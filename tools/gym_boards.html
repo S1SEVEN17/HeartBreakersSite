@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Gym - Heart Breakers</title>
+<!--
+  GYM LEADERBOARDS (members' folder, published by generate.py write_profiles - header button "🏋️ Gym"):
+    gym.html          MODE "current": this month's leaderboards (or All time) - every current member
+    gym-history.html  MODE "history": pick a past month -> that month's leaderboards
+  Drawn in the browser from db/gym.json:
+    {month, stats, fetched, all: {id: {stat: energy since joining}}, month_gain: {id: {stat: this month}},
+     history: {"YYYY-MM": {id: [strength, speed, defense, dexterity]}}}
+  and db/members.json for names (members who left are kept in history months, marked "left").
+  Energy = gym energy trained while in the faction (Torn's faction contributors), refreshed every few hours.
+  History starts in November 2026 (when monthly gym data began being saved).
+  Placeholders: __MENU__ (site header), __MODE__ ("current" / "history").
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1100px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:12px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px}
+.pods{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.pod{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px}
+.pod h3{margin:0 0 6px;color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;text-align:center}
+.pod div{display:flex;justify-content:space-between;font-size:14px;padding:3px 0;border-top:1px solid #2a1416}
+.pod div:first-of-type{border-top:0}.pod b{color:#fff;font-weight:600}.pod span.r{color:var(--sub);margin-right:6px}
+.pod .t{color:var(--sub);text-align:center;display:block;border:0;font-size:12px;padding-top:4px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+td,th{padding:8px 10px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
+th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;cursor:pointer;user-select:none}
+th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}td.n,th.n{text-align:right}td a{color:var(--gold);text-decoration:none}
+.tag{color:var(--sub);font-size:12px}.scroll{overflow-x:auto}tr.zero td{color:#6d6264}
+.rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:4px 0 10px}
+.rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
+.rng button,.rng select{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
+.rng button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+#err{text-align:center;color:var(--sub);margin:30px}
+</style></head><body>
+__MENU__
+<h1 id="ttl">Gym Leaderboards</h1>
+<div class="sub" id="meta">Loading…</div>
+<div class="rng" id="ctl"></div>
+<div id="err" style="display:none"></div>
+<h2 id="podh">🏆 Top 3</h2>
+<div class="pods" id="pods"></div>
+<h2 id="tblh">🏋️ Every member <span class="tag">(tap a column to sort)</span></h2>
+<div class="scroll"><table id="tb"></table></div>
+<script>
+const MODE = "__MODE__";
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const num = n => Math.round(n || 0).toLocaleString("en-US");
+const ST = [["gymstrength", "Strength"], ["gymspeed", "Speed"], ["gymdefense", "Defense"], ["gymdexterity", "Dexterity"], ["total", "Total"]];
+const monthName = m => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
+let G, M, names = {}, current = {}, sortKey = "total", desc = true;
+
+// rows: [{id, name, left, gymstrength.., total}] -> top 3 per stat + the full sortable table
+function show(rows, label) {
+  $("pods").innerHTML = ST.map(([k, l]) => {
+    const top = rows.filter(r => r[k] > 0).sort((a, b) => b[k] - a[k]).slice(0, 3);
+    const sum = rows.reduce((a, r) => a + (r[k] || 0), 0);
+    return `<div class="pod"><h3>${l}</h3>` + (top.map((r, i) => `<div><span><span class="r">${["🥇", "🥈", "🥉"][i]}</span>`
+      + `<a href="member.html?id=${r.id}" style="color:#ddd;text-decoration:none">${esc(r.name)}</a></span><b>${num(r[k])}</b></div>`).join("")
+      || `<div><span class="tag">No energy trained</span></div>`) + `<span class="t">Faction total ${num(sum)}</span></div>`;
+  }).join("");
+  const cols = [["Member", "name"]].concat(ST);
+  const draw = () => {
+    rows.sort((a, b) => { const x = a[sortKey], y = b[sortKey]; const r = typeof x === "string" ? x.localeCompare(y) : x - y; return desc ? -r : r; });
+    $("tb").innerHTML = `<tr><th>#</th>${cols.map(([k, l]) => `<th class="${k === "name" ? "" : "n"}${k === sortKey ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${l}</th>`).join("")}</tr>`
+      + (rows.map((r, i) => `<tr class="${r.total ? "" : "zero"}"><td class="tag">${i + 1}</td><td><a href="member.html?id=${r.id}">${esc(r.name)}</a>`
+        + `${r.left ? ' <span class="tag">left</span>' : ""}</td>${ST.map(([k]) => `<td class="n">${num(r[k])}</td>`).join("")}</tr>`).join("")
+        || `<tr><td colspan="7" class="tag">No gym data for ${esc(label)}.</td></tr>`);
+    $("tb").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+      if (th.dataset.k === sortKey) desc = !desc; else { sortKey = th.dataset.k; desc = sortKey !== "name"; } draw(); });
+  };
+  draw();
+}
+const row = (id, arr) => { const r = {id: +id, name: names[id] || "?", left: !current[id]};
+  ST.slice(0, 4).forEach(([k], j) => r[k] = arr[j] || 0); r.total = ST.slice(0, 4).reduce((a, [k]) => a + r[k], 0); return r; };
+
+function viewCurrent(which) {
+  // every current member, 0s included (so nobody hides); "all" = energy since joining (while in the faction)
+  const src = which === "all" ? G.all : G.month_gain;
+  const rows = Object.keys(current).map(id => row(id, ST.slice(0, 4).map(([k]) => ((src[id] || {})[k]) || 0)));
+  const label = which === "all" ? "All time" : monthName(G.month);
+  $("podh").textContent = `🏆 Top 3 - ${label}`;
+  $("meta").textContent = (which === "all" ? "Gym energy trained while in the faction, since joining" : `Gym energy trained in ${label} (so far)`)
+    + (G.fetched ? ` · updated ${new Date(G.fetched * 1000).toLocaleString("en-US", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC"})} TCT` : "");
+  show(rows, label);
+}
+function viewMonth(mon) {
+  const h = G.history[mon] || {};
+  const rows = Object.entries(h).map(([id, arr]) => row(id, arr)).filter(r => r.total > 0);
+  $("podh").textContent = `🏆 Top 3 - ${monthName(mon)}`;
+  $("meta").textContent = `Gym energy trained in ${monthName(mon)}${mon === G.month ? " (this month, so far)" : ""} · ${rows.length} member${rows.length === 1 ? "" : "s"} trained`;
+  show(rows, monthName(mon));
+}
+
+Promise.all(["db/gym.json", "db/members.json"].map(f => fetch(f).then(r => { if (!r.ok) throw new Error(f); return r.json(); })))
+.then(([g, m]) => {
+  G = g; G.history = G.history || {}; M = m.members;
+  M.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; });
+  if (MODE === "history") {
+    $("ttl").textContent = "Gym Leaderboard History";
+    const months = Object.keys(G.history).sort().reverse();
+    if (!months.length) { $("meta").textContent = "No monthly gym data saved yet."; return; }
+    $("ctl").innerHTML = `<span>Month</span><select id="mon">${months.map(mo => `<option value="${mo}">${monthName(mo)}${mo === G.month ? " (this month)" : ""}</option>`).join("")}</select>`;
+    const pick = location.hash.slice(1);
+    if (months.includes(pick)) $("mon").value = pick;
+    $("mon").onchange = () => { history.replaceState(null, "", "#" + $("mon").value); viewMonth($("mon").value); };
+    viewMonth($("mon").value);
+  } else {
+    $("ctl").innerHTML = `<span>Period</span><button data-v="month" class="on">This month</button><button data-v="all">All time</button>`
+      + `<a href="gym-history.html" style="color:#e8be5a;margin-left:8px;font-size:13px">Past months →</a>`;
+    $("ctl").querySelectorAll("button").forEach(b => b.onclick = () => {
+      $("ctl").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); viewCurrent(b.dataset.v); });
+    viewCurrent("month");
+  }
+}).catch(e => { $("meta").textContent = ""; $("err").style.display = "block"; $("err").textContent = "Couldn't load the gym data (" + e.message + ")."; });
+</script>
+</body></html>

@@ -995,6 +995,9 @@ def chain_leaderboard(hist: dict, members: list, ach: dict, lcfg: dict, since: i
 # Refreshed at most every gym_refresh_hours (4 calls per refresh), saved in
 # data/gym.json. At month rollover last month's top 3 per board are kept.
 GYM_PATH = ROOT / "data" / "gym.json"
+# month-by-month gym energy per member: {"months": {"YYYY-MM": {stat: {member id: energy trained}}}} - the
+# current month is rewritten on every gym refresh, and finalised exactly when the month rolls over
+GYM_HIST_PATH = ROOT / "data" / "gym_history.json"
 GYM_FETCH = [("gymstrength", "Strength"), ("gymspeed", "Speed"), ("gymdefense", "Defense"),
              ("gymdexterity", "Dexterity")]
 GYM_STATS = GYM_FETCH + [("gymtotal", "Total")]      # gymtotal = sum, not fetched
@@ -1056,6 +1059,11 @@ def update_gym(raw: dict, cfg: dict, key: str = None) -> dict:
     names = {str(m.get("id")): m.get("name", "?")
              for m in _as_list(raw["members"].get("members"))}
     month = _month_of(now)
+    try:
+        ghist = json.loads(GYM_HIST_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ghist = {}
+    gmonths = ghist.setdefault("months", {})
     if gym.get("month") and gym["month"] != month and gym.get("baseline"):
         # month rolled over: last month's final gains -> keep top 3 per board
         pbase = json.loads(json.dumps(gym["baseline"]))
@@ -1067,6 +1075,7 @@ def update_gym(raw: dict, cfg: dict, key: str = None) -> dict:
             "gains": {stat: {i: int(v) - int(pbase.get(stat, {}).get(i, v)) for i, v in cur[stat].items()
                              if int(v) - int(pbase.get(stat, {}).get(i, v)) > 0}
                       for stat, _ in GYM_STATS}}
+        gmonths[gym["month"]] = gym["prev"]["gains"]          # last month's final gains -> history
         gym["baseline"] = {}
     if gym.get("month") != month:
         gym["month"] = month
@@ -1078,6 +1087,13 @@ def update_gym(raw: dict, cfg: dict, key: str = None) -> dict:
             b.setdefault(i, v)               # new member mid-month: start now
     gym["current"] = cur
     gym["fetched"] = now
+    # this month so far -> history (overwritten each refresh; final once the month rolls over)
+    tb = json.loads(json.dumps(base))
+    add_total(tb)
+    gmonths[month] = {stat: {i: int(v) - int(tb.get(stat, {}).get(i, v)) for i, v in cur[stat].items()
+                             if int(v) - int(tb.get(stat, {}).get(i, v)) > 0} for stat, _ in GYM_STATS}
+    GYM_HIST_PATH.parent.mkdir(exist_ok=True)
+    GYM_HIST_PATH.write_text(json.dumps(ghist, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
     GYM_PATH.parent.mkdir(exist_ok=True)
     GYM_PATH.write_text(json.dumps(gym, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
     print("Gym leaderboards: refreshed")
@@ -3697,6 +3713,7 @@ NAV = [("🏠 Home", "G:/", None, False),
        ("⚔️ Wars", None, [("War History", "M:wars.html"), ("War Payouts", "M:payouts.html")], False),
        ("⛓️ Chains", "M:chains.html", None, False),
        ("🕵️ Organized Crimes", "M:crimes.html", None, False),
+       ("🏋️ Gym", None, [("Gym Leaderboards", "M:gym.html"), ("Leaderboard History", "M:gym-history.html")], False),
        ("👥 Members", "M:members.html", None, False),
        ("📰 Recaps", None, [("Latest Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html")], False)]
 
@@ -4147,6 +4164,7 @@ def write_homepages(out: Path):
         ("💰", "War Payouts", "Every war payout receipt", "payouts.html"),
         ("⛓️", "Chain History", "Every chain on record", "chains.html"),
         ("🕵️", "Organized Crimes", "Pass rates, payouts and respect for every crime", "crimes.html"),
+        ("🏋️", "Gym Leaderboards", "Gym energy this month and all time - plus past months", "gym.html"),
         ("👥", "Members", "Every member - open a profile", "members.html"),
         ("📰", "Monthly Recap", "The latest monthly recap", "newsletter.html"),
         ("🗂️", "Recap Archive", "Every monthly recap with all its pages", "recaps.html")]
@@ -4239,12 +4257,28 @@ def build_databases(raw: dict, cfg: dict) -> dict:
         g = json.loads(GYM_PATH.read_text(encoding="utf-8")) if "GYM_PATH" in globals() else {}
     except (OSError, ValueError):
         g = {}
-    gym = {"month": g.get("month"), "stats": [st for st, _ in GYM_FETCH], "all": {}, "month_gain": {}}
+    gym = {"month": g.get("month"), "stats": [st for st, _ in GYM_FETCH], "all": {}, "month_gain": {},
+           "fetched": g.get("fetched"), "history": {}}
     for st, _ in GYM_FETCH:
         for i, v in (g.get("current", {}).get(st) or {}).items():
             gym["all"].setdefault(i, {})[st] = v
             b = (g.get("baseline", {}).get(st) or {}).get(i, 0)
             gym["month_gain"].setdefault(i, {})[st] = max(0, v - b)
+    # month by month: {"YYYY-MM": {member id: [strength, speed, defense, dexterity]}} (energy trained that month;
+    # the current month = month_gain above, so it always matches the leaderboards)
+    try:
+        gh_ = json.loads(GYM_HIST_PATH.read_text(encoding="utf-8")).get("months", {})
+    except (OSError, ValueError):
+        gh_ = {}
+    for mon, per in gh_.items():
+        rows = {}
+        for k_, (st, _) in enumerate(GYM_FETCH):
+            for i, v in (per.get(st) or {}).items():
+                rows.setdefault(i, [0] * len(GYM_FETCH))[k_] = int(v)
+        gym["history"][mon] = rows
+    if gym["month"]:
+        gym["history"][gym["month"]] = {i: [int(d.get(st, 0)) for st, _ in GYM_FETCH]
+                                        for i, d in gym["month_gain"].items() if any(d.values())}
     # --- respect ---
     try:
         respect = json.loads(RESPECT_LOG_PATH.read_text(encoding="utf-8"))
@@ -4548,6 +4582,10 @@ def write_profiles(out: Path, db: dict):
     tpl = (ROOT / "tools" / "member_profile.html").read_text(encoding="utf-8")
     gurl = gate_cfg()["url"].rstrip("/") if gate_cfg() else ""
     (mout / "member.html").write_text(tpl.replace("__MENU__", site_menu("")).replace("__GATE__", gurl), encoding="utf-8")
+    # gym.html (this month / all time) + gym-history.html (past months) - header button "🏋️ Gym", from db/gym.json
+    gtpl = (ROOT / "tools" / "gym_boards.html").read_text(encoding="utf-8").replace("__MENU__", site_menu(""))
+    (mout / "gym.html").write_text(gtpl.replace("__MODE__", "current"), encoding="utf-8")
+    (mout / "gym-history.html").write_text(gtpl.replace("__MODE__", "history"), encoding="utf-8")
     # crimes.html - Organized Crimes breakdown (header button), drawn in the browser from db/crimes.json
     (mout / "crimes.html").write_text((ROOT / "tools" / "oc_stats.html").read_text(encoding="utf-8")
                                       .replace("__MENU__", site_menu("")), encoding="utf-8")
@@ -8419,6 +8457,7 @@ def leader_alerts(raw: dict, summary: dict, cfg: dict):
     if lp and st.get("links_posted") != lp:
         mb, lb = member_base(), leader_base()
         member_links = [("Members Hub", f"{mb}/index.html"), ("War History", f"{mb}/wars.html"),
+                        ("Gym Leaderboards", f"{mb}/gym.html"),
                         ("War Payouts", f"{mb}/payouts.html"), ("Chain History", f"{mb}/chains.html"),
                         ("Organized Crimes", f"{mb}/crimes.html"), ("Members", f"{mb}/members.html"),
                         ("Monthly Recap", f"{mb}/newsletter.html"), ("Recap Archive", f"{mb}/recaps.html")]

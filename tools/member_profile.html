@@ -12,6 +12,7 @@
     db/crimes.json   completed organized crimes (m = member ids; share = each member's cut: 80% of the payout split
                      evenly between this crime's AND its prerequisite crime's members - see generate.py crime_shares)
     db/payouts.json  current receipt per war, per member [id, pay, war hits, outside]
+    db/gym.json      gym energy: all (since joining), month_gain (this month), history {"YYYY-MM": {id: [str, spd, def, dex]}}
   Charts are plain inline SVG (no libraries, works in Torn PDA). __MENU__ is replaced with the site menu,
   __GATE__ with the gatekeeper address.
   MY PROFILE: this page is also the signed-in member's own account page (it replaced account.html).
@@ -58,8 +59,11 @@ __MENU__
   <div class="chart" id="cw"></div>
   <h2>⛓️ Chain hits <span class="tag" id="cct"></span></h2>
   <div class="chart" id="cc"></div>
-  <h2>🏋️ Gym energy <span class="tag">(trained while in the faction)</span></h2>
+  <h2 id="gymh">🏋️ Gym energy <span class="tag">(trained while in the faction)</span></h2>
   <div class="tiles" id="gym"></div>
+  <h2>🏋️ Gym energy by month <span class="tag" id="cgt"></span></h2>
+  <div class="chart" id="cg"></div>
+  <div class="scroll" style="margin-top:8px"><table id="tg"></table></div>
   <h2 id="payouts">💰 War payouts <span class="tag" id="payt"></span></h2><div class="scroll"><table id="tp"></table></div>
   <h2 id="wars">⚔️ Wars</h2><div class="scroll"><table id="tw"></table></div>
   <h2 id="chains">⛓️ Recent chains</h2><div class="scroll"><table id="tc"></table></div>
@@ -103,7 +107,8 @@ function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e") {
 let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() =>
   document.querySelectorAll(".chart").forEach(el => el._args && bars(el, ...el._args)), 150); });
 
-Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get).concat([whoami])).then(([M, W, C, O, P, me]) => {
+Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
+  .concat([get("gym").catch(() => ({history: {}})), whoami])).then(([M, W, C, O, P, GY, me]) => {
   if (!id && me) id = me.id;                     // no ?id= -> my own profile
   const m = M.members.find(x => x.id === id);
   if (!m) { $("err").innerHTML = id ? 'Member not found - see <a href="members.html">Members</a>.' : 'Pick a member on the <a href="members.html">Members</a> page.'; return; }
@@ -184,6 +189,28 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get).concat([
   const gt = G.reduce((a, [k]) => a + (m.gym[k] || 0), 0), gm = G.reduce((a, [k]) => a + (m.gym_month[k] || 0), 0);
   $("gym").innerHTML = G.map(([k, l]) => `<div class="tile"><b>${num(m.gym[k])}</b><span>${l}</span><i>+${num(m.gym_month[k])} this month</i></div>`).join("")
     + `<div class="tile"><b>${num(gt)}</b><span>Total</span><i>+${num(gm)} this month</i></div>`;
+  // gym by month (monthly history; the range buttons pick how many months) + a month-by-month table
+  const GH = GY.history || {}, GS = [["Strength"], ["Speed"], ["Defense"], ["Dexterity"]];
+  const gymMonths = Object.keys(GH).sort();
+  const gRow = mo => (GH[mo] || {})[String(id)] || [0, 0, 0, 0];
+  function drawGym(days) {
+    const from = days ? new Date(Date.now() - days * DAY * 1000).toISOString().slice(0, 7) : "";
+    const ms = gymMonths.filter(mo => mo >= from);
+    const lab = mo => new Date(mo + "-01T00:00:00Z").toLocaleString("en-US", {month: "short", year: "2-digit", timeZone: "UTC"});
+    const vals = ms.map(mo => ({label: lab(mo) + (mo === GY.month ? " (so far)" : ""), short: lab(mo), v: gRow(mo).reduce((a, b) => a + b, 0)}));
+    const avg = ms.length ? ms.reduce((a, mo) => { const r = Object.values(GH[mo] || {}).map(x => x.reduce((p, q) => p + q, 0)).filter(v => v > 0);
+      return a + (r.length ? r.reduce((p, q) => p + q, 0) / r.length : 0); }, 0) / ms.length : 0;
+    $("cgt").textContent = ms.length ? `(${ms.length} month${ms.length > 1 ? "s" : ""} - line = faction average of members who trained)` : "";
+    if (ms.length) bars($("cg"), vals, avg, "#78c878", "#4a3a3a");
+    else $("cg").innerHTML = '<div class="tag" style="text-align:center;padding:30px">No monthly gym data in this range yet - it\'s saved from November 2026 on.</div>';
+    $("tg").innerHTML = `<tr><th>Month</th>${GS.map(([l]) => `<th class="n">${l}</th>`).join("")}<th class="n">Total</th></tr>`
+      + (ms.slice().reverse().map(mo => { const r = gRow(mo);
+        return `<tr><td><a href="gym-history.html#${mo}" style="color:#e8be5a">${lab(mo)}</a>${mo === GY.month ? ' <span class="tag">so far</span>' : ""}</td>`
+          + r.map(v => `<td class="n">${num(v)}</td>`).join("") + `<td class="n"><b>${num(r.reduce((a, b) => a + b, 0))}</b></td></tr>`; }).join("")
+        || `<tr><td colspan="6" class="tag">No monthly gym data yet.</td></tr>`);
+  }
+  drawGym(+(document.querySelector("#rng button.on") || {dataset: {r: 365}}).dataset.r);
+  document.querySelectorAll("#rng button").forEach(b => b.addEventListener("click", () => drawGym(+b.dataset.r)));
   // wars table
   const pay = {}; P.payouts.forEach(p => { const r = p.m.find(x => x[0] === id); if (r) pay[p.war] = r[1]; });
   const mine = W.wars.filter(w => w.m.some(x => x[0] === id)).reverse();
