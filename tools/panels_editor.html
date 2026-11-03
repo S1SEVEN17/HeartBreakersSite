@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Heart Breakers - Site Panels</title>
+<!--
+  SITE PANELS EDITOR (leaders' folder: panels.html, published by generate.py write_message_builder)
+  Edits the text, tiles and buttons of the faction DESCRIPTION banner and the members' ANNOUNCEMENTS panel.
+  Those panels are drawn by generate.py from config.json, so this page:
+    1. loads config.json from the repo through the GitHub API (the leader's saved token - "hb_gh_token",
+       the same one the payout calculator / Message Builder use),
+    2. shows a form for the parts below (SCHEMA) - everything else in config.json is left untouched,
+    3. saves it back as one commit (with the file's sha, so a newer change is never overwritten).
+  Saving config.json (private data repo) starts the "Faction banner" workflow in the code repo (the data repo's
+  notify workflow), which redraws both panels in ~3-5 minutes.
+  Field types: text, num, select, icon (picker), lines (one per line <-> list), list (repeatable rows).
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0 auto;padding:10px;max-width:1100px}
+h1{color:var(--red);text-align:center;font-size:22px;margin:4px 0 4px}.lead{color:var(--sub);text-align:center;font-size:13px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:12px;margin-bottom:12px}
+.card h2{color:var(--gold);font-size:14px;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+.card h2 label{margin:0 0 0 auto;font-size:12px;color:var(--sub);text-transform:none;letter-spacing:0;display:flex;gap:4px;align-items:center}
+label{display:block;font-size:12px;color:var(--sub);margin:8px 0 2px}
+input,select,textarea{width:100%;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:6px;padding:8px;font:14px system-ui,sans-serif}
+input[type=checkbox]{width:auto}textarea{min-height:64px;resize:vertical}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px}
+.item{border:1px solid #3a1615;border-radius:8px;padding:8px;margin:8px 0;background:#130b0c}
+.item .bh{display:flex;gap:4px;align-items:center}.item .bh b{flex:1;color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px}
+button{background:#2a1416;color:#eee;border:1px solid #6b2420;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;margin:2px}
+button.g{background:var(--red);border-color:var(--red);color:#fff}button.s{padding:4px 8px;font-size:12px}
+.small{font-size:12px;color:var(--sub)}.ph code{background:#2a1416;border-radius:4px;padding:1px 5px;color:#e8d6a8;font-size:12px}
+.tabs{display:flex;gap:6px;justify-content:center;margin:0 0 12px}.tabs button.on{background:var(--red);border-color:var(--red)}
+.ic{display:flex;gap:6px;align-items:center}.ic img{height:30px;background:#000;border-radius:4px}
+.bar{position:sticky;bottom:0;background:#100a0bee;border-top:1px solid var(--edge);padding:10px;margin:0 -10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+.prev img{max-width:100%;border-radius:8px;display:block;margin:8px auto}
+#pv img{max-width:100%;display:block;margin:6px auto}
+#status{color:var(--gold)}
+</style></head><body>
+<nav id="nav" style="text-align:center;margin-bottom:8px;font-size:14px"></nav>
+<h1>Site Panels</h1>
+<p class="lead">Edit the faction <b>Description</b> banner and the members' <b>Announcements</b> panel.
+Saving redraws them on the site within a few minutes (live data like respect, wars and leaderboards fills itself in).</p>
+<div class="card" id="tokcard" style="display:none"><h2>GitHub token</h2>
+  <div class="small">Saving needs a GitHub token, kept only in this browser on this device (each device / browser - e.g. Torn PDA
+    and Chrome - needs it once). Create a fine-grained token at
+    <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener" style="color:#e8be5a">GitHub → Settings → Developer settings → Fine-grained tokens</a>:
+    Repository access <b>Only select repositories → HeartBreakersLogo</b>, Permissions → Repository → <b>Contents: Read and write</b>.</div>
+  <div style="display:flex;gap:6px;margin-top:8px"><input id="tokIn" type="password" placeholder="github_pat_…" autocomplete="off" style="flex:1">
+    <button class="g" id="tokSave">Save token</button></div><div class="small" id="tokMsg"></div></div>
+<div class="tabs"><button id="tD" class="on">Description banner</button><button id="tA">Announcements panel</button></div>
+<div id="form"><div class="small" style="text-align:center">Loading the current panels…</div></div>
+<div class="card prev"><h2>Live preview <span class="small" id="pvs" style="margin-left:auto;text-transform:none;letter-spacing:0"></span></h2>
+  <div class="small">Drawn in your browser with the site's own drawing code and this update's faction data, so it matches
+    what Save changes will produce. Nothing is saved until you press <b>Save changes</b>.</div>
+  <div id="pvA" class="small" style="display:none;margin:6px 0"><label style="display:inline-flex;gap:6px;align-items:center;margin:0">
+    <input type="checkbox" id="pvAll"> Also preview the leaderboards (slower)</label></div>
+  <div id="pv"></div>
+  <details style="margin-top:10px"><summary class="small" style="cursor:pointer">What's on the site right now</summary><img id="live" alt="live panel"></details></div>
+<div class="card"><h2>HTML code</h2>
+  <div class="small" id="htmlHelp"></div>
+  <textarea id="code" readonly style="min-height:110px;font:12px monospace"></textarea>
+  <button id="copyCode">Copy HTML</button></div>
+<div class="bar"><button class="g" id="save">Save changes</button><button id="reload">Discard &amp; reload</button><span id="status"></span></div>
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+
+// token box: check the token can write to the repo, then keep it in this browser (same key the calculator uses)
+async function saveToken() {
+  const t = document.getElementById("tokIn").value.trim(); if (!t) return;
+  const m = document.getElementById("tokMsg"); m.textContent = "Checking…";
+  try {
+    const r = await fetch(`https://api.github.com/repos/${CFG.repo}`, {headers: {Authorization: "Bearer " + t, Accept: "application/vnd.github+json"}});
+    if (!r.ok) throw new Error("GitHub said " + r.status + " - check the token and its repository access");
+    const j = await r.json();
+    if (j.permissions && !j.permissions.push) throw new Error("this token can read but not write - set Contents: Read and write");
+    localStorage.setItem("hb_gh_token", JSON.stringify(t));
+    m.textContent = "Saved ✓ - reloading…"; setTimeout(() => location.reload(), 600);
+  } catch (e) { m.textContent = "Not saved: " + e.message; }
+}
+document.getElementById("tokSave").onclick = saveToken;
+const tok = (() => { try { return JSON.parse(localStorage.getItem("hb_gh_token")); } catch (e) { return null; } })();
+document.getElementById("nav").innerHTML = [["Leaders Hub", "index.html"], ["Message Builder", "builder.html"], ["Leader Monitor", "monitor.html"],
+  ["Payout Calculator", "payout.html"], ["Announcements", CFG.member_base + "/announcements.html"]]
+  .map(([t, u]) => `<a href="${u}" style="color:#e8be5a;text-decoration:none">${t}</a>`).join(" · ");
+
+const PH = "{faction_name} {tag} {leader} {leader_id} {co_leader} {co_leader_id} {respect} {members} {capacity} {rank} {days_old} {best_chain} {rw_wins} {updated}";
+// ---- what can be edited (path in config.json, label, type, extra) ----
+const SCHEMA = {
+  D: [
+    {path: "section_order", title: "Section order", type: "order",
+     help: "Order of the sections under the header - use ▲▼ to move them.",
+     names: {faction_info: "Faction Information", requirements: "Requirements", perks: "Faction Perks",
+             what_we_offer: "What We Offer", achievements: "Faction Achievements", ranked_wars: "Recent Ranked Wars"}},
+    {path: "faction_info", title: "Faction Information", enable: true, fields: [
+      ["title", "Section title"], ["leadership_title", "Leadership title"],
+      ["fields", "Fields (shown two per row)", "list", [["label", "Label"], ["value", "Value - text and/or {placeholders}"]], {add: {label: "New", value: ""}}]],
+     help: "Placeholders: " + PH},
+    {path: "requirements", title: "Requirements", enable: true, fields: [
+      ["title", "Section title"],
+      ["tiles", "Tiles (exactly 3)", "list", [["icon", "Icon", "icon"], ["badge", "Badge on the icon (optional, e.g. 15+)"], ["label", "Text"]], {fixed: 3}]]},
+    {path: "perks", title: "Faction Perks", enable: true, fields: [
+      ["title", "Section title"], ["tree", "Which tree to show", "select", ["peace", "war", "active"]]],
+     help: "The branches and upgrades themselves come from Torn."},
+    {path: "what_we_offer", title: "What We Offer", enable: true, fields: [
+      ["title", "Section title"],
+      ["tiles", "Tiles (two per row)", "list", [["icon", "Icon", "icon"], ["title", "Headline (under ~15 characters)"],
+        ["text", "Detail (under ~40 characters)"]], {add: {icon: "gi-checked-shield", title: "New", text: ""}}]]},
+    {path: "achievements", title: "Faction Achievements", enable: true, fields: [
+      ["title", "Section title"], ["chains_title", "Chains heading"], ["goal_text", "Text on tiers not reached yet"]]},
+    {path: "ranked_wars", title: "Recent Ranked Wars", enable: true, fields: [
+      ["title", "Section title"], ["count", "How many wars", "num"], ["hits_title", "Hits list title"], ["respect_title", "Respect list title"]]},
+    {path: "footer", title: "Footer", enable: true, fields: [["text", "Footer text ({updated} = last update time)"]]}],
+  A: [
+    {path: "announcements", title: "Announcements", fields: [
+      ["title", "Title bar text"], ["war_title", "War status heading"],
+      ["groups", "Notice groups", "list", [["title", "Heading"], ["lines", "Lines (one per line)", "lines"]], {add: {title: "New", lines: ["Text"]}}]]},
+    {path: "announcements", title: "Navigation buttons", fields: [
+      ["buttons_per_row", "Buttons per row", "num"], ["button_width", "Button width in Torn (px)", "num"],
+      ["buttons", "Buttons", "list", [["label", "Text"], ["url", "Link ({member_base} = members' folder)"], ["icon", "Icon", "icon"]],
+       {add: {label: "New Button", url: "", icon: "gi-checked-shield"}}]]},
+    {path: "announcements.ranked_wars", title: "Recent Ranked Wars (announcement)", fields: [
+      ["title", "Section title"], ["count", "How many wars", "num"]]},
+    {path: "announcements.leaderboard", title: "Leaderboard headings", fields: [
+      ["war_group_title", "War leaderboards heading"], ["chain_group_title", "Chain leaderboards heading"],
+      ["gym_group_title", "Gym leaderboards heading"], ["gym_subtitle", "Gym note"]]},
+    {path: "announcements", title: "Footer", fields: [["footer_text", "Footer text ({updated} = last update time)"]]}]};
+
+let C = null, sha = null, tab = "D", dirty = false;
+const at = (path, make) => path.split(".").reduce((o, k) => (o[k] == null && make ? (o[k] = {}) : o[k]), C);
+
+async function loadConfig() {
+  $("status").textContent = "";
+  if (!tok) { $("tokcard").style.display = "block"; }
+  try {
+    let text;
+    if (tok) {
+      const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/config.json?ref=${CFG.branch}`,
+        {headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json"}, cache: "no-store"});
+      if (!r.ok) throw new Error("GitHub said " + r.status);
+      const j = await r.json(); sha = j.sha;
+      text = new TextDecoder().decode(Uint8Array.from(atob(j.content.replace(/\n/g, "")), c => c.charCodeAt(0)));
+    } else {
+      // no token: show the copy published with the last update (the settings repo is private)
+      text = await (await fetch("preview/config.json", {cache: "no-store"})).text();
+    }
+    C = JSON.parse(text); dirty = false; render();
+  } catch (e) { $("form").innerHTML = `<div class="card">Couldn't load the settings: ${esc(e.message)}</div>`; }
+}
+
+function iconPick(val, attr) {
+  return `<div class="ic"><img src="builder/icons/${esc(val)}.png" onerror="this.style.visibility='hidden'" alt="">
+    <select ${attr}>${CFG.icons.map(([n, l]) => `<option value="${n}"${n == val ? " selected" : ""}>${esc(l)}</option>`).join("")}
+    ${CFG.icons.some(([n]) => n == val) ? "" : `<option value="${esc(val)}" selected>${esc(val)}</option>`}</select></div>`;
+}
+function fieldHtml(sec, si, f) {
+  const [key, label, type = "text", extra, opt = {}] = f, obj = at(sec.path, true), v = obj[key], a = `data-s="${si}" data-k="${key}"`;
+  if (type === "num") return `<label>${esc(label)}</label><input ${a} data-t="num" inputmode="numeric" value="${esc(v)}">`;
+  if (type === "select") return `<label>${esc(label)}</label><select ${a}>${extra.map(o => `<option${o == v ? " selected" : ""}>${o}</option>`).join("")}</select>`;
+  if (type === "lines") return `<label>${esc(label)}</label><textarea ${a} data-t="lines">${esc((v || []).join("\n"))}</textarea>`;
+  if (type === "list") {
+    const rows = v || [];
+    return `<label>${esc(label)}</label>` + rows.map((row, i) => `<div class="item"><div class="bh"><b>${i + 1}</b>
+      <button class="s" data-mv="${si}|${key}|${i}|-1">▲</button><button class="s" data-mv="${si}|${key}|${i}|1">▼</button>
+      ${opt.fixed ? "" : `<button class="s" data-del="${si}|${key}|${i}">✕</button>`}</div><div class="row">` +
+      extra.map(([k2, l2, t2]) => {
+        const a2 = `data-s="${si}" data-k="${key}" data-i="${i}" data-k2="${k2}"`;
+        if (t2 === "icon") return `<div><label>${esc(l2)}</label>${iconPick(row[k2] || "", a2)}</div>`;
+        if (t2 === "lines") return `<div style="grid-column:1/-1"><label>${esc(l2)}</label><textarea ${a2} data-t="lines">${esc((row[k2] || []).join("\n"))}</textarea></div>`;
+        return `<div><label>${esc(l2)}</label><input ${a2} value="${esc(row[k2])}"></div>`;
+      }).join("") + `</div></div>`).join("")
+      + (opt.fixed ? "" : `<button class="s" data-add="${si}|${key}">+ Add</button>`);
+  }
+  return `<label>${esc(label)}</label><input ${a} value="${esc(v)}">`;
+}
+function render() {
+  const secs = SCHEMA[tab];
+  $("form").innerHTML = secs.map((sec, si) => {
+    if (sec.type === "order") {
+      const order = C[sec.path] || [];
+      return `<div class="card"><h2>${esc(sec.title)}</h2><div class="small">${esc(sec.help)}</div>` + order.map((k, i) =>
+        `<div class="item"><div class="bh"><b>${esc(sec.names[k] || k)}</b><button class="s" data-omv="${i}|-1">▲</button>
+         <button class="s" data-omv="${i}|1">▼</button></div></div>`).join("") + `</div>`;
+    }
+    const obj = at(sec.path, true);
+    const en = sec.enable ? `<label><input type="checkbox" data-en="${si}"${obj.enabled !== false ? " checked" : ""}> Show</label>` : "";
+    return `<div class="card"><h2>${esc(sec.title)} ${en}</h2>` + (sec.help ? `<div class="small ph">${esc(sec.help).replace(/(\{\w+\})/g, "<code>$1</code>")}</div>` : "")
+      + sec.fields.map(f => fieldHtml(sec, si, f)).join("") + `</div>`;
+  }).join("");
+  $("live").src = tab === "D" ? CFG.banner_url + "?" + Date.now() : CFG.announce_url + "?" + Date.now();
+  $("pvA").style.display = tab === "A" ? "block" : "none";
+  schedulePreview();
+}
+function changed() { dirty = true; $("status").textContent = "Unsaved changes - press Save changes to keep them"; schedulePreview(); }
+$("form").addEventListener("input", e => {
+  const el = e.target, s = el.dataset.s; if (s == null) return;
+  const sec = SCHEMA[tab][+s], obj = at(sec.path, true);
+  let v = el.value;
+  if (el.dataset.t === "num") { v = v.replace(/\D/g, ""); el.value = v; v = +v || 0; }
+  if (el.dataset.t === "lines") v = el.value.split("\n").map(x => x.trimEnd()).filter(x => x !== "");
+  if (el.dataset.i != null) obj[el.dataset.k][+el.dataset.i][el.dataset.k2] = v; else obj[el.dataset.k] = v;
+  if (el.tagName === "SELECT" && el.closest(".ic")) el.closest(".ic").querySelector("img").src = `builder/icons/${el.value}.png`;
+  changed();
+});
+$("form").addEventListener("change", e => {
+  const en = e.target.dataset.en; if (en == null) return;
+  at(SCHEMA[tab][+en].path, true).enabled = e.target.checked; changed();
+});
+$("form").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.omv) { const [i, d] = b.dataset.omv.split("|").map(Number), o = C.section_order, j = i + d;
+    if (j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; }
+  else if (b.dataset.mv) { const [s, k, i, d] = b.dataset.mv.split("|"), l = at(SCHEMA[tab][+s].path)[k], j = +i + +d;
+    if (j < 0 || j >= l.length) return; [l[+i], l[j]] = [l[j], l[+i]]; }
+  else if (b.dataset.del) { const [s, k, i] = b.dataset.del.split("|"); if (!confirm("Remove this one?")) return;
+    at(SCHEMA[tab][+s].path)[k].splice(+i, 1); }
+  else if (b.dataset.add) { const [s, k] = b.dataset.add.split("|"), sec = SCHEMA[tab][+s], f = sec.fields.find(x => x[0] === k);
+    const o = at(sec.path, true); (o[k] = o[k] || []).push(JSON.parse(JSON.stringify((f[4] || {}).add || {}))); }
+  else return;
+  changed(); render();
+});
+$("tD").onclick = () => { tab = "D"; $("tD").classList.add("on"); $("tA").classList.remove("on"); render(); };
+$("tA").onclick = () => { tab = "A"; $("tA").classList.add("on"); $("tD").classList.remove("on"); render(); };
+$("reload").onclick = () => { if (!dirty || confirm("Discard your changes?")) loadConfig(); };
+$("save").onclick = async () => {
+  if (!tok) { $("tokcard").style.display = "block"; $("tokcard").scrollIntoView({behavior: "smooth"}); return alert("No GitHub token on this device yet - paste one in the GitHub token box (top of the page)."); }
+  if (!dirty) return alert("Nothing changed yet.");
+  $("status").textContent = "Saving…";
+  try {
+    const text = JSON.stringify(C, null, 2) + "\n";
+    const bytes = new TextEncoder().encode(text); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
+    const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/config.json`, {method: "PUT",
+      headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json"},
+      body: JSON.stringify({message: `Site Panels: ${tab === "D" ? "description banner" : "announcements"} edited`, content: btoa(bin), sha, branch: CFG.branch})});
+    if (r.status === 409 || r.status === 422) throw new Error("the settings changed since you opened this page - reload and redo your edit");
+    if (!r.ok) throw new Error(r.status + " " + ((await r.json().catch(() => ({}))).message || ""));
+    sha = (await r.json()).content.sha; dirty = false;
+    $("status").textContent = "Saved ✓ - the site redraws the panels in about 3-5 minutes.";
+    pvStatus("Preview up to date - saved");
+  } catch (e) { $("status").textContent = "Save failed: " + e.message; }
+};
+addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------------- live preview (Pyodide: Python + Pillow running generate.py in this page) ----------------
+// preview/manifest.json lists generate.py, the art, icons and fonts; preview/summary.json is this update's
+// faction data. The first preview loads the engine (~10-20 s, then cached by the browser); after that each
+// change redraws in a few seconds. Edits are debounced; a change during a draw queues one more draw.
+let PY = null, pyLoading = null, drawing = false, again = false, pvTimer = null;
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/";
+function pvStatus(t) { $("pvs").textContent = t; }
+function loadScript(src) { return new Promise((ok, no) => { const sc = document.createElement("script"); sc.src = src; sc.onload = ok; sc.onerror = no; document.head.appendChild(sc); }); }
+async function engine() {
+  if (PY) return PY;
+  if (pyLoading) return pyLoading;
+  pyLoading = (async () => {
+    pvStatus("Loading the preview engine (first time ~15 s)…");
+    await loadScript(PYODIDE + "pyodide.js");
+    const py = await loadPyodide({indexURL: PYODIDE});
+    await py.loadPackage("pillow");
+    const man = await (await fetch("preview/manifest.json", {cache: "no-store"})).json();
+    pvStatus(`Loading the art (${man.files.length} files)…`);
+    const mk = p => { const parts = p.split("/"); let d = "/hb"; try { py.FS.mkdir(d); } catch (e) {}
+      for (const x of parts.slice(0, -1)) { d += "/" + x; try { py.FS.mkdir(d); } catch (e) {} } };
+    await Promise.all(man.files.concat(["summary.json"]).map(async f => {
+      const b = new Uint8Array(await (await fetch("preview/" + f)).arrayBuffer()); mk(f); py.FS.writeFile("/hb/" + f, b); }));
+    py.globals.set("MEMBER_DIR", man.member_dir || "");
+    await py.runPythonAsync(`
+import sys, os, json, io, base64
+os.environ["MEMBER_DIR"] = MEMBER_DIR
+sys.path.insert(0, "/hb")
+import generate as g
+S = json.load(open("/hb/summary.json"))
+def _png(im):
+    b = io.BytesIO(); im.save(b, "PNG", compress_level=1); return base64.b64encode(b.getvalue()).decode()
+def preview(cfg_json, tab, all_sections):
+    cfg = json.loads(cfg_json)
+    g._STAMPS.update({"saved": {}, "new": {}})
+    out = {}
+    if tab == "D":
+        im, _ = g.render_image(S, cfg)
+        out["imgs"] = [_png(im)]
+        out["html"] = g.description_snippet()
+    else:
+        a = cfg.get("announcements", {})
+        parts = g.render_announcement_header(a, S, only=None if all_sections else {"header", "wars"})
+        imgs = [_png(im) for _slug, im in parts[:1]]
+        btns = [_png(g.render_button(b.get("label", ""), b.get("icon", "gi-checked-shield"))) for b in a.get("buttons", [])]
+        imgs += [_png(im) for _slug, im in parts[1:]]
+        out["imgs"], out["btns"] = imgs, btns
+        out["per_row"] = int(a.get("buttons_per_row", 2))
+        names = ["announce-%s.webp" % sl for sl in g.announcement_slugs(a, S)]
+        out["html"] = g.announcement_snippet(a, names, g.member_base())
+    return json.dumps(out)
+`);
+    PY = py; return py;
+  })();
+  return pyLoading;
+}
+async function drawPreview() {
+  if (!C) return;
+  if (drawing) { again = true; return; }
+  drawing = true;
+  try {
+    const py = await engine();
+    pvStatus("Drawing…");
+    const t0 = performance.now();
+    py.globals.set("CFG_JSON", JSON.stringify(C));
+    py.globals.set("TAB", tab);
+    py.globals.set("ALL", tab === "A" && $("pvAll").checked);
+    const res = JSON.parse(await py.runPythonAsync("preview(CFG_JSON, TAB, ALL)"));
+    const box = $("pv"); box.innerHTML = "";
+    const add = (b64, css) => { const im = new Image(); im.src = "data:image/png;base64," + b64; if (css) im.style.cssText = css; box.appendChild(im); return im; };
+    if (tab === "D") add(res.imgs[0]);
+    else {
+      add(res.imgs[0]);
+      if (res.btns.length) { const row = document.createElement("div"); row.style.cssText = "display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin:4px 0";
+        res.btns.forEach(b => { const im = new Image(); im.src = "data:image/png;base64," + b;
+          im.style.cssText = `width:calc(${100 / res.per_row}% - 4px);max-width:320px;margin:0`; row.appendChild(im); }); box.appendChild(row); }
+      res.imgs.slice(1).forEach(b => add(b));
+    }
+    $("code").value = res.html;
+    $("htmlHelp").innerHTML = tab === "D"
+      ? "Paste into the <b>faction description</b> (Torn: Faction → Controls → Description, then the &lt;/&gt; view). It only changes if the address changes - the banner image itself updates on its own."
+      : "Paste into the <b>faction announcement</b> (Torn: Faction → Controls → Announcement, then the &lt;/&gt; view). Re-copy after adding, removing or reordering buttons or sections - text changes update on their own.";
+    pvStatus(`Preview up to date (${((performance.now() - t0) / 1000).toFixed(1)} s)` + (dirty ? " - not saved yet" : ""));
+  } catch (e) { pvStatus("Preview failed: " + (e.message || e).toString().split("\n").slice(-2).join(" ")); }
+  drawing = false;
+  if (again) { again = false; drawPreview(); }
+}
+function schedulePreview() { clearTimeout(pvTimer); pvTimer = setTimeout(drawPreview, 900); }
+$("pvAll").onchange = schedulePreview;
+$("copyCode").onclick = () => { const t = $("code"); t.select();
+  (navigator.clipboard ? navigator.clipboard.writeText(t.value) : Promise.reject()).catch(() => document.execCommand("copy"));
+  $("copyCode").textContent = "Copied!"; setTimeout(() => $("copyCode").textContent = "Copy HTML", 1500); };
+loadConfig();
+</script>
+</body></html>

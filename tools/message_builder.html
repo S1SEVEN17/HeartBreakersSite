@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Heart Breakers - Message Builder</title>
+<!--
+  MESSAGE BUILDER (LEADERS' folder: builder.html, published by generate.py write_message_builder)
+  Build a message panel in the faction frame - the same header art, title bar, red grid panel and
+  Rajdhani fonts as the announcement images - then export it:
+    Download PNG / Copy image  -> Discord DMs, anywhere an image can be pasted
+    Publish to site            -> commits data/panels/<name>.png with a GitHub token (same token the
+                                  payout calculator saves, same browser) - online in a few minutes at
+                                  <member_base>/panels/<name>.png, so it can go in Torn newsletters / mail
+    Torn HTML / Open in Torn newsletter (HB Newsletter Filler userscript fills it in)
+  Everything is drawn on a <canvas> at the frame's 2x size (W = 1298 px), exactly like generate.py:
+    header piece (big HB art + bar / bar only / plain top) + title text
+    body: tiled side columns + red grid panel (gradient, grid, glow border, cut corners) + blocks
+    frame end, then the outer cut corners and the transparent margin (OUTER_PAD).
+  Blocks (all text editable): heading, text (lines starting "- " get a red bullet), card (title + text),
+  tiles (up to 4 "value | label"), image (upload), divider, spacer.
+  Drafts are kept in this browser (localStorage "hb_builder_drafts"); the current one autosaves.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c}
+*{box-sizing:border-box}
+body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0;padding:10px}
+nav{text-align:center;font-size:14px;margin-bottom:8px}nav a{color:var(--gold);text-decoration:none}
+h1{color:var(--red);text-align:center;font-size:20px;margin:4px 0 10px}
+.wrap{display:flex;gap:12px;align-items:flex-start;max-width:1500px;margin:auto}
+.ed{flex:0 0 440px;max-width:100%}.rc{flex:1;min-width:0;position:sticky;top:8px}
+/* phones: preview pinned at the top while editing, export card after the editor */
+@media(max-width:900px){.wrap{flex-direction:column}.ed{flex:auto;width:100%;order:1}.rc{display:contents}
+ .pv{order:0;position:sticky;top:0;z-index:5;width:100%}.pv .card{margin-bottom:6px}.pv canvas{max-height:34vh;width:auto;max-width:100%;margin:auto}
+ .ex{order:2;width:100%}}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px;margin-bottom:10px}
+.card h2{color:var(--gold);font-size:13px;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px}
+label{display:block;font-size:12px;color:var(--sub);margin:6px 0 2px}
+input,select,textarea{width:100%;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:6px;padding:8px;font:14px system-ui,sans-serif}
+textarea{min-height:70px;resize:vertical}
+.row{display:flex;gap:6px}.row>*{flex:1}
+button{background:#2a1416;color:#eee;border:1px solid #6b2420;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;margin:2px}
+button.g{background:var(--red);border-color:var(--red);color:#fff}button.s{padding:4px 8px;font-size:12px}
+.blk{border:1px solid #3a1615;border-radius:8px;padding:8px;margin:8px 0;background:#130b0c}
+.blk .bh{display:flex;align-items:center;gap:4px}.blk .bh b{flex:1;color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px}
+.small{font-size:12px;color:var(--sub)}
+#bprev{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:6px}#bprev canvas{background:none;border-radius:0}
+canvas{width:100%;height:auto;display:block;background:repeating-conic-gradient(#1b1b1b 0 25%,#141414 0 50%) 0 0/20px 20px;border-radius:6px}
+#out{width:100%;height:80px;font:12px monospace}
+.adds{display:flex;flex-wrap:wrap;gap:4px}
+</style></head>
+<body>
+<nav id="nav"></nav>
+<h1>Message Builder</h1>
+<div class="wrap">
+<div class="ed">
+<div class="card" id="tokcard" style="display:none"><h2>GitHub token</h2>
+  <div class="small">Saving needs a GitHub token, kept only in this browser on this device (each device / browser - e.g. Torn PDA
+    and Chrome - needs it once). Create a fine-grained token at
+    <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener" style="color:#e8be5a">GitHub → Settings → Developer settings → Fine-grained tokens</a>:
+    Repository access <b>Only select repositories → HeartBreakersLogo</b>, Permissions → Repository → <b>Contents: Read and write</b>.</div>
+  <div style="display:flex;gap:6px;margin-top:8px"><input id="tokIn" type="password" placeholder="github_pat_…" autocomplete="off" style="flex:1">
+    <button class="g" id="tokSave">Save token</button></div><div class="small" id="tokMsg"></div></div>
+  <div class="card"><h2>Start</h2>
+    <div class="row"><select id="tpl"></select><button class="s" id="useTpl">Use template</button></div>
+    <div class="row" style="margin-top:6px"><select id="drafts"><option value="">Saved drafts…</option></select>
+      <button class="s" id="loadDraft">Load</button><button class="s" id="delDraft">Delete</button></div>
+    <div class="row" style="margin-top:6px"><input id="draftName" placeholder="Draft name"><button class="s" id="saveDraft">Save draft</button></div>
+  </div>
+  <div class="card"><h2>Header</h2>
+    <label>Style</label>
+    <select id="hStyle"><option value="big">Heart Breakers art + title bar</option><option value="bar">Title bar only</option><option value="none">No header</option></select>
+    <label>Title bar text</label><input id="hTitle">
+  </div>
+  <div class="card"><h2>Blocks</h2>
+    <div class="adds">
+      <button class="s" data-add="heading">+ Heading</button><button class="s" data-add="text">+ Text</button>
+      <button class="s" data-add="card">+ Card</button><button class="s" data-add="tiles">+ Tiles</button>
+      <button class="s" data-add="image">+ Image</button><button class="s" data-add="divider">+ Divider</button>
+      <button class="s" data-add="spacer">+ Spacer</button>
+    </div>
+    <div id="blocks"></div>
+  </div>
+  <div class="card"><h2>Navigation buttons</h2>
+    <div class="small">Buttons under the letter, like the announcement's. Each one is its own image wrapped in its link
+      (clickable in Torn newsletters / mail once published).</div>
+    <div class="row" style="margin-top:6px">
+      <div><label>Per row</label><select id="bRow"><option>1</option><option selected>2</option><option>3</option></select></div>
+      <div><label>Button width in Torn (px)</label><input id="bW" inputmode="numeric" value="240"></div></div>
+    <div class="adds" style="margin-top:6px"><button class="s" id="bAdd">+ Add button</button>
+      <button class="s" id="bPreset">Use the announcement's buttons</button><button class="s" id="bClear">Remove all</button></div>
+    <div id="btns"></div>
+  </div>
+</div>
+<div class="rc">
+<div class="pv"><div class="card"><h2>Preview</h2><canvas id="cv"></canvas><div id="bprev"></div></div></div>
+<div class="ex">
+  <div class="card"><h2>Export</h2>
+    <label style="display:flex;gap:6px;align-items:center;margin:0 0 6px"><input type="checkbox" id="bInImg" style="width:auto" checked>
+      Include the buttons in the downloaded / copied image (not clickable there)</label>
+    <button class="g" id="dl">Download PNG</button><button id="copyImg">Copy image</button>
+    <div class="small">Copy image → paste straight into a Discord DM or chat.</div>
+    <label>Publish to the site (needs the GitHub token saved in the payout calculator on this device)</label>
+    <div class="row"><input id="pubName" placeholder="file name, e.g. welcome-message"><button class="g" id="publish">Publish</button></div>
+    <div class="small" id="pubStatus"></div>
+    <label>Torn HTML (newsletter / mail) - uses the published image</label>
+    <textarea id="out" readonly></textarea>
+    <button id="copyHtml">Copy HTML</button><button class="g" id="openNews">Open in Torn newsletter</button>
+    <div class="small">Torn mail: open a new message, press the &lt;/&gt; button and paste the HTML.</div>
+  </div>
+</div>
+</div>
+</div>
+<script>
+const CFG = __CONFIG__;
+// leaders' folder: member pages are linked by full address, the calculator sits next to this page
+document.getElementById("nav").innerHTML = [["Leaders Hub", "index.html"], ["Leader Monitor", "monitor.html"], ["Site Panels", "panels.html"], ["Announcements", CFG.member_base + "/announcements.html"],
+  ["Payouts", CFG.member_base + "/payouts.html"], ["Payout Calculator", "payout.html"],
+  ["Newsletter", CFG.member_base + "/newsletter.html"], ["Recap Archive", CFG.member_base + "/recaps.html"]]
+  .map(([t, u]) => `<a href="${u}">${t}</a>`).join(" · ");
+const C = CFG.colors, rgb = (c, a) => a == null ? `rgb(${c[0]},${c[1]},${c[2]})` : `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const load = k => { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+const COLORS = {Red: "RED", Gold: "GOLD", Steel: "TITLE", White: "TEXT", Grey: "SUB", Green: "GREEN"};
+const W = CFG.W, CX0 = CFG.CX0, CX1 = CFG.CX1, CW = CX1 - CX0;
+
+// ---------------- templates ----------------
+const TEMPLATES = {
+  "Newsletter": {head: {style: "big", title: "Faction Newsletter"}, blocks: [
+    {t: "heading", text: "THIS WEEK IN HEART BREAKERS", color: "RED", size: 40},
+    {t: "text", text: "Write your intro here. Keep it short and punchy.", color: "TEXT", size: 26, align: "center"},
+    {t: "tiles", items: "3 | Wars won\n12,450 | Respect gained\n4 | Chains 1K+"},
+    {t: "card", title: "UPCOMING", text: "- Ranked war starts Friday 18:00 TCT\n- Chain night Sunday\n- OC slots open - check the crimes tab", color: "RED"},
+    {t: "text", text: "Questions? Message a leader.", color: "SUB", size: 22, align: "center"}]},
+  "Direct message": {head: {style: "bar", title: "Message"}, blocks: [
+    {t: "heading", text: "HEY THERE", color: "GOLD", size: 40},
+    {t: "text", text: "Write your message here.\n\nEach new line starts a new line in the image.", color: "TEXT", size: 26, align: "center"}]},
+  "Announcement": {head: {style: "big", title: "Announcement"}, blocks: [
+    {t: "heading", text: "IMPORTANT", color: "RED", size: 44},
+    {t: "card", title: "WHAT'S HAPPENING", text: "Describe the announcement here.", color: "GOLD"},
+    {t: "divider"},
+    {t: "text", text: "- Point one\n- Point two\n- Point three", color: "TEXT", size: 26, align: "left"}]},
+  "Welcome": {head: {style: "big", title: "Welcome"}, blocks: [
+    {t: "heading", text: "WELCOME TO HEART BREAKERS", color: "RED", size: 40},
+    {t: "text", text: "Glad to have you with us! A few things to get you started:", color: "TEXT", size: 26, align: "center"},
+    {t: "card", title: "GETTING STARTED", text: "- Join our Discord and link your Torn account\n- Hit during wars and chains\n- Join an organized crime", color: "GOLD"}]},
+  "Blank": {head: {style: "bar", title: "Title"}, blocks: []}};
+let D = load("hb_builder_current") || JSON.parse(JSON.stringify(TEMPLATES.Newsletter));
+const imgCache = {};     // image blocks: data URL -> HTMLImageElement
+
+// ---------------- assets ----------------
+const ASSETS = {};
+function loadImg(src) { return new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; }); }
+async function loadAssets() {
+  const names = ["head_big", "head_bar", "head_top", "end", "side_l", "side_r", "btn_blank"];
+  await Promise.all(names.map(async n => ASSETS[n] = await loadImg(`builder/${n}.png`)));
+  for (const w of ["Medium", "SemiBold", "Bold"]) {
+    const f = new FontFace("Rajdhani" + w, `url(builder/Rajdhani-${w}.ttf)`);
+    document.fonts.add(await f.load());
+  }
+}
+const F = (w, size) => `${size}px Rajdhani${w}`;
+
+// ---------------- drawing helpers ----------------
+function textW(ctx, t, track) { return ctx.measureText(t).width + (track ? track * Math.max(0, [...t].length - 1) : 0); }
+// left-baseline text with the template's hard drop shadow + optional letter spacing; align: left/center/right
+function drawText(ctx, x, y, t, font, color, {track = 0, shadow = true, align = "left"} = {}) {
+  ctx.font = font; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+  const w = textW(ctx, t, track);
+  if (align == "center") x -= w / 2; else if (align == "right") x -= w;
+  const put = (dx, dy, col) => {
+    ctx.fillStyle = col;
+    if (!track) { ctx.fillText(t, x + dx, y + dy); return; }
+    let xx = x + dx; for (const ch of t) { ctx.fillText(ch, xx, y + dy); xx += ctx.measureText(ch).width + track; }
+  };
+  if (shadow) put(2, 3, rgb(C.SHADOW));
+  put(0, 0, color);
+}
+function wrap(ctx, text, font, maxW) {
+  ctx.font = font; const out = [];
+  for (const para of String(text).split("\n")) {
+    if (!para.trim()) { out.push(""); continue; }
+    let line = "";
+    for (const word of para.split(/\s+/)) {
+      const t = line ? line + " " + word : word;
+      if (ctx.measureText(t).width > maxW && line) { out.push(line); line = word; } else line = t;
+    }
+    out.push(line);
+  }
+  return out;
+}
+function rrect(ctx, x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function chamferPath(ctx, x, y, w, h, c) {
+  ctx.beginPath(); ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c); ctx.lineTo(x + w, y + h - c);
+  ctx.lineTo(x + w - c, y + h); ctx.lineTo(x + c, y + h); ctx.lineTo(x, y + h - c); ctx.lineTo(x, y + c); ctx.closePath();
+}
+function bullet(ctx, x, yBase, size) {
+  const cy = yBase - size * 0.95;
+  ctx.fillStyle = rgb(C.RED); ctx.beginPath();
+  ctx.moveTo(x, cy - size * 0.6); ctx.lineTo(x + size * 0.9, cy); ctx.lineTo(x, cy + size * 0.6); ctx.closePath(); ctx.fill();
+}
+
+// ---------------- blocks: measure + draw (draw=false only measures) ----------------
+function textBlock(ctx, y, b, draw, x0 = CX0, w = CW) {
+  const size = +b.size || 26, lh = Math.round(size * 1.35), font = F("Medium", size), col = rgb(C[b.color || "TEXT"]);
+  let h = 0;
+  for (const raw of String(b.text || "").split("\n")) {
+    const bul = /^\s*[-•]\s+/.test(raw), t = raw.replace(/^\s*[-•]\s+/, "");
+    const indent = bul ? size * 1.2 : 0;
+    const lines = raw.trim() ? wrap(ctx, t, font, w - indent - 8) : [""];
+    lines.forEach((ln, k) => {
+      const base = y + h + size;
+      if (draw && ln) {
+        const al = bul ? "left" : (b.align || "center");
+        const x = al == "center" ? x0 + w / 2 : al == "right" ? x0 + w - 4 : x0 + 4 + indent;
+        if (bul && k == 0) bullet(ctx, x0 + 6, base, size * 0.55);
+        drawText(ctx, x, base, ln, font, col, {align: al, shadow: true});
+      }
+      h += ln || raw.trim() ? lh : Math.round(lh * 0.6);
+    });
+  }
+  return h + 4;
+}
+function blockH(ctx, b) { return drawBlock(ctx, 0, b, false); }
+function drawBlock(ctx, y, b, draw) {
+  if (b.t == "heading") {
+    const size = +b.size || 40, font = F("Bold", size), lines = wrap(ctx, String(b.text || "").toUpperCase(), font, CW - 20);
+    if (draw) lines.forEach((ln, k) => drawText(ctx, CX0 + CW / 2, y + size + k * size * 1.15, ln, font, rgb(C[b.color || "RED"]), {track: 2, align: b.align || "center"}));
+    return Math.round(lines.length * size * 1.15 + size * 0.25);
+  }
+  if (b.t == "text") return textBlock(ctx, y, b, draw);
+  if (b.t == "card") {
+    const pad = 14, inner = {text: b.text, size: b.size || 24, color: "TEXT", align: b.align || "left"};
+    const bodyH = textBlock(ctx, 0, inner, false, CX0 + pad + 8, CW - 2 * pad - 16);
+    const h = pad + 44 + 10 + bodyH + pad;
+    if (draw) {
+      rrect(ctx, CX0, y, CW, h, 10); ctx.fillStyle = rgb(C.CARD_FILL, C.CARD_FILL[3] / 255 || 0.92); ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = rgb(C.CARD_EDGE); ctx.stroke();
+      drawText(ctx, CX0 + CW / 2, y + pad + 26, String(b.title || "").toUpperCase(), F("Bold", 26), rgb(C[b.color || "RED"]), {track: 2, align: "center"});
+      ctx.strokeStyle = rgb(C.RULE); ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(CX0 + pad + 4, y + pad + 38); ctx.lineTo(CX1 - pad - 4, y + pad + 38); ctx.stroke();
+      textBlock(ctx, y + pad + 54, inner, true, CX0 + pad + 8, CW - 2 * pad - 16);
+    }
+    return h;
+  }
+  if (b.t == "tiles") {
+    const items = String(b.items || "").split("\n").map(l => l.split("|").map(s => s.trim())).filter(p => p[0]).slice(0, 4);
+    if (!items.length) return 0;
+    const h = 92;
+    if (draw) {
+      const tw = CW / items.length;
+      items.forEach(([val, lab = ""], k) => {
+        const x = CX0 + tw * k, cx = x + tw / 2;
+        rrect(ctx, x + 6, y, tw - 12, 84, 8); ctx.fillStyle = "rgb(24,12,13)"; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = rgb(C.RULE); ctx.stroke();
+        let size = 34; ctx.font = F("Bold", size);
+        while (size > 16 && ctx.measureText(val).width > tw - 32) { size -= 2; ctx.font = F("Bold", size); }
+        drawText(ctx, cx, y + 46, val, F("Bold", size), rgb(C[b.color || "TEXT"]), {align: "center"});
+        drawText(ctx, cx, y + 72, lab.toUpperCase(), F("SemiBold", 18), rgb(C.SUB), {track: 1, align: "center", shadow: false});
+      });
+    }
+    return h;
+  }
+  if (b.t == "divider") {
+    if (draw) { ctx.strokeStyle = rgb(C.RULE); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(CX0 + 30, y + 10); ctx.lineTo(CX1 - 30, y + 10); ctx.stroke(); }
+    return 20;
+  }
+  if (b.t == "spacer") return +b.size || 30;
+  if (b.t == "image") {
+    const im = b.src && imgCache[b.src];
+    if (!im) return 0;
+    const maxW = CW * Math.min(100, Math.max(10, +b.width || 100)) / 100;
+    const w = Math.min(maxW, im.naturalWidth * 2), h = im.naturalHeight * w / im.naturalWidth;
+    if (draw) ctx.drawImage(im, CX0 + (CW - w) / 2, y, w, h);
+    return Math.round(h);
+  }
+  return 0;
+}
+
+// red grid panel (same as generate.py red_panel): gradient fill, grid, glowing border, cut corners
+function redPanel(ctx, x, y, w, h, ch = 14, grid = 32) {
+  ctx.save();
+  chamferPath(ctx, x, y, w, h, ch); ctx.save(); ctx.clip();
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, "rgb(20,5,6)"); g.addColorStop(0.5, "rgb(46,9,10)"); g.addColorStop(1, "rgb(20,5,6)");
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "rgb(90,18,18)"; ctx.lineWidth = 1; ctx.beginPath();
+  for (let gx = grid / 2; gx < w; gx += grid) { ctx.moveTo(x + gx + 0.5, y); ctx.lineTo(x + gx + 0.5, y + h); }
+  for (let gy = grid / 2; gy < h; gy += grid) { ctx.moveTo(x, y + gy + 0.5); ctx.lineTo(x + w, y + gy + 0.5); }
+  ctx.stroke(); ctx.restore();
+  chamferPath(ctx, x, y, w, h, ch);
+  ctx.shadowColor = rgb(C.GLOW, 0.9); ctx.shadowBlur = 14; ctx.lineWidth = 4; ctx.strokeStyle = rgb(C.GLOW, 0.6); ctx.stroke();
+  ctx.shadowBlur = 0; ctx.lineWidth = 3; ctx.strokeStyle = "rgb(214,46,38)"; ctx.stroke();
+  ctx.restore();
+}
+function sideColumns(ctx, y, h) {
+  ctx.fillStyle = rgb(C.INTERIOR); ctx.fillRect(0, y, W, h);
+  for (const [img, x] of [[ASSETS.side_l, 0], [ASSETS.side_r, W - CFG.SIDE_W]]) {
+    let yy = 0, flip = false;
+    while (yy < h) {
+      const ph = Math.min(img.height, h - yy);
+      ctx.save();
+      if (flip) {   // mirrored copy: the piece's bottom ph rows, flipped (same as generate.py side_columns)
+        ctx.translate(x, y + yy + ph); ctx.scale(1, -1);
+        ctx.drawImage(img, 0, img.height - ph, img.width, ph, 0, 0, img.width, ph);
+      } else ctx.drawImage(img, 0, 0, img.width, ph, x, y + yy, img.width, ph);
+      ctx.restore();
+      yy += img.height; flip = !flip;
+    }
+  }
+}
+
+// ---------------- render ----------------
+const cv = $("cv");
+function render() {
+  if (!ASSETS.end) return;
+  const meas = document.createElement("canvas").getContext("2d");
+  const head = CFG.heads[D.head.style] || CFG.heads.bar;
+  const gap = 18;
+  let contentH = 0;
+  D.blocks.forEach((b, k) => { const h = blockH(meas, b); if (h) contentH += h + (k ? gap : 0); });
+  contentH = Math.max(contentH, 40);
+  const bodyH = CFG.PAD_TOP + contentH + CFG.PAD_BOT + 12;
+  const innerH = head.h + bodyH + CFG.end_h, P = CFG.OUTER_PAD;
+  cv.width = W + 2 * P; cv.height = innerH + 2 * P;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.save(); ctx.translate(P, P);
+  chamferPath(ctx, 0, 0, W, innerH, CFG.CHAMFER); ctx.clip();         // cut outside the frame
+  // body first (columns + panel), then header + end on top
+  sideColumns(ctx, head.h, bodyH);
+  redPanel(ctx, CFG.PANEL_X0, head.h + 8, CFG.PANEL_X1 - CFG.PANEL_X0, bodyH - 16);
+  ctx.drawImage(ASSETS[head.img.replace(".png", "")], 0, 0);
+  if (head.ty && D.head.title) drawText(ctx, 136, head.ty, D.head.title.toUpperCase(), F("Bold", 52), rgb(C.TITLE), {track: 3});
+  let y = head.h + CFG.PAD_TOP;
+  D.blocks.forEach(b => { const h = drawBlock(ctx, y, b, true); if (h) y += h + gap; });
+  ctx.drawImage(ASSETS.end, 0, head.h + bodyH);
+  ctx.restore();
+  save("hb_builder_current", D);
+  updateHtml();
+}
+
+// ---------------- navigation buttons ----------------
+// D.buttons = [{label, url, icon}], D.btnRow (per row), D.btnW (display width in Torn). Each button is drawn like
+// generate.py render_button: gunmetal plate (btn_blank.png) + red icon plate (icons/<icon>.png) + label.
+if (!D.buttons) D.buttons = [];
+if (!D.btnRow) D.btnRow = 2;
+if (!D.btnW) D.btnW = 240;
+const iconImgs = {};
+function iconImg(name) {
+  if (!name) return null;
+  if (!iconImgs[name]) { iconImgs[name] = null; loadImg(`builder/icons/${name}.png`).then(im => { iconImgs[name] = im; renderButtons(); }).catch(() => {}); }
+  return iconImgs[name];
+}
+function drawButton(b) {
+  const B = CFG.btn, c = document.createElement("canvas"); c.width = B.w; c.height = B.h;
+  const ctx = c.getContext("2d");
+  if (ASSETS.btn_blank) ctx.drawImage(ASSETS.btn_blank, 0, 0);
+  const ic = iconImg(b.icon);
+  if (ic) ctx.drawImage(ic, B.plate_cx - ic.width / 2, B.h / 2 - ic.height / 2);
+  const text = String(b.label || "").toUpperCase(), x0 = ic || b.icon ? B.text_x0 : 28, maxW = B.w - x0 - 28;
+  let size = 40; ctx.font = F("Bold", size);
+  while (size > 22 && ctx.measureText(text).width > maxW) { size -= 2; ctx.font = F("Bold", size); }
+  const m = ctx.measureText(text), cx = x0 + (B.w - x0 - 22) / 2;
+  const y = B.h / 2 + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) / 2;
+  drawText(ctx, cx, y, text, F("Bold", size), "rgb(232,232,232)", {align: "center"});
+  return c;
+}
+let btnCanvases = [];
+function renderButtons() {
+  btnCanvases = D.buttons.map(drawButton);
+  const box = $("bprev"); box.innerHTML = "";
+  const per = +D.btnRow || 2;
+  btnCanvases.forEach(c => { c.style.width = `calc(${100 / per}% - 6px)`; c.style.maxWidth = "320px"; box.appendChild(c); });
+}
+// panel + buttons below it, as one image (Download / Copy when "include buttons" is ticked)
+function compositeCanvas() {
+  if (!$("bInImg").checked || !btnCanvases.length) return cv;
+  const per = +D.btnRow || 2, gap = 16, B = CFG.btn;
+  const scale = Math.min(1, (cv.width - 2 * CFG.OUTER_PAD - gap * (per - 1)) / (per * B.w));
+  const bw = B.w * scale, bh = B.h * scale, rows = Math.ceil(btnCanvases.length / per);
+  const out = document.createElement("canvas"); out.width = cv.width; out.height = cv.height + rows * (bh + gap);
+  const ctx = out.getContext("2d"); ctx.drawImage(cv, 0, 0);
+  btnCanvases.forEach((c, k) => {
+    const r = Math.floor(k / per), n = Math.min(per, btnCanvases.length - r * per), col = k % per;
+    const rowW = n * bw + (n - 1) * gap, x = (out.width - rowW) / 2 + col * (bw + gap);
+    ctx.drawImage(c, x, cv.height + r * (bh + gap), bw, bh);
+  });
+  return out;
+}
+function buttonForm() {
+  const opts = sel => `<option value="">No icon</option>` + CFG.icons.map(([n, l]) =>
+    `<option value="${n}"${n == sel ? " selected" : ""}>${esc(l)}</option>`).join("");
+  $("bRow").value = D.btnRow; $("bW").value = D.btnW;
+  $("btns").innerHTML = D.buttons.map((b, i) => `<div class="blk" data-b="${i}"><div class="bh"><b>Button ${i + 1}</b>
+    <button class="s" data-bmv="-1">▲</button><button class="s" data-bmv="1">▼</button><button class="s" data-bdel="1">✕</button></div>
+    <label>Text</label><input data-bk="label" value="${esc(b.label || "")}">
+    <label>Link</label><input data-bk="url" value="${esc(b.url || "")}" placeholder="https://…">
+    <label>Icon</label><select data-bk="icon">${opts(b.icon)}</select></div>`).join("")
+    || `<div class="small" style="margin-top:6px">No buttons - add one or use the announcement's.</div>`;
+  renderButtons();
+}
+$("btns").addEventListener("input", e => { const box = e.target.closest("[data-b]"); if (!box || !e.target.dataset.bk) return;
+  D.buttons[+box.dataset.b][e.target.dataset.bk] = e.target.value; renderButtons(); save("hb_builder_current", D); updateHtml(); });
+$("btns").addEventListener("click", e => { const bt = e.target.closest("button"), box = e.target.closest("[data-b]"); if (!bt || !box) return;
+  const i = +box.dataset.b;
+  if (bt.dataset.bmv) { const j = i + +bt.dataset.bmv; if (j < 0 || j >= D.buttons.length) return; [D.buttons[i], D.buttons[j]] = [D.buttons[j], D.buttons[i]]; }
+  else if (bt.dataset.bdel) D.buttons.splice(i, 1);
+  buttonForm(); save("hb_builder_current", D); updateHtml(); });
+$("bAdd").onclick = () => { D.buttons.push({label: "New Button", url: "", icon: "gi-checked-shield"}); buttonForm(); save("hb_builder_current", D); };
+$("bPreset").onclick = () => { D.buttons = JSON.parse(JSON.stringify(CFG.preset_buttons || [])); buttonForm(); save("hb_builder_current", D); updateHtml(); };
+$("bClear").onclick = () => { if (!D.buttons.length || !confirm("Remove all buttons?")) return; D.buttons = []; buttonForm(); save("hb_builder_current", D); updateHtml(); };
+$("bRow").onchange = () => { D.btnRow = +$("bRow").value; renderButtons(); save("hb_builder_current", D); updateHtml(); };
+$("bW").oninput = () => { $("bW").value = $("bW").value.replace(/\D/g, ""); D.btnW = +$("bW").value || 240; save("hb_builder_current", D); updateHtml(); };
+
+// ---------------- editor ----------------
+const colorSel = (k, v, def) => `<select data-k="${k}">${Object.entries(COLORS).map(([n, c]) =>
+  `<option value="${c}"${(v || def) == c ? " selected" : ""}>${n}</option>`).join("")}</select>`;
+const alignSel = (v, def = "center") => `<select data-k="align">${["left", "center", "right"].map(a =>
+  `<option${(v || def) == a ? " selected" : ""}>${a}</option>`).join("")}</select>`;
+function blockForm(b) {
+  switch (b.t) {
+    case "heading": return `<label>Text</label><input data-k="text" value="${esc(b.text || "")}">
+      <div class="row"><div><label>Colour</label>${colorSel("color", b.color, "RED")}</div>
+      <div><label>Size</label><input data-k="size" inputmode="numeric" value="${b.size || 40}"></div><div><label>Align</label>${alignSel(b.align)}</div></div>`;
+    case "text": return `<label>Text (a line starting with "- " gets a bullet)</label><textarea data-k="text">${esc(b.text || "")}</textarea>
+      <div class="row"><div><label>Colour</label>${colorSel("color", b.color, "TEXT")}</div>
+      <div><label>Size</label><input data-k="size" inputmode="numeric" value="${b.size || 26}"></div><div><label>Align</label>${alignSel(b.align)}</div></div>`;
+    case "card": return `<label>Card title</label><input data-k="title" value="${esc(b.title || "")}">
+      <label>Card text</label><textarea data-k="text">${esc(b.text || "")}</textarea>
+      <div class="row"><div><label>Title colour</label>${colorSel("color", b.color, "RED")}</div>
+      <div><label>Text size</label><input data-k="size" inputmode="numeric" value="${b.size || 24}"></div><div><label>Align</label>${alignSel(b.align, "left")}</div></div>`;
+    case "tiles": return `<label>Tiles - one per line: value | label (max 4)</label><textarea data-k="items">${esc(b.items || "")}</textarea>
+      <label>Value colour</label>${colorSel("color", b.color, "TEXT")}`;
+    case "image": return `<label>Picture</label><input type="file" accept="image/*" data-file="1">
+      <label>Width (% of panel)</label><input data-k="width" inputmode="numeric" value="${b.width || 100}">
+      <div class="small">Images are kept in this browser's draft only - very large pictures may not save.</div>`;
+    case "spacer": return `<label>Height (px)</label><input data-k="size" inputmode="numeric" value="${b.size || 30}">`;
+    default: return `<div class="small">A thin red line.</div>`;
+  }
+}
+const NAMES = {heading: "Heading", text: "Text", card: "Card", tiles: "Tiles", image: "Image", divider: "Divider", spacer: "Spacer"};
+function renderEditor() {
+  $("hStyle").value = D.head.style; $("hTitle").value = D.head.title || "";
+  $("blocks").innerHTML = D.blocks.map((b, i) => `<div class="blk" data-i="${i}"><div class="bh"><b>${NAMES[b.t]}</b>
+    <button class="s" data-mv="-1">▲</button><button class="s" data-mv="1">▼</button><button class="s" data-dup="1">⧉</button><button class="s" data-del="1">✕</button></div>
+    ${blockForm(b)}</div>`).join("") || `<div class="small">No blocks yet - add one above.</div>`;
+  if (!D.buttons) D.buttons = [];
+  buttonForm();
+  render();
+}
+let timer = null;
+const later = () => { clearTimeout(timer); timer = setTimeout(render, 120); };
+$("blocks").addEventListener("input", e => {
+  const el = e.target, box = el.closest(".blk"); if (!box || !el.dataset.k) return;
+  const b = D.blocks[+box.dataset.i];
+  b[el.dataset.k] = ["size", "width"].includes(el.dataset.k) ? el.value.replace(/\D/g, "") : el.value;
+  if (el.value !== b[el.dataset.k]) el.value = b[el.dataset.k];
+  later();
+});
+$("blocks").addEventListener("change", e => {
+  const el = e.target, box = el.closest(".blk"); if (!box) return;
+  if (el.dataset.file && el.files[0]) {
+    const r = new FileReader();
+    r.onload = () => { const src = r.result; loadImg(src).then(im => { imgCache[src] = im; D.blocks[+box.dataset.i].src = src; render(); }); };
+    r.readAsDataURL(el.files[0]);
+  } else if (el.tagName == "SELECT") { D.blocks[+box.dataset.i][el.dataset.k] = el.value; render(); }
+});
+$("blocks").addEventListener("click", e => {
+  const bt = e.target.closest("button"), box = e.target.closest(".blk"); if (!bt || !box) return;
+  const i = +box.dataset.i;
+  if (bt.dataset.mv) { const j = i + +bt.dataset.mv; if (j < 0 || j >= D.blocks.length) return; [D.blocks[i], D.blocks[j]] = [D.blocks[j], D.blocks[i]]; }
+  else if (bt.dataset.dup) D.blocks.splice(i + 1, 0, JSON.parse(JSON.stringify(D.blocks[i])));
+  else if (bt.dataset.del) D.blocks.splice(i, 1);
+  renderEditor();
+});
+document.querySelectorAll("[data-add]").forEach(bt => bt.onclick = () => {
+  const t = bt.dataset.add;
+  const def = {heading: {text: "NEW HEADING", color: "RED", size: 40}, text: {text: "Your text here.", color: "TEXT", size: 26, align: "center"},
+    card: {title: "CARD TITLE", text: "Card text.", color: "RED"}, tiles: {items: "100 | Label\n200 | Label"}, image: {width: 100},
+    divider: {}, spacer: {size: 30}}[t];
+  D.blocks.push(Object.assign({t}, def)); renderEditor();
+  setTimeout(() => $("blocks").lastElementChild.scrollIntoView({behavior: "smooth", block: "nearest"}), 50);
+});
+$("hStyle").onchange = () => { D.head.style = $("hStyle").value; render(); };
+$("hTitle").oninput = () => { D.head.title = $("hTitle").value; later(); };
+
+// templates + drafts
+$("tpl").innerHTML = Object.keys(TEMPLATES).map(n => `<option>${n}</option>`).join("");
+$("useTpl").onclick = () => { if (!confirm("Replace the current message with this template?")) return;
+  D = JSON.parse(JSON.stringify(TEMPLATES[$("tpl").value])); renderEditor(); };
+function drafts() { return load("hb_builder_drafts") || {}; }
+function renderDrafts() { $("drafts").innerHTML = `<option value="">Saved drafts…</option>` +
+  Object.keys(drafts()).sort().map(n => `<option>${esc(n)}</option>`).join(""); }
+$("saveDraft").onclick = () => { const n = $("draftName").value.trim() || D.head.title || "Draft";
+  const all = drafts(); all[n] = D; try { localStorage.setItem("hb_builder_drafts", JSON.stringify(all)); }
+  catch (e) { return alert("Couldn't save - the draft is too big (large images). Remove an image and try again."); }
+  renderDrafts(); $("drafts").value = n; };
+$("loadDraft").onclick = () => { const n = $("drafts").value; if (!n) return; D = JSON.parse(JSON.stringify(drafts()[n]));
+  D.blocks.filter(b => b.src && !imgCache[b.src]).forEach(b => loadImg(b.src).then(im => { imgCache[b.src] = im; render(); }));
+  $("draftName").value = n; renderEditor(); };
+$("delDraft").onclick = () => { const n = $("drafts").value; if (!n || !confirm(`Delete draft "${n}"?`)) return;
+  const all = drafts(); delete all[n]; save("hb_builder_drafts", all); renderDrafts(); };
+
+
+// token box: check the token can write to the repo, then keep it in this browser (same key the calculator uses)
+async function saveToken() {
+  const t = document.getElementById("tokIn").value.trim(); if (!t) return;
+  const m = document.getElementById("tokMsg"); m.textContent = "Checking…";
+  try {
+    const r = await fetch(`https://api.github.com/repos/${CFG.repo}`, {headers: {Authorization: "Bearer " + t, Accept: "application/vnd.github+json"}});
+    if (!r.ok) throw new Error("GitHub said " + r.status + " - check the token and its repository access");
+    const j = await r.json();
+    if (j.permissions && !j.permissions.push) throw new Error("this token can read but not write - set Contents: Read and write");
+    localStorage.setItem("hb_gh_token", JSON.stringify(t));
+    m.textContent = "Saved ✓ - reloading…"; setTimeout(() => location.reload(), 600);
+  } catch (e) { m.textContent = "Not saved: " + e.message; }
+}
+document.getElementById("tokSave").onclick = saveToken;
+if (!load("hb_gh_token")) document.getElementById("tokcard").style.display = "block";
+
+// ---------------- export ----------------
+const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50) || "message";
+function pngBlob(c) { return new Promise(ok => (c || compositeCanvas()).toBlob(ok, "image/png")); }
+const canvasBlob = c => new Promise(ok => c.toBlob(ok, "image/png"));
+$("dl").onclick = async () => { const a = document.createElement("a"); a.href = URL.createObjectURL(await pngBlob());
+  a.download = slugify($("pubName").value || D.head.title) + ".png"; document.body.appendChild(a); a.click(); a.remove(); };
+$("copyImg").onclick = async () => {
+  try { await navigator.clipboard.write([new ClipboardItem({"image/png": pngBlob()})]); $("copyImg").textContent = "Copied!"; }
+  catch (e) { alert("This browser can't copy images - use Download PNG instead."); }
+};
+// publish: commit data/panels/<name>.png via the GitHub API (token saved by the payout calculator)
+let published = load("hb_builder_published") || "";
+let publishedBtns = load("hb_builder_published_btns") || [];     // [image url, ...] matching D.buttons when published
+async function ghPut(path, blob, tok, msg) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/${path}`, {method: "PUT",
+    headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json"},
+    body: JSON.stringify({message: msg, content: btoa(bin), branch: CFG.branch})});
+  if (!r.ok) throw new Error(r.status + " " + ((await r.json().catch(() => ({}))).message || ""));
+}
+$("publish").onclick = async () => {
+  const tok = load("hb_gh_token");
+  if (!tok) { $("tokcard").style.display = "block"; $("tokcard").scrollIntoView({behavior: "smooth"});
+    return alert("No GitHub token on this device yet - paste one in the GitHub token box at the top. (Download PNG / Copy image work without one.)"); }
+  const name = slugify($("pubName").value || D.head.title) + "-" + Date.now().toString(36);
+  $("pubStatus").textContent = "Publishing…";
+  try {
+    // the letter itself (WITHOUT the buttons - in Torn each button is its own clickable image)
+    await ghPut(`data/panels/${name}.png`, await canvasBlob(cv), tok, `Message Builder: ${name}`);
+    const urls = [];
+    for (let k = 0; k < btnCanvases.length; k++) {
+      $("pubStatus").textContent = `Publishing… button ${k + 1} of ${btnCanvases.length}`;
+      await ghPut(`data/panels/${name}-btn-${k + 1}.png`, await canvasBlob(btnCanvases[k]), tok, `Message Builder: ${name} button ${k + 1}`);
+      urls.push(`${CFG.member_base}/panels/${name}-btn-${k + 1}.png`);
+    }
+    published = `${CFG.member_base}/panels/${name}.png`; save("hb_builder_published", published);
+    publishedBtns = urls; save("hb_builder_published_btns", urls);
+    $("pubStatus").innerHTML = `Published ✓ - online in a few minutes: <a href="${published}" target="_blank" style="color:#e8be5a">${name}.png</a>`;
+    updateHtml();
+  } catch (e) { $("pubStatus").textContent = "Publish failed: " + e.message; }
+};
+function torn() {
+  const title = D.head.title || "Faction Message";
+  if (!published) return {t: title, h: ""};
+  let html = `<p style="text-align:center;"><img src="${published}" alt="${esc(title)}" width="600"></p>`;
+  // buttons: one centred paragraph, NO whitespace between the <a> tags (Torn wraps the pair otherwise),
+  // <br> after each row, torn.com links made site-relative - same as the announcement's buttons
+  const btns = D.buttons.map((b, k) => publishedBtns[k] ? [b, publishedBtns[k]] : null).filter(Boolean);
+  if (btns.length) {
+    const per = +D.btnRow || 2, w = +D.btnW || 240;
+    const rel = u => String(u || "#").replace(/^https?:\/\/(www\.)?torn\.com(?=\/)/, "");
+    html += `<p style="text-align:center;">` + btns.map(([b, img], k) =>
+      `<a href="${esc(rel(b.url))}"><img src="${img}" alt="${esc(b.label || "")}" width="${w}"></a>` +
+      ((k + 1) % per === 0 && k + 1 < btns.length ? "<br>" : "")).join("") + `</p>`;
+    if (btns.length < D.buttons.length) html += `<!-- ${D.buttons.length - btns.length} button(s) added after publishing - publish again to include them -->`;
+  }
+  return {t: title, h: html};
+}
+function updateHtml() { $("out").value = torn().h || "Publish the image first - the HTML uses its link."; }
+function copyText(t) {
+  if (navigator.clipboard && document.hasFocus()) return navigator.clipboard.writeText(t);
+  const a = document.createElement("textarea"); a.value = t; document.body.appendChild(a); a.select();
+  try { document.execCommand("copy"); } catch (e) {} a.remove(); return Promise.resolve();
+}
+$("copyHtml").onclick = () => { if (!published) return alert("Publish the image first."); copyText(torn().h).then(() => $("copyHtml").textContent = "Copied!"); };
+$("openNews").onclick = () => {
+  if (!published) return alert("Publish the image first.");
+  const d = torn(), bytes = new TextEncoder().encode(JSON.stringify(d)); let s = ""; bytes.forEach(b => s += String.fromCharCode(b));
+  const link = "https://www.torn.com/factions.php?step=your&type=1#/tab=controls&option=newsletter&hbnews=" +
+    btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  copyText(d.h).catch(() => {}).finally(() => window.open(link, "_blank"));
+};
+
+renderDrafts();
+D.blocks.filter(b => b.src).forEach(b => loadImg(b.src).then(im => { imgCache[b.src] = im; render(); }).catch(() => {}));
+loadAssets().then(renderEditor).catch(e => { document.querySelector(".pv .card").insertAdjacentHTML("beforeend",
+  `<div class="small" style="color:#e4382e">Couldn't load the frame art (${esc(e.message || e)}).</div>`); renderEditor(); });
+</script>
+</body></html>

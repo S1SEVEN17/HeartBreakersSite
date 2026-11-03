@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<!--
+  Heart Breakers - War Payout Calculator (leadership page)
+  =========================================================
+  Published by generate.py into the LEADERSHIP secret folder (LEADER_DIR) as
+  payout.html, with __CONFIG__ replaced by a JSON object:
+    {repo, branch, receipts_url, faction_id, defaults:{...}}
+  Everything runs in the browser: the API key is kept in localStorage on this
+  device only and requests go straight to api.torn.com.
+
+  Flow
+    1. API key (Faction API access) -> list recent ranked wars
+    2. Generate: war report (/faction/{id}/rankedwarreport) + the faction attack
+       log for the war window (/faction/attacks?from&to, paged via
+       _metadata.links, throttled) -> per-member stats
+    3. Settings (auto-saved, presets): mode, budget, expenses, minimum attacks,
+       filters, metric weights, bonus / penalty rules, individual adjustments
+    4. Results + Payment Execution: Torn vault links ("Add to balance"),
+       open-all / copy-all, paid check-boxes (remembered per war)
+    5. Save Receipt: opens GitHub with data/payouts/<war>-<time>.json
+       pre-filled -> Commit -> the bot renders the receipt image, adds it to the
+       members' Payouts archive and posts it to Discord.
+
+  Stat rules (attacks by OUR members only)
+    success results : attacked / hospitalized / mugged (+ special)
+    war target      : defender is in this war's enemy faction (or the attack is
+                      flagged is_ranked_war)
+    chain bonus hit : chain number 10, 25, 50, 100, 250 ... (respect from these
+                      is excluded from Respect when the filter is on)
+-->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>War Payout Calculator - Heart Breakers</title>
+<style>
+:root{--bg:#100a0b;--card:#1a1012;--card2:#22141a;--edge:#5c1c1a;--red:#e4382e;--gold:#e8be5a;--txt:#ddd;--sub:#9a9a9c;--ok:#78c878}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--txt);font:15px system-ui,sans-serif;margin:0 auto;padding:12px;max-width:1000px}
+h1{color:var(--red);text-align:center;margin:8px 0 2px;font-size:24px;letter-spacing:1px}
+.sub{color:var(--sub);text-align:center;margin-bottom:14px;font-size:13px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:12px 14px;margin:12px 0}
+.card h2{color:var(--gold);font-size:16px;margin:0 0 10px;letter-spacing:1px;text-transform:uppercase}
+label{display:block;font-size:13px;color:var(--sub);margin:8px 0 3px}
+input,select{background:#0d0809;color:var(--txt);border:1px solid var(--edge);border-radius:6px;padding:8px;font-size:15px;width:100%}
+input[type=checkbox]{width:auto}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1 1 160px}
+button{background:var(--red);color:#fff;border:0;border-radius:6px;padding:9px 14px;font-weight:600;font-size:14px;cursor:pointer;margin:4px 4px 4px 0}
+button.alt{background:#3a1d20}button.gold{background:#a07a22}button:disabled{opacity:.5}
+.small{font-size:12px;color:var(--sub)}
+#newsPreview p{margin:0}
+.card h3{color:var(--gold);font-size:13px;letter-spacing:1px;text-transform:uppercase}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--sub);font-weight:600;text-align:right;padding:6px 4px;border-bottom:1px solid var(--edge);white-space:nowrap}
+td{text-align:right;padding:6px 4px;border-bottom:1px solid #2a1719;white-space:nowrap}
+th:nth-child(2),td:nth-child(2){text-align:left}
+tr.zero td{color:#777}
+.tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;margin-left:4px}
+.tag.b{background:#24402a;color:var(--ok)}.tag.p{background:#4a1d1d;color:#f88}
+.scroll{overflow-x:auto}
+.bar{height:8px;background:#2a1719;border-radius:4px;overflow:hidden;margin:8px 0}.bar>div{height:100%;background:var(--red);width:0}
+.metric{display:grid;grid-template-columns:1fr 90px 120px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #2a1719}
+.metric b{font-size:14px}.metric .small{grid-column:1/4}
+.list .item{display:flex;gap:6px;align-items:center;margin:4px 0}.list .item>*{flex:1}.list .item button{flex:0 0 auto}
+.sum{display:flex;flex-wrap:wrap;gap:8px}.sum div{flex:1 1 140px;background:var(--card2);border:1px solid var(--edge);border-radius:8px;padding:8px;text-align:center}
+.sum b{display:block;font-size:18px;color:#fff}.sum span{font-size:11px;color:var(--sub);text-transform:uppercase}
+.warn{color:#f99}.good{color:var(--ok)}
+a{color:var(--gold)}
+.pay td:first-child,.pay th:first-child{text-align:center}
+.paid{opacity:.45}
+</style></head>
+<body>
+<h1>WAR PAYOUT CALCULATOR</h1>
+<div class="sub">Heart Breakers leadership tool · calculations run in your browser</div>
+
+<!-- 1. API key + war -->
+<div class="card">
+  <h2>War</h2>
+  <label>Torn API key (Faction API access) - only needed for wars not saved yet; stays on this device</label>
+  <div class="row"><input id="key" type="password" placeholder="16-character API key" autocomplete="off">
+    <div style="flex:0 0 auto"><label style="margin:0"><input type="checkbox" id="remember" checked> Remember on this device</label></div></div>
+  <div class="row" style="margin-top:6px">
+    <div><label>Ranked war</label><select id="warSel"><option value="">Load wars first</option></select></div>
+    <div style="flex:0 0 auto;align-self:end"><button id="loadWars" class="alt">Load wars</button></div>
+  </div>
+  <label>…or War ID (the number after rankID= in the war's URL)</label>
+  <input id="warId" inputmode="numeric" data-num="id" placeholder="e.g. 51701">
+  <button id="generate">Generate war report</button>
+  <div class="bar" id="barWrap" style="display:none"><div id="bar"></div></div>
+  <div class="small" id="status"></div>
+</div>
+
+<!-- war summary -->
+<div class="card" id="summaryCard" style="display:none"><h2>War Summary</h2><div class="sum" id="summary"></div></div>
+
+<!-- 2. settings -->
+<div class="card">
+  <h2>Payout Settings</h2>
+  <div class="row">
+    <div><label>Payout mode</label><select id="mode"><option value="pct">Percentage - split the budget by metric weights (%)</option><option value="flat">Flat rate - fixed $ per metric unit</option></select></div>
+    <div><label>Total payout budget ($)</label><input id="budget" inputmode="numeric" data-num="int"></div>
+    <div><label>Minimum total hits to qualify (war + outside)</label><input id="minHits" inputmode="numeric" data-num="int"></div>
+  </div>
+  <label>Faction expenses (taken off the budget before members are paid)</label>
+  <div class="list" id="expenses"></div>
+  <button class="alt" id="addExp">+ Add expense</button>
+  <div class="small" id="expTotal"></div>
+</div>
+
+<div class="card">
+  <h2>Filters</h2>
+  <label><input type="checkbox" id="fChainOnly"> Outside hits only count if they added to the chain</label>
+  <label><input type="checkbox" id="fNoBonus"> Exclude chain bonus respect (10, 25, 50, 100, 250 … hits)</label>
+  <label><input type="checkbox" id="fWarRespect"> Respect only from war targets</label>
+</div>
+
+<div class="card">
+  <h2>Performance Metrics</h2>
+  <div class="small" id="metricHelp"></div>
+  <div id="metrics"></div>
+  <div class="small" id="weightTotal"></div>
+</div>
+
+<div class="card">
+  <h2>Bonus &amp; Penalty Rules</h2>
+  <div class="small">Applied after the base payout. Example: War Hits ≥ 200 → bonus $5,000,000; War Hits &lt; 10 → penalty 50%.</div>
+  <div class="list" id="rules"></div>
+  <button class="alt" id="addBonus">+ Bonus rule</button><button class="alt" id="addPenalty">+ Penalty rule</button>
+  <label>Individual adjustments</label>
+  <div class="list" id="adjust"></div>
+  <button class="alt" id="addAdj">+ Individual bonus / penalty</button>
+</div>
+
+<div class="card">
+  <h2>Presets</h2>
+  <div class="row"><select id="presetSel"><option value="">Saved presets…</option></select>
+    <div style="flex:0 0 auto"><button class="alt" id="loadPreset">Load</button><button class="alt" id="delPreset">Delete</button></div></div>
+  <div class="row"><input id="presetName" placeholder="Preset name"><div style="flex:0 0 auto"><button class="gold" id="savePreset">Save preset</button><button class="alt" id="resetAll">Reset to defaults</button></div></div>
+</div>
+
+<!-- 3. results -->
+<div class="card" id="resultsCard" style="display:none">
+  <h2>Payout Results</h2>
+  <div class="sum" id="totals"></div>
+  <h3 style="margin:14px 0 6px">Metrics</h3>
+  <div class="small" id="metricsNote"></div>
+  <div class="scroll"><table id="metricsTable"></table></div>
+  <h3 style="margin:14px 0 6px">Members</h3>
+  <div class="scroll"><table id="results"></table></div>
+</div>
+
+<!-- 4. payment execution -->
+<div class="card" id="payCard" style="display:none">
+  <h2>Payment Execution</h2>
+  <div class="small">Needs Money Giving / Money Managing permission in Torn. Each link opens the faction vault with the
+    member and amount filled in - you still press the button in Torn. Tick members off as you go (remembered for this war).</div>
+  <button id="openAll">Open all in tabs</button>
+  <label class="small" style="display:inline-block">Delay <input id="openDelay" inputmode="decimal" data-num="dec" value="3"
+    style="width:60px" inputmode="decimal"> s per tab</label><button class="alt" id="copyLinks">Copy all links</button>
+  <button class="alt" id="copyBatch">Copy batch link</button>
+  <div class="small" id="openStatus"></div>
+  <div class="small">Batch link = one link for the "Batch Balance" userscript (adds every amount in one go).</div>
+  <div class="scroll"><table id="payTable" class="pay"></table></div>
+  <div class="small" id="payProgress"></div>
+</div>
+
+<!-- 5. receipt -->
+<div class="card" id="receiptCard" style="display:none">
+  <h2>Receipt</h2>
+  <label>Paid by (shown on the receipt)</label><input id="paidBy" placeholder="Your name">
+  <label>Note (optional, shown on the receipt)</label><input id="note" placeholder="e.g. 10% faction tax, caches sold">
+  <details id="ghBox" style="margin:8px 0"><summary class="small">GitHub token for one-click saving - <span id="ghState"></span></summary>
+    <div class="small">With a token saved, <b>Save receipt</b> commits the receipt straight to the archive - nothing to paste.
+      Create a fine-grained token at <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → Settings → Developer settings → Fine-grained tokens</a>:
+      Repository access <b>Only select repositories → HeartBreakersLogo</b>, Permissions → Repository → <b>Contents: Read and write</b>.
+      It's stored only in this browser (like your API key).</div>
+    <div class="row"><input id="ghToken" type="password" placeholder="github_pat_…" autocomplete="off">
+      <div style="flex:0 0 auto"><button class="alt" id="ghSave">Save token</button><button class="alt" id="ghClear">Remove</button></div></div>
+  </details>
+  <button class="gold" id="saveReceipt">Save receipt to archive</button>
+  <div class="small" id="saveStatus"></div>
+  <button class="alt" id="copyJson">Copy receipt data</button><button class="alt" id="dlJson">Download</button>
+  <div class="small">"Save receipt" opens GitHub with the receipt file filled in - press <b>Commit changes</b>.
+    Within a few minutes the bot draws the receipt, adds it to the members' <a id="rcptLink" href="#">Payouts archive</a>
+    and posts it to Discord.</div>
+  <button class="gold" id="makeNews">Create Newsletter</button>
+  <div id="newsBox" style="display:none">
+    <h3 style="margin:14px 0 6px">Faction Newsletter</h3>
+    <label>Title</label><input id="newsTitle">
+    <label>Message (optional, shown at the top)</label>
+    <textarea id="newsMsg" rows="3" style="width:100%;box-sizing:border-box" placeholder="e.g. Great effort everyone - next war starts Friday."></textarea>
+    <div class="small" id="newsWarn" style="color:#e8be5a"></div>
+    <div class="small">Preview</div>
+    <div id="newsPreview" class="tornLike" style="background:#fff;color:#222;border-radius:8px;padding:10px;max-height:520px;overflow:auto"></div>
+    <button class="gold" id="newsCopyOpen">Open in Torn newsletter</button>
+    <button class="alt" id="newsCopyTitle">Copy title</button><button class="alt" id="newsCopyHtml">Copy HTML only</button>
+    <div class="small">With the <a id="fillerLink" href="#">HB Newsletter Filler</a> userscript installed
+      (Tampermonkey / Torn PDA), the title and newsletter are filled in on Torn automatically - check it, then
+      <b>Send newsletter</b>. Without it: the newsletter is copied, so paste the title (Copy title), press
+      <b>&lt;/&gt;</b> (Toggle Code Editor), paste, press <b>&lt;/&gt;</b> again, then send.</div>
+  </div>
+</div>
+
+<script>
+const CFG = __CONFIG__;
+const API = "https://api.torn.com/v2";
+const BONUS = new Set([10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000]);
+const OK = new Set(["attacked","hospitalized","mugged"]);   // "special" results don't count
+// metric catalog: key, label, help
+const METRICS = [
+  ["war", "War Hits", "Successful hits on the enemy faction during the war"],
+  ["out", "Outside Hits", "Successful hits on anyone else during the war - raids excluded (see filter)"],
+  ["resp", "Respect", "Respect from hits (see filters)"],
+  ["assists", "Assists", "Assists on attacks against the enemy"],
+  ["hosps", "Hospitalizations", "Enemy members hospitalized"],
+  ["mugs", "Mugs", "Enemy members mugged"],
+  ["stealth", "Stealthed", "Stealthed successful hits"],
+];
+const $ = id => document.getElementById(id);
+const money = n => "$" + Math.round(n).toLocaleString("en-US");
+const num = v => { const n = parseFloat(String(v).replace(/[$,\s]/g, "")); return isFinite(n) ? n : 0; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let war = null;      // {id, start, end, opp, oppId, won, our, their, rank, rewards}
+let stats = {};      // member id -> stats
+let names = {};      // member id -> {name, level}
+let lastResult = null;
+
+// ---------------- settings (auto-saved) ----------------
+function defaults() { return JSON.parse(JSON.stringify(CFG.defaults)); }
+let S = load("hb_payout_settings") || defaults();
+function load(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+
+function renderSettings() {
+  $("mode").value = S.mode; $("budget").value = S.budget ? Number(S.budget).toLocaleString("en-US") : "";
+  $("minHits").value = S.minHits; $("fChainOnly").checked = S.filters.chainOnly;
+  $("fNoBonus").checked = S.filters.noBonus; $("fWarRespect").checked = S.filters.warRespect;
+  // expenses
+  $("expenses").innerHTML = S.expenses.map((e, i) => `<div class="item">
+    <input data-e="${i}" data-f="label" value="${esc(e.label)}" placeholder="Label">
+    <select data-e="${i}" data-f="type"><option value="pct"${e.type=="pct"?" selected":""}>% of budget</option><option value="usd"${e.type=="usd"?" selected":""}>$ amount</option></select>
+    <input data-e="${i}" data-f="value" value="${e.value}" inputmode="decimal" data-num="dec">
+    <button class="alt" data-del-e="${i}">✕</button></div>`).join("");
+  // metrics
+  $("metricHelp").textContent = S.mode == "pct"
+    ? "Percentage mode: each metric gets this share of the net budget, split by each member's share of that metric."
+    : "Flat mode: each member earns this many dollars per unit of the metric.";
+  $("metrics").innerHTML = METRICS.map(([k, lab, help]) => `<div class="metric">
+    <b>${lab}</b><input data-m="${k}" value="${S.weights[k] || 0}" inputmode="decimal" data-num="dec">
+    <span class="small">${S.mode == "pct" ? "% of budget" : "$ per unit"}</span>
+    <span class="small">${help}${stats && Object.keys(stats).length ? " · total " + totalOf(k).toLocaleString("en-US", {maximumFractionDigits: 1}) : ""}</span></div>`).join("");
+  const wsum = Object.values(S.weights).reduce((a, b) => a + num(b), 0);
+  $("weightTotal").innerHTML = S.mode == "pct"
+    ? `Weights total: <b class="${Math.abs(wsum - 100) < 0.01 ? "good" : "warn"}">${wsum.toFixed(2)}%</b>` + (wsum < 100 ? " - the rest funds bonus rules" : "")
+    : "";
+  // rules
+  const opt = sel => METRICS.map(([k, l]) => `<option value="${k}"${k == sel ? " selected" : ""}>${l}</option>`).join("");
+  $("rules").innerHTML = S.rules.map((r, i) => `<div class="item">
+    <span class="tag ${r.kind == "bonus" ? "b" : "p"}" style="flex:0 0 auto">${r.kind}</span>
+    <select data-r="${i}" data-f="metric">${opt(r.metric)}</select>
+    <select data-r="${i}" data-f="op"><option${r.op == ">=" ? " selected" : ""}>&gt;=</option><option${r.op == "<" ? " selected" : ""}>&lt;</option></select>
+    <input data-r="${i}" data-f="threshold" value="${r.threshold}" inputmode="decimal" data-num="dec" placeholder="value">
+    <input data-r="${i}" data-f="amount" value="${r.amount}" inputmode="decimal" data-num="pct" placeholder="5,000,000 or 10%">
+    <button class="alt" data-del-r="${i}">✕</button></div>`).join("");
+  const mopt = sel => `<option value="">Member…</option>` + Object.entries(names).sort((a, b) => a[1].name.localeCompare(b[1].name))
+    .map(([id, m]) => `<option value="${id}"${id == sel ? " selected" : ""}>${esc(m.name)} (Lv ${m.level || "?"})</option>`).join("");
+  $("adjust").innerHTML = S.adjust.map((a, i) => `<div class="item">
+    <select data-a="${i}" data-f="id">${mopt(a.id)}</select>
+    <input data-a="${i}" data-f="amount" value="${a.amount}" inputmode="numeric" data-num="neg" placeholder="5,000,000 or -2,000,000">
+    <input data-a="${i}" data-f="note" value="${esc(a.note || "")}" placeholder="Note">
+    <button class="alt" data-del-a="${i}">✕</button></div>`).join("");
+  formatAllNums();
+  renderPresets();
+  compute();
+}
+
+// ---------------- number inputs ----------------
+// Every numeric box has data-num:  int = whole number with commas · dec = decimals allowed (one ".")
+//   pct = like dec, may end in "%" (rule amounts) · neg = whole number, may start with "-" (adjustments)
+//   id  = digits only, no commas (war id)
+// Anything else typed/pasted is dropped; commas are re-inserted as you type and the caret is kept
+// after the same digit. num() strips commas, so stored values stay plain numbers.
+function cleanNum(v, kind) {
+  v = String(v);
+  if (kind == "id") return v.replace(/\D/g, "");
+  const neg = kind == "neg" && /^\s*[-−]/.test(v);
+  const pct = kind == "pct" && /%\s*$/.test(v);
+  let body = v.replace(kind == "dec" || kind == "pct" ? /[^\d.]/g : /\D/g, "");
+  if (kind == "dec" || kind == "pct") { const i = body.indexOf("."); if (i >= 0) body = body.slice(0, i + 1) + body.slice(i + 1).replace(/\./g, ""); }
+  let [ip, dp] = body.split(".");
+  ip = ip.replace(/^0+(?=\d)/, "").replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return (neg ? "-" : "") + ip + (dp !== undefined ? "." + dp : "") + (pct ? "%" : "");
+}
+function formatNumInput(el) {
+  const kind = el.dataset.num, before = el.value;
+  const caret = el.selectionStart == null ? before.length : el.selectionStart;
+  const sig = before.slice(0, caret).replace(/[^\d.\-−%]/g, "").length;   // meaningful chars before the caret
+  const after = cleanNum(before, kind);
+  if (after === before) return;
+  el.value = after;
+  let pos = 0, n = 0;
+  while (pos < after.length && n < sig) { if (/[\d.\-%]/.test(after[pos])) n++; pos++; }
+  try { if (document.activeElement === el) el.setSelectionRange(pos, pos); } catch (e) {}
+}
+function formatAllNums() { document.querySelectorAll("input[data-num]").forEach(formatNumInput); }
+// capture phase: clean the box BEFORE the settings listeners read it
+document.addEventListener("input", e => { if (e.target.dataset && e.target.dataset.num) formatNumInput(e.target); }, true);
+
+function readSettings(ev) {
+  const t = ev.target;
+  if (t.id == "mode") S.mode = t.value;
+  else if (t.id == "budget") S.budget = num(t.value);
+  else if (t.id == "minHits") S.minHits = num(t.value);
+  else if (t.id == "fChainOnly") S.filters.chainOnly = t.checked;
+  else if (t.id == "fNoBonus") S.filters.noBonus = t.checked;
+  else if (t.id == "fWarRespect") S.filters.warRespect = t.checked;
+  else if (t.dataset.e) S.expenses[t.dataset.e][t.dataset.f] = t.dataset.f == "value" ? num(t.value) : t.value;
+  else if (t.dataset.m) S.weights[t.dataset.m] = num(t.value);
+  else if (t.dataset.r) S.rules[t.dataset.r][t.dataset.f] = t.dataset.f == "threshold" ? num(t.value) : t.value;
+  else if (t.dataset.a) S.adjust[t.dataset.a][t.dataset.f] = t.value;
+  else return;
+  save("hb_payout_settings", S);
+  if (t.id == "mode" || t.tagName == "SELECT" || t.type == "checkbox") renderSettings(); else compute();
+}
+document.addEventListener("change", readSettings);
+document.addEventListener("input", e => { if (e.target.tagName == "INPUT" && e.target.type != "checkbox" && e.target.id != "key" && e.target.id != "warId") readSettings(e); });
+document.addEventListener("click", e => {
+  const d = e.target.dataset;
+  if (d.delE) { S.expenses.splice(d.delE, 1); }
+  else if (d.delR) { S.rules.splice(d.delR, 1); }
+  else if (d.delA) { S.adjust.splice(d.delA, 1); }
+  else return;
+  save("hb_payout_settings", S); renderSettings();
+});
+$("addExp").onclick = () => { S.expenses.push({label: "Expense", type: "usd", value: 0}); save("hb_payout_settings", S); renderSettings(); };
+$("addBonus").onclick = () => { S.rules.push({kind: "bonus", metric: "war", op: ">=", threshold: 100, amount: "1,000,000"}); save("hb_payout_settings", S); renderSettings(); };
+$("addPenalty").onclick = () => { S.rules.push({kind: "penalty", metric: "war", op: "<", threshold: 10, amount: "50%"}); save("hb_payout_settings", S); renderSettings(); };
+$("addAdj").onclick = () => { S.adjust.push({id: "", amount: "", note: ""}); save("hb_payout_settings", S); renderSettings(); };
+$("resetAll").onclick = () => { if (confirm("Reset all payout settings to the defaults?")) { S = defaults(); save("hb_payout_settings", S); renderSettings(); } };
+
+// presets
+function presets() { return load("hb_payout_presets") || {}; }
+function renderPresets() {
+  const p = presets();
+  $("presetSel").innerHTML = `<option value="">Saved presets…</option>` + Object.keys(p).sort().map(n => `<option>${esc(n)}</option>`).join("");
+}
+$("savePreset").onclick = () => {
+  const n = $("presetName").value.trim(); if (!n) return alert("Name the preset first");
+  const p = presets(); const c = JSON.parse(JSON.stringify(S)); c.adjust = []; p[n] = c; save("hb_payout_presets", p); renderPresets();
+};
+$("loadPreset").onclick = () => { const n = $("presetSel").value, p = presets(); if (!p[n]) return;
+  S = Object.assign(defaults(), JSON.parse(JSON.stringify(p[n]))); save("hb_payout_settings", S); renderSettings(); };
+$("delPreset").onclick = () => { const n = $("presetSel").value, p = presets(); if (!p[n]) return; delete p[n]; save("hb_payout_presets", p); renderPresets(); };
+
+// ---------------- Torn API ----------------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function apiKey() { return $("key").value.trim(); }
+async function tget(url) {
+  const full = url.startsWith("http") ? url : API + url;
+  const u = new URL(full); u.searchParams.delete("key"); u.searchParams.set("comment", "HBPayout");
+  const r = await fetch(u, {headers: {Authorization: "ApiKey " + apiKey()}});
+  const j = await r.json();
+  if (j.error) throw new Error(`Torn API error ${j.error.code}: ${j.error.error}`);
+  return j;
+}
+function status(t, cls) { $("status").innerHTML = cls ? `<span class="${cls}">${t}</span>` : t; }
+
+// ---------------- saved war data (no API key needed) ----------------
+// The bot publishes payout_data/index.json + payout_data/<war>.json next to
+// this page for every war whose attack log it has already read.
+let hosted = {};
+async function loadHosted() {
+  try {
+    const r = await fetch("payout_data/index.json", {cache: "no-store"});
+    if (!r.ok) return;
+    const idx = await r.json();
+    idx.forEach(w => hosted[w.id] = w);
+    const now = Date.now() / 1000;
+    $("warSel").innerHTML = idx.filter(w => w.end < now).map(w =>
+      `<option value="${w.id}">${w.won === true ? "W" : w.won === false ? "L" : "?"} vs ${esc(w.opp)} - ${new Date(w.end * 1000).toISOString().slice(0, 10)}${w.ready ? " ✓ saved" : " (needs API key)"}</option>`).join("");
+    status(`${idx.filter(w => w.ready).length} wars ready from saved data - no API key needed for those (✓)`, "good");
+  } catch (e) {}
+}
+async function loadSavedWar(id) {
+  const d = await (await fetch(`payout_data/${id}.json`, {cache: "no-store"})).json();
+  war = {id: d.id, start: d.start, end: d.end, opp: d.opp, oppId: d.opp_id, won: !!d.won, our: d.our || 0,
+         their: d.their || 0, rank: d.rank || {}, rewards: {}};
+  names = {}; stats = {};
+  for (const m of d.members) {
+    names[m.id] = {name: m.name, level: ""};
+    // War hits = the official war report count (the attack log can differ by a few)
+    stats[m.id] = {war: m.attacks || 0, out: m.out || 0, outAll: m.out_all || 0, resp: m.resp_war || 0,
+                   respAll: (m.resp_war || 0) + (m.resp_out || 0), bonusWar: m.bonus_resp || 0, bonusOut: m.out_bonus_resp || 0,
+                   assists: m.assists || 0, hosps: m.hosps || 0, mugs: m.mugs || 0, stealth: m.stealth || 0,
+                   losses: m.losses || 0, reportHits: m.attacks, reportScore: m.score};
+  }
+}
+
+$("loadWars").onclick = async () => {
+  if (!apiKey()) return status("Enter your API key first", "warn");
+  if ($("remember").checked) localStorage.setItem("hb_payout_key", apiKey());
+  try {
+    status("Loading ranked wars…");
+    const [b, w] = await Promise.all([tget("/faction/basic"), tget("/faction/rankedwars?limit=20")]);
+    const me = (b.basic || b).id; CFG.faction_id = me;
+    const now = Date.now() / 1000;
+    const wars = (w.rankedwars || []).filter(x => x.end && x.end < now).sort((a, b) => b.end - a.end);
+    $("warSel").innerHTML = wars.map(x => {
+      const them = (x.factions || []).find(f => f.id != me) || {};
+      const won = x.winner == me ? "W" : "L";
+      return `<option value="${x.id}">${won} vs ${esc(them.name || "?")} - ${new Date(x.end * 1000).toISOString().slice(0, 10)}</option>`;
+    }).join("");
+    status(`${wars.length} finished wars loaded`, "good");
+  } catch (e) { status(e.message, "warn"); }
+};
+
+$("generate").onclick = async () => {
+  const id = $("warId").value.trim() || $("warSel").value;
+  if (id && hosted[id] && hosted[id].ready) {          // saved by the bot: no API calls
+    try {
+      await loadSavedWar(id);
+      status(`Loaded war ${id} from saved data - no API calls used`, "good");
+      showSummary(); renderSettings();
+      $("resultsCard").style.display = $("payCard").style.display = $("receiptCard").style.display = "block";
+    } catch (e) { status("Couldn't load the saved war: " + e.message, "warn"); }
+    return;
+  }
+  if (!apiKey() || !id) return status("This war isn't saved yet - enter your API key to read it from Torn", "warn");
+  if ($("remember").checked) localStorage.setItem("hb_payout_key", apiKey());
+  $("generate").disabled = true; $("barWrap").style.display = "block"; $("bar").style.width = "0";
+  try {
+    status("Reading the war report…");
+    const b = await tget("/faction/basic"); const me = (b.basic || b).id; CFG.faction_id = me;
+    const rep = (await tget(`/faction/${id}/rankedwarreport`)).rankedwarreport;
+    const ours = rep.factions.find(f => f.id == me), them = rep.factions.find(f => f.id != me);
+    war = {id: +id, start: rep.start, end: rep.end, opp: them.name, oppId: them.id, won: rep.winner == me,
+           our: ours.score, their: them.score, rank: ours.rank || {}, rewards: ours.rewards || {}};
+    names = {}; stats = {};
+    for (const m of ours.members) {
+      names[m.id] = {name: m.name, level: m.level};
+      stats[m.id] = {war: 0, out: 0, resp: 0, respAll: 0, bonusResp: 0, assists: 0, hosps: 0, mugs: 0, stealth: 0,
+                     losses: 0, outAll: 0, reportHits: m.attacks, reportScore: m.score};
+    }
+    // attack log for the war window
+    status("Reading the attack log (this takes a minute)…");
+    const seen = new Set(), urls = new Set();
+    let queue = [`/faction/attacks?from=${war.start}&to=${war.end}&limit=100`], pages = 0;
+    while (queue.length && pages < 200) {
+      const u = queue.pop(); pages++;
+      const j = await tget(u);
+      const items = (j.attacks || []).filter(a => !seen.has(a.id));
+      items.forEach(a => seen.add(a.id));
+      let inside = 0;
+      for (const a of items) {
+        const t = a.started || a.ended || 0;
+        if (t < war.start || t > war.end) continue;      // exactly the war window
+        inside++;
+        if (!a.attacker || !a.attacker.faction || a.attacker.faction.id != me) continue;
+        const s = stats[a.attacker.id] || (stats[a.attacker.id] = {war: 0, out: 0, resp: 0, respAll: 0, bonusResp: 0, assists: 0,
+                   hosps: 0, mugs: 0, stealth: 0, losses: 0, outAll: 0, reportHits: 0, reportScore: 0});
+        if (!names[a.attacker.id]) names[a.attacker.id] = {name: a.attacker.name, level: a.attacker.level};
+        const res = String(a.result || "").toLowerCase();
+        const dfac = a.defender && a.defender.faction ? a.defender.faction.id : null;
+        const isWar = dfac == war.oppId || a.is_ranked_war === true;
+        const bonus = BONUS.has(+a.chain);
+        const r = +a.respect_gain || 0;
+        if (OK.has(res)) {
+          if (isWar) { s.war++; if (res == "hospitalized") s.hosps++; if (res == "mugged") s.mugs++; }
+          // outside chain hits: raids don't count (matches the previous payout tool)
+          else { s.outAll++; if (+a.chain > 0 && !a.is_raid) s.out++; }
+          if (a.is_stealthed) s.stealth++;
+          if (bonus) { if (isWar) s.bonusWar = (s.bonusWar || 0) + r; else s.bonusOut = (s.bonusOut || 0) + r; }
+          s.respAll += r;
+          if (isWar) s.resp += r; else s.respOut = (s.respOut || 0) + r;
+        } else if (res == "assist" && isWar) s.assists++;
+        else if (res == "lost" && isWar) s.losses++;
+      }
+      $("bar").style.width = Math.min(100, pages * 2) + "%";
+      status(`Reading the attack log… page ${pages}, ${seen.size} attacks`);
+      if (!inside && pages > 1) continue;
+      const l = (j._metadata || {}).links || {};
+      for (const d of ["prev", "next"]) if (l[d] && !urls.has(l[d])) { urls.add(l[d]); queue.push(l[d]); }
+      await sleep(700);                    // stay well under 100 calls / minute
+    }
+    // War hits = the official war report count (the attack log can differ by a few)
+    for (const id in stats) if (stats[id].reportHits != null && names[id]) stats[id].war = stats[id].reportHits;
+    $("bar").style.width = "100%";
+    status(`Done: ${seen.size} attacks read in ${pages} pages`, "good");
+    showSummary(); renderSettings();
+    $("resultsCard").style.display = $("payCard").style.display = $("receiptCard").style.display = "block";
+  } catch (e) { status(e.message, "warn"); }
+  $("generate").disabled = false;
+};
+
+function showSummary() {
+  const w = war;
+  $("summaryCard").style.display = "block";
+  $("summary").innerHTML = [
+    [w.won ? "Victory" : "Defeat", "vs " + esc(w.opp)],
+    [`${w.our.toLocaleString()} - ${w.their.toLocaleString()}`, "Score"],
+    [`${((w.end - w.start) / 3600).toFixed(1)}h`, "Duration"],
+    [`${w.rank.before || "?"} → ${w.rank.after || "?"}`, "Rank"],
+    [totalOf("war").toLocaleString(), "War hits"],
+    [Object.values(stats).filter(s => s.war > 0).length + "/" + Object.keys(stats).length, "Members who hit"],
+  ].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
+}
+
+// ---------------- calculation ----------------
+function metricOf(s, k) {
+  if (k == "resp") {
+    let r = S.filters.warRespect ? s.resp : s.respAll;
+    if (S.filters.noBonus) r -= (s.bonusWar || 0) + (S.filters.warRespect ? 0 : (s.bonusOut || 0));
+    return Math.max(0, r);
+  }
+  if (k == "out") return S.filters.chainOnly ? s.out : s.outAll;
+  return s[k] || 0;
+}
+function totalOf(k) { return Object.values(stats).reduce((a, s) => a + metricOf(s, k), 0); }
+
+function compute() {
+  const exp = S.expenses.reduce((a, e) => a + (e.type == "pct" ? S.budget * num(e.value) / 100 : num(e.value)), 0);
+  const net = Math.max(0, S.budget - exp);
+  $("expTotal").textContent = `Expenses: -${money(exp)} · Net to members: ${money(net)}`;
+  if (!war) return;
+  const ids = Object.keys(stats);
+  // qualifies on TOTAL hits (war + outside), so outside-only members still earn for their outside hits
+  const qual = id => stats[id].war + metricOf(stats[id], "out") >= S.minHits;
+  const rows = ids.map(id => ({id: +id, name: (names[id] || {}).name || id, level: (names[id] || {}).level, s: stats[id],
+                               base: 0, bonus: 0, penalty: 0, notes: []}));
+  // base pay - and a per-metric breakdown (Metrics section + saved on the receipt)
+  const metrics = [];
+  for (const [k, label] of METRICS) {
+    const w = num(S.weights[k]); if (!w) continue;
+    const tot = rows.filter(r => qual(r.id)).reduce((a, r) => a + metricOf(r.s, k), 0);
+    if (S.mode == "pct") {
+      const pot = net * w / 100;
+      if (tot > 0) rows.forEach(r => { if (qual(r.id)) r.base += pot * metricOf(r.s, k) / tot; });
+      metrics.push({k, label, weight: w, pool: pot, units: tot, per: tot > 0 ? pot / tot : 0});
+    } else {
+      rows.forEach(r => { if (qual(r.id)) r.base += w * metricOf(r.s, k); });
+      metrics.push({k, label, weight: null, pool: w * tot, units: tot, per: w});
+    }
+  }
+  // rules
+  for (const rule of S.rules) for (const r of rows) {
+    const v = metricOf(r.s, rule.metric), hit = rule.op == ">=" ? v >= num(rule.threshold) : v < num(rule.threshold);
+    if (!hit) continue;
+    const pct = String(rule.amount).includes("%");
+    const amt = pct ? r.base * num(rule.amount) / 100 : num(rule.amount);
+    const lab = `${METRICS.find(m => m[0] == rule.metric)[1]} ${rule.op} ${rule.threshold}`;
+    if (rule.kind == "bonus") { r.bonus += amt; r.notes.push(`+${lab}`); } else { r.penalty += amt; r.notes.push(`-${lab}`); }
+  }
+  for (const a of S.adjust) { const r = rows.find(x => x.id == a.id); if (!r || !a.amount) continue;
+    const v = num(a.amount); if (v >= 0) r.bonus += v; else r.penalty += -v; if (a.note) r.notes.push(a.note); }
+  // each payout rounded UP to the whole dollar (tiny tolerance so float noise like 5.0000000001 stays 5);
+  // this can allocate a few dollars over the net - one per paid member at most
+  rows.forEach(r => { r.pay = Math.max(0, Math.ceil(r.base + r.bonus - Math.min(r.penalty, r.base + r.bonus) - 1e-6)); });
+  rows.sort((a, b) => b.pay - a.pay || b.s.war - a.s.war);
+  const paid = rows.reduce((a, r) => a + r.pay, 0);
+  const adjB = rows.reduce((a, r) => a + r.bonus, 0), adjP = rows.reduce((a, r) => a + Math.min(r.penalty, r.base + r.bonus), 0);
+  lastResult = {rows, exp, net, paid, metrics, adjB, adjP};
+  // Metrics: how the net was split - weight, pool, total units (qualified members), $ per unit
+  const fmtU = (k, v) => k == "resp" ? v.toLocaleString(undefined, {maximumFractionDigits: 1}) : Math.round(v).toLocaleString();
+  const perMoney = v => "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  $("metricsTable").innerHTML = `<tr><th>Metric</th>${S.mode == "pct" ? "<th>Weight</th>" : ""}<th>Pool</th><th>Total</th><th>Per unit</th></tr>` +
+    metrics.map(m => `<tr><td>${esc(m.label)}</td>${S.mode == "pct" ? `<td>${m.weight}%</td>` : ""}<td>${money(m.pool)}</td>
+      <td>${fmtU(m.k, m.units)}</td><td><b>${perMoney(m.per)}</b></td></tr>`).join("") +
+    (adjB ? `<tr><td>Bonuses</td>${S.mode == "pct" ? "<td></td>" : ""}<td>+${money(adjB)}</td><td></td><td></td></tr>` : "") +
+    (adjP ? `<tr><td>Penalties</td>${S.mode == "pct" ? "<td></td>" : ""}<td>-${money(adjP)}</td><td></td><td></td></tr>` : "");
+  $("metricsNote").textContent = `${S.mode == "pct" ? "Percentage split of the net" : "Flat rate per unit"} · ` +
+    `Qualify: ${S.minHits}+ total hits (war + outside) · ${rows.filter(r => qual(r.id)).length} qualified`;
+  // totals
+  $("totals").innerHTML = [[money(S.budget), "Budget"], ["-" + money(exp), "Expenses"], [money(net), "Net to members"],
+    [money(paid), "Allocated"], net - paid >= 0 ? [money(net - paid), "Remaining"]
+      : paid - net <= rows.length ? ["+" + money(paid - net), "Rounded up"] : [money(net - paid), "Over budget"],
+    [rows.filter(r => r.pay > 0).length + "", "Members paid"]]
+    .map(([v, l]) => `<div><b class="${l == "Over budget" ? "warn" : ""}">${v}</b><span>${l}</span></div>`).join("");
+  $("results").innerHTML = `<tr><th>#</th><th>Member</th><th>War</th><th>Outside</th><th>Respect</th><th>Assists</th><th>Hosps</th><th>Losses</th><th>Adj.</th><th>Payout</th></tr>` +
+    rows.map((r, i) => `<tr class="${r.pay ? "" : "zero"}"><td>${i + 1}</td><td>${esc(r.name)}${qual(r.id) ? "" : ' <span class="small">(under min)</span>'}</td>
+      <td>${r.s.war}</td><td>${metricOf(r.s, "out")}</td><td>${metricOf(r.s, "resp").toFixed(1)}</td><td>${r.s.assists}</td>
+      <td>${r.s.hosps}</td><td>${r.s.losses}</td>
+      <td>${r.bonus ? `<span class="tag b">+${money(r.bonus)}</span>` : ""}${r.penalty ? `<span class="tag p">-${money(r.penalty)}</span>` : ""}</td>
+      <td><b>${money(r.pay)}</b></td></tr>`).join("");
+  renderPay();
+}
+
+// ---------------- payment execution ----------------
+const vaultLink = r => `https://www.torn.com/factions.php?step=your#/tab=controls&addMoneyTo=${r.id}&money=${r.pay}`;
+function paidSet() { return new Set(load("hb_paid_" + (war && war.id)) || []); }
+function renderPay() {
+  if (!lastResult) return;
+  const done = paidSet(), rows = lastResult.rows.filter(r => r.pay > 0);
+  // Paid tick-box first so it's visible on narrow phone screens
+  $("payTable").innerHTML = `<tr><th>Paid</th><th>Member</th><th>Amount</th><th>Vault</th></tr>` + rows.map((r, i) =>
+    `<tr class="${done.has(r.id) ? "paid" : ""}"><td style="text-align:center"><input type="checkbox" data-paid="${r.id}"${done.has(r.id) ? " checked" : ""}></td>
+     <td>${esc(r.name)} <span class="small">[${r.id}]</span></td><td>${money(r.pay)}</td>
+     <td><a href="${vaultLink(r)}" target="_blank" rel="noopener">Add to vault</a></td></tr>`).join("");
+  const n = rows.filter(r => done.has(r.id)).length;
+  $("payProgress").textContent = `${n} of ${rows.length} paid · ${money(rows.filter(r => !done.has(r.id)).reduce((a, r) => a + r.pay, 0))} left to pay`;
+}
+document.addEventListener("change", e => { const id = e.target.dataset.paid; if (!id) return;
+  const s = paidSet(); e.target.checked ? s.add(+id) : s.delete(+id); save("hb_paid_" + war.id, [...s]); renderPay(); });
+// Open all: one tab at a time with a pause between, so Torn isn't hit by ~50 page loads at once.
+// Pressing the button again while it runs stops it. Browsers only allow tabs opened after a delay
+// when pop-ups are allowed for this site - if one is blocked we stop and say so.
+let openTimer = null;
+function stopOpening(msg) { clearTimeout(openTimer); openTimer = null; $("openAll").textContent = "Open all in tabs";
+  $("openStatus").textContent = msg || ""; }
+$("openAll").onclick = () => {
+  if (openTimer) return stopOpening("Stopped.");
+  if (!lastResult) return; const done = paidSet();
+  const queue = lastResult.rows.filter(r => r.pay > 0 && !done.has(r.id));
+  if (!queue.length) return stopOpening("Everyone is already ticked as paid.");
+  const delay = Math.min(30, Math.max(1, num($("openDelay").value) || 3)) * 1000;
+  save("hb_open_delay", delay / 1000);
+  let i = 0;
+  $("openAll").textContent = "Stop opening";
+  const next = () => {
+    const r = queue[i];
+    const w = window.open(vaultLink(r), "_blank");
+    if (!w) return stopOpening(`Pop-up blocked at ${r.name} (${i + 1} of ${queue.length}). Allow pop-ups for this site, then press Open all again - ticked members are skipped.`);
+    i++;
+    if (i >= queue.length) return stopOpening(`Opened ${queue.length} tabs.`);
+    $("openStatus").textContent = `Opened ${i} of ${queue.length} - next: ${queue[i].name} in ${delay / 1000}s`;
+    openTimer = setTimeout(next, delay);
+  };
+  openTimer = -1; next();
+};
+if (load("hb_open_delay")) $("openDelay").value = load("hb_open_delay");
+$("copyLinks").onclick = () => { if (!lastResult) return;
+  navigator.clipboard.writeText(lastResult.rows.filter(r => r.pay > 0).map(r => `${r.name}: ${vaultLink(r)}`).join("\n")).then(() => alert("Copied")); };
+$("copyBatch").onclick = () => { if (!lastResult) return; const rows = lastResult.rows.filter(r => r.pay > 0);
+  navigator.clipboard.writeText(`https://www.torn.com/factions.php?step=your#/tab=controls&batbal_uids=${rows.map(r => r.id).join(",")}&batbal_amounts=${rows.map(r => r.pay).join(",")}`).then(() => alert("Copied")); };
+
+// ---------------- receipt ----------------
+function receipt() {
+  const r = lastResult;
+  return {v: 1, created: Math.floor(Date.now() / 1000), paid_by: $("paidBy").value.trim(), note: $("note").value.trim(),
+    war: {id: war.id, opponent: war.opp, won: war.won, start: war.start, end: war.end, our: war.our, their: war.their,
+          rank_before: war.rank.before || "", rank_after: war.rank.after || ""},
+    budget: Math.round(S.budget), expenses: S.expenses.map(e => ({label: e.label,
+      amount: Math.round(e.type == "pct" ? S.budget * num(e.value) / 100 : num(e.value)), pct: e.type == "pct" ? num(e.value) : null})),
+    net: Math.round(r.net), paid: r.paid, mode: S.mode, weights: S.weights, min_hits: S.minHits, filters: S.filters,
+    metrics: (r.metrics || []).map(m => ({k: m.k, label: m.label, weight: m.weight, pool: Math.round(m.pool),
+      units: +(+m.units).toFixed(1), per: +m.per.toFixed(2)})),
+    adj: {bonus: Math.round(r.adjB || 0), penalty: Math.round(r.adjP || 0)},
+    members: r.rows.map(x => ({id: x.id, n: x.name, w: x.s.war, o: metricOf(x.s, "out"), r: +metricOf(x.s, "resp").toFixed(1),
+      a: x.s.assists, h: x.s.hosps, b: Math.round(x.bonus), p: Math.round(x.penalty), pay: x.pay}))};
+}
+// ---- one-click save: commit the receipt through the GitHub API with the leader's token ----
+const ghToken = () => load("hb_gh_token") || "";
+function ghRender() { $("ghState").textContent = ghToken() ? "saved ✓" : "not set (manual save)"; $("ghToken").value = ""; }
+$("ghSave").onclick = async () => {
+  const t = $("ghToken").value.trim(); if (!t) return;
+  try {   // check it can see the repo before keeping it
+    const r = await fetch(`https://api.github.com/repos/${CFG.repo}`, {headers: {Authorization: "Bearer " + t, Accept: "application/vnd.github+json"}});
+    if (!r.ok) throw new Error("GitHub said " + r.status);
+    const j = await r.json();
+    if (j.permissions && !j.permissions.push) throw new Error("token can read but not write - set Contents: Read and write");
+    save("hb_gh_token", t); ghRender(); alert("Token saved - Save receipt now commits directly.");
+  } catch (e) { alert("Token not saved: " + e.message); }
+};
+$("ghClear").onclick = () => { localStorage.removeItem("hb_gh_token"); ghRender(); };
+ghRender();
+async function ghCommit(path, text, message) {
+  const bytes = new TextEncoder().encode(text); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
+  const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/${path}`, {method: "PUT",
+    headers: {Authorization: "Bearer " + ghToken(), Accept: "application/vnd.github+json", "Content-Type": "application/json"},
+    body: JSON.stringify({message, content: btoa(bin), branch: CFG.branch})});
+  if (!r.ok) { let m = r.status + ""; try { m += " " + (await r.json()).message; } catch (e) {} throw new Error(m); }
+  return r.json();
+}
+$("saveReceipt").onclick = () => {
+  if (!lastResult) return;
+  const t = new Date(), stamp = t.toISOString().slice(0, 16).replace(/[-:T]/g, "");
+  const file = `data/payouts/${war.id}-${stamp}.json`;
+  const json = JSON.stringify(receipt(), null, 1);
+  save("hb_rcpt_" + war.id, `${war.id}-${stamp}`);   // so Create Newsletter can link this receipt's image
+  const base = `https://github.com/${CFG.repo}/new/${CFG.branch}?filename=${encodeURIComponent(file)}`;
+  const full = `${base}&value=${encodeURIComponent(json)}`;
+  if (ghToken()) {
+    $("saveStatus").textContent = "Saving to GitHub…";
+    ghCommit(file, json, `Payout receipt: war ${war.id} vs ${war.opp}`).then(() => {
+      $("saveStatus").innerHTML = `Saved ✓ <b>${esc(file.split("/").pop())}</b> - the receipt appears in the archive and Discord within a few minutes.`;
+    }).catch(e => {
+      $("saveStatus").textContent = "GitHub save failed (" + e.message + ") - check the token, or remove it to save manually.";
+    });
+    return;
+  }
+  if (full.length <= 6000) { window.open(full, "_blank"); return; }
+  // Too long for GitHub's URL limit. Copy FIRST, then open GitHub: opening the tab first moves focus
+  // away from this page and the browser then refuses the clipboard write (the old bug).
+  // If copying still fails: download the receipt (correct file name) and open GitHub's UPLOAD page
+  // for data/payouts, so it can be added by dropping the file in - no pasting needed.
+  const name = file.split("/").pop();
+  copyText(json).then(() => {
+    window.open(base, "_blank");
+    alert("Receipt copied. On the GitHub page, paste it into the empty file box, then click Commit changes.");
+  }).catch(() => {
+    downloadText(json, name);
+    window.open(`https://github.com/${CFG.repo}/upload/${CFG.branch}/data/payouts`, "_blank");
+    alert(`Receipt downloaded as ${name}. On the GitHub page, drag that file in (or "choose your files"), then click Commit changes.`);
+  });
+};
+// clipboard with a fallback for browsers / PDA where navigator.clipboard is missing or refuses
+function copyText(t) {
+  if (navigator.clipboard && document.hasFocus()) return navigator.clipboard.writeText(t).catch(() => legacyCopy(t));
+  return legacyCopy(t);
+}
+function legacyCopy(t) {
+  return new Promise((ok, fail) => {
+    const ta = document.createElement("textarea");
+    ta.value = t; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
+    let done = false; try { done = document.execCommand("copy"); } catch (e) {}
+    ta.remove(); done ? ok() : fail(new Error("copy refused"));
+  });
+}
+function downloadText(t, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([t], {type: "application/json"}));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+}
+// ---------------- newsletter ----------------
+// Torn's newsletter editor takes HTML through its Code Editor (</>). It can't be pre-filled by link,
+// so we copy the HTML and open the newsletter page. Keep styling inline + simple (Torn strips classes).
+// The receipt IMAGE only exists once the receipt is saved and the site has rebuilt: we use the
+// receipt the site already has for this war (CFG.receipts) or the one just saved from this device.
+const NEWS_URL = "https://www.torn.com/factions.php?step=your&type=1#/tab=controls&option=newsletter";
+// stable per-war receipt name: payouts/war-<id> always shows the newest (corrected) receipt
+function receiptStem() { return ((CFG.receipts || {})[war.id] || load("hb_rcpt_" + war.id)) ? "war-" + war.id : ""; }
+function newsletter() {
+  const r = receipt(), w = r.war, base = CFG.member_base || "";
+  const res = w.won ? "Victory" : "Defeat", col = w.won ? "#2e8b3a" : "#c0261d";
+  const when = w.end ? new Date(w.end * 1000).toLocaleDateString("en-US", {month: "short", day: "2-digit", year: "numeric", timeZone: "UTC"}) : "";
+  const paidN = r.members.filter(m => m.pay > 0).length;
+  const exp = r.expenses.reduce((a, e) => a + e.amount, 0);
+  const per = v => "$" + v.toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const unit = {war: "war hit", out: "outside hit", resp: "respect", assists: "assist", hosps: "hosp", mugs: "mug", stealth: "stealth hit"};
+  const rank = w.rank_before && w.rank_after ? (w.rank_before == w.rank_after ? ` · Rank ${esc(w.rank_after)}` : ` · Rank ${esc(w.rank_before)} → ${esc(w.rank_after)}`) : "";
+  const msg = $("newsMsg").value.trim();
+  const stem = receiptStem();
+  const P = (inner, extra = "") => `<p style="text-align:center;${extra}">${inner}</p>`;
+  const parts = [
+    P(`<strong><span style="font-size:20px;color:#c0261d">WAR PAYOUT</span></strong>`),
+    P(`<strong><span style="font-size:16px;color:${col}">${res} vs ${esc(w.opponent)}</span></strong><br>${when} · Score ${w.our.toLocaleString()} - ${w.their.toLocaleString()}${rank}`),
+    msg ? P(esc(msg).replace(/\n/g, "<br>")) : "",
+    P(`Payouts have been sent to your <strong>faction balance</strong>.<br>` +
+      `<strong>${money(r.paid)}</strong> was paid to <strong>${paidN}</strong> members from a ${money(r.budget)} budget` +
+      (exp ? ` (${r.expenses.map(e => `${esc(e.label)}${e.pct ? " " + e.pct + "%" : ""}: ${money(e.amount)}`).join(", ")})` : "") + "."),
+    P(`<strong>How it was split</strong><br>` + r.metrics.map(m =>
+      r.mode == "pct" ? `${esc(m.label)}: ${m.weight}% → <strong>${per(m.per)}</strong> per ${unit[m.k] || "unit"}`
+                      : `${esc(m.label)}: <strong>${per(m.per)}</strong> per ${unit[m.k] || "unit"}`).join("<br>")),
+    stem ? P(`<a href="${base}/payouts/${stem}.html"><img src="${base}/payouts/${stem}.png" alt="War payout receipt" width="600"></a>`) : "",
+    P(`Full receipt &amp; past payouts: <a href="${base}/payouts.html">War Payouts archive</a>` +
+      (r.paid_by ? `<br>Paid by ${esc(r.paid_by)}` : "") + (r.note ? ` · ${esc(r.note)}` : ""), "font-size:12px")];
+  // Torn's newsletter shows paragraphs with NO gap between them, so put an empty paragraph between
+  // sections - it then matches this page's preview spacing
+  return {title: `War Payout - ${res} vs ${w.opponent}`, html: parts.filter(Boolean).join("\n<p>&nbsp;</p>\n")};
+}
+function renderNews() {
+  const n = newsletter();
+  if (!$("newsTitle").dataset.edited) $("newsTitle").value = n.title;
+  $("newsPreview").innerHTML = n.html;
+  $("newsWarn").textContent = receiptStem() ? "" :
+    "No saved receipt for this war yet - the receipt image is left out. Save the receipt, wait a few minutes for the site to update, then create the newsletter.";
+}
+$("fillerLink").href = "hb-newsletter-filler.user.js";
+$("makeNews").onclick = () => { if (!lastResult) return; $("newsBox").style.display = "block"; renderNews();
+  $("newsBox").scrollIntoView({behavior: "smooth"}); };
+$("newsMsg").oninput = renderNews;
+$("newsTitle").oninput = () => { $("newsTitle").dataset.edited = 1; };
+$("newsCopyTitle").onclick = () => navigator.clipboard.writeText($("newsTitle").value).then(() => alert("Title copied"));
+$("newsCopyHtml").onclick = () => navigator.clipboard.writeText(newsletter().html).then(() => alert("Newsletter HTML copied"));
+// Copy & open: the newsletter (title + HTML) rides in the link's #hash as base64url JSON. With the
+// "HB Newsletter Filler" userscript installed on Torn it's filled in automatically; the HTML is also
+// copied to the clipboard as a fallback for pasting by hand.
+function newsLink() {
+  const json = JSON.stringify({t: $("newsTitle").value, h: newsletter().html});
+  const bytes = new TextEncoder().encode(json);
+  let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
+  return NEWS_URL + "&hbnews=" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+$("newsCopyOpen").onclick = () => { const link = newsLink();
+  copyText(newsletter().html).catch(() => {}).finally(() => window.open(link, "_blank")); };
+$("copyJson").onclick = () => lastResult && copyText(JSON.stringify(receipt())).then(() => alert("Copied"), () => alert("Couldn't copy - use Download instead."));
+$("dlJson").onclick = () => { if (!lastResult) return; const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(receipt(), null, 1)], {type: "application/json"}));
+  a.download = `${war.id}-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}.json`; a.click(); };
+
+// ---------------- start ----------------
+$("rcptLink").href = CFG.receipts_url;
+const k = localStorage.getItem("hb_payout_key"); if (k) $("key").value = k;
+$("remember").onchange = e => { if (!e.target.checked) localStorage.removeItem("hb_payout_key"); };
+S = Object.assign(defaults(), S);
+renderSettings();
+loadHosted();
+</script>
+</body></html>

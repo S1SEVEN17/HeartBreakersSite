@@ -1,0 +1,33 @@
+# Gatekeeper secrets (Actions -> Gatekeeper secrets -> Run workflow): puts MEMBER_DIR / LEADER_DIR on the
+# Cloudflare worker. Only needed if those GitHub secrets change. The worker code + site are deployed by
+# banner.yml (tools/deploy_site.sh).
+name: Gatekeeper secrets
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Set worker secrets
+        working-directory: gate
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+          LEADER_DIR: ${{ secrets.LEADER_DIR }}
+        run: |
+          mkdir -p ../site
+          npm install --no-save --silent wrangler@4 >/dev/null 2>&1
+          printf '%s' "$MEMBER_DIR" | npx wrangler secret put MEMBER_DIR >/dev/null 2>&1
+          printf '%s' "$LEADER_DIR" | npx wrangler secret put LEADER_DIR >/dev/null 2>&1
+          npx wrangler secret delete PAGES_ORIGIN --force >/dev/null 2>&1 || true
+          echo "Worker secrets set"

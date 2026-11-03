@@ -1,0 +1,112 @@
+# Faction banner + site - hourly (tools/should_run.py decides full / war / chain run).
+#
+# The code is here (public repo); config.json + data/ are in the PRIVATE data repo (DATA_REPO), checked out
+# at ./store and linked in (tools/store.sh). generate.py builds ./site, changed data is pushed back to the data
+# repo, and the site is uploaded to Cloudflare together with the gatekeeper (tools/deploy_site.sh) - nothing is
+# published from GitHub. The data repo's notify workflow starts this one when a leader saves a payout receipt,
+# a Message Builder panel or the Site Panels settings.
+name: Faction banner
+
+on:
+  schedule:
+    # Hourly trigger, but tools/should_run.py only lets through:
+    #   - a FULL run every 3 hours (everything refreshes, ~10 API calls)
+    #   - an hourly WAR run while a ranked war is ongoing / starting within 3 h (~2 API calls)
+    #   - every other hour, a CHAIN run: newly finished chains -> Discord Chain Reports (no deploy)
+    - cron: "0 * * * *"
+  workflow_dispatch: {}        # "Run workflow" button + the data repo's notify workflow
+  push:
+    branches: [main]           # redeploy whenever the code/design changes
+    paths:
+      - "generate.py"
+      - "fonts/**"
+      - "art/**"
+      - "tools/**"
+      - "gate/**"
+      - ".github/workflows/banner.yml"
+
+permissions:
+  contents: read
+  actions: write               # keep-alive + starting a full run after a chain run's new report
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+env:
+  DATA_REPO: S1SEVEN17/HeartBreakersLogo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the private data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DATA_REPO }}
+          token: ${{ secrets.DATA_TOKEN }}
+          path: store
+
+      - name: Link data
+        run: tools/store.sh link
+
+      - name: Decide run type
+        id: gate
+        run: python3 tools/should_run.py
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Generate banner
+        if: steps.gate.outputs.run == 'true'
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+          RUN_KIND: ${{ steps.gate.outputs.kind }}
+          DISCORD_WEBHOOK_SLACKERS: ${{ secrets.DISCORD_WEBHOOK_SLACKERS }}
+          DISCORD_WEBHOOK_CHAINS: ${{ secrets.DISCORD_WEBHOOK_CHAINS }}
+          DISCORD_WEBHOOK_CRIMES: ${{ secrets.DISCORD_WEBHOOK_CRIMES }}
+          DISCORD_WEBHOOK_RECAP: ${{ secrets.DISCORD_WEBHOOK_RECAP }}
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+          LEADER_DIR: ${{ secrets.LEADER_DIR }}
+          DISCORD_WEBHOOK_PAYOUTS: ${{ secrets.DISCORD_WEBHOOK_PAYOUTS }}
+          DISCORD_WEBHOOK_LEADERS: ${{ secrets.DISCORD_WEBHOOK_LEADERS }}
+        run: python generate.py --out site
+
+      # a chain run that posted a new report asks for a full run so its page/newsletter go live now
+      - name: Save data
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY: ${{ steps.gate.outputs.deploy }}
+        run: |
+          REQ=0
+          if [ -f data/.deploy_request ]; then rm -f data/.deploy_request; [ "$DEPLOY" != "true" ] && REQ=1; fi
+          tools/store.sh save "Update saved faction data"
+          if [ "$REQ" = 1 ]; then gh workflow run banner.yml --ref main && echo "Requested a full run (new report)"; fi
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.deploy == 'true'
+        with:
+          node-version: "22"
+
+      - name: Deploy site + gatekeeper to Cloudflare
+        if: steps.gate.outputs.deploy == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: tools/deploy_site.sh
+
+      # GitHub disables scheduled workflows in public repos after 60 days without activity.
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/banner.yml/enable"

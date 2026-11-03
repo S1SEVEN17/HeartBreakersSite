@@ -1,0 +1,18 @@
+# Quick health check of the gatekeeper (Actions -> Gatekeeper check -> Run workflow): status codes only.
+name: Gatekeeper check
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        run: |
+          G=https://hb-gate.heartbreakers.workers.dev
+          for p in /login /m/ /m/index.html /m/db/members.json /m/announce-header.webp /banner-animated.webp /data.json /l/payout.html /nope; do
+            printf '%-28s ' "$p"; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "$G$p"
+          done
+          echo "headers on an image: $(curl -sI $G/banner-animated.webp | tr -d "\r" | cut -d: -f1 | tr "\n" " ")"
+          echo "login page title: $(curl -s $G/login | grep -o '<title>[^<]*')"

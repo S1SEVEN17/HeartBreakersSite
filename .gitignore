@@ -1,0 +1,8 @@
+site/
+__pycache__/
+*.pyc
+# private data repo, checked out by the workflows (tools/store.sh)
+store/
+data
+config.json
+gate/node_modules/

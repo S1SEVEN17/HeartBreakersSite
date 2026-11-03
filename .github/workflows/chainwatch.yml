@@ -1,0 +1,75 @@
+# Chain watch - every 15 minutes (RUN_KIND=chainwatch). While a chain is RUNNING the job stays on and
+# refreshes the Ongoing Chain section every 5 minutes until it breaks (up to ~5h40m); when it ends it starts
+# a full update (banner.yml) so the finished chain shows right away. Data: private data repo (see banner.yml).
+name: Chain watch
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write               # starts banner.yml after a chain ends + keep-alive
+
+concurrency:
+  group: chainwatch
+  cancel-in-progress: false
+
+env:
+  DATA_REPO: S1SEVEN17/HeartBreakersLogo
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the private data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DATA_REPO }}
+          token: ${{ secrets.DATA_TOKEN }}
+          path: store
+
+      - name: Link data
+        run: tools/store.sh link
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Watch the chain
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+          RUN_KIND: chainwatch
+          DISCORD_WEBHOOK_CHAINS: ${{ secrets.DISCORD_WEBHOOK_CHAINS }}
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+        run: python generate.py --out site
+
+      - name: Full update after a chain ended + save state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REQ=$(python3 -c "import json;print(json.load(open('data/chain_watch_state.json')).get('request_full',False))" 2>/dev/null || echo False)
+          if [ "$REQ" = "True" ]; then
+            python3 - <<'PY'
+          import json
+          p = "data/chain_watch_state.json"
+          s = json.load(open(p)); s.pop("request_full", None)
+          json.dump(s, open(p, "w")); open(p, "a").write("\n")
+          PY
+            gh workflow run banner.yml --ref main && echo "Started a full update (chain ended)"
+          fi
+          tools/store.sh save "Update chain watch state" data/chain_watch_state.json
+
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/chainwatch.yml/enable"

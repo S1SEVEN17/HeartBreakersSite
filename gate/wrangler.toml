@@ -1,0 +1,19 @@
+# Heart Breakers gatekeeper + site - deployed by tools/deploy_site.sh (from the "Faction banner" workflow).
+# The built site (site/) is uploaded WITH the worker as static assets; run_worker_first sends every request
+# through worker.js, so nothing in site/ can be opened without passing the gate.
+name = "hb-gate"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[assets]
+directory = "../site"
+binding = "ASSETS"
+run_worker_first = true
+html_handling = "none"          # exact paths only (worker.js adds index.html itself)
+not_found_handling = "none"
+
+[vars]
+FACTION_ID = "51384"
+# LEADER_POSITIONS comes from config.json gate.leader_positions (passed by the deploy)
+# Secrets (wrangler secret put, by the Gatekeeper secrets workflow): MEMBER_DIR, LEADER_DIR, SESSION_SECRET (optional)

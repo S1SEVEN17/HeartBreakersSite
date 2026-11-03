@@ -1,0 +1,64 @@
+# Organized Crime check - every 15 minutes (RUN_KIND=crimes: overview post, delay pings, leader escalation).
+# Data (alert state, Discord IDs, delay log) lives in the private data repo - see banner.yml.
+name: Crime delay check
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write               # keep-alive
+
+concurrency:
+  group: crimes
+  cancel-in-progress: false
+
+env:
+  DATA_REPO: S1SEVEN17/HeartBreakersLogo
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the private data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DATA_REPO }}
+          token: ${{ secrets.DATA_TOKEN }}
+          path: store
+
+      - name: Link data
+        run: tools/store.sh link
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check for delayed crimes
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+          RUN_KIND: crimes
+          DISCORD_WEBHOOK_CRIMES: ${{ secrets.DISCORD_WEBHOOK_CRIMES }}
+          DISCORD_WEBHOOK_LEADERS: ${{ secrets.DISCORD_WEBHOOK_LEADERS }}
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+        run: python generate.py --out site
+
+      - name: Save alert state
+        run: >
+          tools/store.sh save "Update crime alert state"
+          data/discord_crime_state.json data/leader_alerts.json data/discord_messages_crimes.json
+          data/item_names.json data/crime_delays.json
+
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/crimes.yml/enable"

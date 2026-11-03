@@ -1,0 +1,6 @@
+Files named gi-*.png are from game-icons.net (https://game-icons.net), by Lorc,
+Delapouite and contributors, licensed CC BY 3.0
+(https://creativecommons.org/licenses/by/3.0/). Rasterized to white PNG silhouettes;
+the renderer recolors them.
+
+glyph-*.png are drawn from the bundled Rajdhani font (SIL OFL 1.1).
