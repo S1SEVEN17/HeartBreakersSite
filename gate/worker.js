@@ -12,7 +12,7 @@
 //   /m/...            members' pages  (pass + still in the faction)
 //   /m/me             -> their own profile (member.html?id=<their id>)
 //   /l/...            leaders' pages  (pass + position in LEADER_POSITIONS)
-//   /                 -> /m/ (Members Hub)
+//   /                 the dashboard: Leaders Hub (/l/) for leader access, else the Members Hub (/m/)
 //   /<image>          public images at the site root (the faction description banner: banner-animated.webp ...)
 //
 // Nothing from GitHub shows through: GitHub's response headers are dropped (only type / caching headers are
@@ -145,7 +145,8 @@ so these pages aren't available. If you've just joined, try again after the next
   const pass = await makePass(env, {i: d.player_id, n: d.name, p: (d.faction || {}).position || ""});
   return new Response(null, {status: 302, headers: {Location: next, "Set-Cookie": cookie(pass, PASS_DAYS * 86400), "Cache-Control": "no-store"}});
 }
-const safeNext = n => { n = String(n || "/m/"); return /^\/[ml]\//.test(n) || n === "/" ? n : "/m/"; };
+// no / unknown "next" -> "/" (the dashboard: leaders land on the Leaders Hub, everyone else on the Members Hub)
+const safeNext = n => { n = String(n || "/"); return /^\/[ml]\//.test(n) || n === "/" ? n : "/"; };
 
 // ---------- proxy to the site's files ----------
 // Only these headers are passed on - everything else GitHub sends (Server, X-GitHub-Request-Id, Via,
@@ -174,7 +175,12 @@ const notFound = () => page("Not found", `<h1>Not found</h1><p class="sub">That 
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url), p = url.pathname;
-    if (p === "/" ) return Response.redirect(url.origin + "/m/", 302);
+    // the dashboard address: members with leader access default to the Leaders Hub
+    if (p === "/") {
+      const who = await whoIs(env, ctx, req);
+      if (!who) return Response.redirect(`${url.origin}/login`, 302);
+      return Response.redirect(url.origin + (who.leader ? "/l/" : "/m/"), 302);
+    }
     if (p === "/login") return req.method === "POST" ? doLogin(env, req) : loginPage(safeNext(url.searchParams.get("next")));
     if (p === "/logout") return new Response(null, {status: 302, headers: {Location: "/login", "Set-Cookie": cookie("", 0)}});
     if (p === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n");
