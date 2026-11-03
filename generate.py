@@ -3703,18 +3703,23 @@ font:14px system-ui,sans-serif;position:relative;z-index:50}.hbm>a,.hbm summary{
 border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;text-decoration:none;cursor:pointer;list-style:none;white-space:nowrap}
 .hbm summary::-webkit-details-marker{display:none}.hbm summary:after{content:" ▾";color:#9a9a9c}
 .hbm details{position:relative}.hbm details[open] summary{border-color:#e4382e}
+.hbm details[open]{z-index:100}.hbm details div{z-index:100}
 .hbm details div{position:absolute;top:110%;left:0;background:#170d0e;border:1px solid #5c1c1a;border-radius:8px;
 padding:4px;min-width:170px;box-shadow:0 6px 18px #000a}.hbm details div a{display:block;color:#ddd;padding:8px 10px;
-border-radius:6px;text-decoration:none}.hbm details div a:hover{background:#2a1416;color:#fff}
-.hbm details.hbacc div{left:auto;right:0}
+border-radius:6px;text-decoration:none;white-space:nowrap}.hbm details div a:hover{background:#2a1416;color:#fff}
 .hbm input{background:#1a1012;color:#eee;border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;width:170px;font:14px system-ui}
 .hbm .ld>a,.hbm .ld summary{border-color:#6b4a18}</style>"""
 
 
 def _menu_js(root: str) -> str:
     return ("<script>(function(){var R=" + json.dumps(root) + ",inp=document.getElementById('hbmq'),dl=document.getElementById('hbmn'),M=null;"
-            "document.querySelectorAll('.hbm details').forEach(function(d){d.addEventListener('toggle',function(){if(d.open)"
-            "document.querySelectorAll('.hbm details').forEach(function(o){if(o!==d)o.open=false;});});});"
+            "document.querySelectorAll('.hbm details').forEach(function(d){d.addEventListener('toggle',function(){if(!d.open)return;"
+            "document.querySelectorAll('.hbm details').forEach(function(o){if(o!==d)o.open=false;});"
+            # keep the opened list on screen: flip it to the right edge of its button if it would run off the right
+            "var p=d.querySelector('div');if(!p)return;p.style.left='';p.style.right='';"
+            "var r=p.getBoundingClientRect();if(r.right>innerWidth-6){p.style.left='auto';p.style.right='0';r=p.getBoundingClientRect();}"
+            # ...and never off the left edge either (narrow phones): pin it 6px from the screen's left
+            "if(r.left<6){p.style.right='auto';p.style.left=(6-d.getBoundingClientRect().left)+'px';}});});"
             "document.addEventListener('click',function(e){if(!e.target.closest('.hbm'))document.querySelectorAll('.hbm details')"
             ".forEach(function(o){o.open=false;});});"
             "function load(){if(M)return;M=[];fetch(R+'db/members.json').then(function(r){return r.json();}).then(function(d){"
