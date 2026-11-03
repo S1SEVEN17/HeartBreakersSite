@@ -19,7 +19,15 @@
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c}
-*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0 auto;padding:10px;max-width:1100px}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0 auto;padding:10px;max-width:1500px}
+/* same layout as the Panel Builder: editor on the left, live preview + HTML code on the right (pinned while you
+   scroll the editor). Phones: the preview pins to the top (scrolls inside itself), editor below, HTML code last. */
+.wrap{display:flex;gap:12px;align-items:flex-start;max-width:1500px;margin:auto}
+.ed{flex:0 0 460px;max-width:100%}.rc{flex:1;min-width:0;position:sticky;top:8px;max-height:calc(100vh - 16px);overflow-y:auto}
+@media(max-width:900px){.wrap{flex-direction:column}.ed{flex:auto;width:100%;order:1}.rc{display:contents}
+ .pv{order:0;position:sticky;top:0;z-index:5;width:100%}.pv .card{margin-bottom:6px;padding:8px}.pv #pv{max-height:32vh;overflow-y:auto}
+ #pvhelp,.pv details{display:none}
+ .ex{order:2;width:100%}}
 h1{color:var(--red);text-align:center;font-size:22px;margin:4px 0 4px}.lead{color:var(--sub);text-align:center;font-size:13px;margin:0 0 12px}
 .card{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:12px;margin-bottom:12px}
 .card h2{color:var(--gold);font-size:14px;letter-spacing:1px;text-transform:uppercase;margin:0 0 8px;display:flex;align-items:center;gap:8px}
@@ -44,6 +52,7 @@ __MENU__
 <h1 id="ttl">Site Panels</h1>
 <p class="lead" id="lead">Edit the faction <b>Description</b> banner and the members' <b>Announcements</b> panel.
 Saving redraws them on the site within a few minutes (live data like respect, wars and leaderboards fills itself in).</p>
+<div class="wrap"><div class="ed">
 <div class="card" id="tokcard" style="display:none"><h2>GitHub token</h2>
   <div class="small">Saving needs a GitHub token, kept only in this browser on this device (each device / browser - e.g. Torn PDA
     and Chrome - needs it once). Create a fine-grained token at
@@ -52,18 +61,22 @@ Saving redraws them on the site within a few minutes (live data like respect, wa
   <div style="display:flex;gap:6px;margin-top:8px"><input id="tokIn" type="password" placeholder="github_pat_…" autocomplete="off" style="flex:1">
     <button class="g" id="tokSave">Save token</button></div><div class="small" id="tokMsg"></div></div>
 <div class="tabs"><button id="tD" class="on">Description banner</button><button id="tA">Announcements panel</button></div>
+<div id="form"><div class="small" style="text-align:center">Loading the current panels…</div></div>
+</div>
+<div class="rc"><div class="pv">
 <div class="card prev"><h2>Live preview <span class="small" id="pvs" style="margin-left:auto;text-transform:none;letter-spacing:0"></span></h2>
-  <div class="small">Drawn in your browser with the site's own drawing code and this update's faction data, so it matches
+  <div class="small" id="pvhelp">Drawn in your browser with the site's own drawing code and this update's faction data, so it matches
     what Save changes will produce. Nothing is saved until you press <b>Save changes</b>.</div>
   <div id="pvA" class="small" style="display:none;margin:6px 0"><label style="display:inline-flex;gap:6px;align-items:center;margin:0">
     <input type="checkbox" id="pvAll"> Also preview the leaderboards (slower)</label></div>
   <div id="pv"></div>
   <details style="margin-top:10px"><summary class="small" style="cursor:pointer">What's on the site right now</summary><img id="live" alt="live panel"></details></div>
+</div><div class="ex">
 <div class="card"><h2>HTML code</h2>
   <div class="small" id="htmlHelp"></div>
   <textarea id="code" readonly style="min-height:110px;font:12px monospace"></textarea>
   <button id="copyCode">Copy HTML</button></div>
-<div id="form"><div class="small" style="text-align:center">Loading the current panels…</div></div>
+</div></div></div>
 <div class="bar"><button class="g" id="save">Save changes</button><button id="reload">Discard &amp; reload</button><span id="status"></span></div>
 <script>
 const CFG = __CONFIG__;
