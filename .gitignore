@@ -6,3 +6,5 @@ store/
 data
 config.json
 gate/node_modules/
+gate/.wrangler/
+gate/.dev.vars

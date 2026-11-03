@@ -3706,6 +3706,7 @@ border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;text-decoration:none
 .hbm details div{position:absolute;top:110%;left:0;background:#170d0e;border:1px solid #5c1c1a;border-radius:8px;
 padding:4px;min-width:170px;box-shadow:0 6px 18px #000a}.hbm details div a{display:block;color:#ddd;padding:8px 10px;
 border-radius:6px;text-decoration:none}.hbm details div a:hover{background:#2a1416;color:#fff}
+.hbm details.hbacc div{left:auto;right:0}
 .hbm input{background:#1a1012;color:#eee;border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;width:170px;font:14px system-ui}
 .hbm .ld>a,.hbm .ld summary{border-color:#6b4a18}</style>"""
 
@@ -3725,6 +3726,26 @@ def _menu_js(root: str) -> str:
             "inp.addEventListener('keydown',function(e){if(e.key==='Enter'){load();go();}});})();</script>")
 
 
+# Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
+# The name / leader link are filled in the browser from whoami.json (the gatekeeper's "who is signed in"),
+# so the same page works for every member. `mroot` = path to the members' folder ("" / "../" / full URL).
+ACCOUNT_LINKS = [("👤 My Account", "account.html"), ("📈 My Profile", "me"), ("💰 My Payouts", "account.html#payouts"),
+                 ("⚔️ My Wars", "account.html#wars"), ("⛓️ My Chains", "account.html#chains"),
+                 ("🕵️ My Crimes", "account.html#crimes")]
+
+
+def account_menu(mroot: str) -> str:
+    g_ = gate_cfg()["url"].rstrip("/")
+    links = "".join(f'<a href="{mroot}{u}">{t}</a>' for t, u in ACCOUNT_LINKS)
+    return (f'<details class="hbacc"><summary id="hbaccn">👤 Me</summary><div>{links}'
+            f'<a id="hbaccl" href="{g_}/l/" style="display:none">🛡️ Leaders Hub</a>'
+            f'<a href="{g_}/logout" style="color:#ff8a80">🚪 Sign out</a></div></details>'
+            "<script>(function(){fetch(" + json.dumps(mroot + "whoami.json") + ",{cache:'no-store'})"
+            ".then(function(r){return r.ok?r.json():null;}).then(function(w){if(!w)return;"
+            "var n=document.getElementById('hbaccn');n.textContent='👤 '+w.name;"
+            "if(w.leader)document.getElementById('hbaccl').style.display='block';}).catch(function(){});})();</script>")
+
+
 def site_menu(root: str = "") -> str:
     """The members' grouped menu + search (see MENU_GROUPS)."""
     parts = []
@@ -3734,9 +3755,8 @@ def site_menu(root: str = "") -> str:
         else:
             parts.append(f"<details><summary>{label}</summary><div>"
                          + "".join(f'<a href="{root}{u}">{t}</a>' for t, u in items) + "</div></details>")
-    if gate_cfg():                     # signed in through the gatekeeper: their own profile + sign out
-        parts.append(f'<details><summary>👤 Me</summary><div><a href="{root}me">My Profile</a>'
-                     f'<a href="{gate_cfg()["url"].rstrip("/")}/logout">Sign out</a></div></details>')
+    if gate_cfg():                     # signed in through the gatekeeper: the account menu (see account_menu)
+        parts.append(account_menu(root))
     parts.append('<input id="hbmq" list="hbmn" placeholder="🔎 Find a member" autocomplete="off"><datalist id="hbmn"></datalist>')
     return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(root)
 
@@ -3756,6 +3776,8 @@ def leader_menu(root: str = "") -> str:
         else:
             parts.append(f"<details><summary>{label}</summary><div>"
                          + "".join(f'<a href="{mb}{u}">{t}</a>' for t, u in items) + "</div></details>")
+    if gate_cfg():
+        parts.append(account_menu(mb))
     parts.append('<input id="hbmq" list="hbmn" placeholder="🔎 Find a member" autocomplete="off"><datalist id="hbmn"></datalist>')
     return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(mb)
 
@@ -4107,7 +4129,8 @@ def write_homepages(out: Path):
     leader tools + every member page). Each shows the newest recap / payout / war + chain report."""
     mout = member_out(out)
     _reports_page(mout)
-    member_items = [
+    member_items = ([("🙋", "My Account", "Your own wars, chains, crimes and payouts · sign out", "account.html")]
+                    if gate_cfg() else []) + [
         ("📢", "Announcements", "Faction news, leaderboards and recent ranked wars", "announcements.html"),
         ("💰", "War Payouts", "Every war payout receipt", "payouts.html"),
         ("📊", "Reports", "War and chain reports", "reports.html"),
@@ -4470,6 +4493,10 @@ def write_profiles(out: Path, db: dict):
     mout = member_out(out)
     tpl = (ROOT / "tools" / "member_profile.html").read_text(encoding="utf-8")
     (mout / "member.html").write_text(tpl.replace("__MENU__", site_menu("")), encoding="utf-8")
+    if gate_cfg():                         # My Account: the signed-in member's own information (needs whoami.json)
+        acc = (ROOT / "tools" / "my_account.html").read_text(encoding="utf-8")
+        (mout / "account.html").write_text(acc.replace("__MENU__", site_menu(""))
+                                           .replace("__GATE__", gate_cfg()["url"].rstrip("/")), encoding="utf-8")
     ms = db["members"]["members"]
     def table(rows):
         h = ('<table class="srt"><tr><th>Member</th><th>Position</th><th>Days</th><th>War hits</th><th>Wars hit</th>'

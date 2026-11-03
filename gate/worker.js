@@ -8,7 +8,7 @@
 //                     Torn who the person is and which faction they're in, then thrown away - never stored.
 //                     A Heart Breakers member gets a signed pass (cookie "hb_s", 30 days, HttpOnly).
 //   /logout           removes the pass
-//   /m/whoami.json    JSON {id, name, position, leader} for the signed-in member (personalized pages/scripts)
+//   /m/whoami.json    JSON {id, name, position, leader, since, until} for the signed-in member (My Account, menus, scripts)
 //   /m/...            members' pages  (pass + still in the faction)
 //   /m/me             -> their own profile (member.html?id=<their id>)
 //   /l/...            leaders' pages  (pass + position in LEADER_POSITIONS)
@@ -86,7 +86,8 @@ function isLeader(env, position) {
   return want.includes(String(position || "").toLowerCase());
 }
 
-// who is this? -> {id, name, position, leader} or null. Position comes from the live member list.
+// who is this? -> {id, name, position, leader, since, until} or null. Position comes from the live member list;
+// since / until = when this device signed in / when the pass runs out (ms) - shown on My Account.
 async function whoIs(env, ctx, req) {
   const p = await readPass(env, req);
   if (!p) return null;
@@ -94,9 +95,9 @@ async function whoIs(env, ctx, req) {
   if (members) {
     const m = members.get(p.i);
     if (!m) return null;                     // left the faction -> no access
-    return {id: p.i, name: m.name, position: m.position || "", leader: isLeader(env, m.position)};
+    return {id: p.i, name: m.name, position: m.position || "", leader: isLeader(env, m.position), since: p.t, until: p.e};
   }
-  return {id: p.i, name: p.n, position: p.p || "", leader: isLeader(env, p.p)};   // list unavailable: trust the pass
+  return {id: p.i, name: p.n, position: p.p || "", leader: isLeader(env, p.p), since: p.t, until: p.e};   // list unavailable: trust the pass
 }
 
 // ---------- pages ----------
