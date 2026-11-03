@@ -3684,20 +3684,22 @@ def member_out(out: Path) -> Path:
     d_ = out / member_dir() if member_dir() else out
     d_.mkdir(parents=True, exist_ok=True)
     return d_
-# member pages link only to each other (description.html stays unlisted)
-SITE_NAV = [("Home", "index.html"), ("Announcements", "announcements.html"), ("Payouts", "payouts.html"),
-            ("Reports", "reports.html"), ("Wars", "wars.html"), ("Chains", "chains.html"),
-            ("Latest Recap", "newsletter.html"), ("Recap Archive", "recaps.html")]
+# ONE header for every page (members' and leaders'), the same everywhere; what it shows depends on the
+# signed-in member's role: leader-only groups (class "hbl") stay hidden until whoami.json (the gatekeeper's
+# "who is signed in") says leader. Dropdowns are <details>, so they work by tap on phones.
+#   (label, link, items)  link = direct button; items = dropdown. "M:" = members' folder, "L:" = leaders' folder,
+#   "G:" = gatekeeper address ("/" = the dashboard: Leaders Hub for leaders, Members Hub for everyone else)
+NAV = [("🏠 Home", "G:/", None, False),
+       ("🛡️ Leaders", None, [("Leaders Hub", "L:index.html"), ("Members Hub", "M:index.html"),
+                              ("Leader Monitor", "L:monitor.html"), ("Payout Calculator", "L:payout.html")], True),
+       ("🖼️ Site Panels", None, [("Panel Builder", "L:builder.html"), ("Description", "L:description.html"),
+                                  ("Announcements", "L:announcements.html")], True),
+       ("⚔️ Wars", None, [("War History", "M:wars.html"), ("War Payouts", "M:payouts.html")], False),
+       ("⛓️ Chains", "M:chains.html", None, False),
+       ("🕵️ Organized Crimes", "M:crimes.html", None, False),
+       ("👥 Members", "M:members.html", None, False),
+       ("📰 Recaps", None, [("Latest Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html")], False)]
 
-
-# Grouped menu for every member page: dropdowns (<details>, so it works by tap on phones) + a member
-# search box (names from db/members.json -> member.html?id=...). `root` = path back to the members'
-# folder ("" or "../" or a full URL for pages outside it).
-MENU_GROUPS = [("🏠 Home", "index.html", None),
-               ("⚔️ Wars", None, [("War History", "wars.html"), ("War Payouts", "payouts.html"), ("Reports", "reports.html")]),
-               ("⛓️ Chains", None, [("Chain History", "chains.html"), ("Reports", "reports.html")]),
-               ("👥 Faction", None, [("Members", "members.html"), ("Announcements", "announcements.html")]),
-               ("📰 Recaps", None, [("Latest Recap", "newsletter.html"), ("Recap Archive", "recaps.html")])]
 MENU_CSS = """<style>.hbm{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:0 0 12px;
 font:14px system-ui,sans-serif;position:relative;z-index:50}.hbm>a,.hbm summary{color:#e8be5a;background:#1a1012;
 border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;text-decoration:none;cursor:pointer;list-style:none;white-space:nowrap}
@@ -3727,57 +3729,63 @@ def _menu_js(root: str) -> str:
 
 
 # Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
-# The name / leader link are filled in the browser from whoami.json (the gatekeeper's "who is signed in"),
-# so the same page works for every member. `mroot` = path to the members' folder ("" / "../" / full URL).
-ACCOUNT_LINKS = [("👤 My Account", "account.html"), ("📈 My Profile", "me"), ("💰 My Payouts", "account.html#payouts"),
-                 ("⚔️ My Wars", "account.html#wars"), ("⛓️ My Chains", "account.html#chains"),
-                 ("🕵️ My Crimes", "account.html#crimes")]
+# The name is filled in the browser from whoami.json, which also reveals the leader-only groups.
+# My Profile = their own member.html (the gatekeeper's /m/me sends them there; #sections jump to a part).
+ACCOUNT_LINKS = [("👤 My Profile", "me"), ("💰 My Payouts", "me#payouts"), ("⚔️ My Wars", "me#wars"),
+                 ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
 
 
 def account_menu(mroot: str) -> str:
     g_ = gate_cfg()["url"].rstrip("/")
     links = "".join(f'<a href="{mroot}{u}">{t}</a>' for t, u in ACCOUNT_LINKS)
     return (f'<details class="hbacc"><summary id="hbaccn">👤 Me</summary><div>{links}'
-            f'<a id="hbaccl" href="{g_}/l/" style="display:none">🛡️ Leaders Hub</a>'
             f'<a href="{g_}/logout" style="color:#ff8a80">🚪 Sign out</a></div></details>'
             "<script>(function(){fetch(" + json.dumps(mroot + "whoami.json") + ",{cache:'no-store'})"
             ".then(function(r){return r.ok?r.json():null;}).then(function(w){if(!w)return;"
-            "var n=document.getElementById('hbaccn');n.textContent='👤 '+w.name;"
-            "if(w.leader)document.getElementById('hbaccl').style.display='block';}).catch(function(){});})();</script>")
+            "document.getElementById('hbaccn').textContent='👤 '+w.name;"
+            "if(w.leader)document.querySelectorAll('.hbm .hbl').forEach(function(e){e.style.display='';});"
+            "}).catch(function(){});})();</script>")
+
+
+def nav_menu(mroot: str, lroot: str) -> str:
+    """The header (see NAV). mroot / lroot = path to the members' / leaders' folder from this page."""
+    g_ = gate_cfg()
+    groot = g_["url"].rstrip("/") if g_ else ""
+    def href(u):
+        k, rest = u.split(":", 1)
+        if k == "G":
+            return groot + rest if g_ else mroot + "index.html"
+        return (mroot if k == "M" else lroot) + rest
+    parts = []
+    for label, url, items, lead in NAV:
+        # leader-only groups: hidden until whoami says leader (always shown without the gatekeeper - local tests)
+        attr = ' class="hbl ld" style="display:none"' if lead and g_ else (' class="ld"' if lead else "")
+        if lead and not lroot:
+            continue                      # no leaders' folder (LEADER_DIR not set)
+        if url:
+            parts.append(f'<a{attr} href="{href(url)}">{label}</a>')
+        else:
+            parts.append(f"<details{attr}><summary>{label}</summary><div>"
+                         + "".join(f'<a href="{href(u)}">{t}</a>' for t, u in items) + "</div></details>")
+    if g_:
+        parts.append(account_menu(mroot))
+    return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(mroot)
+
+
+def _leader_root() -> str:
+    """Leaders' folder address for member pages: the gatekeeper's /l/ (or the GitHub Pages folder)."""
+    lb = leader_base() if leader_dir() else ""
+    return lb + "/" if lb else ""
 
 
 def site_menu(root: str = "") -> str:
-    """The members' grouped menu + search (see MENU_GROUPS)."""
-    parts = []
-    for label, url, items in MENU_GROUPS:
-        if url:
-            parts.append(f'<a href="{root}{url}">{label}</a>')
-        else:
-            parts.append(f"<details><summary>{label}</summary><div>"
-                         + "".join(f'<a href="{root}{u}">{t}</a>' for t, u in items) + "</div></details>")
-    if gate_cfg():                     # signed in through the gatekeeper: the account menu (see account_menu)
-        parts.append(account_menu(root))
-    return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(root)
+    """Header for a page in the MEMBERS' folder (`root` = path back to that folder: "" / "../")."""
+    return nav_menu(root, _leader_root())
 
 
 def leader_menu(root: str = "") -> str:
-    """Leaders' grouped menu: leader tools + the member pages (by full address) + member search."""
-    mb = member_base() + "/"
-    lead = ('<details class="ld"><summary>🛡️ Leaders</summary><div>'
-            + "".join(f'<a href="{root}{u}">{t}</a>' for t, u in (("Leaders Hub", "index.html"), ("Leader Monitor", "monitor.html"),
-                                                               ("Payout Calculator", "payout.html"), ("Message Builder", "builder.html"),
-                                                               ("Site Panels", "panels.html")))
-            + "</div></details>")
-    parts = [lead]
-    for label, url, items in MENU_GROUPS:
-        if url:
-            parts.append(f'<a href="{mb}{url}">👥 Members Hub</a>')
-        else:
-            parts.append(f"<details><summary>{label}</summary><div>"
-                         + "".join(f'<a href="{mb}{u}">{t}</a>' for t, u in items) + "</div></details>")
-    if gate_cfg():
-        parts.append(account_menu(mb))
-    return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(mb)
+    """Header for a page in the LEADERS' folder (`root` = path back to that folder)."""
+    return nav_menu(member_base() + "/", root or "./")
 
 
 def image_page(path: Path, title: str, img_src: str, markup: str, root: str = "", menu: bool = True):
@@ -3998,8 +4006,15 @@ def write_message_builder(out: Path):
     pconf = {"repo": REPO, "branch": "main", "member_base": member_base(), "icons": all_icons,
              "banner_url": public_base() + "/banner.webp",
              "announce_url": f"{member_base()}/announce-header.webp"}
-    (lout / "panels.html").write_text((ROOT / "tools" / "panels_editor.html").read_text(encoding="utf-8")
-                                      .replace("__CONFIG__", json.dumps(pconf)).replace("__MENU__", leader_menu("")), encoding="utf-8")
+    # one page per panel (header: Site Panels -> Description / Announcements), each its own editor + live
+    # preview + the HTML for Torn under the panel. "html" = what's live now (the preview replaces it as you edit)
+    tpl_ = (ROOT / "tools" / "panels_editor.html").read_text(encoding="utf-8")
+    for only, fname in (("D", "description.html"), ("A", "announcements.html")):
+        c_ = dict(pconf, only=only, html=description_snippet() if only == "D" else _PANEL_HTML.get("A", ""))
+        (lout / fname).write_text(tpl_.replace("__CONFIG__", json.dumps(c_)).replace("__MENU__", leader_menu("")),
+                                  encoding="utf-8")
+    (lout / "panels.html").write_text('<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" '
+                                      'content="0;url=announcements.html"><title>Site Panels</title>', encoding="utf-8")
     if PANELS_DIR.exists():
         (mout / "panels").mkdir(exist_ok=True)
         for f in PANELS_DIR.glob("*.png"):
@@ -4125,15 +4140,14 @@ def write_homepages(out: Path):
     """index.html in the MEMBERS' folder (Members Hub) and in the LEADERS' folder (Leaders Hub:
     leader tools + every member page). Each shows the newest recap / payout / war + chain report."""
     mout = member_out(out)
-    _reports_page(mout)
-    member_items = ([("🙋", "My Account", "Your own wars, chains, crimes and payouts · sign out", "account.html")]
+    # (reports.html is no longer published - War History / Chain History list every report)
+    member_items = ([("🙋", "My Profile", "Your own wars, chains, crimes and payouts · sign out", "me")]
                     if gate_cfg() else []) + [
-        ("📢", "Announcements", "Faction news, leaderboards and recent ranked wars", "announcements.html"),
-        ("💰", "War Payouts", "Every war payout receipt", "payouts.html"),
-        ("📊", "Reports", "War and chain reports", "reports.html"),
-        ("👤", "Members", "Every member - open a profile", "members.html"),
         ("⚔️", "War History", "Every ranked war on record", "wars.html"),
+        ("💰", "War Payouts", "Every war payout receipt", "payouts.html"),
         ("⛓️", "Chain History", "Every chain on record", "chains.html"),
+        ("🕵️", "Organized Crimes", "Pass rates, payouts and respect for every crime", "crimes.html"),
+        ("👥", "Members", "Every member - open a profile", "members.html"),
         ("📰", "Monthly Recap", "The latest monthly recap", "newsletter.html"),
         ("🗂️", "Recap Archive", "Every monthly recap with all its pages", "recaps.html")]
     _hub_page(mout / "index.html", "Heart Breakers", "Members Hub",
@@ -4145,15 +4159,16 @@ def write_homepages(out: Path):
     leader_items = [
         ("🧮", "Payout Calculator", "Work out war payouts, pay members, save receipts", "payout.html"),
         ("📊", "Leader Monitor", "Participation trend, reliability score, payout ledger, crime delays", "monitor.html"),
-        ("🎨", "Message Builder", "Make framed messages for newsletters, mail and DMs", "builder.html"),
-        ("🖼️", "Site Panels", "Edit the description banner and the announcements panel", "panels.html"),
+        ("🎨", "Panel Builder", "Framed messages from templates - newsletters, war reports, recruits, events", "builder.html"),
+        ("🖼️", "Description", "Edit the faction description banner (live preview + HTML for Torn)", "description.html"),
+        ("📢", "Announcements", "Edit the members' announcement (live preview + HTML for Torn)", "announcements.html"),
         ("🧩", "Newsletter Filler", "Userscript - fills Torn's newsletter for you (Tampermonkey / PDA)",
          "hb-newsletter-filler.user.js"),
         ("⚙️", "Run an update", "GitHub Actions - Faction banner - Run workflow",
          f"https://github.com/{CODE_REPO}/actions/workflows/banner.yml")]
-    _hub_page(lout / "index.html", "Heart Breakers", "Leaders Hub - leaders only, don't share this page",
-              leader_menu("") + '<div class="note">🛡️ Leader tools are in this folder. Member pages are below - share those with members only.</div>'
-              "<h2>🛡️ Leader tools</h2>" + _hub_tiles(leader_items, "l")
+    _hub_page(lout / "index.html", "Heart Breakers", "Leaders Hub - leaders only",
+              leader_menu("")
+              + "<h2>🛡️ Leader tools</h2>" + _hub_tiles(leader_items, "l")
               + "<h2>Latest</h2>" + _hub_latest(mb)
               + "<h2>👥 Member pages</h2>" + _hub_tiles([(i, t, d, mb + u) for i, t, d, u in member_items]
                                                         + [("🏠", "Members Hub", "The members' homepage", mb + "index.html")]))
@@ -4484,16 +4499,32 @@ vy=y.dataset.v!=null?+y.dataset.v:y.textContent.toLowerCase();return (vx>vy?1:vx
 rows.concat(tot).forEach(function(r){t.tBodies[0].appendChild(r);});};}});</script>"""
 
 
+# Faction positions from lowest to highest - the Members list sorts its Position column by this
+# (case-insensitive; any other position sorts below Recruit).
+POSITION_ORDER = ["Recruit", "Heart Beat", "Heart Breaker", "Heart Stopper", "HR", "Leadership", "Co-Leader", "Leader"]
+
+
+def position_rank(pos) -> int:
+    p_ = str(pos or "").strip().lower()
+    for i, x in enumerate(POSITION_ORDER):
+        if x.lower() == p_:
+            return i
+    return -1
+
+
 def write_profiles(out: Path, db: dict):
     """member.html (profile page, drawn in the browser from db/) + members.html (directory, sortable)."""
     import html as _html
     mout = member_out(out)
     tpl = (ROOT / "tools" / "member_profile.html").read_text(encoding="utf-8")
-    (mout / "member.html").write_text(tpl.replace("__MENU__", site_menu("")), encoding="utf-8")
-    if gate_cfg():                         # My Account: the signed-in member's own information (needs whoami.json)
-        acc = (ROOT / "tools" / "my_account.html").read_text(encoding="utf-8")
-        (mout / "account.html").write_text(acc.replace("__MENU__", site_menu(""))
-                                           .replace("__GATE__", gate_cfg()["url"].rstrip("/")), encoding="utf-8")
+    gurl = gate_cfg()["url"].rstrip("/") if gate_cfg() else ""
+    (mout / "member.html").write_text(tpl.replace("__MENU__", site_menu("")).replace("__GATE__", gurl), encoding="utf-8")
+    # crimes.html - Organized Crimes breakdown (header button), drawn in the browser from db/crimes.json
+    (mout / "crimes.html").write_text((ROOT / "tools" / "oc_stats.html").read_text(encoding="utf-8")
+                                      .replace("__MENU__", site_menu("")), encoding="utf-8")
+    if gate_cfg():     # account.html merged into the profile: old links go to their own profile (keeping #section)
+        (mout / "account.html").write_text('<!DOCTYPE html><meta charset="utf-8"><title>My Profile</title>'
+                                           '<script>location.replace("me" + location.hash)</script>', encoding="utf-8")
     ms = db["members"]["members"]
     def table(rows):
         h = ('<table class="srt"><tr><th>Member</th><th>Position</th><th>Days</th><th>War hits</th><th>Wars hit</th>'
@@ -4501,7 +4532,8 @@ def write_profiles(out: Path, db: dict):
         for m in rows:
             t = m["t"]
             h += (f'<tr><td><a href="member.html?id={m["id"]}" style="color:#e8be5a">{_html.escape(m["name"])}</a></td>'
-                  f'<td>{_html.escape(str(m.get("position") or ""))}</td><td data-v="{m.get("days") or 0}">{m.get("days") or ""}</td>'
+                  f'<td data-v="{position_rank(m.get("position"))}">{_html.escape(str(m.get("position") or ""))}</td>'
+                  f'<td data-v="{m.get("days") or 0}">{m.get("days") or ""}</td>'
                   f'<td data-v="{t["war_hits"]}">{t["war_hits"]:,}</td><td data-v="{t["wars"] - t["wars_zero"]}">{t["wars"] - t["wars_zero"]}/{t["wars"]}</td>'
                   f'<td data-v="{t["chain_hits"]}">{t["chain_hits"]:,}</td><td data-v="{t["crimes_ok"]}">{t["crimes_ok"]}/{t["crimes"]}</td>'
                   f'<td data-v="{t["paid"]}">${t["paid"]:,}</td></tr>')
@@ -4557,6 +4589,9 @@ def write_legacy_images(out: Path):
             shutil.copyfile(f, t)
             n += 1
     print(f"Gatekeeper: {n} images also kept at the old address (for older newsletters)")
+
+
+_PANEL_HTML = {}          # "A" = the announcement's paste-ready HTML from this run (write_announcements)
 
 
 def write_description_page(out: Path):
@@ -4657,6 +4692,9 @@ def write_announcements(cfg: dict, summary: dict, out: Path):
     for n in names:
         image_page(out / pg(n), titles.get(n[len("announce-"):].rsplit(".", 1)[0], n), n, img_p(n))
     snippet = announcement_snippet(acfg, names, base_url)
+    _PANEL_HTML["A"] = snippet          # shown on the leaders' Announcements page (write_message_builder)
+    # (no members' announcements.html any more - the HTML lives on the leaders' Announcements page)
+    return
     page = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>Announcement HTML</title>
@@ -5210,18 +5248,23 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
     chains = sorted(((k, c) for k, c in chist.get("chains", {}).items() if c.get("length", 0) >= min_len),
                     key=lambda kc: -kc[1]["end"])
     best = max((c["length"] for _k, c in chains), default=0)
-    body = (site_menu("") +
-            f'<h2>{len(chains)} chains of {min_len}+ hits · longest {fmt_int(best)}</h2>'
-            "<table><tr><th>Date</th><th>Hits</th><th>Respect</th><th>Members</th><th></th></tr>")
+    tot_hits = sum(c.get("length", 0) for _k, c in chains)
+    tot_resp = sum(a.get("respect", 0) for _k, c in chains for a in c.get("attackers", []))
+    body = (site_menu("") + HIST_STATS_CSS + _stat_strip([
+                (fmt_int(len(chains)), f"Chains ({min_len}+)"), (fmt_int(best), "Longest"), (fmt_int(tot_hits), "Chain hits"),
+                (f"{tot_resp:,.0f}", "Chain respect")])
+            + f'<h2>All chains <span class="tag">(tap a column to sort)</span></h2>'
+            '<table class="srt"><tr><th>Date</th><th>Hits</th><th>Respect</th><th>Members</th><th>Report</th></tr>')
     for k, c in chains:
         when = datetime.fromtimestamp(c["end"], timezone.utc).strftime("%b %d, %Y")
         resp = sum(a.get("respect", 0) for a in c.get("attackers", []))
         has = (REPORTS_DIR / f"chain-{k}.json").exists()
         link = (f'<a href="reports/chain-{k}.html">Report</a>'
                 if has else '<span class="tag">-</span>')
-        body += (f'<tr><td>{when}</td><td><b>{fmt_int(c["length"])}</b></td><td>{resp:,.0f}</td>'
-                 f'<td>{len(c.get("attackers", []))}</td><td>{link}</td></tr>')
-    body += "</table>"
+        body += (f'<tr><td data-v="{c["end"]}">{when}</td><td data-v="{c["length"]}"><b>{fmt_int(c["length"])}</b></td>'
+                 f'<td data-v="{resp:.2f}">{resp:,.0f}</td><td data-v="{len(c.get("attackers", []))}">{len(c.get("attackers", []))}</td>'
+                 f'<td>{link}</td></tr>')
+    body += "</table>" + SORT_JS
     _hub_page(mout / "chains.html", "Chain History", "Every chain on record, newest first", body)
 
 
@@ -5556,18 +5599,53 @@ def _war_report_meta(w0: dict, wh_: dict) -> dict:
             "top": max(ms_, key=lambda m: m["attacks"]).get("name", "") if ms_ else ""}
 
 
-def war_history_page(out: Path, raw: dict, cfg: dict):
-    """wars.html (members) - every ranked war on record, newest first: result, score, hits, participation,
-    with its report and payout when saved."""
+HIST_STATS_CSS = """<style>.hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin:0 0 14px}
+.hst div{background:#170d0e;border:1px solid #5c1c1a;border-radius:10px;padding:9px;text-align:center}
+.hst b{display:block;color:#fff;font-size:19px}.hst span{color:#9a9a9c;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.wsum{text-align:center;margin:0 0 6px}.wsum img{max-width:100%;height:auto;border-radius:8px}
+table.srt th{white-space:nowrap}table.srt th:after{content:" ⇅";color:#5c4a4a;font-size:11px}</style>"""
+
+
+def _stat_strip(items) -> str:
+    """[(value, label)] -> a row of stat boxes (War / Chain History headers)."""
     import html as _html
+    return '<div class="hst">' + "".join(f"<div><b>{v}</b><span>{_html.escape(l)}</span></div>" for v, l in items) + "</div>"
+
+
+def war_history_page(out: Path, raw: dict, cfg: dict):
+    """wars.html (members) - the War Summary on top (record + totals, and the latest war's War Summary card),
+    then every ranked war on record, newest first: result, score, hits, respect, participation, with its report
+    and payout when saved. The table sorts by tapping a column (date, result, score, hits, respect, took part)."""
+    import html as _html
+    mout = member_out(out)
     hist = raw.get("_war_history") or {}
     my_id = raw["basic"].get("basic", raw["basic"]).get("id")
     meta = war_meta(raw, my_id)
     wars = sorted(hist.get("wars", {}).items(), key=lambda kv: -kv[1]["end"])
     won = sum(1 for k, _w in wars if meta.get(k, {}).get("won"))
-    body = (site_menu("") +
-            f'<h2>{len(wars)} ranked wars · {won} won · {len(wars) - won} lost</h2>'
-            "<table><tr><th>Date</th><th>Result</th><th>Score</th><th>Hits</th><th>Took part</th><th></th></tr>")
+    tot_hits = sum(m["attacks"] for _k, w in wars for m in w.get("members", []))
+    tot_resp = sum(m.get("score", 0) for _k, w in wars for m in w.get("members", []))
+    part = [sum(1 for m in w.get("members", []) if m["attacks"] > 0) / len(w["members"]) for _k, w in wars if w.get("members")]
+    summary_html = HIST_STATS_CSS + _stat_strip([
+        (f"{won}-{len(wars) - won}", "Record (W-L)"), (f"{round(100 * won / len(wars)) if wars else 0}%", "Win rate"),
+        (fmt_int(len(wars)), "Ranked wars"), (fmt_int(tot_hits), "War hits"), (f"{tot_resp:,.0f}", "War respect"),
+        (f"{round(100 * sum(part) / len(part)) if part else 0}%", "Avg took part")])
+    # the latest war's War Summary card (same printout as the payout receipts / Discord), linked to its report
+    if wars:
+        lk = wars[0][0]
+        try:
+            w0 = _one_war(raw, lk, my_id, cfg)
+            if w0:
+                (mout / "war-summary.png").write_bytes(frame_png(war_summary_card(w0), bar="War Summary"))
+                href = f"reports/war-{lk}.html" if (REPORTS_DIR / f"war-{lk}.json").exists() else "war-summary.png"
+                summary_html += (f'<div class="wsum"><a href="{href}"><img src="war-summary.png" '
+                                 f'alt="War Summary - latest war" loading="lazy"></a></div>')
+        except Exception as e:
+            print(f"War History: war summary skipped ({type(e).__name__})")
+    body = (site_menu("") + "<h2>⚔️ War Summary</h2>" + summary_html
+            + f'<h2>All ranked wars <span class="tag">(tap a column to sort)</span></h2>'
+            '<table class="srt"><tr><th>Date</th><th>Result</th><th>Score</th><th>Hits</th><th>Respect</th>'
+            "<th>Took part</th><th>Links</th></tr>")
     rec = _latest_receipts()
     for k, w in wars:
         mt = meta.get(k, {})
@@ -5580,11 +5658,14 @@ def war_history_page(out: Path, raw: dict, cfg: dict):
             links.append(f'<a href="reports/war-{k}.html">Report</a>')
         if k in rec:
             links.append(f'<a href="payouts/war-{k}.html">Payout</a>')
-        body += (f'<tr><td>{when}</td><td>{res}</td><td>{fmt_int(mt.get("our", 0))} - {fmt_int(mt.get("their", 0))}</td>'
-                 f'<td>{fmt_int(sum(m["attacks"] for m in ms_))}</td>'
-                 f'<td>{sum(1 for m in ms_ if m["attacks"] > 0)}/{len(ms_)}</td><td>{" · ".join(links) or "-"}</td></tr>')
-    body += "</table>"
-    _hub_page(member_out(out) / "wars.html", "War History", "Every ranked war on record, newest first", body)
+        hits, resp = sum(m["attacks"] for m in ms_), sum(m.get("score", 0) for m in ms_)
+        took = sum(1 for m in ms_ if m["attacks"] > 0)
+        body += (f'<tr><td data-v="{w["end"]}">{when}</td><td data-v="{1 if mt.get("won") else 0}">{res}</td>'
+                 f'<td data-v="{mt.get("our", 0)}">{fmt_int(mt.get("our", 0))} - {fmt_int(mt.get("their", 0))}</td>'
+                 f'<td data-v="{hits}">{fmt_int(hits)}</td><td data-v="{resp:.2f}">{resp:,.0f}</td>'
+                 f'<td data-v="{took / len(ms_) if ms_ else 0:.4f}">{took}/{len(ms_)}</td><td>{" · ".join(links) or "-"}</td></tr>')
+    body += "</table>" + SORT_JS
+    _hub_page(mout / "wars.html", "War History", "The war summary, then every ranked war on record", body)
 
 
 def discord_post_wars(raw: dict, summary: dict, cfg: dict):
@@ -8273,7 +8354,7 @@ def _leader_post(cfg: dict, sections: list) -> bool:
                          {"username": lcfg.get("username", "Leader Alerts"), "content": text,
                           "components": [{"type": 1, "components": [
                               {"type": 2, "style": 5, "label": "Payouts", "url": f"{member_base()}/payouts.html"},
-                              {"type": 2, "style": 5, "label": "Announcements", "url": f"{member_base()}/announcements.html"}]}],
+                              {"type": 2, "style": 5, "label": "Announcements", "url": f"{leader_base()}/announcements.html"}]}],
                           "allowed_mentions": {"parse": []}})
         discord_msg_save(f"leader:{int(_t.time())}", (lmsg or {}).get("id"))
         print(f"Discord: leader alert posted ({len(sections)} section(s))")
@@ -8300,13 +8381,14 @@ def leader_alerts(raw: dict, summary: dict, cfg: dict):
     lp = str(lcfg.get("links_post", ""))
     if lp and st.get("links_posted") != lp:
         mb, lb = member_base(), leader_base()
-        member_links = [("Members Hub", f"{mb}/index.html"), ("Members", f"{mb}/members.html"),
-                        ("Announcements", f"{mb}/announcements.html"),
-                        ("Payouts", f"{mb}/payouts.html"), ("Newsletters", f"{mb}/newsletter.html"),
-                        ("Recap Archive", f"{mb}/recaps.html")]
+        member_links = [("Members Hub", f"{mb}/index.html"), ("War History", f"{mb}/wars.html"),
+                        ("War Payouts", f"{mb}/payouts.html"), ("Chain History", f"{mb}/chains.html"),
+                        ("Organized Crimes", f"{mb}/crimes.html"), ("Members", f"{mb}/members.html"),
+                        ("Monthly Recap", f"{mb}/newsletter.html"), ("Recap Archive", f"{mb}/recaps.html")]
         leader_links = ([("Leaders Hub", f"{lb}/index.html"), ("Leader Monitor", f"{lb}/monitor.html"),
                          ("Payout Calculator", f"{lb}/payout.html"),
-                         ("Message Builder", f"{lb}/builder.html"), ("Site Panels", f"{lb}/panels.html"),
+                         ("Panel Builder", f"{lb}/builder.html"), ("Description", f"{lb}/description.html"),
+                         ("Announcements", f"{lb}/announcements.html"),
                          ("Newsletter Filler (userscript)", f"{lb}/hb-newsletter-filler.user.js")] if lb else [])
         text = "\n".join(
             ["## 🔗 Faction Pages", "", "### 👥 Member pages", "-# Safe to share with faction members (never publicly)."]
@@ -8476,7 +8558,7 @@ def main():
     size = render(summary, cfg, out)
     write_announcements(cfg, summary, out)
     write_panel_preview_kit(out, summary)
-    write_description_page(out)
+    # (description.html at the public root is gone - the leaders' Description page has the HTML)
     _PAYOUT_RAW["raw"] = raw
     write_payout_calculator(cfg, out)
     update_payouts(cfg, out)

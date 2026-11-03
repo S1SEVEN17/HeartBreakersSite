@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Organized Crimes - Heart Breakers</title>
+<!--
+  ORGANIZED CRIMES (members' folder: crimes.html, published by generate.py write_profiles; header button
+  "🕵️ Organized Crimes"). Drawn in the browser from db/crimes.json (rebuilt every full update from
+  data/crime_history.json):  {tax, crimes: [{t, name, diff, status, money, items, respect, m: [member ids]}]}
+    money   = the crime's cash reward (whole team, before the faction's cut); items = item rewards (count)
+    share   = money * (1 - tax) / members  (what each member got - same rule as the profile pages)
+  Payout figures (avg / max / least) count SUCCESSFUL runs only (a success that paid only items counts as $0). Tables sort by tapping a column; the range buttons are remembered.
+  __MENU__ is replaced with the site header.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1200px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:12px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.tile{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px;text-align:center}
+.tile b{display:block;color:#fff;font-size:20px}.tile span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.tile i{display:block;color:var(--gold);font-style:normal;font-size:11px;margin-top:2px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+td,th{padding:8px 10px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
+th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;cursor:pointer;user-select:none}
+th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}
+td.n,th.n{text-align:right}.w{color:var(--green)}.d{color:var(--red)}.tag{color:var(--sub);font-size:12px}
+.scroll{overflow-x:auto}
+.bar{display:inline-block;height:8px;border-radius:4px;background:var(--green);vertical-align:middle;margin-left:6px}
+.rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:4px 0 10px}
+.rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
+.rng button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
+.rng button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+#err{text-align:center;color:var(--sub);margin:30px}
+</style></head><body>
+__MENU__
+<h1>Organized Crimes</h1>
+<div class="sub" id="meta">Loading…</div>
+<div class="rng" id="rng"><span>Range</span><button data-r="30">1 Month</button><button data-r="91">3 Months</button>
+  <button data-r="182">6 Months</button><button data-r="365">1 Year</button><button data-r="0" class="on">All Time</button></div>
+<div id="err" style="display:none"></div>
+<div class="tiles" id="tiles"></div>
+<h2>🕵️ By crime <span class="tag">(tap a column to sort)</span></h2>
+<div class="scroll"><table id="tcrime"></table></div>
+<h2>📶 By level</h2>
+<div class="scroll"><table id="tlevel"></table></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const num = n => Math.round(n || 0).toLocaleString("en-US");
+const money = n => "$" + num(n);
+const short = n => n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? "$" + (n / 1e3).toFixed(0) + "K" : "$" + num(n);
+const day = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "short", day: "2-digit", year: "numeric", timeZone: "UTC"}) : "";
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+let O = null;
+
+// one row of stats for a group of crimes
+function stats(list, tax) {
+  const ok = list.filter(c => String(c.status).toLowerCase() === "successful");
+  const paid = ok.map(c => c.money || 0);
+  const shares = ok.filter(c => (c.m || []).length).map(c => (c.money || 0) * (1 - tax) / c.m.length);
+  const resp = ok.map(c => c.respect || 0);
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+  return {runs: list.length, ok: ok.length, rate: pct(ok.length, list.length),
+    avg: avg(paid), max: paid.length ? Math.max(...paid) : 0, min: paid.length ? Math.min(...paid) : 0,
+    share: avg(shares), total: paid.reduce((x, y) => x + y, 0),
+    resp: avg(resp), respTot: resp.reduce((x, y) => x + y, 0),
+    items: ok.reduce((x, c) => x + (c.items || 0), 0), last: Math.max(0, ...list.map(c => c.t || 0)),
+    size: avg(list.map(c => (c.m || []).length))};
+}
+
+// sortable table: cols [[label, key, numeric, fmt]], rows = objects
+function table(el, cols, rows, sortKey, desc = true) {
+  const draw = () => {
+    const c = cols.find(x => x[1] === sortKey) || cols[0];
+    rows.sort((a, b) => { const x = a[sortKey], y = b[sortKey];
+      const r = typeof x === "string" ? x.localeCompare(y) : (x || 0) - (y || 0); return desc ? -r : r; });
+    el.innerHTML = `<tr>${cols.map(k => `<th class="${k[2] ? "n" : ""}${k[1] === sortKey ? " on" + (desc ? "" : " up") : ""}" data-k="${k[1]}">${k[0]}</th>`).join("")}</tr>`
+      + (rows.map(r => `<tr>${cols.map(k => `<td class="${k[2] ? "n" : ""}">${k[3] ? k[3](r) : esc(r[k[1]])}</td>`).join("")}</tr>`).join("")
+         || `<tr><td colspan="${cols.length}" class="tag">No organized crimes in this range.</td></tr>`);
+    el.querySelectorAll("th").forEach(th => th.onclick = () => {
+      if (th.dataset.k === sortKey) desc = !desc; else { sortKey = th.dataset.k; desc = typeof rows[0]?.[sortKey] !== "string"; }
+      draw(); });
+  };
+  draw();
+}
+
+// crimes that reward items only (no cash): say so instead of "$0"
+const pay = k => r => !r.total && r.items ? '<span class="tag">items only</span>' : short(r[k]);
+const rateCell = r => `${r.rate}%<span class="bar" style="width:${Math.max(2, r.rate * 0.5)}px;background:${r.rate >= 75 ? "#78c878" : r.rate >= 50 ? "#e8be5a" : "#e4382e"}"></span>`;
+const COLS_CRIME = [
+  ["Crime", "name", false, r => `${esc(r.name)}`], ["Level", "diff", true, r => r.diff ? "D" + r.diff : "-"],
+  ["Runs", "runs", true, r => num(r.runs)], ["Passed", "ok", true, r => num(r.ok)], ["Pass rate", "rate", true, rateCell],
+  ["Avg payout", "avg", true, pay("avg")], ["Max payout", "max", true, pay("max")],
+  ["Least payout", "min", true, pay("min")], ["Avg / member", "share", true, pay("share")],
+  ["Total paid", "total", true, pay("total")], ["Avg respect", "resp", true, r => num(r.resp)],
+  ["Total respect", "respTot", true, r => num(r.respTot)], ["Items", "items", true, r => num(r.items)],
+  ["Team", "size", true, r => r.size.toFixed(1)], ["Last run", "last", true, r => day(r.last)]];
+
+function draw(days) {
+  const from = days ? Date.now() / 1000 - days * 86400 : 0;
+  const list = O.crimes.filter(c => (c.t || 0) >= from), tax = O.tax || 0;
+  const all = stats(list, tax);
+  $("meta").textContent = list.length
+    ? `${num(list.length)} completed crimes · ${day(Math.min(...list.map(c => c.t || Infinity)))} - ${day(all.last)} · payouts are the whole team's cash reward before the faction's ${Math.round(tax * 100)}% cut`
+    : "No organized crimes in this range.";
+  $("tiles").innerHTML = [
+    [num(all.runs), "Crimes run", `${num(all.ok)} passed`], [all.rate + "%", "Pass rate", `${num(all.runs - all.ok)} failed`],
+    [short(all.total), "Total paid out", "successful crimes"], [short(all.avg), "Avg payout", "per successful crime"],
+    [short(all.max), "Biggest payout", ""], [short(all.share), "Avg per member", "after the faction's cut"],
+    [num(all.respTot), "Respect gained", num(all.resp) + " avg per crime"], [num(all.items), "Item rewards", ""]]
+    .map(([v, l, i]) => `<div class="tile"><b>${v}</b><span>${l}</span>${i ? `<i>${i}</i>` : ""}</div>`).join("");
+  // by crime
+  const by = {};
+  list.forEach(c => (by[c.name] = by[c.name] || []).push(c));
+  const rows = Object.entries(by).map(([name, l]) => Object.assign({name, diff: Math.max(...l.map(c => c.diff || 0))}, stats(l, tax)));
+  table($("tcrime"), COLS_CRIME, rows, "runs");
+  // by level
+  const bl = {};
+  list.forEach(c => (bl[c.diff || 0] = bl[c.diff || 0] || []).push(c));
+  const lrows = Object.entries(bl).map(([d, l]) => Object.assign({name: d > 0 ? "Level " + d : "?", diff: +d,
+    kinds: new Set(l.map(c => c.name)).size}, stats(l, tax)));
+  table($("tlevel"), [["Level", "diff", true, r => r.diff ? "D" + r.diff : "?"], ["Crimes", "kinds", true, r => num(r.kinds)],
+    ["Runs", "runs", true, r => num(r.runs)], ["Pass rate", "rate", true, rateCell], ["Avg payout", "avg", true, pay("avg")],
+    ["Max payout", "max", true, pay("max")], ["Least payout", "min", true, pay("min")],
+    ["Avg / member", "share", true, pay("share")], ["Avg respect", "resp", true, r => num(r.resp)],
+    ["Total respect", "respTot", true, r => num(r.respTot)]], lrows, "diff", false);
+}
+
+fetch("db/crimes.json").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => {
+  O = d;
+  const saved = localStorage.getItem("hb_oc_range");
+  document.querySelectorAll("#rng button").forEach(b => {
+    if (saved !== null) b.classList.toggle("on", b.dataset.r === saved);
+    b.onclick = () => { document.querySelectorAll("#rng button").forEach(x => x.classList.toggle("on", x === b));
+      try { localStorage.setItem("hb_oc_range", b.dataset.r); } catch (e) {}
+      draw(+b.dataset.r); };
+  });
+  draw(+(document.querySelector("#rng button.on") || {dataset: {r: 0}}).dataset.r);
+}).catch(e => { $("meta").textContent = ""; $("err").style.display = "block"; $("err").textContent = "Couldn't load the crime data (" + e.message + ")."; });
+</script>
+</body></html>

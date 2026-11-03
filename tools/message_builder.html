@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>Heart Breakers - Message Builder</title>
+<title>Heart Breakers - Panel Builder</title>
 <!--
   MESSAGE BUILDER (LEADERS' folder: builder.html, published by generate.py write_message_builder)
   Build a message panel in the faction frame - the same header art, title bar, red grid panel and
@@ -50,7 +50,7 @@ canvas{width:100%;height:auto;display:block;background:repeating-conic-gradient(
 </style></head>
 <body>
 __MENU__
-<h1>Message Builder</h1>
+<h1>Panel Builder</h1>
 <div class="wrap">
 <div class="ed">
 <div class="card" id="tokcard" style="display:none"><h2>GitHub token</h2>
@@ -139,6 +139,20 @@ const TEMPLATES = {
     {t: "card", title: "TOP HITTERS", text: "- Name - 0 hits\n- Name - 0 hits\n- Name - 0 hits", color: "GOLD"},
     {t: "card", title: "WAR PAYOUT", text: "- $0 paid to 0 members\n- Payouts are in your faction balance\n- Full receipt on the War Payouts page", color: "GREEN"},
     {t: "text", text: "Great work everyone!", color: "TEXT", size: 24, align: "center"}]},
+  "Monthly Recap": {head: {style: "big", title: "Monthly Recap"}, blocks: [
+    {t: "heading", text: "MONTH YEAR RECAP", color: "RED", size: 42},
+    {t: "text", text: "Here's how the faction did last month.", color: "TEXT", size: 26, align: "center"},
+    {t: "tiles", items: "0-0 | Ranked wars\n0 | War hits\n0 | Chains\n0% | OC pass rate"},
+    {t: "card", title: "TOP WAR HITTERS", text: "- 1. Name - 0 hits\n- 2. Name - 0 hits\n- 3. Name - 0 hits", color: "GOLD"},
+    {t: "card", title: "TOP CHAIN HITTERS", text: "- 1. Name - 0 hits\n- 2. Name - 0 hits\n- 3. Name - 0 hits", color: "RED"},
+    {t: "card", title: "ORGANIZED CRIMES", text: "- 0 crimes completed · 0% passed\n- $0 paid out", color: "GREEN"},
+    {t: "text", text: "Thanks for another great month!", color: "SUB", size: 22, align: "center"}]},
+  "Chain Report": {head: {style: "big", title: "Chain Report"}, blocks: [
+    {t: "heading", text: "0 HIT CHAIN", color: "RED", size: 44},
+    {t: "text", text: "Date · duration", color: "SUB", size: 24, align: "center"},
+    {t: "tiles", items: "0 | Hits\n0 | Respect\n0 | Members\n0 | Respect / hit"},
+    {t: "card", title: "TOP HITTERS", text: "- 1. Name - 0 hits · 0 respect\n- 2. Name - 0 hits · 0 respect\n- 3. Name - 0 hits · 0 respect", color: "GOLD"},
+    {t: "text", text: "Great chaining everyone!", color: "TEXT", size: 24, align: "center"}]},
   "Pre-War Notice": {head: {style: "big", title: "Pre-War Notice"}, blocks: [
     {t: "heading", text: "RANKED WAR VS OPPONENT", color: "RED", size: 42},
     {t: "tiles", items: "Day, Mon 00 | Date\n00:00 TCT | Start"},
@@ -174,13 +188,15 @@ let LIVE_DATA = null;
 async function liveData() {
   if (LIVE_DATA) return LIVE_DATA;
   const get = f => fetch(`${CFG.member_base}/${f}`, {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null);
-  const [M, W, C, P, S] = await Promise.all(["db/members.json", "db/wars.json", "db/chains.json", "db/payouts.json", "data.json"].map(get));
+  const [M, W, C, P, S, O] = await Promise.all(["db/members.json", "db/wars.json", "db/chains.json", "db/payouts.json", "data.json",
+                                                "db/crimes.json"].map(get));
   const names = {};
   for (const m of (M || {}).members || []) names[m.id] = m.name;
   LIVE_DATA = {names, members: ((M || {}).members || []).filter(m => m.current).length,
     wars: ((W || {}).wars || []).slice().sort((a, b) => (b.end || 0) - (a.end || 0)),
     chains: ((C || {}).chains || []).slice().sort((a, b) => (b.end || 0) - (a.end || 0)),
-    payouts: (P || {}).payouts || [], status: (S || {}).war_status || {kind: "none"}};
+    payouts: (P || {}).payouts || [], status: (S || {}).war_status || {kind: "none"},
+    crimes: (O || {}).crimes || [], tax: (O || {}).tax || 0};
   return LIVE_DATA;
 }
 const nf = n => Math.round(n || 0).toLocaleString("en-US");
@@ -226,6 +242,50 @@ const LIVE = {
       D.blocks.splice(4, 1);                       // no payout for this war (yet)
       D.buttons = [{label: "War history", url: `${CFG.member_base}/wars.html`, icon: "gi-crossed-swords"}];
     }
+    return D;
+  },
+  // last full calendar month (the month the recap covers): wars, chains, crimes and the top hitters in it
+  "Monthly Recap": L => {
+    const n = new Date(), a = Date.UTC(n.getUTCFullYear(), n.getUTCMonth() - 1, 1) / 1000, b = Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1) / 1000;
+    const inM = t => t >= a && t < b;
+    const wars = L.wars.filter(w => inM(w.end || 0)), chains = L.chains.filter(c => inM(c.end || 0)), crimes = L.crimes.filter(c => inM(c.t || 0));
+    const add = (acc, id, v) => { acc[id] = (acc[id] || 0) + v; };
+    const wh = {}, ch = {};
+    wars.forEach(w => (w.m || []).forEach(x => add(wh, x[0], x[1] || 0)));
+    chains.forEach(c => (c.m || []).forEach(x => add(ch, x[0], x[1] || 0)));
+    const top = acc => Object.entries(acc).filter(e => e[1]).sort((x, y) => y[1] - x[1]).slice(0, 3)
+      .map(([id, v], k) => `- ${k + 1}. ${L.names[id] || id} - ${nf(v)} hits`).join("\n");
+    const ok = crimes.filter(c => String(c.status).toLowerCase() === "successful");
+    const label = new Date(a * 1000).toLocaleString("en-US", {month: "long", year: "numeric", timeZone: "UTC"}).toUpperCase();
+    const D = JSON.parse(JSON.stringify(TEMPLATES["Monthly Recap"]));
+    D.blocks[0].text = `${label} RECAP`;
+    D.blocks[1].text = `Here's how Heart Breakers did in ${label.charAt(0) + label.slice(1).toLowerCase()}.`;
+    D.blocks[2].items = `${wars.filter(w => w.won).length}-${wars.filter(w => !w.won).length} | Ranked wars\n`
+      + `${nf(wars.reduce((s, w) => s + (w.m || []).reduce((x, y) => x + (y[1] || 0), 0), 0))} | War hits\n`
+      + `${chains.length} | Chains\n${crimes.length ? Math.round(100 * ok.length / crimes.length) : 0}% | OC pass rate`;
+    D.blocks[3].text = top(wh) || "- No ranked wars this month";
+    D.blocks[4].text = top(ch) || "- No chains this month";
+    D.blocks[5].text = `- ${nf(crimes.length)} crimes completed · ${crimes.length ? Math.round(100 * ok.length / crimes.length) : 0}% passed\n`
+      + `- $${nf(ok.reduce((s, c) => s + (c.money || 0), 0))} paid out`;
+    D.buttons = [{label: "Latest Recap", url: `${CFG.member_base}/newsletter.html`, icon: "gi-open-book"},
+                 {label: "Organized Crimes", url: `${CFG.member_base}/crimes.html`, icon: "gi-lockpicks"}];
+    return D;
+  },
+  "Chain Report": L => {
+    const c = L.chains[0];
+    if (!c) return null;
+    const m = c.m || [], resp = c.respect || m.reduce((s, x) => s + (x[2] || 0), 0);
+    const mins = c.start ? Math.round((c.end - c.start) / 60) : 0;
+    const dur = mins ? (mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`) : "";
+    const D = JSON.parse(JSON.stringify(TEMPLATES["Chain Report"]));
+    D.blocks[0].text = `${nf(c.length)} HIT CHAIN`;
+    D.blocks[1].text = tctDay(c.end) + (dur ? ` · ${dur}` : "");
+    D.blocks[2].items = `${nf(c.length)} | Hits\n${nf(resp)} | Respect\n${m.filter(x => x[1]).length} | Members\n`
+      + `${c.length ? (resp / c.length).toFixed(1) : 0} | Respect / hit`;
+    D.blocks[3].text = m.slice().sort((x, y) => y[1] - x[1]).slice(0, 5).filter(x => x[1])
+      .map((x, k) => `- ${k + 1}. ${L.names[x[0]] || x[0]} - ${nf(x[1])} hits · ${nf(x[2])} respect`).join("\n") || "- No hits recorded";
+    D.buttons = [{label: "Chain report", url: `${CFG.member_base}/reports/chain-${c.id}.html`, icon: "gi-bolt-shield"},
+                 {label: "Chain history", url: `${CFG.member_base}/chains.html`, icon: "gi-trophy"}];
     return D;
   },
   "Pre-War Notice": L => {

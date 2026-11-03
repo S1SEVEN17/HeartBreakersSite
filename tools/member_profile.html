@@ -11,7 +11,12 @@
     db/chains.json   per chain, per member [id, hits, respect, rets]
     db/crimes.json   completed organized crimes (members = list of ids; money split = (1 - tax) / members)
     db/payouts.json  current receipt per war, per member [id, pay, war hits, outside]
-  Charts are plain inline SVG (no libraries, works in Torn PDA). __MENU__ is replaced with the site menu.
+  Charts are plain inline SVG (no libraries, works in Torn PDA). __MENU__ is replaced with the site menu,
+  __GATE__ with the gatekeeper address.
+  MY PROFILE: this page is also the signed-in member's own account page (it replaced account.html).
+  member.html with no ?id= (or the gatekeeper's /m/me) shows THEM - whoami.json says who that is - and on
+  their own profile it adds the account bar (leader badge, sign-in info, Torn profile, Leaders Hub, Sign out).
+  Section ids #payouts #wars #chains #crimes are what the account menu's My Payouts / My Wars / ... jump to.
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -33,12 +38,18 @@ td.n,th.n{text-align:right}.w{color:var(--green)}.d{color:var(--red)}.tag{color:
 .rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
 .rng button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
 .rng button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
-#err{text-align:center;color:var(--sub);margin:30px}
+#err{text-align:center;color:var(--sub);margin:30px}#err a{color:var(--gold)}
+.acts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin:8px 0 4px}
+.acts a{background:#1a1012;color:var(--gold);border:1px solid var(--edge);border-radius:8px;padding:8px 13px;text-decoration:none;font-size:14px}
+.acts a:hover{border-color:var(--gold)}.acts a.out{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+.pass{color:var(--sub);text-align:center;font-size:12px;margin:4px 0 12px}.badge.ld{color:var(--gold);border-color:var(--gold)}
+h2{scroll-margin-top:10px}
 </style></head><body>
 __MENU__
 <div id="err">Loading…</div>
 <div id="p" style="display:none">
   <h1 id="nm"></h1><div class="sub" id="meta"></div>
+  <div class="acts" id="acts" style="display:none"></div><div class="pass" id="pass"></div>
   <div class="tiles" id="tiles"></div>
   <div class="rng" id="rng"><span>Range</span><button data-r="30">1 Month</button><button data-r="91">3 Months</button>
     <button data-r="182">6 Months</button><button data-r="365" class="on">1 Year</button><button data-r="0">All Time</button></div>
@@ -48,9 +59,10 @@ __MENU__
   <div class="chart" id="cc"></div>
   <h2>🏋️ Gym energy <span class="tag">(trained while in the faction)</span></h2>
   <div class="tiles" id="gym"></div>
-  <h2>⚔️ Wars</h2><div class="scroll"><table id="tw"></table></div>
-  <h2>⛓️ Recent chains</h2><div class="scroll"><table id="tc"></table></div>
-  <h2>🕵️ Organized crimes</h2><div class="scroll"><table id="to"></table></div>
+  <h2 id="payouts">💰 War payouts <span class="tag" id="payt"></span></h2><div class="scroll"><table id="tp"></table></div>
+  <h2 id="wars">⚔️ Wars</h2><div class="scroll"><table id="tw"></table></div>
+  <h2 id="chains">⛓️ Recent chains</h2><div class="scroll"><table id="tc"></table></div>
+  <h2 id="crimes">🕵️ Organized crimes</h2><div class="scroll"><table id="to"></table></div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -58,8 +70,11 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", 
 const num = n => Math.round(n || 0).toLocaleString("en-US");
 const money = n => "$" + num(n);
 const day = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "short", day: "2-digit", year: "numeric", timeZone: "UTC"}) : "";
-const id = +new URLSearchParams(location.search).get("id");
+const GATE = "__GATE__";
+let id = +new URLSearchParams(location.search).get("id");
 const get = f => fetch("db/" + f + ".json").then(r => { if (!r.ok) throw new Error(f); return r.json(); });
+// who is signed in (the gatekeeper answers; null without it) - decides "my profile"
+const whoami = GATE ? fetch("whoami.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null) : Promise.resolve(null);
 
 // bar chart: values [{label, v, sub}] + optional average line
 // width = the chart box (so bars spread across it, centred); phones get at least 28 px per bar and scroll sideways
@@ -87,15 +102,26 @@ function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e") {
 let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() =>
   document.querySelectorAll(".chart").forEach(el => el._args && bars(el, ...el._args)), 150); });
 
-Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)).then(([M, W, C, O, P]) => {
+Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get).concat([whoami])).then(([M, W, C, O, P, me]) => {
+  if (!id && me) id = me.id;                     // no ?id= -> my own profile
   const m = M.members.find(x => x.id === id);
-  if (!m) { $("err").textContent = "Member not found - use the search box above."; return; }
+  if (!m) { $("err").innerHTML = id ? 'Member not found - see <a href="members.html">Members</a>.' : 'Pick a member on the <a href="members.html">Members</a> page.'; return; }
+  const own = !!(me && me.id === id);
   $("err").style.display = "none"; $("p").style.display = "block";
-  document.title = m.name + " - Heart Breakers";
+  document.title = (own ? "My Profile - " : "") + m.name + " - Heart Breakers";
   $("nm").textContent = m.name;
   $("meta").innerHTML = [m.position, m.days != null ? m.days + " days in the faction" : "",
     m.current ? "" : '<span class="badge">left the faction</span>',
+    own && me.leader ? '<span class="badge ld">🛡️ Leader access</span>' : "",
     `<a href="https://www.torn.com/profiles.php?XID=${m.id}">Torn profile [${m.id}]</a>`].filter(Boolean).join(" · ");
+  if (own) {                                     // the account bar: only on your own profile
+    const dd = t => new Date(t).toLocaleDateString("en-US", {month: "short", day: "2-digit", year: "numeric"});
+    $("acts").style.display = "flex";
+    $("acts").innerHTML = (me.leader ? `<a href="${GATE}/l/">🛡️ Leaders Hub</a>` : "")
+      + `<a href="https://www.torn.com/profiles.php?XID=${me.id}" target="_blank" rel="noopener">🌐 My Torn profile</a>`
+      + `<a class="out" href="${GATE}/logout">🚪 Sign out</a>`;
+    if (me.until) $("pass").textContent = `Signed in on this device${me.since ? " since " + dd(me.since) : ""} · stays signed in until ${dd(me.until)} · Sign out ends it on this device only.`;
+  }
   const t = m.t;
   // rank among current members
   const cur = M.members.filter(x => x.current);
@@ -165,6 +191,13 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)).then(([
       return `<tr><td>${day(w.end)}</td><td><span class="${w.won ? "w" : "d"}">${w.won ? "Victory" : "Defeat"}</span> vs ${esc(w.opponent)}</td>
         <td class="n">${num(r[1])}</td><td class="n">${num(r[2])}</td><td class="n">${num(r[3])}</td><td class="n">${num(r[4])}</td><td class="n">${num(r[5])}</td>
         <td class="n">${pay[w.id] ? money(pay[w.id]) : "-"}</td></tr>`; }).join("") || `<tr><td colspan="8" class="tag">No ranked wars yet.</td></tr>`);
+  // payouts (newest first) with their receipts
+  const pc = P.payouts.map(p => ({p, r: p.m.find(x => x[0] === id)})).filter(x => x.r && x.r[1]).sort((a, b) => (b.p.end || 0) - (a.p.end || 0));
+  $("payt").textContent = pc.length ? `(${pc.length} · ${money(pc.reduce((a, x) => a + x.r[1], 0))} total)` : "";
+  $("tp").innerHTML = `<tr><th>Date</th><th>War</th><th class="n">War hits</th><th class="n">Paid</th><th></th></tr>`
+    + (pc.map(({p, r}) => `<tr><td>${day(p.end)}</td><td>vs ${esc(p.opponent || "?")}</td><td class="n">${num(r[2])}</td>
+        <td class="n w">${money(r[1])}</td><td><a href="payouts/war-${p.war}.html" style="color:#e8be5a">Receipt</a></td></tr>`).join("")
+      || `<tr><td colspan="5" class="tag">No war payouts yet.</td></tr>`);
   // chains table (last 25 they hit in)
   const ch = C.chains.filter(c => c.m.some(x => x[0] === id)).reverse().slice(0, 25);
   $("tc").innerHTML = `<tr><th>Date</th><th class="n">Chain</th><th class="n">Their hits</th><th class="n">Respect</th><th class="n">Retals</th></tr>`
@@ -179,6 +212,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)).then(([
       return `<tr><td>${day(c.t)}</td><td>${esc(c.name)} <span class="tag">D${c.diff}</span></td><td class="${ok ? "w" : "d"}">${esc(c.status)}</td>
         <td class="n">${share ? money(share) : (ok && c.items ? "Item rewards" : "-")}</td></tr>`; }).join("")
       || `<tr><td colspan="4" class="tag">No organized crimes on record.</td></tr>`);
+  if (location.hash) { const el = document.querySelector(location.hash); if (el) el.scrollIntoView(); }
 }).catch(e => { $("err").textContent = "Couldn't load the faction data (" + e.message + ")."; });
 </script>
 </body></html>

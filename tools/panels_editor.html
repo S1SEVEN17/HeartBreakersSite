@@ -3,6 +3,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <title>Heart Breakers - Site Panels</title>
+<!-- Published twice (leaders' folder): description.html (CFG.only = "D") and announcements.html (CFG.only = "A") -
+     each page edits just its own panel; the tab switcher is hidden. CFG.html = the panel's HTML as it is now. -->
 <!--
   SITE PANELS EDITOR (leaders' folder: panels.html, published by generate.py write_message_builder)
   Edits the text, tiles and buttons of the faction DESCRIPTION banner and the members' ANNOUNCEMENTS panel.
@@ -39,8 +41,8 @@ button.g{background:var(--red);border-color:var(--red);color:#fff}button.s{paddi
 #status{color:var(--gold)}
 </style></head><body>
 __MENU__
-<h1>Site Panels</h1>
-<p class="lead">Edit the faction <b>Description</b> banner and the members' <b>Announcements</b> panel.
+<h1 id="ttl">Site Panels</h1>
+<p class="lead" id="lead">Edit the faction <b>Description</b> banner and the members' <b>Announcements</b> panel.
 Saving redraws them on the site within a few minutes (live data like respect, wars and leaderboards fills itself in).</p>
 <div class="card" id="tokcard" style="display:none"><h2>GitHub token</h2>
   <div class="small">Saving needs a GitHub token, kept only in this browser on this device (each device / browser - e.g. Torn PDA
@@ -50,7 +52,6 @@ Saving redraws them on the site within a few minutes (live data like respect, wa
   <div style="display:flex;gap:6px;margin-top:8px"><input id="tokIn" type="password" placeholder="github_pat_…" autocomplete="off" style="flex:1">
     <button class="g" id="tokSave">Save token</button></div><div class="small" id="tokMsg"></div></div>
 <div class="tabs"><button id="tD" class="on">Description banner</button><button id="tA">Announcements panel</button></div>
-<div id="form"><div class="small" style="text-align:center">Loading the current panels…</div></div>
 <div class="card prev"><h2>Live preview <span class="small" id="pvs" style="margin-left:auto;text-transform:none;letter-spacing:0"></span></h2>
   <div class="small">Drawn in your browser with the site's own drawing code and this update's faction data, so it matches
     what Save changes will produce. Nothing is saved until you press <b>Save changes</b>.</div>
@@ -62,6 +63,7 @@ Saving redraws them on the site within a few minutes (live data like respect, wa
   <div class="small" id="htmlHelp"></div>
   <textarea id="code" readonly style="min-height:110px;font:12px monospace"></textarea>
   <button id="copyCode">Copy HTML</button></div>
+<div id="form"><div class="small" style="text-align:center">Loading the current panels…</div></div>
 <div class="bar"><button class="g" id="save">Save changes</button><button id="reload">Discard &amp; reload</button><span id="status"></span></div>
 <script>
 const CFG = __CONFIG__;
@@ -127,7 +129,17 @@ const SCHEMA = {
       ["gym_group_title", "Gym leaderboards heading"], ["gym_subtitle", "Gym note"]]},
     {path: "announcements", title: "Footer", fields: [["footer_text", "Footer text ({updated} = last update time)"]]}]};
 
-let C = null, sha = null, tab = "D", dirty = false;
+let C = null, sha = null, tab = CFG.only || "D", dirty = false;
+// single-panel page: title, intro, no tab switcher; the HTML box starts with the panel's current HTML
+if (CFG.only) {
+  document.querySelector(".tabs").style.display = "none";
+  const D_ = CFG.only === "D";
+  $("ttl").textContent = D_ ? "Faction Description" : "Faction Announcements";
+  document.title = "Heart Breakers - " + (D_ ? "Description" : "Announcements");
+  $("lead").innerHTML = D_ ? "The banner in the faction <b>description</b> (seen by everyone). Edit below - the preview updates as you type; nothing is saved until <b>Save changes</b>."
+    : "The members' <b>announcement</b> panel. Edit below - the preview updates as you type; nothing is saved until <b>Save changes</b>.";
+  if (CFG.html) $("code").value = CFG.html;
+}
 const at = (path, make) => path.split(".").reduce((o, k) => (o[k] == null && make ? (o[k] = {}) : o[k]), C);
 
 async function loadConfig() {
