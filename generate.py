@@ -3712,7 +3712,8 @@ border-radius:6px;text-decoration:none;white-space:nowrap}.hbm details div a:hov
 
 
 def _menu_js(root: str) -> str:
-    return ("<script>(function(){var R=" + json.dumps(root) + ",inp=document.getElementById('hbmq'),dl=document.getElementById('hbmn'),M=null;"
+    # dropdown behaviour only (the member search box was removed - members are on members.html)
+    return ("<script>(function(){"
             "document.querySelectorAll('.hbm details').forEach(function(d){d.addEventListener('toggle',function(){if(!d.open)return;"
             "document.querySelectorAll('.hbm details').forEach(function(o){if(o!==d)o.open=false;});"
             # keep the opened list on screen: flip it to the right edge of its button if it would run off the right
@@ -3722,13 +3723,7 @@ def _menu_js(root: str) -> str:
             "if(r.left<6){p.style.right='auto';p.style.left=(6-d.getBoundingClientRect().left)+'px';}});});"
             "document.addEventListener('click',function(e){if(!e.target.closest('.hbm'))document.querySelectorAll('.hbm details')"
             ".forEach(function(o){o.open=false;});});"
-            "function load(){if(M)return;M=[];fetch(R+'db/members.json').then(function(r){return r.json();}).then(function(d){"
-            "M=d.members;dl.innerHTML=M.map(function(m){return '<option value="'+m.name.replace(/"/g,'')+'">'+(m.current?'':'left the faction')"
-            "+'</option>';}).join('');}).catch(function(){});}"
-            "function go(){var v=inp.value.trim().toLowerCase();if(!v||!M)return;var m=M.find(function(x){return x.name.toLowerCase()===v;})"
-            "||M.find(function(x){return x.name.toLowerCase().indexOf(v)===0;});if(m)location.href=R+'member.html?id='+m.id;}"
-            "inp.addEventListener('focus',load);inp.addEventListener('change',go);"
-            "inp.addEventListener('keydown',function(e){if(e.key==='Enter'){load();go();}});})();</script>")
+            "})();</script>")
 
 
 # Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
@@ -3762,7 +3757,6 @@ def site_menu(root: str = "") -> str:
                          + "".join(f'<a href="{root}{u}">{t}</a>' for t, u in items) + "</div></details>")
     if gate_cfg():                     # signed in through the gatekeeper: the account menu (see account_menu)
         parts.append(account_menu(root))
-    parts.append('<input id="hbmq" list="hbmn" placeholder="🔎 Find a member" autocomplete="off"><datalist id="hbmn"></datalist>')
     return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(root)
 
 
@@ -3783,7 +3777,6 @@ def leader_menu(root: str = "") -> str:
                          + "".join(f'<a href="{mb}{u}">{t}</a>' for t, u in items) + "</div></details>")
     if gate_cfg():
         parts.append(account_menu(mb))
-    parts.append('<input id="hbmq" list="hbmn" placeholder="🔎 Find a member" autocomplete="off"><datalist id="hbmn"></datalist>')
     return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(mb)
 
 
