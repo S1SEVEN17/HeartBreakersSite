@@ -3687,7 +3687,7 @@ def member_out(out: Path) -> Path:
 # member pages link only to each other (description.html stays unlisted)
 SITE_NAV = [("Home", "index.html"), ("Announcements", "announcements.html"), ("Payouts", "payouts.html"),
             ("Reports", "reports.html"), ("Wars", "wars.html"), ("Chains", "chains.html"),
-            ("Newsletter", "newsletter.html"), ("Recap Archive", "recaps.html")]
+            ("Latest Recap", "newsletter.html"), ("Recap Archive", "recaps.html")]
 
 
 # Grouped menu for every member page: dropdowns (<details>, so it works by tap on phones) + a member
@@ -3811,7 +3811,7 @@ button{{background:#e4382e;color:#fff;border:0;padding:10px 16px;border-radius:6
 
 
 # --------------------------------------------------------------------------
-# Torn faction NEWSLETTER pages - one for every report (war, chain, payout, recap)
+# Torn faction NEWSLETTER page helper (newsletter_page) - no longer published for reports; leaders use the Message Builder templates
 # --------------------------------------------------------------------------
 TORN_NEWSLETTER_URL = "https://www.torn.com/factions.php?step=your&type=1#/tab=controls&option=newsletter"
 
@@ -3883,11 +3883,11 @@ def save_report(kind: str, rid, png: bytes, meta: dict) -> str:
 
 
 def report_links(slug: str) -> list:
-    """Discord link buttons for a report: its page + its newsletter page."""
+    """Discord link button for a report: its page. (No newsletter buttons any more - leaders make newsletters
+    in the Message Builder, which has War Report / Payout and other templates.)"""
     base_url = member_base()
     return [{"type": 1, "components": [
-        {"type": 2, "style": 5, "label": "Report", "url": f"{base_url}/reports/{slug}.html"},
-        {"type": 2, "style": 5, "label": "Newsletter", "url": f"{base_url}/newsletters/{slug}.html"}]}]
+        {"type": 2, "style": 5, "label": "Report", "url": f"{base_url}/reports/{slug}.html"}]}]
 
 
 def report_newsletter(meta: dict, slug: str) -> tuple:
@@ -3924,7 +3924,7 @@ def report_newsletter(meta: dict, slug: str) -> tuple:
 
 
 def write_report_pages(out: Path):
-    """Every saved report: reports/<slug>.png + page, newsletters/<slug>.html (member folder)."""
+    """Every saved report: reports/<slug>.png + page (member folder)."""
     mout = member_out(out)
     base_url = member_base()
     for f in sorted(REPORTS_DIR.glob("*.json")) if REPORTS_DIR.exists() else []:
@@ -3942,7 +3942,6 @@ def write_report_pages(out: Path):
         image_page(mout / "reports" / f"{slug}.html", title, png.name,
                    f'<p style="text-align:center;"><a href="{base_url}/reports/{slug}.html"><img src="{base_url}/reports/'
                    f'{png.name}" alt="{title}" width="600"></a></p>', "../")
-        newsletter_page(mout / "newsletters" / f"{slug}.html", title, body, "../")
 
 
 PANELS_DIR = ROOT / "data" / "panels"     # images published from the Message Builder
@@ -4102,7 +4101,7 @@ def _hub_latest(mb: str) -> str:
 
 
 def _reports_page(mout: Path):
-    """reports.html (members) - every saved war + chain report with its newsletter."""
+    """reports.html (members) - every saved war + chain report."""
     import html as _html
     metas = []
     for f in REPORTS_DIR.glob("*.json") if REPORTS_DIR.exists() else []:
@@ -4117,15 +4116,14 @@ def _reports_page(mout: Path):
         if not rows:
             body += '<p class="tag">None saved yet - new reports appear here as they are posted.</p>'
             continue
-        body += "<table><tr><th>Date</th><th>Report</th><th></th></tr>"
+        body += "<table><tr><th>Date</th><th>Report</th></tr>"
         for slug, m in rows:
             when = datetime.fromtimestamp(m.get("end", 0), timezone.utc).strftime("%b %d, %Y")
             if kind == "war":
                 res = f'<span class="{"w" if m.get("won") else "d"}">{"Victory" if m.get("won") else "Defeat"}</span> vs {_html.escape(str(m.get("opponent", "?")))}'
             else:
                 res = f'{fmt_int(m.get("length", 0))} hit chain · {m.get("respect", 0):,.0f} respect'
-            body += (f'<tr><td>{when}</td><td><a href="reports/{slug}.html">{res}</a></td>'
-                     f'<td><a href="newsletters/{slug}.html">Newsletter</a></td></tr>')
+            body += f'<tr><td>{when}</td><td><a href="reports/{slug}.html">{res}</a></td></tr>'
         body += "</table>"
     _hub_page(mout / "reports.html", "Reports", "Every war and chain report posted to Discord", body)
 
@@ -4143,7 +4141,7 @@ def write_homepages(out: Path):
         ("👤", "Members", "Every member - open a profile", "members.html"),
         ("⚔️", "War History", "Every ranked war on record", "wars.html"),
         ("⛓️", "Chain History", "Every chain on record", "chains.html"),
-        ("📰", "Monthly Recap", "The latest monthly recap and its newsletter", "newsletter.html"),
+        ("📰", "Monthly Recap", "The latest monthly recap", "newsletter.html"),
         ("🗂️", "Recap Archive", "Every monthly recap with all its pages", "recaps.html")]
     _hub_page(mout / "index.html", "Heart Breakers", "Members Hub",
               site_menu("") + "<h2>Latest</h2>" + _hub_latest("") + "<h2>Pages</h2>" + _hub_tiles(member_items))
@@ -5226,7 +5224,7 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
         when = datetime.fromtimestamp(c["end"], timezone.utc).strftime("%b %d, %Y")
         resp = sum(a.get("respect", 0) for a in c.get("attackers", []))
         has = (REPORTS_DIR / f"chain-{k}.json").exists()
-        link = (f'<a href="reports/chain-{k}.html">Report</a> · <a href="newsletters/chain-{k}.html">Newsletter</a>'
+        link = (f'<a href="reports/chain-{k}.html">Report</a>'
                 if has else '<span class="tag">-</span>')
         body += (f'<tr><td>{when}</td><td><b>{fmt_int(c["length"])}</b></td><td>{resp:,.0f}</td>'
                  f'<td>{len(c.get("attackers", []))}</td><td>{link}</td></tr>')
@@ -5361,7 +5359,7 @@ def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) ->
                                           also refreshed every 15 min by the crime check
          embed 3  ⛓️ Latest Chain        (members + facts, links to its page)
          embed 4  📚 Chain Directory     (previous chains: date, hits, respect, report links)
-       + buttons: Latest Report · Newsletter · Chain History.
+       + buttons: Latest Report · Chain History.
     A NEW chain re-posts it (old one deleted, so it's the newest message and notifies); otherwise it is
     edited in place - only when its content changed."""
     import hashlib
@@ -5418,11 +5416,11 @@ def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) ->
                "attachments": [{"id": 0, "filename": "chain-leaderboard.png"}, {"id": 1, "filename": "chain-latest.png"}],
                "components": [{"type": 1, "components": [
                    {"type": 2, "style": 5, "label": "Latest Report", "url": f"{base}/reports/chain-{lk}.html"},
-                   {"type": 2, "style": 5, "label": "Newsletter", "url": f"{base}/newsletters/chain-{lk}.html"},
                    {"type": 2, "style": 5, "label": "Chain History", "url": f"{base}/chains.html"}]}],
                "allowed_mentions": {"parse": []}}
     files = [("chain-leaderboard.png", board), ("chain-latest.png", latest_png)]
-    h = hashlib.sha1(board + latest_png + "\n".join(lines).encode() + base.encode()).hexdigest()[:12]
+    # b"v2": bump when the hub's buttons/layout change so the existing post is edited
+    h = hashlib.sha1(b"v2" + board + latest_png + "\n".join(lines).encode() + base.encode()).hexdigest()[:12]
     hub = state.get("hub_id")
     osig = _ongoing_sig(ongoing or {})
     if hub and not new_chain and state.get("hub_hash") == h and "hub_att" in state:
@@ -5601,7 +5599,7 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
          embed 1  ⚔️ War Leaderboard          (this month + all time: War Hits | War Respect | Respect / Hit)
          embed 2  🏴 Latest War                (its war summary card + facts, links to its full report)
          embed 3  📚 War Report Directory      (previous wars: date, result, score, report / payout links)
-       + buttons: Latest Report · Newsletter · War History (· Payout when issued).
+       + buttons: Latest Report · War History (· Payout when issued).
     Each finished war's FULL War Report (summary + slacker tiers) is saved as its report page; a new war
     re-posts the hub (newest message, notifies), otherwise it's edited in place when its content changed."""
     import hashlib
@@ -5678,7 +5676,6 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
                         + (f"\n-# …and {more} older - see the full War History" if more > 0 else ""),
          "footer": {"text": f"{len(order)} ranked wars on record · {won} won · {len(order) - won} lost"}}]
     btns = [{"type": 2, "style": 5, "label": "Latest Report", "url": f"{base}/reports/war-{lk}.html"},
-            {"type": 2, "style": 5, "label": "Newsletter", "url": f"{base}/newsletters/war-{lk}.html"},
             {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"}]
     if lk in rec:
         btns.append({"type": 2, "style": 5, "label": "Payout", "url": f"{base}/payouts/war-{lk}.html"})
@@ -5688,7 +5685,8 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
                "attachments": [{"id": 0, "filename": "war-leaderboard.png"}, {"id": 1, "filename": "latest-war.png"}],
                "components": [{"type": 1, "components": btns}], "allowed_mentions": {"parse": []}}
     files = [("war-leaderboard.png", board), ("latest-war.png", latest)]
-    h = hashlib.sha1(board + latest + "\n".join(lines).encode() + str(lk in rec).encode() + base.encode()).hexdigest()[:12]
+    # b"v2": bump when the hub's buttons/layout change so the existing post is edited
+    h = hashlib.sha1(b"v2" + board + latest + "\n".join(lines).encode() + str(lk in rec).encode() + base.encode()).hexdigest()[:12]
     hub = state.get("hub_id")
     if not (hub and not todo and state.get("hub_hash") == h):
         try:
@@ -7022,8 +7020,6 @@ def recap_components(month: str) -> list:
             continue
         url = f"{base_url}/recaps/{month}/{slug}.html" if slug else f"{base_url}/recaps.html"
         btns.append({"type": 2, "style": 5, "label": lab, "url": url})
-    # Discord only: this month's copy-ready newsletter HTML
-    btns.append({"type": 2, "style": 5, "label": "Newsletter", "url": f"{base_url}/newsletters/recap-{month}.html"})
     return [{"type": 1, "components": btns[k:k + 5]} for k in range(0, len(btns), 5)]
 
 
@@ -7255,12 +7251,8 @@ def monthly_recap(raw: dict, cfg: dict, out: Path):
                            f'<p style="text-align: center;"><a href="{base_url}/{pth}.html">'
                            f'<img src="{base_url}/{pth}.png" alt="{label} {lab}" width="{nw}"></a></p>', "../../")
         snippet += f'\n<p style="text-align: center;">{"".join(btns)}</p>'
-        newsletter_page(out / "newsletters" / f"recap-{f.stem}.html", f"{label} Recap", snippet, "../")
         items.append(f"""<section id="{f.stem}"><h2>{label}</h2>
 <div class="p">{snippet}</div>
-<p>Newsletter HTML (Torn: Faction &gt; Newsletter &gt; source/HTML view, paste):</p>
-<textarea readonly onclick="this.select()">{_html.escape(snippet)}</textarea>
-<button onclick="navigator.clipboard.writeText(this.previousElementSibling.value);this.textContent='Copied!'">Copy HTML</button>
 </section>""")
     (out / "newsletter.html").write_text(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Monthly Recaps</title>
@@ -7298,7 +7290,7 @@ show(location.hash.slice(1));window.addEventListener("hashchange",function(){{sh
             for lab, _i, slug in RECAP_BUTTONS if slug and (RECAP_DIR / f.stem / f"{slug}.png").exists())
         cards.append(f"""<section id="{f.stem}"><h2>{label}</h2>
 <a href="recaps/{f.name}"><img src="recaps/{f.name}" alt="{label} recap" loading="lazy"></a>
-<div class="links">{links}<a class="b n" href="newsletter.html#{f.stem}">Newsletter HTML</a></div></section>""")
+<div class="links">{links}<a class="b n" href="newsletter.html#{f.stem}">View recap</a></div></section>""")
     (out / "recaps.html").write_text(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Heart Breakers - Recap Archive</title>
 <style>body{{background:#100a0b;color:#ddd;font-family:system-ui,sans-serif;max-width:900px;margin:auto;padding:16px}}
@@ -7661,7 +7653,7 @@ def payout_receipt_image(r: dict, vault: dict = None, war_card=None) -> bytes:
     return frame_png(img, bar="War Payout Receipt")
 
 
-PAYOUT_POST_V = b"7"
+PAYOUT_POST_V = b"8"
 
 
 def payout_newsletter(r: dict, wid: str) -> tuple:
@@ -7785,7 +7777,6 @@ def update_payouts(cfg: dict, out: Path):
                   f'<img src="{base_url}/payouts/{slug}.png" alt="War payout receipt" width="600"></a></p>')
         image_page(mout / "payouts" / f"{slug}.html",
                    f"War Payout - vs {r['war'].get('opponent', '?')}", f"{slug}.png", markup, "../")
-        newsletter_page(mout / "newsletters" / f"payout-{wid}.html", *payout_newsletter(r, wid), "../")
         for g, x in receipts:
             if str(x["war"]["id"]) != wid:
                 continue
@@ -7828,7 +7819,6 @@ def update_payouts(cfg: dict, out: Path):
                    "attachments": [{"id": k, "filename": n} for k, (n, _b) in enumerate(discord_imgs[wid])],
                    "components": [{"type": 1, "components": [
                        {"type": 2, "style": 5, "label": "Receipt", "url": f"{base_url}/payouts/war-{wid}.html"},
-                       {"type": 2, "style": 5, "label": "Newsletter", "url": f"{base_url}/newsletters/payout-{wid}.html"},
                        {"type": 2, "style": 5, "label": "All payouts", "url": f"{base_url}/payouts.html"}]}],
                    "allowed_mentions": {"parse": []}}
         files_ = discord_imgs[wid]

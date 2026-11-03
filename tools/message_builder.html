@@ -123,26 +123,125 @@ const COLORS = {Red: "RED", Gold: "GOLD", Steel: "TITLE", White: "TEXT", Grey: "
 const W = CFG.W, CX0 = CFG.CX0, CX1 = CFG.CX1, CW = CX1 - CX0;
 
 // ---------------- templates ----------------
+// Static starting points. The ones in LIVE (below) are rebuilt from the site's data when chosen.
 const TEMPLATES = {
   "Newsletter": {head: {style: "big", title: "Faction Newsletter"}, blocks: [
-    {t: "heading", text: "THIS WEEK IN HEART BREAKERS", color: "RED", size: 40},
+    {t: "heading", text: "THIS MONTH IN HEART BREAKERS", color: "RED", size: 40},
     {t: "text", text: "Write your intro here. Keep it short and punchy.", color: "TEXT", size: 26, align: "center"},
-    {t: "tiles", items: "3 | Wars won\n12,450 | Respect gained\n4 | Chains 1K+"},
-    {t: "card", title: "UPCOMING", text: "- Ranked war starts Friday 18:00 TCT\n- Chain night Sunday\n- OC slots open - check the crimes tab", color: "RED"},
+    {t: "tiles", items: "3 | Wars won\n12,450 | Respect gained\n4 | Chains"},
+    {t: "card", title: "RECENT WARS", text: "- Victory vs Opponent - 4,500 to 3,200\n- Defeat vs Opponent - 2,900 to 3,100", color: "GOLD"},
+    {t: "card", title: "UPCOMING", text: "- Ranked war: day, date, time TCT\n- Chain night: day, time TCT\n- OC slots open - check the crimes tab", color: "RED"},
     {t: "text", text: "Questions? Message a leader.", color: "SUB", size: 22, align: "center"}]},
-  "Direct message": {head: {style: "bar", title: "Message"}, blocks: [
-    {t: "heading", text: "HEY THERE", color: "GOLD", size: 40},
-    {t: "text", text: "Write your message here.\n\nEach new line starts a new line in the image.", color: "TEXT", size: 26, align: "center"}]},
+  "War Report / Payout": {head: {style: "big", title: "War Report"}, blocks: [
+    {t: "heading", text: "VICTORY VS OPPONENT", color: "GREEN", size: 42},
+    {t: "text", text: "Date · Score 0 - 0 · Rank", color: "SUB", size: 24, align: "center"},
+    {t: "tiles", items: "0 | War hits\n0/0 | Members hit\n0 | Respect"},
+    {t: "card", title: "TOP HITTERS", text: "- Name - 0 hits\n- Name - 0 hits\n- Name - 0 hits", color: "GOLD"},
+    {t: "card", title: "WAR PAYOUT", text: "- $0 paid to 0 members\n- Payouts are in your faction balance\n- Full receipt on the War Payouts page", color: "GREEN"},
+    {t: "text", text: "Great work everyone!", color: "TEXT", size: 24, align: "center"}]},
+  "Pre-War Notice": {head: {style: "big", title: "Pre-War Notice"}, blocks: [
+    {t: "heading", text: "RANKED WAR VS OPPONENT", color: "RED", size: 42},
+    {t: "tiles", items: "Day, Mon 00 | Date\n00:00 TCT | Start"},
+    {t: "card", title: "BEFORE THE WAR", text: "- Be online when the war starts\n- Stock up on Xanax, refills and medical items\n- Don't travel during the war\n- Bank your cash - stay out of hospital", color: "GOLD"},
+    {t: "card", title: "DURING THE WAR", text: "- Only hit war targets\n- No hits before the start\n- Call big hits and assists in Discord\n- Every hit counts toward the payout", color: "RED"},
+    {t: "text", text: "Questions? Message a leader.", color: "SUB", size: 22, align: "center"}]},
+  "New Recruit Letter": {head: {style: "big", title: "Welcome"}, blocks: [
+    {t: "heading", text: "WELCOME TO HEART BREAKERS", color: "RED", size: 40},
+    {t: "text", text: "Glad to have you with us! Here's everything you need to get started.", color: "TEXT", size: 26, align: "center"},
+    {t: "card", title: "GETTING STARTED", text: "- Join our Discord and link your Torn account\n- Sign in to the faction site with a Public API key\n- Install CAT (link below)\n- Read the faction forums", color: "GOLD"},
+    {t: "card", title: "WHAT WE EXPECT", text: "- Hit in every ranked war\n- Join chains when you can\n- Stay in an organized crime\n- Log in daily and keep active", color: "RED"},
+    {t: "card", title: "WHAT YOU GET", text: "- War payouts for your war hits\n- Faction perks and armory support\n- A team that has your back", color: "GREEN"},
+    {t: "text", text: "Questions? Message any leader - welcome aboard!", color: "SUB", size: 22, align: "center"}]},
+  "Event Notification": {head: {style: "big", title: "Event"}, blocks: [
+    {t: "heading", text: "EVENT NAME", color: "GOLD", size: 42},
+    {t: "text", text: "One line about what's happening and why it matters.", color: "TEXT", size: 26, align: "center"},
+    {t: "tiles", items: "Day, Mon 00 | Date\n00:00 TCT | Start\n0 hours | Length"},
+    {t: "card", title: "DETAILS", text: "- What we're doing\n- Who should join\n- Where to meet (Discord channel / Torn)", color: "RED"},
+    {t: "card", title: "REWARDS", text: "- Prize or reward details\n- How winners are picked", color: "GREEN"},
+    {t: "text", text: "Sign up in Discord - see you there!", color: "SUB", size: 22, align: "center"}]},
   "Announcement": {head: {style: "big", title: "Announcement"}, blocks: [
     {t: "heading", text: "IMPORTANT", color: "RED", size: 44},
     {t: "card", title: "WHAT'S HAPPENING", text: "Describe the announcement here.", color: "GOLD"},
     {t: "divider"},
     {t: "text", text: "- Point one\n- Point two\n- Point three", color: "TEXT", size: 26, align: "left"}]},
-  "Welcome": {head: {style: "big", title: "Welcome"}, blocks: [
-    {t: "heading", text: "WELCOME TO HEART BREAKERS", color: "RED", size: 40},
-    {t: "text", text: "Glad to have you with us! A few things to get you started:", color: "TEXT", size: 26, align: "center"},
-    {t: "card", title: "GETTING STARTED", text: "- Join our Discord and link your Torn account\n- Hit during wars and chains\n- Join an organized crime", color: "GOLD"}]},
+  "Direct message": {head: {style: "bar", title: "Message"}, blocks: [
+    {t: "heading", text: "HEY THERE", color: "GOLD", size: 40},
+    {t: "text", text: "Write your message here.\n\nEach new line starts a new line in the image.", color: "TEXT", size: 26, align: "center"}]},
   "Blank": {head: {style: "bar", title: "Title"}, blocks: []}};
+
+// ---- live data for the templates (the members' databases + this update's summary, read through the site) ----
+let LIVE_DATA = null;
+async function liveData() {
+  if (LIVE_DATA) return LIVE_DATA;
+  const get = f => fetch(`${CFG.member_base}/${f}`, {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null);
+  const [M, W, C, P, S] = await Promise.all(["db/members.json", "db/wars.json", "db/chains.json", "db/payouts.json", "data.json"].map(get));
+  const names = {};
+  for (const m of (M || {}).members || []) names[m.id] = m.name;
+  LIVE_DATA = {names, members: ((M || {}).members || []).filter(m => m.current).length,
+    wars: ((W || {}).wars || []).slice().sort((a, b) => (b.end || 0) - (a.end || 0)),
+    chains: ((C || {}).chains || []).slice().sort((a, b) => (b.end || 0) - (a.end || 0)),
+    payouts: (P || {}).payouts || [], status: (S || {}).war_status || {kind: "none"}};
+  return LIVE_DATA;
+}
+const nf = n => Math.round(n || 0).toLocaleString("en-US");
+const tct = (t, o) => new Date(t * 1000).toLocaleString("en-US", Object.assign({timeZone: "UTC"}, o));
+const tctDay = t => tct(t, {weekday: "short", month: "short", day: "2-digit"});
+const tctTime = t => { const d = new Date(t * 1000), z = n => String(n).padStart(2, "0");   // TCT = UTC, 24h
+  return `${z(d.getUTCHours())}:${z(d.getUTCMinutes())} TCT`; };
+const warLine = w => `- ${w.won ? "Victory" : "Defeat"} vs ${w.opponent || "?"} - ${nf(w.our)} to ${nf(w.their)}`;
+const upcomingLine = st => st.kind === "upcoming" && st.start
+  ? `- Ranked war vs ${st.opponent || "?"}: ${tctDay(st.start)}, ${tctTime(st.start)}`
+  : st.kind === "ongoing" ? `- Ranked war vs ${st.opponent || "?"} is ON NOW - get your hits in` : "- Ranked war: day, date, time TCT";
+// each returns a full message (same shape as TEMPLATES) filled with real numbers; null = no data -> static one
+const LIVE = {
+  "Newsletter": L => {
+    const since = Date.now() / 1000 - 30 * 86400;
+    const wars = L.wars.filter(w => (w.end || 0) >= since), chains = L.chains.filter(c => (c.end || 0) >= since);
+    const resp = wars.reduce((s, w) => s + (w.m || []).reduce((a, x) => a + (x[2] || 0), 0), 0);
+    const D = JSON.parse(JSON.stringify(TEMPLATES.Newsletter));
+    D.blocks[2].items = `${wars.filter(w => w.won).length}/${wars.length} | Wars won\n${nf(resp)} | War respect\n${chains.length} | Chains\n${L.members} | Members`;
+    D.blocks[3].text = L.wars.slice(0, 3).map(warLine).join("\n") || "- No ranked wars yet";
+    D.blocks[4].text = [upcomingLine(L.status), "- Chain night: day, time TCT", "- OC slots open - check the crimes tab"].join("\n");
+    return D;
+  },
+  "War Report / Payout": L => {
+    const w = L.wars[0];
+    if (!w) return null;
+    const m = w.m || [], hits = m.reduce((s, x) => s + (x[1] || 0), 0), resp = m.reduce((s, x) => s + (x[2] || 0), 0);
+    const top = m.slice().sort((a, b) => b[1] - a[1]).slice(0, 5).filter(x => x[1]);
+    const pay = L.payouts.find(p => String(p.war) === String(w.id));
+    const D = JSON.parse(JSON.stringify(TEMPLATES["War Report / Payout"]));
+    D.head.title = pay ? "War Report + Payout" : "War Report";
+    D.blocks[0].text = `${w.won ? "VICTORY" : "DEFEAT"} VS ${String(w.opponent || "?").toUpperCase()}`;
+    D.blocks[0].color = w.won ? "GREEN" : "RED";
+    D.blocks[1].text = `${tctDay(w.end)} · Score ${nf(w.our)} - ${nf(w.their)}${w.rank ? " · " + w.rank : ""}`;
+    D.blocks[2].items = `${nf(hits)} | War hits\n${m.filter(x => x[1]).length}/${m.length} | Members hit\n${nf(resp)} | Respect`;
+    D.blocks[3].text = top.map((x, k) => `- ${k + 1}. ${L.names[x[0]] || x[0]} - ${nf(x[1])} hits`).join("\n") || "- No hits recorded";
+    if (pay) {
+      const paidN = (pay.m || []).filter(x => x[1]).length;
+      D.blocks[4].text = `- $${nf(pay.paid)} paid to ${paidN} members\n- Payouts are in your faction balance\n- Full receipt on the War Payouts page`;
+      D.buttons = [{label: "Payout receipt", url: `${CFG.member_base}/payouts/war-${w.id}.html`, icon: "gi-coins-pile"},
+                   {label: "War history", url: `${CFG.member_base}/wars.html`, icon: "gi-crossed-swords"}];
+    } else {
+      D.blocks.splice(4, 1);                       // no payout for this war (yet)
+      D.buttons = [{label: "War history", url: `${CFG.member_base}/wars.html`, icon: "gi-crossed-swords"}];
+    }
+    return D;
+  },
+  "Pre-War Notice": L => {
+    const st = L.status;
+    if (!st || st.kind === "none" || !st.start) return null;
+    const D = JSON.parse(JSON.stringify(TEMPLATES["Pre-War Notice"]));
+    D.blocks[0].text = `RANKED WAR VS ${String(st.opponent || "?").toUpperCase()}`;
+    D.blocks[1].items = `${tctDay(st.start)} | Date\n${tctTime(st.start)} | Start`;
+    return D;
+  },
+  "New Recruit Letter": () => {
+    const D = JSON.parse(JSON.stringify(TEMPLATES["New Recruit Letter"]));
+    D.buttons = JSON.parse(JSON.stringify(CFG.preset_buttons || []));    // the announcement's buttons (Discord, CAT, ...)
+    return D;
+  },
+};
 let D = load("hb_builder_current") || JSON.parse(JSON.stringify(TEMPLATES.Newsletter));
 const imgCache = {};     // image blocks: data URL -> HTMLImageElement
 
@@ -485,8 +584,20 @@ $("hTitle").oninput = () => { D.head.title = $("hTitle").value; later(); };
 
 // templates + drafts
 $("tpl").innerHTML = Object.keys(TEMPLATES).map(n => `<option>${n}</option>`).join("");
-$("useTpl").onclick = () => { if (!confirm("Replace the current message with this template?")) return;
-  D = JSON.parse(JSON.stringify(TEMPLATES[$("tpl").value])); renderEditor(); };
+$("useTpl").onclick = async () => {
+  const n = $("tpl").value;
+  if (!confirm("Replace the current message with this template?")) return;
+  let d = null;
+  if (LIVE[n]) {                       // fill it in from the site's data; falls back to the plain template
+    $("useTpl").textContent = "Loading…";
+    try { d = LIVE[n](await liveData()); } catch (e) { d = null; }
+    $("useTpl").textContent = "Use template";
+    if (!d && n === "Pre-War Notice") alert("No ranked war is scheduled right now - fill in the opponent and time yourself.");
+  }
+  D = d || JSON.parse(JSON.stringify(TEMPLATES[n]));
+  if (!D.buttons) D.buttons = [];
+  renderEditor(); save("hb_builder_current", D);
+};
 function drafts() { return load("hb_builder_drafts") || {}; }
 function renderDrafts() { $("drafts").innerHTML = `<option value="">Saved drafts…</option>` +
   Object.keys(drafts()).sort().map(n => `<option>${esc(n)}</option>`).join(""); }
