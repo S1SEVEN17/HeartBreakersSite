@@ -1466,33 +1466,24 @@ def normalize(raw: dict, cfg: dict) -> dict:
                 pos_order.append(pos)
 
     # member_titles keys can be a player name (any case) or a player id.
-    # member_title_list: [{name, title}] (the Description editor's form, in display order); member_titles {name: title}
-    # is the older form - used when there's no list
-    mtl = [(str(x.get("name", "")).strip(), str(x.get("title", "")).strip()) for x in fi.get("member_title_list") or []
-           if str(x.get("name", "")).strip()]
-    if mtl:
-        fi = dict(fi, member_titles={n_: t_ for n_, t_ in mtl})
-    mt = {str(k).strip().lower(): str(v) for k, v in fi.get("member_titles", {}).items()}
-    mt_order = list(mt.keys())
-
+    # SLOTS: the people are filled in from the API automatically; only the TITLES are set by hand.
+    # Slot order is stable: position order (roles[] first, then Torn's), then longest in the faction, then ID.
+    # leadership_titles[k] = the title of slot k+1 ({leadership1}, {leadership2}, ... on the banner); an empty /
+    # missing title falls back to the roles[] title for their position, then the Torn position name.
+    slot_titles = [str(t or "").strip() for t in fi.get("leadership_titles") or []]
     roles = []
     for m in members:
         pos = str(m.get("position", "")).strip()
         if pos.lower() not in pos_order:
             continue
-        name = str(m.get("name", "?"))
-        mid = str(m.get("id", ""))
-        key = mid if mid in mt else name.lower()
-        roles.append({
-            "title": mt.get(key) or pos_titles.get(pos.lower()) or pos,
-            "name": name,
-            "id": mid,
-            "_sort": (mt_order.index(key) if key in mt else len(mt_order),
-                      pos_order.index(pos.lower()), name.lower()),
-        })
+        roles.append({"name": str(m.get("name", "?")), "id": str(m.get("id", "")), "position": pos,
+                      "_sort": (pos_order.index(pos.lower()), -int(m.get("days_in_faction") or 0),
+                                int(m.get("id") or 0))})
     roles.sort(key=lambda r: r["_sort"])
-    for r in roles:
+    for k, r in enumerate(roles):
         r.pop("_sort")
+        r["title"] = slot_title(fi, k, r["position"])
+    LEADERSHIP_NOW[:] = [{"name": r["name"], "id": r["id"], "title": r["title"]} for r in roles]
     if not fi.get("hide_empty_roles", True):
         filled = {str(m.get("position", "")).strip().lower() for m in members}
         for pos in pos_order:
@@ -1538,6 +1529,10 @@ def normalize(raw: dict, cfg: dict) -> dict:
             "co_leader": person(basic.get("co_leader_id")) or "Vacant",
             "leader_id": str(basic.get("leader_id") or "") if person(basic.get("leader_id")) else "",
             "co_leader_id": str(basic.get("co_leader_id") or "") if person(basic.get("co_leader_id")) else "",
+            # {leadership1} {leadership1_id} {leadership1_title} ... one set per leadership slot (filled from the API)
+            # (slots nobody holds: "Vacant" / empty, so a leftover placeholder never shows as {leadership5})
+            **{f"leadership{k + 1}{suf}": ((roles[k][key] if k < len(roles) else ("Vacant" if suf == "" else "")))
+               for k in range(max(8, len(roles))) for suf, key in (("", "name"), ("_id", "id"), ("_title", "title"))},
             "respect": fmt_int(basic.get("respect")),  # exact, comma-grouped
             "members": fmt_int(count),
             "capacity": fmt_int(basic.get("capacity")),
@@ -2329,6 +2324,126 @@ def _req_row(base_art: Image.Image, n: int):
     return row, slots
 
 
+# ---- Requirements plate faces + icons (all drawn, so every tile is crisp and matches) ----------------------
+# The plate face in req_body.png is a blurred leftover of the template's icons, so every tile gets a clean face
+# drawn over it (dark brushed steel, steel bevel, red inner trim like the template shield) and a crisp steel
+# symbol, drawn 4x and scaled down (sharp edges). The template's own three icons are redrawn the same way:
+# art2-shield = a heater shield (badge e.g. "15+" printed on it), art2-swords = crossed swords,
+# art2-cat = a document with a folded corner and red "CAT". gi-* = any game-icons silhouette.
+REQ_FACE_W, REQ_FACE_H, REQ_FACE_CH, REQ_FACE_CY = 152, 122, 12, 69     # face size / chamfer / centre y on the row
+REQ_SYMBOL = 84                                                          # symbol box inside the face
+_SS = 4                                                                  # supersampling factor
+
+
+def req_face() -> Image.Image:
+    import random
+    W_, H_, C_ = REQ_FACE_W, REQ_FACE_H, REQ_FACE_CH
+    poly = lambda i: [(C_ + i, i), (W_ - 1 - C_ - i, i), (W_ - 1 - i, C_ + i), (W_ - 1 - i, H_ - 1 - C_ - i),
+                      (W_ - 1 - C_ - i, H_ - 1 - i), (C_ + i, H_ - 1 - i), (i, H_ - 1 - C_ - i), (i, C_ + i)]
+    im = Image.new("RGBA", (W_, H_), (0, 0, 0, 0))
+    mask = Image.new("L", (W_, H_), 0)
+    ImageDraw.Draw(mask).polygon(poly(0), fill=255)
+    grad = Image.new("RGB", (W_, H_))
+    gd = ImageDraw.Draw(grad)
+    for y in range(H_):
+        v = int(46 - 28 * y / (H_ - 1))
+        gd.line([(0, y), (W_, y)], fill=(v + 2, v - 2, v - 1))
+    rnd = random.Random(7)                       # faint brushed-metal streaks (same every time)
+    for _ in range(140):
+        y, x0, ln = rnd.randrange(H_), rnd.randrange(W_), rnd.randrange(10, 50)
+        dv = rnd.choice((-1, 1)) * rnd.randrange(3, 8)
+        px = grad.getpixel((x0, y))
+        gd.line([(x0, y), (x0 + ln, y)], fill=tuple(max(0, min(255, c + dv)) for c in px))
+    im.paste(grad, (0, 0), mask)
+    d = ImageDraw.Draw(im)
+    for inset, col in ((0, (12, 10, 11, 255)), (2, (104, 100, 100, 255)), (7, (120, 30, 27, 255))):
+        pts = poly(inset)
+        d.line(pts + [pts[0]], fill=col, width=2)  # dark edge / steel bevel / red inner trim
+    return im
+
+
+def _steel(mask: Image.Image, red: Image.Image = None) -> Image.Image:
+    """Supersampled symbol mask (white = symbol) -> steel symbol with a crisp dark outline and a soft drop
+    shadow, scaled down to 1/_SS. `red` (optional, same size): parts painted template red (e.g. "CAT")."""
+    w, h = mask.size
+    pad = 6 * _SS
+    grad = Image.new("RGB", (w, h))
+    gd = ImageDraw.Draw(grad)
+    for yy in range(h):
+        v = int(236 - 100 * yy / max(h - 1, 1))
+        gd.line([(0, yy), (w, yy)], fill=(v, v, v + 2))
+    out = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
+    full = mask if red is None else ImageChops.lighter(mask, red)
+    edge = Image.new("L", out.size, 0)
+    edge.paste(full, (pad, pad))
+    edge = edge.filter(ImageFilter.MaxFilter(2 * _SS + 1))
+    sh = edge.filter(ImageFilter.GaussianBlur(2 * _SS))
+    out.alpha_composite(Image.merge("RGBA", [Image.new("L", out.size, 0)] * 3 + [sh.point(lambda p: int(p * 0.7))]),
+                        (2 * _SS, 3 * _SS))
+    out.alpha_composite(Image.merge("RGBA", [Image.new("L", out.size, 14)] * 3 + [edge]))
+    body = grad.convert("RGBA")
+    body.putalpha(mask)
+    out.alpha_composite(body, (pad, pad))
+    if red is not None:
+        rb = Image.new("RGBA", (w, h), (200, 44, 38, 255))
+        rb.putalpha(red)
+        out.alpha_composite(rb, (pad, pad))
+    return out.resize((out.width // _SS, out.height // _SS), Image.LANCZOS)
+
+
+def req_symbol(name: str, box: int = REQ_SYMBOL) -> Image.Image:
+    """The symbol for a Requirements tile (see the note above req_face)."""
+    S = box * _SS
+    m = Image.new("L", (S, S), 0)
+    d = ImageDraw.Draw(m)
+    if name == "art2-shield":
+        # heater shield: slightly arched top, straight sides, then rounded (quarter-ellipse) curves to the point
+        import math
+        l, r_, cx = int(S * 0.13), int(S * 0.87), S // 2
+        top, side, tip = int(S * 0.05), int(S * 0.46), int(S * 0.97)
+        pts = [(l, top + int(S * 0.05))]
+        for k in range(1, 20):                   # gentle arch across the top
+            t = k / 20
+            pts.append((int(l + (r_ - l) * t), int(top + int(S * 0.05) - S * 0.05 * math.sin(math.pi * t))))
+        pts += [(r_, top + int(S * 0.05)), (r_, side)]
+        for k in range(1, 25):                   # right side curving in to the point
+            a = math.pi / 2 * k / 24
+            pts.append((int(cx + (r_ - cx) * math.cos(a)), int(side + (tip - side) * math.sin(a))))
+        for k in range(23, 0, -1):               # ...and the left side back up
+            a = math.pi / 2 * k / 24
+            pts.append((int(cx - (cx - l) * math.cos(a)), int(side + (tip - side) * math.sin(a))))
+        pts.append((l, side))
+        d.polygon(pts, fill=255)
+        return _steel(m)
+    if name == "art2-cat":
+        # document: page with a folded top-right corner, text lines, red "CAT"
+        l, t, r_, b, f = int(S * 0.16), int(S * 0.04), int(S * 0.84), int(S * 0.96), int(S * 0.2)
+        lw = max(4, S // 22)
+        page = [(l, t), (r_ - f, t), (r_, t + f), (r_, b), (l, b)]
+        d.line(page + [page[0]], fill=255, width=lw, joint="curve")
+        d.line([(r_ - f, t), (r_ - f, t + f), (r_, t + f)], fill=255, width=lw, joint="curve")
+        for k, (x0, x1) in enumerate(((0.28, 0.58), (0.28, 0.72), (0.28, 0.72), (0.28, 0.66))):
+            y = int(S * (0.24 + k * 0.1))
+            d.line([(int(S * x0), y), (int(S * x1), y)], fill=255, width=max(3, S // 30))
+        red = Image.new("L", (S, S), 0)
+        rd = ImageDraw.Draw(red)
+        ft = font("Bold", int(S * 0.26))
+        tw = ft.getlength("CAT")
+        rd.text(((S - tw) / 2, int(S * 0.62)), "CAT", font=ft, fill=255)
+        return _steel(m, red)
+    if name == "art2-swords":
+        name = "gi-crossed-swords"
+    path = ICON_DIR / f"{name}.png"
+    if not name.startswith(("gi-", "glyph-")) or not path.exists():
+        if path.exists():                        # other lifted art: as-is, fitted
+            src = Image.open(path).convert("RGBA")
+            src.thumbnail((box, box), Image.LANCZOS)
+            return src
+        path = ICON_DIR / "gi-checked-shield.png"
+    src = Image.open(path).convert("RGBA").resize((S, S), Image.LANCZOS)
+    return _steel(src.getchannel("A"))
+
+
 def draw_requirements(sec, s, base: Image.Image):
     """Requirements: tiles 3 per row on the req_body art (icon + optional badge + pill label). Any number of
     tiles - the section grows a row for every 3 (a last row of 1-2 is centred)."""
@@ -2340,18 +2455,14 @@ def draw_requirements(sec, s, base: Image.Image):
         d = ImageDraw.Draw(row)
         for tile, (cx, pill, slot) in zip(chunk, slots):
             name = tile.get("icon", "art2-shield")
-            if slot is not None and name in REQ_ART_POS and REQ_ART_POS[name][0] == [258, 640, 1002][slot]:
-                # template icon back in its own slot: exact original placement
-                icon = Image.open(ICON_DIR / f"{name}.png").convert("RGBA")
-                icx, icy = REQ_ART_POS[name]
-                paste_center(row, icon, icx, icy)
-            else:
-                icon = metal_icon(name, REQ_ICON_MAX)
-                paste_center(row, icon, cx, REQ_ICON_CY)
+            face = req_face()
+            sym = req_symbol(name)
+            face.alpha_composite(sym, ((face.width - sym.width) // 2, (face.height - sym.height) // 2))
+            paste_center(row, face, cx, REQ_FACE_CY)
             badge = str(tile.get("badge", "")).strip()
             if badge:  # e.g. "15+" printed on the shield face
-                bf = fit_font(badge, "Bold", 44, 70, 22)
-                draw_centered(d, (cx, REQ_ICON_CY), badge, bf, (28, 28, 28), shadow=False)
+                bf = fit_font(badge, "Bold", 40, 60, 20)
+                draw_centered(d, (cx, REQ_FACE_CY - 2), badge, bf, (28, 28, 28), shadow=False)
             label = fill(tile.get("label", ""), s["values"])
             x0, y0, x1, y1 = pill
             lf = fit_font(label, "SemiBold", 32, (x1 - x0) - 24, 18)
@@ -2746,6 +2857,12 @@ def render(summary: dict, cfg: dict, out_path: Path):
 def render_image(summary: dict, cfg: dict):
     """Stack header + sections and draw everything -> (image, panel rects). Nothing is saved here, so the
     leaders' Site Panels page can run this same code in the browser (Pyodide) for its live preview."""
+    # leadership slot titles come from cfg at DRAW time (people stay as read from Torn)
+    fi_ = cfg.get("faction_info", {})
+    if summary.get("roles") and any("position" in r for r in summary["roles"]):
+        roles_ = [dict(r, title=slot_title(fi_, k, r.get("position", r.get("title", "")))) for k, r in enumerate(summary["roles"])]
+        vals_ = dict(summary["values"], **{f"leadership{k + 1}_title": r["title"] for k, r in enumerate(roles_)})
+        summary = dict(summary, roles=roles_, values=vals_)
     v = summary["values"]
     order = cfg.get("section_order", ["faction_info", "what_we_offer", "requirements", "perks"])
     sections = [k for k in order if cfg.get(k, {}).get("enabled", True)]
@@ -3695,6 +3812,18 @@ def render_button(label: str, icon: str) -> Image.Image:
 FACTION_URL = "https://www.torn.com/factions.php?step=profile&ID=51384"
 
 
+LEADERSHIP_NOW = []
+
+
+def slot_title(fi: dict, k: int, position: str) -> str:
+    """Title of leadership slot k (0-based): leadership_titles[k], else the roles[] title for their position,
+    else the Torn position name. Used when the data is read AND when drawing (so the editor's live preview
+    shows a changed title straight away)."""
+    st = [str(t or "").strip() for t in fi.get("leadership_titles") or []]
+    pt = {str(r.get("position", "")).strip().lower(): (r.get("title") or r.get("position")) for r in fi.get("roles", [])}
+    return (st[k] if k < len(st) else "") or pt.get(str(position).strip().lower()) or position    # this run's leadership slots [{name, id, title}] - shown on the leaders' Description editor
+
+
 def gate_cfg() -> dict:
     """config.json "gate": {enabled, url, leader_positions}. When enabled (and url set), every member /
     leader page is reached through the Cloudflare gatekeeper (gate/worker.js) at url + "/m" and url + "/l",
@@ -4069,7 +4198,8 @@ def write_message_builder(out: Path):
     # preview + the HTML for Torn under the panel. "html" = what's live now (the preview replaces it as you edit)
     tpl_ = (ROOT / "tools" / "panels_editor.html").read_text(encoding="utf-8")
     for only, fname in (("D", "description.html"), ("A", "announcements.html")):
-        c_ = dict(pconf, only=only, html=description_snippet() if only == "D" else _PANEL_HTML.get("A", ""))
+        c_ = dict(pconf, only=only, html=description_snippet() if only == "D" else _PANEL_HTML.get("A", ""),
+                  leadership=LEADERSHIP_NOW)      # who holds each leadership slot now (Description editor)
         (lout / fname).write_text(tpl_.replace("__CONFIG__", json.dumps(c_)).replace("__MENU__", leader_menu("")),
                                   encoding="utf-8")
     (lout / "panels.html").write_text('<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" '

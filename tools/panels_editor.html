@@ -100,7 +100,7 @@ document.getElementById("tokSave").onclick = saveToken;
 const tok = (() => { try { return JSON.parse(localStorage.getItem("hb_gh_token")); } catch (e) { return null; } })();
 // (top menu: the MENU placeholder = the leaders' site menu with the account menu, filled in by generate.py)
 
-const PH = "{faction_name} {tag} {leader} {leader_id} {co_leader} {co_leader_id} {respect} {members} {capacity} {rank} {days_old} {best_chain} {rw_wins} {updated}";
+const PH = "{faction_name} {tag} {leader} {leader_id} {co_leader} {co_leader_id} {leadership1} {leadership1_id} {leadership1_title} (… up to {leadership4}) {respect} {members} {capacity} {rank} {days_old} {best_chain} {rw_wins} {updated}";
 // ---- what can be edited (path in config.json, label, type, extra) ----
 const SCHEMA = {
   D: [
@@ -110,8 +110,7 @@ const SCHEMA = {
              what_we_offer: "What We Offer", achievements: "Faction Achievements"}},
     {path: "faction_info", title: "Faction Information", enable: true, fields: [
       ["title", "Section title"], ["leadership_title", "Leadership heading (the divider above the leaders)"],
-      ["member_title_list", "Leader titles - the title shown above each person's name, in this order", "list",
-       [["name", "Member (Torn name or ID)"], ["title", "Title above their name"]], {add: {name: "", title: "Leadership"}}],
+      ["leadership_titles", "Leadership titles - the people come from Torn automatically; name each slot's role", "slots"],
       ["fields", "Fields (shown two per row)", "list", [["label", "Label"], ["value", "Value - text and/or {placeholders}"]], {add: {label: "New", value: ""}}]],
      help: "Placeholders: " + PH},
     {path: "requirements", title: "Requirements", enable: true, fields: [
@@ -172,10 +171,6 @@ async function loadConfig() {
       text = await (await fetch("preview/config.json", {cache: "no-store"})).text();
     }
     C = JSON.parse(text); dirty = false;
-    // leader titles: older configs keep them as {name: title} - shown here as the editable list (saved as the list)
-    const fi = C.faction_info = C.faction_info || {};
-    if (!fi.member_title_list && fi.member_titles)
-      fi.member_title_list = Object.entries(fi.member_titles).map(([name, title]) => ({name, title}));
     render();
   } catch (e) { $("form").innerHTML = `<div class="card">Couldn't load the settings: ${esc(e.message)}</div>`; }
 }
@@ -189,6 +184,15 @@ function fieldHtml(sec, si, f) {
   const [key, label, type = "text", extra, opt = {}] = f, obj = at(sec.path, true), v = obj[key], a = `data-s="${si}" data-k="${key}"`;
   if (type === "num") return `<label>${esc(label)}</label><input ${a} data-t="num" inputmode="numeric" value="${esc(v)}">`;
   if (type === "select") return `<label>${esc(label)}</label><select ${a}>${extra.map(o => `<option${o == v ? " selected" : ""}>${o}</option>`).join("")}</select>`;
+  // leadership slots: one title per slot; who holds each slot right now comes from this update (CFG.leadership)
+  if (type === "slots") {
+    const now = CFG.leadership || [], n = Math.max(4, now.length, (v || []).length);
+    return `<label>${esc(label)}</label>` + Array.from({length: n}, (_, k) => {
+      const who = now[k] ? `${esc(now[k].name)} [${esc(now[k].id)}]` : "nobody right now";
+      return `<div class="item"><div class="bh"><b>{leadership${k + 1}}</b><span class="small" style="text-transform:none">${who}</span></div>`
+        + `<input data-s="${si}" data-k="${key}" data-t="slot" data-i="${k}" placeholder="Leadership" value="${esc((v || [])[k] || "")}"></div>`;
+    }).join("") + `<div class="small">Order: longest in the faction first. Leave a title empty to show their Torn position.</div>`;
+  }
   if (type === "lines") return `<label>${esc(label)}</label><textarea ${a} data-t="lines">${esc((v || []).join("\n"))}</textarea>`;
   if (type === "list") {
     const rows = v || [];
@@ -239,7 +243,9 @@ $("form").addEventListener("input", e => {
   let v = el.value;
   if (el.dataset.t === "num") { v = v.replace(/\D/g, ""); el.value = v; v = +v || 0; }
   if (el.dataset.t === "lines") v = el.value.split("\n").map(x => x.trimEnd()).filter(x => x !== "");
-  if (el.dataset.i != null) obj[el.dataset.k][+el.dataset.i][el.dataset.k2] = v; else obj[el.dataset.k] = v;
+  if (el.dataset.t === "slot") { const arr = obj[el.dataset.k] = obj[el.dataset.k] || []; arr[+el.dataset.i] = v.trim();
+    for (let k = 0; k < arr.length; k++) if (arr[k] == null) arr[k] = ""; }
+  else if (el.dataset.i != null) obj[el.dataset.k][+el.dataset.i][el.dataset.k2] = v; else obj[el.dataset.k] = v;
   if (el.tagName === "SELECT" && el.closest(".ic")) el.closest(".ic").querySelector("img").src = `builder/icons/${el.value}.png`;
   changed();
 });
