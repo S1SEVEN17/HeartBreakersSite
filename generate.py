@@ -7395,6 +7395,8 @@ def write_payout_calculator(cfg: dict, out: Path):
             "member_base": member_base(),
             # newest saved receipt per war -> Create Newsletter links its image
             "receipts": _latest_receipts(),
+            # wars with a saved war report (reports/war-<id>.png) -> Create Newsletter adds the report image
+            "war_reports": sorted(f.stem[4:] for f in REPORTS_DIR.glob("war-*.png")) if REPORTS_DIR.exists() else [],
             "defaults": pcfg.get("defaults", {
                 "mode": "pct", "budget": 0, "minHits": 1,
                 "expenses": [{"label": "Faction tax", "type": "pct", "value": 10}],

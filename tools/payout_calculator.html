@@ -741,11 +741,14 @@ function newsletter() {
   const rank = w.rank_before && w.rank_after ? (w.rank_before == w.rank_after ? ` · Rank ${esc(w.rank_after)}` : ` · Rank ${esc(w.rank_before)} → ${esc(w.rank_after)}`) : "";
   const msg = $("newsMsg").value.trim();
   const stem = receiptStem();
+  // the war's report image (posted to the War Reports channel; saved as reports/war-<id>.png on the site)
+  const rep = (CFG.war_reports || []).includes(String(w.id));
   const P = (inner, extra = "") => `<p style="text-align:center;${extra}">${inner}</p>`;
   const parts = [
-    P(`<strong><span style="font-size:20px;color:#c0261d">WAR PAYOUT</span></strong>`),
+    P(`<strong><span style="font-size:20px;color:#c0261d">${rep ? "WAR REPORT &amp; PAYOUT" : "WAR PAYOUT"}</span></strong>`),
     P(`<strong><span style="font-size:16px;color:${col}">${res} vs ${esc(w.opponent)}</span></strong><br>${when} · Score ${w.our.toLocaleString()} - ${w.their.toLocaleString()}${rank}`),
     msg ? P(esc(msg).replace(/\n/g, "<br>")) : "",
+    rep ? P(`<a href="${base}/reports/war-${w.id}.html"><img src="${base}/reports/war-${w.id}.png" alt="War report" width="600"></a>`) : "",
     P(`Payouts have been sent to your <strong>faction balance</strong>.<br>` +
       `<strong>${money(r.paid)}</strong> was paid to <strong>${paidN}</strong> members from a ${money(r.budget)} budget` +
       (exp ? ` (${r.expenses.map(e => `${esc(e.label)}${e.pct ? " " + e.pct + "%" : ""}: ${money(e.amount)}`).join(", ")})` : "") + "."),
@@ -757,14 +760,17 @@ function newsletter() {
       (r.paid_by ? `<br>Paid by ${esc(r.paid_by)}` : "") + (r.note ? ` · ${esc(r.note)}` : ""), "font-size:12px")];
   // Torn's newsletter shows paragraphs with NO gap between them, so put an empty paragraph between
   // sections - it then matches this page's preview spacing
-  return {title: `War Payout - ${res} vs ${w.opponent}`, html: parts.filter(Boolean).join("\n<p>&nbsp;</p>\n")};
+  return {title: `${rep ? "War Report & Payout" : "War Payout"} - ${res} vs ${w.opponent}`, html: parts.filter(Boolean).join("\n<p>&nbsp;</p>\n")};
 }
 function renderNews() {
   const n = newsletter();
   if (!$("newsTitle").dataset.edited) $("newsTitle").value = n.title;
   $("newsPreview").innerHTML = n.html;
-  $("newsWarn").textContent = receiptStem() ? "" :
-    "No saved receipt for this war yet - the receipt image is left out. Save the receipt, wait a few minutes for the site to update, then create the newsletter.";
+  const wid = String((receipt().war || {}).id || "");
+  $("newsWarn").textContent = [
+    receiptStem() ? "" : "No saved receipt for this war yet - the receipt image is left out. Save the receipt, wait a few minutes for the site to update, then create the newsletter.",
+    (CFG.war_reports || []).includes(wid) ? "" : "No war report for this war on the site yet - the war report image is left out."
+  ].filter(Boolean).join(" ");
 }
 $("fillerLink").href = "hb-newsletter-filler.user.js";
 $("makeNews").onclick = () => { if (!lastResult) return; $("newsBox").style.display = "block"; renderNews();
