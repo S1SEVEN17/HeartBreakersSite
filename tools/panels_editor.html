@@ -107,14 +107,17 @@ const SCHEMA = {
     {path: "section_order", title: "Section order", type: "order",
      help: "Order of the sections under the header - use ▲▼ to move them.",
      names: {faction_info: "Faction Information", requirements: "Requirements", perks: "Faction Perks",
-             what_we_offer: "What We Offer", achievements: "Faction Achievements", ranked_wars: "Recent Ranked Wars"}},
+             what_we_offer: "What We Offer", achievements: "Faction Achievements"}},
     {path: "faction_info", title: "Faction Information", enable: true, fields: [
-      ["title", "Section title"], ["leadership_title", "Leadership title"],
+      ["title", "Section title"], ["leadership_title", "Leadership heading (the divider above the leaders)"],
+      ["member_title_list", "Leader titles - the title shown above each person's name, in this order", "list",
+       [["name", "Member (Torn name or ID)"], ["title", "Title above their name"]], {add: {name: "", title: "Leadership"}}],
       ["fields", "Fields (shown two per row)", "list", [["label", "Label"], ["value", "Value - text and/or {placeholders}"]], {add: {label: "New", value: ""}}]],
      help: "Placeholders: " + PH},
     {path: "requirements", title: "Requirements", enable: true, fields: [
       ["title", "Section title"],
-      ["tiles", "Tiles (exactly 3)", "list", [["icon", "Icon", "icon"], ["badge", "Badge on the icon (optional, e.g. 15+)"], ["label", "Text"]], {fixed: 3}]]},
+      ["tiles", "Requirements (3 per row - the section grows a row for every 3)", "list", [["icon", "Icon", "icon"], ["badge", "Badge on the icon (optional, e.g. 15+)"], ["label", "Text"]],
+       {add: {icon: "gi-checked-shield", badge: "", label: "New requirement"}}]]},
     {path: "perks", title: "Faction Perks", enable: true, fields: [
       ["title", "Section title"], ["tree", "Which tree to show", "select", ["peace", "war", "active"]]],
      help: "The branches and upgrades themselves come from Torn."},
@@ -124,8 +127,6 @@ const SCHEMA = {
         ["text", "Detail (under ~40 characters)"]], {add: {icon: "gi-checked-shield", title: "New", text: ""}}]]},
     {path: "achievements", title: "Faction Achievements", enable: true, fields: [
       ["title", "Section title"], ["chains_title", "Chains heading"], ["goal_text", "Text on tiers not reached yet"]]},
-    {path: "ranked_wars", title: "Recent Ranked Wars", enable: true, fields: [
-      ["title", "Section title"], ["count", "How many wars", "num"], ["hits_title", "Hits list title"], ["respect_title", "Respect list title"]]},
     {path: "footer", title: "Footer", enable: true, fields: [["text", "Footer text ({updated} = last update time)"]]}],
   A: [
     {path: "announcements", title: "Announcements", fields: [
@@ -170,7 +171,12 @@ async function loadConfig() {
       // no token: show the copy published with the last update (the settings repo is private)
       text = await (await fetch("preview/config.json", {cache: "no-store"})).text();
     }
-    C = JSON.parse(text); dirty = false; render();
+    C = JSON.parse(text); dirty = false;
+    // leader titles: older configs keep them as {name: title} - shown here as the editable list (saved as the list)
+    const fi = C.faction_info = C.faction_info || {};
+    if (!fi.member_title_list && fi.member_titles)
+      fi.member_title_list = Object.entries(fi.member_titles).map(([name, title]) => ({name, title}));
+    render();
   } catch (e) { $("form").innerHTML = `<div class="card">Couldn't load the settings: ${esc(e.message)}</div>`; }
 }
 
@@ -199,9 +205,18 @@ function fieldHtml(sec, si, f) {
   }
   return `<label>${esc(label)}</label><input ${a} value="${esc(v)}">`;
 }
+// Description: the editor follows the banner's own layout - the section order card first, then each section in
+// the order it appears on the banner (section_order), then the footer. ▲▼ in the order card re-sorts the form too.
+function inPageOrder(secs) {
+  const pairs = secs.map((sec, si) => [sec, si]);
+  if (tab !== "D") return pairs;
+  const ord = C.section_order || [];
+  const rank = sec => sec.type === "order" ? -1 : sec.path === "footer" ? 1e6 : (ord.indexOf(sec.path) + 1 || 1e5);
+  return pairs.sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]);
+}
 function render() {
   const secs = SCHEMA[tab];
-  $("form").innerHTML = secs.map((sec, si) => {
+  $("form").innerHTML = inPageOrder(secs).map(([sec, si]) => {
     if (sec.type === "order") {
       const order = C[sec.path] || [];
       return `<div class="card"><h2>${esc(sec.title)}</h2><div class="small">${esc(sec.help)}</div>` + order.map((k, i) =>
@@ -338,11 +353,11 @@ async function drawPreview() {
     const add = (b64, css) => { const im = new Image(); im.src = "data:image/png;base64," + b64; if (css) im.style.cssText = css; box.appendChild(im); return im; };
     if (tab === "D") add(res.imgs[0]);
     else {
-      add(res.imgs[0]);
+      // navigation buttons first (above the main announcement image), like the HTML for Torn
       if (res.btns.length) { const row = document.createElement("div"); row.style.cssText = "display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin:4px 0";
         res.btns.forEach(b => { const im = new Image(); im.src = "data:image/png;base64," + b;
           im.style.cssText = `width:calc(${100 / res.per_row}% - 4px);max-width:320px;margin:0`; row.appendChild(im); }); box.appendChild(row); }
-      res.imgs.slice(1).forEach(b => add(b));
+      res.imgs.forEach(b => add(b));
     }
     $("code").value = res.html;
     $("htmlHelp").innerHTML = tab === "D"

@@ -1466,6 +1466,12 @@ def normalize(raw: dict, cfg: dict) -> dict:
                 pos_order.append(pos)
 
     # member_titles keys can be a player name (any case) or a player id.
+    # member_title_list: [{name, title}] (the Description editor's form, in display order); member_titles {name: title}
+    # is the older form - used when there's no list
+    mtl = [(str(x.get("name", "")).strip(), str(x.get("title", "")).strip()) for x in fi.get("member_title_list") or []
+           if str(x.get("name", "")).strip()]
+    if mtl:
+        fi = dict(fi, member_titles={n_: t_ for n_, t_ in mtl})
     mt = {str(k).strip().lower(): str(v) for k, v in fi.get("member_titles", {}).items()}
     mt_order = list(mt.keys())
 
@@ -2299,30 +2305,66 @@ def draw_offer_bullets(sec, s):
     return img
 
 
+REQ_SLOT_X = [(108, 405), (495, 800), (862, 1165)]   # each plate + pill in req_body.png (x range, full height)
+
+
+def _req_row(base_art: Image.Image, n: int):
+    """One Requirements row for n (1..3) tiles -> (image, [(cx, pill rect, template slot or None)]).
+    3 tiles = the template art as it is. 1-2 tiles (the last row when there are more than 3): the plates are
+    copied onto a plain copy of the strip and centred, so no empty plates show."""
+    if n >= 3:
+        return base_art.copy(), [(REQ_SLOT_CX[k], REQ_PILL[k], k) for k in range(3)]
+    row = base_art.copy()
+    plain = base_art.crop((476, 0, 486, base_art.height)).resize((1190 - 100, base_art.height))
+    row.paste(plain, (100, 0))                          # wipe the three plates (frame edges kept)
+    centers = [646] if n == 1 else [452, 840]
+    slots = []
+    for k, cx in enumerate(centers):
+        src = 1 if n == 1 else (0, 2)[k]                # take the middle plate for one, the outer ones for two
+        x0, x1 = REQ_SLOT_X[src]
+        dx = cx - REQ_SLOT_CX[src]
+        row.alpha_composite(base_art.crop((x0, 0, x1, base_art.height)), (x0 + dx, 0))
+        px0, py0, px1, py1 = REQ_PILL[src]
+        slots.append((cx, (px0 + dx, py0, px1 + dx, py1), None))
+    return row, slots
+
+
 def draw_requirements(sec, s, base: Image.Image):
-    """Draws onto the fixed 3-slot req_body art (icons + badge + pill label)."""
-    d = ImageDraw.Draw(base)
-    for slot, (tile, cx, pill) in enumerate(zip(sec.get("tiles", [])[:3], REQ_SLOT_CX, REQ_PILL)):
-        name = tile.get("icon", "art2-shield")
-        if name in REQ_ART_POS and REQ_ART_POS[name][0] == [258, 640, 1002][slot]:
-            # template icon back in its own slot: exact original placement
-            icon = Image.open(ICON_DIR / f"{name}.png").convert("RGBA")
-            icx, icy = REQ_ART_POS[name]
-            paste_center(base, icon, icx, icy)
-            badge_cx = cx
-        else:
-            icon = metal_icon(name, REQ_ICON_MAX)
-            paste_center(base, icon, cx, REQ_ICON_CY)
-            badge_cx = cx
-        badge = str(tile.get("badge", "")).strip()
-        if badge:  # e.g. "15+" printed on the shield face
-            bf = fit_font(badge, "Bold", 44, 70, 22)
-            draw_centered(d, (badge_cx, REQ_ICON_CY), badge, bf, (28, 28, 28), shadow=False)
-        label = fill(tile.get("label", ""), s["values"])
-        x0, y0, x1, y1 = pill
-        lf = fit_font(label, "SemiBold", 32, (x1 - x0) - 24, 18)
-        draw_centered(d, ((x0 + x1) / 2, (y0 + y1) / 2), label, lf, TEXT)
-    return base
+    """Requirements: tiles 3 per row on the req_body art (icon + optional badge + pill label). Any number of
+    tiles - the section grows a row for every 3 (a last row of 1-2 is centred)."""
+    tiles = sec.get("tiles", []) or []
+    rows = []
+    for r0 in range(0, max(1, len(tiles)), 3):
+        chunk = tiles[r0:r0 + 3]
+        row, slots = _req_row(base, len(chunk) or 3)
+        d = ImageDraw.Draw(row)
+        for tile, (cx, pill, slot) in zip(chunk, slots):
+            name = tile.get("icon", "art2-shield")
+            if slot is not None and name in REQ_ART_POS and REQ_ART_POS[name][0] == [258, 640, 1002][slot]:
+                # template icon back in its own slot: exact original placement
+                icon = Image.open(ICON_DIR / f"{name}.png").convert("RGBA")
+                icx, icy = REQ_ART_POS[name]
+                paste_center(row, icon, icx, icy)
+            else:
+                icon = metal_icon(name, REQ_ICON_MAX)
+                paste_center(row, icon, cx, REQ_ICON_CY)
+            badge = str(tile.get("badge", "")).strip()
+            if badge:  # e.g. "15+" printed on the shield face
+                bf = fit_font(badge, "Bold", 44, 70, 22)
+                draw_centered(d, (cx, REQ_ICON_CY), badge, bf, (28, 28, 28), shadow=False)
+            label = fill(tile.get("label", ""), s["values"])
+            x0, y0, x1, y1 = pill
+            lf = fit_font(label, "SemiBold", 32, (x1 - x0) - 24, 18)
+            draw_centered(d, ((x0 + x1) / 2, (y0 + y1) / 2), label, lf, TEXT)
+        rows.append(row)
+    if len(rows) == 1:
+        return rows[0]
+    out = Image.new("RGBA", (base.width, sum(r.height for r in rows)), (0, 0, 0, 0))
+    y = 0
+    for r in rows:
+        out.alpha_composite(r, (0, y))
+        y += r.height
+    return out
 
 
 def draw_centered(d, center, text, fnt, fill_c, shadow=True):
@@ -4668,15 +4710,15 @@ def write_description_page(out: Path):
 
 
 def announcement_snippet(acfg: dict, names: list, base_url: str) -> str:
-    """The announcement's paste-ready HTML: each section image (linking to its own page) with the
-    navigation buttons right under the first one. Buttons: one centred paragraph, NO whitespace between
+    """The announcement's paste-ready HTML: the navigation buttons on top, then each section image (linking
+    to its own page). Buttons: one centred paragraph, NO whitespace between
     the <a> tags (a space made the pair too wide and wrapped it), no target attr, torn.com links made
     site-relative (as Torn's editor stores them). Also used by the leaders' Site Panels page."""
     import html as _html
     bw = int(acfg.get("button_width", 240))
     per_row = int(acfg.get("buttons_per_row", 2))
     buttons = acfg.get("buttons", [])
-    btn_html = ["<br>"]
+    btn_html = []                     # (buttons now come first - no gap line above them)
     for i, b in enumerate(buttons, 1):
         url = b.get("url", "#").replace("{member_base}", base_url)   # e.g. the Recaps button
         for pre in ("https://www.torn.com", "https://torn.com"):
@@ -4691,11 +4733,9 @@ def announcement_snippet(acfg: dict, names: list, base_url: str) -> str:
     img_p = lambda n: (f'<p style="text-align:center;"><a href="{base_url}/{pg(n)}">'
                        f'<img src="{base_url}/{n}" alt="{n}"></a></p>')
     btn_p = '<p style="text-align:center;">' + "".join(btn_html) + "</p>"
-    parts = ["<p>&nbsp;</p>"]
+    parts = ["<p>&nbsp;</p>", btn_p]   # navigation buttons ABOVE the main announcement image
     for n in names:
         parts.append(img_p(n))
-        if n == names[0]:              # buttons right under the announcements image
-            parts.append(btn_p)
     parts.append("<p>&nbsp;</p>")
     return "\n".join(parts)
 
