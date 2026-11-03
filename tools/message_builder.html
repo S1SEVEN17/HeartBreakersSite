@@ -49,7 +49,7 @@ canvas{width:100%;height:auto;display:block;background:repeating-conic-gradient(
 .adds{display:flex;flex-wrap:wrap;gap:4px}
 </style></head>
 <body>
-<nav id="nav"></nav>
+__MENU__
 <h1>Message Builder</h1>
 <div class="wrap">
 <div class="ed">
@@ -113,10 +113,7 @@ canvas{width:100%;height:auto;display:block;background:repeating-conic-gradient(
 <script>
 const CFG = __CONFIG__;
 // leaders' folder: member pages are linked by full address, the calculator sits next to this page
-document.getElementById("nav").innerHTML = [["Leaders Hub", "index.html"], ["Leader Monitor", "monitor.html"], ["Site Panels", "panels.html"], ["Announcements", CFG.member_base + "/announcements.html"],
-  ["Payouts", CFG.member_base + "/payouts.html"], ["Payout Calculator", "payout.html"],
-  ["Newsletter", CFG.member_base + "/newsletter.html"], ["Recap Archive", CFG.member_base + "/recaps.html"]]
-  .map(([t, u]) => `<a href="${u}">${t}</a>`).join(" · ");
+// (top menu: the MENU placeholder = the leaders' site menu with the account menu, filled in by generate.py)
 const C = CFG.colors, rgb = (c, a) => a == null ? `rgb(${c[0]},${c[1]},${c[2]})` : `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));

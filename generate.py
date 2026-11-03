@@ -3995,13 +3995,14 @@ def write_message_builder(out: Path):
                        "INTERIOR": INTERIOR, "GLOW": GLOW, "CARD_FILL": CARD_FILL, "CARD_EDGE": CARD_EDGE,
                        "GOLD": (232, 190, 90), "GREEN": (120, 200, 120)}}
     html_ = (ROOT / "tools" / "message_builder.html").read_text(encoding="utf-8")
-    (lout / "builder.html").write_text(html_.replace("__CONFIG__", json.dumps(conf)), encoding="utf-8")
+    (lout / "builder.html").write_text(html_.replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", leader_menu("")),
+                                       encoding="utf-8")
     # Site Panels editor: the description banner + announcements text/tiles/buttons (config.json via the GitHub API)
     pconf = {"repo": REPO, "branch": "main", "member_base": member_base(), "icons": all_icons,
              "banner_url": public_base() + "/banner.webp",
              "announce_url": f"{member_base()}/announce-header.webp"}
     (lout / "panels.html").write_text((ROOT / "tools" / "panels_editor.html").read_text(encoding="utf-8")
-                                      .replace("__CONFIG__", json.dumps(pconf)), encoding="utf-8")
+                                      .replace("__CONFIG__", json.dumps(pconf)).replace("__MENU__", leader_menu("")), encoding="utf-8")
     if PANELS_DIR.exists():
         (mout / "panels").mkdir(exist_ok=True)
         for f in PANELS_DIR.glob("*.png"):
@@ -7407,7 +7408,8 @@ def write_payout_calculator(cfg: dict, out: Path):
     write_payout_data(out / leader_dir(), _PAYOUT_RAW.get("raw") or {})
     d_ = out / leader_dir()
     d_.mkdir(parents=True, exist_ok=True)
-    (d_ / "payout.html").write_text(html_.replace("__CONFIG__", json.dumps(conf)), encoding="utf-8")
+    (d_ / "payout.html").write_text(html_.replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", leader_menu("")),
+                                   encoding="utf-8")
     # Torn-side userscript that fills the faction newsletter from "Create Newsletter" (leaders install it)
     (d_ / "hb-newsletter-filler.user.js").write_text(
         (ROOT / "tools" / "hb-newsletter-filler.user.js").read_text(encoding="utf-8"), encoding="utf-8")
