@@ -9,7 +9,8 @@
     db/members.json  totals per member (wars, chains, crimes, payouts, gym)
     db/wars.json     per war, per member [id, hits, respect, assists, hosps, outside]
     db/chains.json   per chain, per member [id, hits, respect, rets]
-    db/crimes.json   completed organized crimes (members = list of ids; money split = (1 - tax) / members)
+    db/crimes.json   completed organized crimes (m = member ids; share = each member's cut: 80% of the payout split
+                     evenly between this crime's AND its prerequisite crime's members - see generate.py crime_shares)
     db/payouts.json  current receipt per war, per member [id, pay, war hits, outside]
   Charts are plain inline SVG (no libraries, works in Torn PDA). __MENU__ is replaced with the site menu,
   __GATE__ with the gatekeeper address.
@@ -208,9 +209,9 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get).concat([
   const cr = O.crimes.filter(c => (c.m || []).includes(id)).reverse().slice(0, 40);
   $("to").innerHTML = `<tr><th>Date</th><th>Crime</th><th>Result</th><th class="n">Their share</th></tr>`
     + (cr.map(c => { const ok = String(c.status).toLowerCase() === "successful";
-      const share = ok && c.m.length ? Math.floor(c.money * (1 - O.tax) / c.m.length) : 0;
+      const share = ok ? Math.floor(c.share || 0) : 0;          // prerequisite crimes: their share of the follow-up
       return `<tr><td>${day(c.t)}</td><td>${esc(c.name)} <span class="tag">D${c.diff}</span></td><td class="${ok ? "w" : "d"}">${esc(c.status)}</td>
-        <td class="n">${share ? money(share) : (ok && c.items ? "Item rewards" : "-")}</td></tr>`; }).join("")
+        <td class="n">${share ? money(share) + (c.via ? ` <span class="tag">via ${esc(c.via)}</span>` : "") : (ok && c.items ? "Item rewards" : "-")}</td></tr>`; }).join("")
       || `<tr><td colspan="4" class="tag">No organized crimes on record.</td></tr>`);
   if (location.hash) { const el = document.querySelector(location.hash); if (el) el.scrollIntoView(); }
 }).catch(e => { $("err").textContent = "Couldn't load the faction data (" + e.message + ")."; });

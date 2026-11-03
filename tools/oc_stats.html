@@ -8,7 +8,10 @@
   "🕵️ Organized Crimes"). Drawn in the browser from db/crimes.json (rebuilt every full update from
   data/crime_history.json):  {tax, crimes: [{t, name, diff, status, money, items, respect, m: [member ids]}]}
     money   = the crime's cash reward (whole team, before the faction's cut); items = item rewards (count)
-    share   = money * (1 - tax) / members  (what each member got - same rule as the profile pages)
+    share   = what each member got: 80% of the payout (20% faction tax) split EVENLY between this crime's members AND
+              its prerequisite crime's members (previous_crime_id, e.g. No Reserve -> Bidding War); a prerequisite
+              that paid nothing itself carries the share of the crime it led to, with via = that crime's name.
+              Worked out in generate.py crime_shares - same numbers as the profile pages and the recap.
   Payout figures (avg / max / least) count SUCCESSFUL runs only (a success that paid only items counts as $0). Tables sort by tapping a column; the range buttons are remembered.
   __MENU__ is replaced with the site header.
 -->
@@ -60,7 +63,7 @@ let O = null;
 function stats(list, tax) {
   const ok = list.filter(c => String(c.status).toLowerCase() === "successful");
   const paid = ok.map(c => c.money || 0);
-  const shares = ok.filter(c => (c.m || []).length).map(c => (c.money || 0) * (1 - tax) / c.m.length);
+  const shares = ok.map(c => c.share || 0).filter(v => v > 0);
   const resp = ok.map(c => c.respect || 0);
   const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
   return {runs: list.length, ok: ok.length, rate: pct(ok.length, list.length),
@@ -68,6 +71,8 @@ function stats(list, tax) {
     share: avg(shares), total: paid.reduce((x, y) => x + y, 0),
     resp: avg(resp), respTot: resp.reduce((x, y) => x + y, 0),
     items: ok.reduce((x, c) => x + (c.items || 0), 0), last: Math.max(0, ...list.map(c => c.t || 0)),
+    via: (ok.find(c => c.via) || {}).via || "",                  // a prerequisite: paid through this crime
+    split: avg(ok.filter(c => c.split).map(c => c.split)),       // members sharing each payout (incl. prerequisites)
     size: avg(list.map(c => (c.m || []).length))};
 }
 
@@ -88,23 +93,28 @@ function table(el, cols, rows, sortKey, desc = true) {
 }
 
 // crimes that reward items only (no cash): say so instead of "$0"
-const pay = k => r => !r.total && r.items ? '<span class="tag">items only</span>' : short(r[k]);
+const pay = k => r => !r.total && r.via ? `<span class="tag">via ${esc(r.via)}</span>`
+  : !r.total && r.items ? '<span class="tag">items only</span>' : short(r[k]);
+const shareCell = r => r.share ? short(r.share) + (r.via ? ` <span class="tag">via ${esc(r.via)}</span>` : "")
+  : r.items ? '<span class="tag">items only</span>' : short(0);
 const rateCell = r => `${r.rate}%<span class="bar" style="width:${Math.max(2, r.rate * 0.5)}px;background:${r.rate >= 75 ? "#78c878" : r.rate >= 50 ? "#e8be5a" : "#e4382e"}"></span>`;
 const COLS_CRIME = [
   ["Crime", "name", false, r => `${esc(r.name)}`], ["Level", "diff", true, r => r.diff ? "D" + r.diff : "-"],
   ["Runs", "runs", true, r => num(r.runs)], ["Passed", "ok", true, r => num(r.ok)], ["Pass rate", "rate", true, rateCell],
   ["Avg payout", "avg", true, pay("avg")], ["Max payout", "max", true, pay("max")],
-  ["Least payout", "min", true, pay("min")], ["Avg / member", "share", true, pay("share")],
+  ["Least payout", "min", true, pay("min")], ["Avg / member", "share", true, shareCell],
   ["Total paid", "total", true, pay("total")], ["Avg respect", "resp", true, r => num(r.resp)],
   ["Total respect", "respTot", true, r => num(r.respTot)], ["Items", "items", true, r => num(r.items)],
-  ["Team", "size", true, r => r.size.toFixed(1)], ["Last run", "last", true, r => day(r.last)]];
+  ["Team", "size", true, r => r.size.toFixed(1)],
+  ["Split", "split", true, r => r.split ? r.split.toFixed(1) : "-"], ["Last run", "last", true, r => day(r.last)]];
 
 function draw(days) {
   const from = days ? Date.now() / 1000 - days * 86400 : 0;
   const list = O.crimes.filter(c => (c.t || 0) >= from), tax = O.tax || 0;
   const all = stats(list, tax);
   $("meta").textContent = list.length
-    ? `${num(list.length)} completed crimes · ${day(Math.min(...list.map(c => c.t || Infinity)))} - ${day(all.last)} · payouts are the whole team's cash reward before the faction's ${Math.round(tax * 100)}% cut`
+    ? `${num(list.length)} completed crimes · ${day(Math.min(...list.map(c => c.t || Infinity)))} - ${day(all.last)} · payouts = the crime's whole cash reward; `
+      + `${Math.round(tax * 100)}% goes to the faction and ${100 - Math.round(tax * 100)}% is split evenly between its members and its prerequisite crime's members ("Split" = how many)`
     : "No organized crimes in this range.";
   $("tiles").innerHTML = [
     [num(all.runs), "Crimes run", `${num(all.ok)} passed`], [all.rate + "%", "Pass rate", `${num(all.runs - all.ok)} failed`],
@@ -125,7 +135,7 @@ function draw(days) {
   table($("tlevel"), [["Level", "diff", true, r => r.diff ? "D" + r.diff : "?"], ["Crimes", "kinds", true, r => num(r.kinds)],
     ["Runs", "runs", true, r => num(r.runs)], ["Pass rate", "rate", true, rateCell], ["Avg payout", "avg", true, pay("avg")],
     ["Max payout", "max", true, pay("max")], ["Least payout", "min", true, pay("min")],
-    ["Avg / member", "share", true, pay("share")], ["Avg respect", "resp", true, r => num(r.resp)],
+    ["Avg / member", "share", true, shareCell], ["Avg respect", "resp", true, r => num(r.resp)],
     ["Total respect", "respTot", true, r => num(r.respTot)]], lrows, "diff", false);
 }
 

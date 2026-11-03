@@ -4227,10 +4227,13 @@ def build_databases(raw: dict, cfg: dict) -> dict:
     except (OSError, ValueError):
         crimes_raw = {}
     crimes_l = crimes_raw.values() if isinstance(crimes_raw, dict) else crimes_raw
-    crimes = sorted(({"t": c.get("executed_at"), "name": c.get("name"), "diff": c.get("difficulty"),
+    crimes = sorted(({"id": int(cid) if str(cid).isdigit() else cid, "prev": c.get("prev"),
+                      "t": c.get("executed_at"), "name": c.get("name"), "diff": c.get("difficulty"),
                       "status": c.get("status"), "money": c.get("money", 0), "items": c.get("items", 0),
-                      "respect": c.get("respect", 0), "m": c.get("members", [])} for c in crimes_l),
+                      "respect": c.get("respect", 0), "m": c.get("members", [])}
+                     for cid, c in (crimes_raw.items() if isinstance(crimes_raw, dict) else enumerate(crimes_raw))),
                     key=lambda c: c["t"] or 0)
+    crime_shares(crimes)
     # --- gym ---
     try:
         g = json.loads(GYM_PATH.read_text(encoding="utf-8")) if "GYM_PATH" in globals() else {}
@@ -4274,7 +4277,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
         for i, h, r_, rt in c["m"]:
             t = T(i); t["chains"] += 1; t["chain_hits"] += h; t["chain_resp"] += r_; t["rets"] += rt
     for c in crimes:
-        share = int(c["money"] * (1 - CRIME_TAX) / len(c["m"])) if c["m"] else 0
+        share = int(c.get("share") or 0)          # this crime's members' cut (see crime_shares)
         for i in c["m"]:
             t = T(i); t["crimes"] += 1
             if str(c["status"]).lower() == "successful":
@@ -4510,6 +4513,32 @@ def position_rank(pos) -> int:
         if x.lower() == p_:
             return i
     return -1
+
+
+def crime_shares(crimes: list):
+    """Organized crime payouts: CRIME_TAX (20%) goes to the faction, the other 80% is split EVENLY between every
+    participating member - including the members of its prerequisite crime(s) (previous_crime_id, e.g. No Reserve
+    before Bidding War; chains of several are followed back). Sets on each crime:
+      split = how many member slots share the payout (this crime + its prerequisites)
+      share = what each of THIS crime's members got (a prerequisite gets the share of the crime it led to)
+      via   = for a prerequisite: the name of the crime whose payout it shared"""
+    by_id = {c.get("id"): c for c in crimes}
+    for c in crimes:
+        c.setdefault("share", 0)
+    for c in crimes:
+        if not c.get("money") or str(c.get("status", "")).lower() != "successful":
+            continue
+        chain, x, seen = [c], c, set()
+        while x.get("prev") and x["prev"] in by_id and x["prev"] not in seen:
+            seen.add(x["prev"])
+            x = by_id[x["prev"]]
+            chain.append(x)
+        split = sum(len(y.get("m") or []) for y in chain)
+        share = int(c["money"] * (1 - CRIME_TAX) / split) if split else 0
+        c["split"], c["share"] = split, share
+        for y in chain[1:]:
+            if not y.get("money"):             # a prerequisite that paid nothing itself
+                y["share"], y["split"], y["via"] = share, split, c.get("name")
 
 
 def write_profiles(out: Path, db: dict):
@@ -6180,13 +6209,18 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
             gym_all.append({"name": names[i], "id": i,
                             "gymtotal": int(gym_gains.get("gymtotal", {}).get(str(i), 0))})
     # --- organized crimes executed this period
-    oc = [c for c in (crimes or {}).get("crimes", {}).values() if start <= c["executed_at"] < end]
+    call = (crimes or {}).get("crimes", {})
+    # member income: the faction keeps CRIME_TAX (20%), the rest is split evenly between everyone in the crime
+    # AND its prerequisite crime(s) (crime_shares - e.g. No Reserve's members share Bidding War's payout)
+    sh_ = [{"id": int(k) if str(k).isdigit() else k, "prev": v.get("prev"), "money": v.get("money", 0),
+            "status": v.get("status"), "name": v.get("name"), "m": v.get("members", [])} for k, v in call.items()]
+    crime_shares(sh_)
+    share_of = {str(x["id"]): x["share"] for x in sh_}
+    oc = [dict(c, _id=k) for k, c in call.items() if start <= c["executed_at"] < end]
     ol = {}
     for c in oc:
         ok = str(c.get("status", "")).lower().startswith("success")
-        # member income: the faction keeps CRIME_TAX (20%), the rest is split
-        # evenly between everyone in the crime
-        share = c["money"] * (1 - CRIME_TAX) / max(1, len(c["members"]))
+        share = share_of.get(str(c["_id"]), 0)
         for i in c["members"]:
             t = ol.setdefault(i, {"name": nm(i), "crimes": 0, "won": 0, "lost": 0, "diff": 0, "money": 0.0,
                                   "respect": 0.0})
@@ -6955,8 +6989,8 @@ def update_crime_history(key: str) -> dict:
     except (OSError, ValueError):
         hist = {"crimes": {}}
     saved = hist.setdefault("crimes", {})
-    # saved before item rewards were recorded -> read the whole history once more
-    refill = any("items" not in c for c in saved.values())
+    # saved before item rewards / prerequisite links were recorded -> read the whole history once more
+    refill = any("items" not in c or "prev" not in c for c in saved.values())
     now_ = int(datetime.now(timezone.utc).timestamp())
     if saved and not refill and now_ - int(hist.get("fetched", 0)) < CRIME_HIST_HOURS * 3600 - 600:
         return hist                         # read at most every CRIME_HIST_HOURS (6)
@@ -6974,8 +7008,9 @@ def update_crime_history(key: str) -> dict:
         cid = str(c.get("id"))
         rw = c.get("rewards") or {}
         n_items = sum(int(x.get("quantity") or 1) for x in _as_list(rw.get("items"))) if isinstance(rw, dict) else 0
-        if cid in saved and "items" not in saved[cid]:
+        if cid in saved and ("items" not in saved[cid] or "prev" not in saved[cid]):
             saved[cid]["items"] = n_items
+            saved[cid]["prev"] = c.get("previous_crime_id")
             added += 1
             continue
         if cid in saved or not c.get("executed_at"):
@@ -6986,7 +7021,9 @@ def update_crime_history(key: str) -> dict:
                       "money": int(rw.get("money") or 0) if isinstance(rw, dict) else 0,
                       "respect": int(rw.get("respect") or 0) if isinstance(rw, dict) else 0,
                       # number of items rewarded (crimes that pay in items, not cash)
-                      "items": n_items}
+                      "items": n_items,
+                      # prerequisite crime (e.g. No Reserve before Bidding War): its members share this payout
+                      "prev": c.get("previous_crime_id")}
         added += 1
     if True:                                # always save (records the fetch time)
         CRIME_HIST_PATH.parent.mkdir(exist_ok=True)
