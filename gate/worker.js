@@ -206,4 +206,24 @@ export default {
     if (rest === "whoami.json") return Response.json(who, {headers: {"Cache-Control": "no-store"}});
     return proxy(env, dir, rest, req, true);
   },
+
+  // ---------- timer: starts the update workflows (GitHub's own schedule proved unreliable) ----------
+  // wrangler.toml [triggers]: "0,15,30,45 * * * *" -> Crime delay check (+ Faction banner on the hour),
+  // "7,22,37,52 * * * *" -> Chain watch. Needs the GH_DISPATCH secret (token with Actions: write on CODE_REPO).
+  async scheduled(event, env, ctx) {
+    const minute = new Date(event.scheduledTime).getUTCMinutes();
+    const runs = event.cron.startsWith("7,") ? [["chainwatch.yml", {}]]
+      : [["crimes.yml", {}]].concat(minute === 0 ? [["banner.yml", {scheduled: "1"}]] : []);
+    ctx.waitUntil(Promise.all(runs.map(([wf, inputs]) => dispatch(env, wf, inputs))));
+  },
 };
+
+const CODE_REPO = "S1SEVEN17/HeartBreakersSite";
+async function dispatch(env, wf, inputs) {
+  if (!env.GH_DISPATCH) { console.log("GH_DISPATCH secret missing"); return; }
+  const r = await fetch(`https://api.github.com/repos/${CODE_REPO}/actions/workflows/${wf}/dispatches`, {
+    method: "POST", body: JSON.stringify({ref: "main", inputs}),
+    headers: {Authorization: "Bearer " + env.GH_DISPATCH, Accept: "application/vnd.github+json",
+              "User-Agent": "hb-gate", "Content-Type": "application/json"}});
+  console.log(`dispatch ${wf}: ${r.status}`);
+}

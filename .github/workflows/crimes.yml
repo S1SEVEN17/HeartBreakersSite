@@ -3,13 +3,11 @@
 name: Crime delay check
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch: {}        # every 15 min by the gatekeeper's Cloudflare timer (gate/worker.js scheduled)
 
 permissions:
   contents: read
-  actions: write               # keep-alive
+  actions: read
 
 concurrency:
   group: crimes
@@ -56,9 +54,3 @@ jobs:
           tools/store.sh save "Update crime alert state"
           data/discord_crime_state.json data/leader_alerts.json data/discord_messages_crimes.json
           data/item_names.json data/crime_delays.json
-
-      - name: Keep schedule alive
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/crimes.yml/enable"

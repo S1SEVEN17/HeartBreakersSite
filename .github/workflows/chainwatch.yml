@@ -4,13 +4,11 @@
 name: Chain watch
 
 on:
-  schedule:
-    - cron: "7,22,37,52 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch: {}        # every 15 min (:07 :22 :37 :52) by the gatekeeper's Cloudflare timer
 
 permissions:
   contents: read
-  actions: write               # starts banner.yml after a chain ends + keep-alive
+  actions: write               # starts banner.yml after a chain ends
 
 concurrency:
   group: chainwatch
@@ -67,9 +65,3 @@ jobs:
             gh workflow run banner.yml --ref main && echo "Started a full update (chain ended)"
           fi
           tools/store.sh save "Update chain watch state" data/chain_watch_state.json
-
-      - name: Keep schedule alive
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/chainwatch.yml/enable"

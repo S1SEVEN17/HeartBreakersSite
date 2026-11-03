@@ -23,6 +23,10 @@ from pathlib import Path
 FULL_EVERY = 3 * 3600 - 20 * 60      # 3 h, with 20 min slack for late starts
 
 event = os.environ.get("GITHUB_EVENT_NAME", "")
+# hourly runs are started by the gatekeeper's Cloudflare timer (gate/worker.js scheduled) as a workflow_dispatch
+# with input scheduled=1 - treat those exactly like GitHub's own schedule
+if os.environ.get("HB_SCHEDULED") == "1":
+    event = "schedule"
 now = int(time.time())
 try:
     st = json.loads(Path("data/run_state.json").read_text())

@@ -13,6 +13,10 @@ run_worker_first = true
 html_handling = "none"          # exact paths only (worker.js adds index.html itself)
 not_found_handling = "none"
 
+# timer that starts the update workflows (see worker.js scheduled)
+[triggers]
+crons = ["0,15,30,45 * * * *", "7,22,37,52 * * * *"]
+
 [vars]
 FACTION_ID = "51384"
 # LEADER_POSITIONS comes from config.json gate.leader_positions (passed by the deploy)

@@ -8,13 +8,18 @@
 name: Faction banner
 
 on:
-  schedule:
-    # Hourly trigger, but tools/should_run.py only lets through:
-    #   - a FULL run every 3 hours (everything refreshes, ~10 API calls)
-    #   - an hourly WAR run while a ranked war is ongoing / starting within 3 h (~2 API calls)
-    #   - every other hour, a CHAIN run: newly finished chains -> Discord Chain Reports (no deploy)
-    - cron: "0 * * * *"
-  workflow_dispatch: {}        # "Run workflow" button + the data repo's notify workflow
+  # Hourly, started by the gatekeeper's Cloudflare timer (gate/worker.js scheduled) with scheduled=1 - GitHub's
+  # own schedule never fired for this repo. tools/should_run.py then lets through:
+  #   - a FULL run every 3 hours (everything refreshes, ~10 API calls)
+  #   - an hourly WAR run while a ranked war is ongoing / starting within 3 h (~2 API calls)
+  #   - every other hour, a CHAIN run: newly finished chains -> Discord Chain Reports (no deploy)
+  # Without scheduled=1 ("Run workflow" button, the data repo's notify workflow) it's always a full run.
+  workflow_dispatch:
+    inputs:
+      scheduled:
+        description: "1 = hourly timer run (leave empty for a full update)"
+        required: false
+        default: ""
   push:
     branches: [main]           # redeploy whenever the code/design changes
     paths:
@@ -27,7 +32,7 @@ on:
 
 permissions:
   contents: read
-  actions: write               # keep-alive + starting a full run after a chain run's new report
+  actions: write               # starting a full run after a chain run's new report
 
 concurrency:
   group: site
@@ -54,6 +59,8 @@ jobs:
 
       - name: Decide run type
         id: gate
+        env:
+          HB_SCHEDULED: ${{ inputs.scheduled }}
         run: python3 tools/should_run.py
 
       - uses: actions/setup-python@v5
@@ -103,10 +110,3 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: tools/deploy_site.sh
-
-      # GitHub disables scheduled workflows in public repos after 60 days without activity.
-      - name: Keep schedule alive
-        if: github.event_name == 'schedule'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/banner.yml/enable"
