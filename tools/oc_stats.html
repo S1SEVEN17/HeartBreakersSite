@@ -13,6 +13,8 @@
               that paid nothing itself carries the share of the crime it led to, with via = that crime's name.
               Worked out in generate.py crime_shares - same numbers as the profile pages and the recap.
   Payout figures (avg / max / least) count SUCCESSFUL runs only (a success that paid only items counts as $0). Tables sort by tapping a column; the range buttons are remembered.
+  Tap a crime's name -> every run of it in the range: date, result, payout, each member's share, respect, items, the
+  members who took part (names from db/members.json) and its prerequisite crime (or the crime it led to).
   __MENU__ is replaced with the site header.
 -->
 <style>
@@ -31,6 +33,10 @@ th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;
 th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}
 td.n,th.n{text-align:right}.w{color:var(--green)}.d{color:var(--red)}.tag{color:var(--sub);font-size:12px}
 .scroll{overflow-x:auto}
+td a.cn{color:var(--gold);text-decoration:none;border-bottom:1px dotted #8a6a2a}
+#detail{display:none;scroll-margin-top:10px}#detail .hd{display:flex;align-items:center;gap:10px;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px}
+#detail .hd h2{margin:0;border:0;padding:0;flex:1}#detail button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:5px 10px;cursor:pointer}
+#detail td.mem{white-space:normal;min-width:220px;font-size:13px}#detail td.mem a{color:#ddd;text-decoration:none}#detail td.mem a:hover{color:var(--gold)}
 .bar{display:inline-block;height:8px;border-radius:4px;background:var(--green);vertical-align:middle;margin-left:6px}
 .rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:4px 0 10px}
 .rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
@@ -47,6 +53,8 @@ __MENU__
 <div class="tiles" id="tiles"></div>
 <h2>🕵️ By crime <span class="tag">(tap a column to sort)</span></h2>
 <div class="scroll"><table id="tcrime"></table></div>
+<div id="detail"><div class="hd"><h2 id="dtitle"></h2><button id="dclose">✕ Close</button></div>
+  <div class="tiles" id="dtiles"></div><div class="scroll" style="margin-top:10px"><table id="truns"></table></div></div>
 <h2>📶 By level</h2>
 <div class="scroll"><table id="tlevel"></table></div>
 <script>
@@ -99,7 +107,7 @@ const shareCell = r => r.share ? short(r.share) + (r.via ? ` <span class="tag">v
   : r.items ? '<span class="tag">items only</span>' : short(0);
 const rateCell = r => `${r.rate}%<span class="bar" style="width:${Math.max(2, r.rate * 0.5)}px;background:${r.rate >= 75 ? "#78c878" : r.rate >= 50 ? "#e8be5a" : "#e4382e"}"></span>`;
 const COLS_CRIME = [
-  ["Crime", "name", false, r => `${esc(r.name)}`], ["Level", "diff", true, r => r.diff ? "D" + r.diff : "-"],
+  ["Crime", "name", false, r => `<a href="#detail" class="cn" data-crime="${esc(r.name)}">${esc(r.name)}</a>`], ["Level", "diff", true, r => r.diff ? "D" + r.diff : "-"],
   ["Runs", "runs", true, r => num(r.runs)], ["Passed", "ok", true, r => num(r.ok)], ["Pass rate", "rate", true, rateCell],
   ["Avg payout", "avg", true, pay("avg")], ["Max payout", "max", true, pay("max")],
   ["Least payout", "min", true, pay("min")], ["Avg / member", "share", true, shareCell],
@@ -108,9 +116,43 @@ const COLS_CRIME = [
   ["Team", "size", true, r => r.size.toFixed(1)],
   ["Split", "split", true, r => r.split ? r.split.toFixed(1) : "-"], ["Last run", "last", true, r => day(r.last)]];
 
+// every run of one crime (in the current range), newest first
+let NAMES = {}, RANGE_LIST = [], OPEN = "";
+function showRuns(name) {
+  OPEN = name;
+  const runs = RANGE_LIST.filter(c => c.name === name).sort((a, b) => (b.t || 0) - (a.t || 0));
+  const byId = {}; O.crimes.forEach(c => { if (c.id != null) byId[c.id] = c; });
+  const next = {}; O.crimes.forEach(c => { if (c.prev != null) next[c.prev] = c; });
+  const st = stats(runs, O.tax || 0);
+  $("dtitle").textContent = `🕵️ ${name} - every run`;
+  $("dtiles").innerHTML = [[num(st.runs), "Runs", `${num(st.ok)} passed`], [st.rate + "%", "Pass rate", ""],
+    [st.total ? short(st.avg) : (st.via ? "via " + st.via : "-"), "Avg payout", st.total ? short(st.max) + " max" : ""],
+    [short(st.share), "Avg per member", st.split ? st.split.toFixed(1) + " sharing" : ""], [num(st.respTot), "Respect", ""]]
+    .map(([v, l, i]) => `<div class="tile"><b>${v}</b><span>${l}</span>${i ? `<i>${i}</i>` : ""}</div>`).join("");
+  const who = ids => (ids || []).map(id => `<a href="member.html?id=${id}">${esc(NAMES[id] || "[" + id + "]")}</a>`).join(", ");
+  $("truns").innerHTML = `<tr><th>Date</th><th>Result</th><th class="n">Payout</th><th class="n">Per member</th><th class="n">Respect</th>`
+    + `<th class="n">Items</th><th>Members</th><th>Linked crime</th></tr>`
+    + (runs.map(c => {
+      const ok = String(c.status).toLowerCase() === "successful";
+      const pre = c.prev != null && byId[c.prev] ? byId[c.prev] : null, nx = c.id != null ? next[c.id] : null;
+      const link = pre ? `after <b>${esc(pre.name)}</b> (${day(pre.t)})<br><span class="tag">${who(pre.m)}</span>`
+        : nx ? `led to <b>${esc(nx.name)}</b> (${day(nx.t)}, ${esc(nx.status)})` : '<span class="tag">-</span>';
+      return `<tr><td>${day(c.t)}</td><td class="${ok ? "w" : "d"}">${esc(c.status)}</td>`
+        + `<td class="n">${c.money ? money(c.money) : '<span class="tag">-</span>'}</td>`
+        + `<td class="n">${c.share ? money(c.share) + (c.via ? ` <span class="tag">via ${esc(c.via)}</span>` : "") : '<span class="tag">-</span>'}</td>`
+        + `<td class="n">${num(c.respect)}</td><td class="n">${c.items ? num(c.items) : '<span class="tag">-</span>'}</td>`
+        + `<td class="mem">${who(c.m)}</td><td class="mem">${link}</td></tr>`; }).join("")
+      || `<tr><td colspan="8" class="tag">No runs of this crime in this range.</td></tr>`);
+  $("detail").style.display = "block";
+}
+$("tcrime").addEventListener("click", e => { const a = e.target.closest("a.cn"); if (!a) return;
+  e.preventDefault(); showRuns(a.dataset.crime); $("detail").scrollIntoView({behavior: "smooth"}); });
+$("dclose").onclick = () => { OPEN = ""; $("detail").style.display = "none"; };
+
 function draw(days) {
   const from = days ? Date.now() / 1000 - days * 86400 : 0;
   const list = O.crimes.filter(c => (c.t || 0) >= from), tax = O.tax || 0;
+  RANGE_LIST = list;
   const all = stats(list, tax);
   $("meta").textContent = list.length
     ? `${num(list.length)} completed crimes · ${day(Math.min(...list.map(c => c.t || Infinity)))} - ${day(all.last)} · payouts = the crime's whole cash reward; `
@@ -137,10 +179,13 @@ function draw(days) {
     ["Max payout", "max", true, pay("max")], ["Least payout", "min", true, pay("min")],
     ["Avg / member", "share", true, shareCell], ["Avg respect", "resp", true, r => num(r.resp)],
     ["Total respect", "respTot", true, r => num(r.respTot)]], lrows, "diff", false);
+  if (OPEN) showRuns(OPEN);                      // keep the open crime, for the new range
 }
 
-fetch("db/crimes.json").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }).then(d => {
+Promise.all([fetch("db/crimes.json").then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }),
+             fetch("db/members.json").then(r => r.ok ? r.json() : {members: []}).catch(() => ({members: []}))]).then(([d, mm]) => {
   O = d;
+  (mm.members || []).forEach(x => NAMES[x.id] = x.name);
   const saved = localStorage.getItem("hb_oc_range");
   document.querySelectorAll("#rng button").forEach(b => {
     if (saved !== null) b.classList.toggle("on", b.dataset.r === saved);

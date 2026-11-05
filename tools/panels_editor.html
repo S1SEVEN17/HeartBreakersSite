@@ -20,7 +20,7 @@
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c}
 *{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0 auto;padding:10px;max-width:1500px}
-/* same layout as the Panel Builder: editor on the left, live preview + HTML code on the right (pinned while you
+/* same layout as the Newsletter Builder: editor on the left, live preview + HTML code on the right (pinned while you
    scroll the editor). Phones: the preview pins to the top (scrolls inside itself), editor below, HTML code last. */
 .wrap{display:flex;gap:12px;align-items:flex-start;max-width:1500px;margin:auto}
 .ed{flex:0 0 460px;max-width:100%}.rc{flex:1;min-width:0;position:sticky;top:8px;max-height:calc(100vh - 16px);overflow-y:auto}
@@ -97,7 +97,10 @@ async function saveToken() {
   } catch (e) { m.textContent = "Not saved: " + e.message; }
 }
 document.getElementById("tokSave").onclick = saveToken;
-const tok = (() => { try { return JSON.parse(localStorage.getItem("hb_gh_token")); } catch (e) { return null; } })();
+// GitHub contents API: through the gatekeeper when it's on (CFG.ghproxy - it adds the faction's token for signed-in
+// leaders, so no token on this device), else straight to GitHub with the leader's own saved token.
+const GHC = CFG.ghproxy || `https://api.github.com/repos/${CFG.repo}/contents/`;
+const tok = CFG.ghproxy ? "gate" : (() => { try { return JSON.parse(localStorage.getItem("hb_gh_token")); } catch (e) { return null; } })();
 // (top menu: the MENU placeholder = the leaders' site menu with the account menu, filled in by generate.py)
 
 const PH = "{faction_name} {tag} {leader} {leader_id} {co_leader} {co_leader_id} {leadership1} {leadership1_id} {leadership1_title} (… up to {leadership4}) {respect} {members} {capacity} {rank} {days_old} {best_chain} {rw_wins} {updated}";
@@ -109,9 +112,11 @@ const SCHEMA = {
      names: {faction_info: "Faction Information", requirements: "Requirements", perks: "Faction Perks",
              what_we_offer: "What We Offer", achievements: "Faction Achievements"}},
     {path: "faction_info", title: "Faction Information", enable: true, fields: [
-      ["title", "Section title"], ["leadership_title", "Leadership heading (the divider above the leaders)"],
-      ["leadership_titles", "Leadership titles - the people come from Torn automatically; name each slot's role", "slots"],
-      ["fields", "Fields (shown two per row)", "list", [["label", "Label"], ["value", "Value - text and/or {placeholders}"]], {add: {label: "New", value: ""}}]],
+      // same order as the banner: title, the field rows (Leader, Co-Leader, Respect...), then the Leadership block
+      ["title", "Section title"],
+      ["fields", "Fields (shown two per row)", "list", [["label", "Label"], ["value", "Value - text and/or {placeholders}"]], {add: {label: "New", value: ""}}],
+      ["leadership_title", "Leadership heading (the divider above the leaders)"],
+      ["leadership_titles", "Leadership titles - the people come from Torn automatically; name each slot's role", "slots"]],
      help: "Placeholders: " + PH},
     {path: "requirements", title: "Requirements", enable: true, fields: [
       ["title", "Section title"],
@@ -128,13 +133,13 @@ const SCHEMA = {
       ["title", "Section title"], ["chains_title", "Chains heading"], ["goal_text", "Text on tiers not reached yet"]]},
     {path: "footer", title: "Footer", enable: true, fields: [["text", "Footer text ({updated} = last update time)"]]}],
   A: [
-    {path: "announcements", title: "Announcements", fields: [
-      ["title", "Title bar text"], ["war_title", "War status heading"],
-      ["groups", "Notice groups", "list", [["title", "Heading"], ["lines", "Lines (one per line)", "lines"]], {add: {title: "New", lines: ["Text"]}}]]},
     {path: "announcements", title: "Navigation buttons", fields: [
       ["buttons_per_row", "Buttons per row", "num"], ["button_width", "Button width in Torn (px)", "num"],
       ["buttons", "Buttons", "list", [["label", "Text"], ["url", "Link ({member_base} = members' folder)"], ["icon", "Icon", "icon"]],
        {add: {label: "New Button", url: "", icon: "gi-checked-shield"}}]]},
+    {path: "announcements", title: "Announcements", fields: [
+      ["title", "Title bar text"], ["war_title", "War status heading"],
+      ["groups", "Notice groups", "list", [["title", "Heading"], ["lines", "Lines (one per line)", "lines"]], {add: {title: "New", lines: ["Text"]}}]]},
     {path: "announcements.ranked_wars", title: "Recent Ranked Wars (announcement)", fields: [
       ["title", "Section title"], ["count", "How many wars", "num"]]},
     {path: "announcements.leaderboard", title: "Leaderboard headings", fields: [
@@ -147,7 +152,7 @@ let C = null, sha = null, tab = CFG.only || "D", dirty = false;
 if (CFG.only) {
   document.querySelector(".tabs").style.display = "none";
   const D_ = CFG.only === "D";
-  $("ttl").textContent = D_ ? "Faction Description" : "Faction Announcements";
+  $("ttl").textContent = D_ ? "Faction Description" : "Announcements";
   document.title = "Heart Breakers - " + (D_ ? "Description" : "Announcements");
   $("lead").innerHTML = D_ ? "The banner in the faction <b>description</b> (seen by everyone). Edit below - the preview updates as you type; nothing is saved until <b>Save changes</b>."
     : "The members' <b>announcement</b> panel. Edit below - the preview updates as you type; nothing is saved until <b>Save changes</b>.";
@@ -161,7 +166,7 @@ async function loadConfig() {
   try {
     let text;
     if (tok) {
-      const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/config.json?ref=${CFG.branch}`,
+      const r = await fetch(`${GHC}config.json?ref=${CFG.branch}`,
         {headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json"}, cache: "no-store"});
       if (!r.ok) throw new Error("GitHub said " + r.status);
       const j = await r.json(); sha = j.sha;
@@ -276,9 +281,9 @@ $("save").onclick = async () => {
   try {
     const text = JSON.stringify(C, null, 2) + "\n";
     const bytes = new TextEncoder().encode(text); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
-    const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/config.json`, {method: "PUT",
-      headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json"},
-      body: JSON.stringify({message: `Site Panels: ${tab === "D" ? "description banner" : "announcements"} edited`, content: btoa(bin), sha, branch: CFG.branch})});
+    const r = await fetch(`${GHC}config.json`, {method: "PUT",
+      headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-HB-Save": "1"},
+      body: JSON.stringify({message: `${tab === "D" ? "Faction Description" : "Announcements"} edited`, content: btoa(bin), sha, branch: CFG.branch})});
     if (r.status === 409 || r.status === 422) throw new Error("the settings changed since you opened this page - reload and redo your edit");
     if (!r.ok) throw new Error(r.status + " " + ((await r.json().catch(() => ({}))).message || ""));
     sha = (await r.json()).content.sha; dirty = false;

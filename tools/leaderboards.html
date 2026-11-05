@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Leaderboards - Heart Breakers</title>
+<!--
+  LEADERBOARDS (members' folder, published by generate.py write_profiles - header "🏆 Leaderboards" dropdown and
+  the Wars / Chains / Gym / Organized Crimes dropdowns link to the sections):
+    leaderboards.html          MODE "current": This month or All time
+    leaderboard-history.html   MODE "history": pick any past month (every month that has wars, chains, crimes or gym data)
+  Sections (ids for links): #war  #chain  #oc  #gym - top 10 per board, drawn in the browser from db/:
+    war   - war hits, war respect, wars hit             (db/wars.json, by the war's end date)
+    chain - chain hits, chain respect, retaliations     (db/chains.json, by the chain's end date)
+    oc    - crimes passed, crime earnings (each member's share - 80% split incl. prerequisite crimes), level points
+            (difficulty of successful crimes)            (db/crimes.json)
+    gym   - energy trained: total + each stat            (db/gym.json: month_gain / all / history)
+  Current mode shows current members only; history includes members who've since left (marked "left").
+  Placeholders: __MENU__ (site header), __MODE__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1200px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:10px}
+h2{color:var(--gold);font-size:15px;letter-spacing:1.5px;text-transform:uppercase;margin:26px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px;scroll-margin-top:10px}
+.jump{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:0 0 6px}
+.jump a{color:var(--gold);text-decoration:none;background:#1a1012;border:1px solid var(--edge);border-radius:7px;padding:5px 10px;font-size:13px}
+.boards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.board{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 12px}
+.board h3{margin:0 0 6px;color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1.2px;text-align:center}
+.board ol{list-style:none;margin:0;padding:0}
+.board li{display:flex;align-items:center;gap:8px;padding:4px 0;border-top:1px solid #2a1416;font-size:14px}
+.board li:first-child{border-top:0}
+.board li .r{width:24px;text-align:right;color:var(--sub);font-size:12px}.board li:nth-child(-n+3) .r{font-size:15px}
+.board li a{flex:1;color:#ddd;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.board li b{color:#fff;font-weight:600}.board .t{color:var(--sub);font-size:12px;text-align:center;margin-top:6px}
+.tag{color:var(--sub);font-size:11px}.none{color:var(--sub);font-size:13px;text-align:center;padding:10px}
+.rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:4px 0 8px}
+.rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
+.rng button,.rng select{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
+.rng button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+.rng a{color:var(--gold);font-size:13px;margin-left:6px}
+#err{text-align:center;color:var(--sub);margin:30px}
+</style></head><body>
+__MENU__
+<h1 id="ttl">Leaderboards</h1>
+<div class="sub" id="meta">Loading…</div>
+<div class="rng" id="ctl"></div>
+<div class="jump"><a href="#war">⚔️ War</a><a href="#chain">⛓️ Chain</a><a href="#oc">🕵️ Organized Crimes</a><a href="#gym">🏋️ Gym</a></div>
+<div id="err" style="display:none"></div>
+<h2 id="war">⚔️ War Leaderboards</h2><div class="boards" id="bwar"></div>
+<h2 id="chain">⛓️ Chain Leaderboards</h2><div class="boards" id="bchain"></div>
+<h2 id="oc">🕵️ Organized Crime Leaderboards</h2><div class="boards" id="boc"></div>
+<h2 id="gym">🏋️ Gym Leaderboards</h2><div class="boards" id="bgym"></div>
+<script>
+const MODE = "__MODE__", TOP = 10;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const num = n => Math.round(n || 0).toLocaleString("en-US");
+const short = n => n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "K" : "$" + num(n);
+const monthOf = t => new Date(t * 1000).toISOString().slice(0, 7);
+const monthName = m => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
+const GS = [["gymstrength", "Strength"], ["gymspeed", "Speed"], ["gymdefense", "Defense"], ["gymdexterity", "Dexterity"]];
+let D = {}, names = {}, current = {};
+
+// one board: {title, vals: {id: value}, fmt}
+function board(title, vals, fmt = num, onlyCurrent = false) {
+  const rows = Object.entries(vals).filter(([id, v]) => v > 0 && (!onlyCurrent || current[id])).sort((a, b) => b[1] - a[1]);
+  const tot = rows.reduce((a, r) => a + r[1], 0);
+  return `<div class="board"><h3>${esc(title)}</h3>` + (rows.length ? `<ol>` + rows.slice(0, TOP).map(([id, v], i) =>
+    `<li><span class="r">${["🥇", "🥈", "🥉"][i] || i + 1}</span><a href="member.html?id=${id}">${esc(names[id] || "[" + id + "]")}`
+    + `${current[id] ? "" : ' <span class="tag">left</span>'}</a><b>${fmt(v)}</b></li>`).join("") + `</ol>`
+    + `<div class="t">${rows.length} member${rows.length === 1 ? "" : "s"} · total ${fmt(tot)}</div>` : `<div class="none">Nothing this period.</div>`) + `</div>`;
+}
+const add = (o, id, v) => { if (v) o[id] = (o[id] || 0) + v; };
+
+// period: {month: "YYYY-MM"} or {all: true}
+function draw(period) {
+  const inP = t => period.all || (t && monthOf(t) === period.month);
+  const cur = MODE !== "history";             // this month / all time: current members only
+  // war
+  const wh = {}, wr = {}, wn = {};
+  D.wars.wars.filter(w => inP(w.end)).forEach(w => w.m.forEach(x => { add(wh, x[0], x[1]); add(wr, x[0], x[2]); if (x[1] > 0) add(wn, x[0], 1); }));
+  $("bwar").innerHTML = board("War hits", wh, num, cur) + board("War respect", wr, num, cur) + board("Wars hit", wn, num, cur);
+  // chain
+  const ch = {}, cr = {}, crt = {};
+  D.chains.chains.filter(c => inP(c.end)).forEach(c => c.m.forEach(x => { add(ch, x[0], x[1]); add(cr, x[0], x[2]); add(crt, x[0], x[3]); }));
+  $("bchain").innerHTML = board("Chain hits", ch, num, cur) + board("Chain respect", cr, num, cur) + board("Retaliations", crt, num, cur);
+  // organized crimes
+  const op = {}, oe = {}, ol = {};
+  D.crimes.crimes.filter(c => inP(c.t) && String(c.status).toLowerCase() === "successful").forEach(c => (c.m || []).forEach(id => {
+    add(op, id, 1); add(oe, id, c.share || 0); add(ol, id, c.diff || 0); }));
+  $("boc").innerHTML = board("Crimes passed", op, num, cur) + board("Crime earnings", oe, short, cur) + board("Level points", ol, num, cur);
+  // gym
+  let g = {};
+  if (period.all) g = D.gym.all || {};
+  else if (period.month === D.gym.month) g = D.gym.month_gain || {};
+  else { const h = (D.gym.history || {})[period.month] || {};
+    Object.entries(h).forEach(([id, arr]) => { g[id] = {}; GS.forEach(([k], j) => g[id][k] = arr[j] || 0); }); }
+  const gt = {}, per = Object.fromEntries(GS.map(([k]) => [k, {}]));
+  Object.entries(g).forEach(([id, st]) => GS.forEach(([k]) => { add(per[k], id, st[k] || 0); add(gt, id, st[k] || 0); }));
+  $("bgym").innerHTML = board("Total energy", gt, num, cur) + GS.map(([k, l]) => board(l, per[k], num, cur)).join("");
+  $("meta").textContent = period.all ? "All time (while in the faction) - current members"
+    : `${monthName(period.month)}${period.month === new Date().toISOString().slice(0, 7) ? " (so far)" : ""}` + (cur ? " - current members" : " - everyone who took part");
+  if (location.hash && !draw.done) { draw.done = 1; const el = document.querySelector(location.hash); if (el) el.scrollIntoView(); }
+}
+
+Promise.all(["members", "wars", "chains", "crimes", "gym"].map(f => fetch(`db/${f}.json`).then(r => { if (!r.ok) throw new Error(f); return r.json(); })))
+.then(([M, W, C, O, G]) => {
+  D = {wars: W, chains: C, crimes: O, gym: G};
+  M.members.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; });
+  if (MODE === "history") {
+    $("ttl").textContent = "Leaderboard History";
+    const ms = new Set(Object.keys(G.history || {}));
+    W.wars.forEach(w => w.end && ms.add(monthOf(w.end))); C.chains.forEach(c => c.end && ms.add(monthOf(c.end)));
+    O.crimes.forEach(c => c.t && ms.add(monthOf(c.t)));
+    const months = [...ms].sort().reverse();
+    const params = new URLSearchParams(location.search);
+    $("ctl").innerHTML = `<span>Month</span><select id="mon">${months.map(m => `<option value="${m}">${monthName(m)}</option>`).join("")}</select>`
+      + `<a href="leaderboards.html">This month →</a>`;
+    if (months.includes(params.get("m"))) $("mon").value = params.get("m");
+    $("mon").onchange = () => { history.replaceState(null, "", "?m=" + $("mon").value + location.hash); draw({month: $("mon").value}); };
+    draw({month: $("mon").value});
+  } else {
+    $("ctl").innerHTML = `<span>Period</span><button data-v="month" class="on">This month</button><button data-v="all">All time</button>`
+      + `<a href="leaderboard-history.html">Past months →</a>`;
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    $("ctl").querySelectorAll("button").forEach(b => b.onclick = () => {
+      $("ctl").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+      draw(b.dataset.v === "all" ? {all: true} : {month: thisMonth}); });
+    draw({month: thisMonth});
+  }
+}).catch(e => { $("meta").textContent = ""; $("err").style.display = "block"; $("err").textContent = "Couldn't load the leaderboards (" + e.message + ")."; });
+</script>
+</body></html>

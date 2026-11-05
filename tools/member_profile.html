@@ -46,12 +46,38 @@ td.n,th.n{text-align:right}.w{color:var(--green)}.d{color:var(--red)}.tag{color:
 .acts a:hover{border-color:var(--gold)}.acts a.out{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
 .pass{color:var(--sub);text-align:center;font-size:12px;margin:4px 0 12px}.badge.ld{color:var(--gold);border-color:var(--gold)}
 h2{scroll-margin-top:10px}
+/* profile card (header) */
+.hero{background:linear-gradient(135deg,#2a0f10,#170d0e 60%);border:1px solid var(--edge);border-radius:14px;padding:16px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.hero .av{width:74px;height:74px;border-radius:50%;background:#100a0b;border:2px solid var(--red);display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;color:var(--gold);flex:0 0 auto}
+.hero .who{flex:1;min-width:200px}.hero h1{text-align:left;margin:0}.hero .sub{text-align:left;margin:4px 0 0}
+.hero .rel{flex:0 0 auto;text-align:center;background:#100a0b;border:1px solid var(--edge);border-radius:12px;padding:8px 14px;display:none}
+.hero .rel b{display:block;font-size:30px}.hero .rel span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:12px 0 0}
+.chips a{background:#1a1012;color:var(--gold);border:1px solid var(--edge);border-radius:20px;padding:5px 12px;text-decoration:none;font-size:13px}
+.chips a:hover{border-color:var(--gold)}
+/* "vs faction average" cards */
+.cmp{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px}
+.cm{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 12px}
+.cm .l{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.cm .v{color:#fff;font-size:20px;font-weight:600;margin:2px 0}.cm .a{color:var(--sub);font-size:12px}
+.cm .bar2{height:6px;background:#2a1416;border-radius:3px;margin-top:6px;position:relative;overflow:hidden}
+.cm .bar2 i{position:absolute;left:0;top:0;bottom:0;border-radius:3px}
+.cm .bar2 u{position:absolute;top:-2px;bottom:-2px;width:2px;background:#ddd;left:50%}
+.cm .pc{float:right;font-size:13px;font-weight:600}.cm .pv{font-size:10px;color:var(--sub)}
+.cm.pv{border-style:dashed}
 </style></head><body>
 __MENU__
 <div id="err">Loading…</div>
 <div id="p" style="display:none">
-  <h1 id="nm"></h1><div class="sub" id="meta"></div>
+  <div class="hero"><div class="av" id="av"></div><div class="who"><h1 id="nm"></h1><div class="sub" id="meta"></div></div>
+    <div class="rel" id="rel"><b id="relv"></b><span>Reliability</span><div class="pv" id="relp"></div></div></div>
+  <div class="chips" id="chips"></div>
   <div class="acts" id="acts" style="display:none"></div><div class="pass" id="pass"></div>
+  <h2>📈 Compared with the faction average <span class="tag">(last 3 months · 100% = average · bar marker = average)</span></h2>
+  <div class="cmp" id="cmp"></div>
+  <h2 id="relh" style="display:none">🛡️ Reliability breakdown <span class="tag" id="relt"></span></h2>
+  <div class="cmp" id="relb" style="display:none"></div>
+  <h2>📊 Totals <span class="tag">(while in the faction)</span></h2>
   <div class="tiles" id="tiles"></div>
   <div class="rng" id="rng"><span>Range</span><button data-r="30">1 Month</button><button data-r="91">3 Months</button>
     <button data-r="182">6 Months</button><button data-r="365" class="on">1 Year</button><button data-r="0">All Time</button></div>
@@ -84,8 +110,8 @@ const whoami = GATE ? fetch("whoami.json", {cache: "no-store"}).then(r => r.ok ?
 // bar chart: values [{label, v, sub}] + optional average line
 // width = the chart box (so bars spread across it, centred); phones get at least 28 px per bar and scroll sideways
 // zeroCol: colour of a 0 bar (red = missed for wars, grey = quiet day for chains)
-function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e") {
-  el._args = [vals, avg, colour, zeroCol];
+function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e", avgCol = "#e4382e") {
+  el._args = [vals, avg, colour, zeroCol, avgCol];
   const W = Math.max((el.clientWidth || 600) - 22, vals.length * 16), H = 190, pad = 26, mx = Math.max(1, avg || 0, ...vals.map(x => x.v || 0));
   const bw = (W - pad * 2) / vals.length;
   // many bars (long ranges): numbers only on bars wide enough, date labels every few bars (hover/tap shows all)
@@ -100,7 +126,7 @@ function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e") {
       s += `<text x="${X + w / 2}" y="${H + 14}" fill="#9a9a9c" font-size="10" text-anchor="middle">${esc(x.short || "")}</text>`;
   });
   if (avg) { const y = H - (H - 20) * avg / mx;
-    s += `<line x1="${pad}" x2="${W - pad}" y1="${y}" y2="${y}" stroke="#e4382e" stroke-dasharray="5 4"/>`; }
+    s += `<line x1="${pad}" x2="${W - pad}" y1="${y}" y2="${y}" stroke="${avgCol}" stroke-width="2" stroke-dasharray="6 4"><title>Faction average: ${num(avg)}</title></line>`; }
   el.innerHTML = s + "</svg>";
 }
 // redraw on resize / rotate so the charts keep filling their box
@@ -141,6 +167,67 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     ["Crime earnings", money(t.crime_money), "their share"],
     ["War payouts", money(t.paid), t.payouts ? t.payouts + " war" + (t.payouts > 1 ? "s" : "") : ""]];
   $("tiles").innerHTML = tiles.map(([l, v, i]) => `<div class="tile"><b>${v}</b><span>${l}</span>${i ? `<i>${i}</i>` : ""}</div>`).join("");
+  // ---- profile card: initial, quick links ----
+  $("av").textContent = (m.name || "?").charAt(0).toUpperCase();
+  $("chips").innerHTML = [["#cmp", "📈 vs average"], ["#payouts", "💰 Payouts"], ["#wars", "⚔️ Wars"], ["#chains", "⛓️ Chains"],
+    ["#crimes", "🕵️ Crimes"], ["#gymh", "🏋️ Gym"], ["gym-history.html", "🏋️ Gym history"], ["wars.html", "📜 War reports"],
+    ["chains.html", "📜 Chain reports"]].map(([h, l]) => `<a href="${h}">${l}</a>`).join("");
+  // ---- compared with the faction average: last 3 months, every current member counted (0s included) ----
+  const since = Date.now() / 1000 - 91 * 86400, CUR = M.members.filter(x => x.current);
+  const mean = a => a.length ? a.reduce((p, q) => p + q, 0) / a.length : 0;
+  const recentW = W.wars.filter(w => w.end >= since);
+  const warStats = uid => { const rows = recentW.map(w => w.m.find(x => x[0] === uid)).filter(Boolean);
+    return {per: rows.length ? mean(rows.map(r => r[1])) : null, part: rows.length ? rows.filter(r => r[1] > 0).length / rows.length : null}; };
+  const chainHits = uid => C.chains.filter(c => c.end >= since).reduce((a, c) => a + ((c.m.find(x => x[0] === uid) || [0, 0])[1]), 0);
+  const gymMonths3 = Object.keys(GY.history || {}).sort().slice(-3);
+  const gymPer = uid => gymMonths3.length ? mean(gymMonths3.map(mo => ((GY.history[mo] || {})[String(uid)] || [0, 0, 0, 0]).reduce((p, q) => p + q, 0))) : null;
+  const ocOf = uid => { const l = O.crimes.filter(c => (c.t || 0) >= since && (c.m || []).includes(uid));
+    return {n: l.length, rate: l.length ? l.filter(c => String(c.status).toLowerCase() === "successful").length / l.length : null}; };
+  const favg = f => mean(CUR.map(x => f(x.id)).filter(v => v !== null && v !== undefined));
+  const card = (label, v, a, fmt, note) => {
+    if (v === null || v === undefined) return `<div class="cm"><div class="l">${label}</div><div class="v">-</div><div class="a">${note || "nothing to compare yet"}</div></div>`;
+    const r = a ? v / a : (v ? 2 : 1), pc = Math.round(r * 100), col = r >= 1 ? "#78c878" : r >= 0.7 ? "#e8be5a" : "#e4382e";
+    return `<div class="cm"><div class="l">${label}<span class="pc" style="color:${col}">${pc}%</span></div><div class="v">${fmt(v)}</div>`
+      + `<div class="a">faction average ${fmt(a)}${note ? " · " + note : ""}</div>`
+      + `<div class="bar2"><i style="width:${Math.min(100, r * 50)}%;background:${col}"></i><u></u></div></div>`; };
+  const pctF = v => Math.round(v * 100) + "%", n1 = v => (Math.round(v * 10) / 10).toLocaleString("en-US");
+  const ws_ = warStats(id), oc_ = ocOf(id);
+  const cmp = [
+    card("⚔️ Hits per war", ws_.per, favg(u => warStats(u).per), n1, `${recentW.length} war${recentW.length !== 1 ? "s" : ""}`),
+    card("⚔️ Wars hit in", ws_.part, favg(u => warStats(u).part), pctF),
+    card("⛓️ Chain hits", chainHits(id), favg(chainHits), num),
+    card("🏋️ Gym energy / month", gymPer(id), favg(gymPer), num, gymMonths3.length ? gymMonths3.length + " month" + (gymMonths3.length > 1 ? "s" : "") : "saved from Nov 2026"),
+    card("🕵️ Crimes done", oc_.n, favg(u => ocOf(u).n), num),
+    card("🕵️ Crime success", oc_.rate, favg(u => ocOf(u).rate), pctF)];
+  $("cmp").innerHTML = cmp.join("");
+  // ---- private figures (reliability, Xanax): your own (the gatekeeper's mine.json) or anyone's for leaders ----
+  const priv = !me ? Promise.resolve(null) : own ? fetch("mine.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
+    : me.leader ? fetch(GATE + "/l/db/private.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
+        .then(P => P ? Object.assign({}, (P.members || {})[String(id)] || {}, {averages: P.averages || {}}) : null) : Promise.resolve(null);
+  priv.catch(() => null).then(pv => {
+    if (!pv || !pv.reliability) return;
+    const R = pv.reliability, A = pv.averages || {}, sc = R.score, col = sc >= 80 ? "#78c878" : sc >= 60 ? "#e8be5a" : "#e4382e";
+    $("rel").style.display = "block"; $("relv").textContent = sc; $("relv").style.color = col;
+    $("relp").textContent = `faction avg ${A.reliability ?? "-"}` + (own ? " · only you and leaders see this" : " · leaders only");
+    const D = R.detail || {}, AP = A.parts || {};
+    const part = (label, k, max, note) => card(`${label} (out of ${max})`, R.parts[k], AP[k], v => n1(v), note);
+    $("relh").style.display = ""; $("relb").style.display = "";
+    $("relt").textContent = "(war 40 · chains 20 · crimes 25 · activity 15)";
+    let h = part("⚔️ War", "war", 40, `hit in ${D.wars_hit}/${D.wars_in} wars`)
+      + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
+      + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
+      + part("🕐 Activity", "activity", 15, `idle ${D.idle_days} days`);
+    const X = pv.xanax;
+    if (X && X.total) {
+      const xr = (r_, l_, a_, b_) => `<div class="cm"><div class="l">💊 ${l_}${r_ == null ? "" : `<span class="pc" style="color:${r_ >= 1 ? "#78c878" : r_ >= 0.7 ? "#e8be5a" : "#e4382e"}">${Math.round(r_ * 100)}%</span>`}</div>`
+        + `<div class="v">${a_}</div><div class="a">${b_}</div></div>`;
+      h += xr(X.war_ratio, "Xanax in wars", `${num(X.war_hits)} hits`, `${X.war_xanax} Xanax = ${num(X.war_expected)} hits expected`)
+        + xr(X.peace_ratio, "Xanax outside wars", `${num(X.gym)} gym energy`,
+             `${X.peace_xanax} Xanax` + (X.peace_rated !== X.peace_xanax ? ` (${X.peace_rated} in months with gym data)` : "")
+             + ` = ${num(X.peace_expected)} energy expected`);
+    }
+    $("relb").innerHTML = h;
+  });
   // charts - redrawn for the chosen range (1M / 3M / 6M / 1Y / All). Remembered on this device.
   const DAY = 86400, nowT = Date.now() / 1000;
   const fmtD = (t, o) => new Date(t * 1000).toLocaleDateString("en-US", Object.assign({timeZone: "UTC"}, o));
@@ -172,10 +259,19 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
                                        : fmtD(Date.parse(k + "T00:00:00Z") / 1000, {month: "short", day: "numeric"});
     const cv = Object.entries(buckets).map(([k, v]) => ({label: (unit === "week" ? "Week of " : "") + lab(k), short: lab(k), v}));
     const tot = cv.reduce((a, x) => a + x.v, 0);
-    $("cct").textContent = `(per ${unit} - ${tot.toLocaleString("en-US")} in this range)`;
-    bars($("cc"), cv, 0, "#e4382e", "#4a3a3a");
+    // faction average: in each bucket, total chain hits / members who chained in it - averaged over the buckets
+    const fb = {};
+    C.chains.forEach(c => { if (c.end < first) return; const k = keyOf(c.end); if (!(k in buckets)) return;
+      const b = fb[k] = fb[k] || {h: 0, who: new Set()}; c.m.forEach(x => { if (x[1] > 0) { b.h += x[1]; b.who.add(x[0]); } }); });
+    const fav = Object.keys(buckets).map(k => fb[k] && fb[k].who.size ? fb[k].h / fb[k].who.size : 0);
+    const cAvg = fav.length ? fav.reduce((a, b) => a + b, 0) / fav.length : 0;
+    $("cct").textContent = `(per ${unit} - ${tot.toLocaleString("en-US")} in this range - dashed gold line = faction average)`;
+    bars($("cc"), cv, cAvg, "#e4382e", "#4a3a3a", "#e8be5a");
+    $("ccl").innerHTML = `Their average <b style="color:#e4382e">${num(tot / (cv.length || 1))}</b> hits per ${unit} · faction average <b style="color:#e8be5a">${num(cAvg)}</b> per member who chained (dashed line)`;
   }
   $("cw").insertAdjacentHTML("afterend", '<div class="legend" id="cwl" style="text-align:center"></div>');
+  $("cc").insertAdjacentHTML("afterend", '<div class="legend" id="ccl" style="text-align:center"></div>');
+  $("cg").insertAdjacentHTML("afterend", '<div class="legend" id="cgl" style="text-align:center"></div>');
   const saved = localStorage.getItem("hb_profile_range");
   document.querySelectorAll("#rng button").forEach(b => {
     if (saved !== null) b.classList.toggle("on", b.dataset.r === saved);
@@ -200,9 +296,11 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     const vals = ms.map(mo => ({label: lab(mo) + (mo === GY.month ? " (so far)" : ""), short: lab(mo), v: gRow(mo).reduce((a, b) => a + b, 0)}));
     const avg = ms.length ? ms.reduce((a, mo) => { const r = Object.values(GH[mo] || {}).map(x => x.reduce((p, q) => p + q, 0)).filter(v => v > 0);
       return a + (r.length ? r.reduce((p, q) => p + q, 0) / r.length : 0); }, 0) / ms.length : 0;
-    $("cgt").textContent = ms.length ? `(${ms.length} month${ms.length > 1 ? "s" : ""} - line = faction average of members who trained)` : "";
-    if (ms.length) bars($("cg"), vals, avg, "#78c878", "#4a3a3a");
+    $("cgt").textContent = ms.length ? `(${ms.length} month${ms.length > 1 ? "s" : ""} - dashed gold line = faction average of members who trained)` : "";
+    if (ms.length) bars($("cg"), vals, avg, "#78c878", "#4a3a3a", "#e8be5a");
     else $("cg").innerHTML = '<div class="tag" style="text-align:center;padding:30px">No monthly gym data in this range yet - it\'s saved from November 2026 on.</div>';
+    const myG = vals.length ? vals.reduce((a, x) => a + x.v, 0) / vals.length : 0;
+    $("cgl").innerHTML = ms.length ? `Their average <b style="color:#78c878">${num(myG)}</b> energy per month · faction average <b style="color:#e8be5a">${num(avg)}</b> (dashed line)` : "";
     $("tg").innerHTML = `<tr><th>Month</th>${GS.map(([l]) => `<th class="n">${l}</th>`).join("")}<th class="n">Total</th></tr>`
       + (ms.slice().reverse().map(mo => { const r = gRow(mo);
         return `<tr><td><a href="gym-history.html#${mo}" style="color:#e8be5a">${lab(mo)}</a>${mo === GY.month ? ' <span class="tag">so far</span>' : ""}</td>`

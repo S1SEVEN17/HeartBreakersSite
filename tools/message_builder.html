@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>Heart Breakers - Panel Builder</title>
+<title>Heart Breakers - Newsletter Builder</title>
 <!--
   MESSAGE BUILDER (LEADERS' folder: builder.html, published by generate.py write_message_builder)
   Build a message panel in the faction frame - the same header art, title bar, red grid panel and
@@ -50,7 +50,7 @@ canvas{width:100%;height:auto;display:block;background:repeating-conic-gradient(
 </style></head>
 <body>
 __MENU__
-<h1>Panel Builder</h1>
+<h1>Newsletter Builder</h1>
 <div class="wrap">
 <div class="ed">
 <div class="card" id="tokcard" style="display:none"><h2>GitHub token</h2>
@@ -686,7 +686,7 @@ async function saveToken() {
   } catch (e) { m.textContent = "Not saved: " + e.message; }
 }
 document.getElementById("tokSave").onclick = saveToken;
-if (!load("hb_gh_token")) document.getElementById("tokcard").style.display = "block";
+if (!CFG.ghproxy && !load("hb_gh_token")) document.getElementById("tokcard").style.display = "block";
 
 // ---------------- export ----------------
 const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50) || "message";
@@ -701,16 +701,19 @@ $("copyImg").onclick = async () => {
 // publish: commit data/panels/<name>.png via the GitHub API (token saved by the payout calculator)
 let published = load("hb_builder_published") || "";
 let publishedBtns = load("hb_builder_published_btns") || [];     // [image url, ...] matching D.buttons when published
+// GitHub contents API: through the gatekeeper when it's on (CFG.ghproxy - it adds the faction's token for signed-in
+// leaders, so no token on this device), else straight to GitHub with the leader's own saved token.
+const GHC = CFG.ghproxy || `https://api.github.com/repos/${CFG.repo}/contents/`;
 async function ghPut(path, blob, tok, msg) {
   const buf = new Uint8Array(await blob.arrayBuffer());
   let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
-  const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/${path}`, {method: "PUT",
-    headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json"},
+  const r = await fetch(`${GHC}${path}`, {method: "PUT",
+    headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-HB-Save": "1"},
     body: JSON.stringify({message: msg, content: btoa(bin), branch: CFG.branch})});
   if (!r.ok) throw new Error(r.status + " " + ((await r.json().catch(() => ({}))).message || ""));
 }
 $("publish").onclick = async () => {
-  const tok = load("hb_gh_token");
+  const tok = CFG.ghproxy ? "gate" : load("hb_gh_token");     // gatekeeper: no token needed
   if (!tok) { $("tokcard").style.display = "block"; $("tokcard").scrollIntoView({behavior: "smooth"});
     return alert("No GitHub token on this device yet - paste one in the GitHub token box at the top. (Download PNG / Copy image work without one.)"); }
   const name = slugify($("pubName").value || D.head.title) + "-" + Date.now().toString(36);

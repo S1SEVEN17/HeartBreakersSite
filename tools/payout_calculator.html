@@ -648,9 +648,14 @@ function receipt() {
     members: r.rows.map(x => ({id: x.id, n: x.name, w: x.s.war, o: metricOf(x.s, "out"), r: +metricOf(x.s, "resp").toFixed(1),
       a: x.s.assists, h: x.s.hosps, b: Math.round(x.bonus), p: Math.round(x.penalty), pay: x.pay}))};
 }
-// ---- one-click save: commit the receipt through the GitHub API with the leader's token ----
-const ghToken = () => load("hb_gh_token") || "";
-function ghRender() { $("ghState").textContent = ghToken() ? "saved ✓" : "not set (manual save)"; $("ghToken").value = ""; }
+// ---- one-click save: commit the receipt through the GitHub API ----
+// GitHub contents API: through the gatekeeper when it's on (CFG.ghproxy - it adds the faction's token for signed-in
+// leaders, so no token on this device), else straight to GitHub with the leader's own saved token.
+const GHC = CFG.ghproxy || `https://api.github.com/repos/${CFG.repo}/contents/`;
+const ghToken = () => CFG.ghproxy ? "gate" : (load("hb_gh_token") || "");
+function ghRender() {
+  if (CFG.ghproxy) { $("ghBox").style.display = "none"; return; }        // gatekeeper saves - no token needed
+  $("ghState").textContent = ghToken() ? "saved ✓" : "not set (manual save)"; $("ghToken").value = ""; }
 $("ghSave").onclick = async () => {
   const t = $("ghToken").value.trim(); if (!t) return;
   try {   // check it can see the repo before keeping it
@@ -665,8 +670,8 @@ $("ghClear").onclick = () => { localStorage.removeItem("hb_gh_token"); ghRender(
 ghRender();
 async function ghCommit(path, text, message) {
   const bytes = new TextEncoder().encode(text); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
-  const r = await fetch(`https://api.github.com/repos/${CFG.repo}/contents/${path}`, {method: "PUT",
-    headers: {Authorization: "Bearer " + ghToken(), Accept: "application/vnd.github+json", "Content-Type": "application/json"},
+  const r = await fetch(`${GHC}${path}`, {method: "PUT",
+    headers: {Authorization: "Bearer " + ghToken(), Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-HB-Save": "1"},
     body: JSON.stringify({message, content: btoa(bin), branch: CFG.branch})});
   if (!r.ok) { let m = r.status + ""; try { m += " " + (await r.json()).message; } catch (e) {} throw new Error(m); }
   return r.json();

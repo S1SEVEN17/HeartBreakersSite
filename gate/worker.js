@@ -8,6 +8,8 @@
 //                     Torn who the person is and which faction they're in, then thrown away - never stored.
 //                     A Heart Breakers member gets a signed pass (cookie "hb_s", 30 days, HttpOnly).
 //   /logout           removes the pass
+//   /m/mine.json      the signed-in member's OWN reliability / Xanax figures (from the leaders' db/private.json)
+//   /l/gh/contents/*  leaders' tools save to the private data repo through here (faction token, never on devices)
 //   /m/whoami.json    JSON {id, name, position, leader, since, until} for the signed-in member (My Account, menus, scripts)
 //   /m/...            members' pages  (pass + still in the faction)
 //   /m/me             -> their own profile (member.html?id=<their id>)
@@ -204,6 +206,10 @@ export default {
 <br><br><a href="/m/">Go to the Members Hub</a></p>`, 403);
     if (rest === "me") return Response.redirect(`${url.origin}/m/member.html?id=${who.id}`, 302);
     if (rest === "whoami.json") return Response.json(who, {headers: {"Cache-Control": "no-store"}});
+    // a member's OWN private figures (reliability, Xanax) - picked out of the leaders' db/private.json
+    if (area === "m" && rest === "mine.json") return mine(env, who);
+    // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
+    if (area === "l" && rest.startsWith("gh/contents/")) return ghProxy(env, req, who, rest.slice("gh/contents/".length));
     return proxy(env, dir, rest, req, true);
   },
 
@@ -219,6 +225,47 @@ export default {
 };
 
 const CODE_REPO = "S1SEVEN17/HeartBreakersSite";
+const DATA_REPO = "S1SEVEN17/HeartBreakersLogo";       // private: config.json + data/
+
+// ---------- leaders' saves (GET / PUT /l/gh/contents/<path>) ----------
+// The leaders' tools (Payout Calculator, Newsletter Builder, Faction Description, Announcements) talk to GitHub's
+// contents API THROUGH the gatekeeper: it checks the leader's pass (already done before we get here), adds the
+// faction's own token (GH_DISPATCH secret = DATA_TOKEN, Contents: write on the data repo) and forwards the call.
+// No GitHub token is needed - or ever shown - on any device. Only these paths can be read / written:
+const GH_PATHS = [/^config\.json$/, /^data\/payouts\/[\w.-]+$/, /^data\/panels\/[\w.-]+$/];
+async function ghProxy(env, req, who, path) {
+  path = decodeURIComponent(path.split("?")[0]);
+  if (!GH_PATHS.some(rx => rx.test(path))) return new Response("Not allowed", {status: 403});
+  if (!["GET", "PUT"].includes(req.method)) return new Response("Method not allowed", {status: 405});
+  // a custom header can't be sent cross-site without CORS approval -> blocks other sites posting with the cookie
+  if (req.method === "PUT" && req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+  const tok = env.GH_SAVE || env.GH_DISPATCH;
+  if (!tok) return new Response("Saving isn't set up (GH_DISPATCH secret missing)", {status: 503});
+  let body;
+  if (req.method === "PUT") {
+    const j = await req.json().catch(() => null);
+    if (!j || typeof j.content !== "string") return new Response("Bad request", {status: 400});
+    // who saved it goes in the commit message (the commit itself is made with the faction's token)
+    j.message = `${String(j.message || "Update " + path).slice(0, 200)} (by ${who.name} [${who.id}])`;
+    body = JSON.stringify(j);
+  }
+  const ref = new URL(req.url).searchParams.get("ref");
+  const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/${path}${ref ? "?ref=" + encodeURIComponent(ref) : ""}`, {
+    method: req.method, body,
+    headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "User-Agent": "hb-gate",
+              "Content-Type": "application/json"}});
+  return new Response(r.body, {status: r.status, headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
+}
+
+// ---------- a member's own private figures ----------
+// db/private.json (leaders' folder, written by generate.py): {members: {"<id>": {...reliability, xanax...}}}.
+// Members may only see THEIR entry; leaders read the whole file from /l/db/private.json.
+async function mine(env, who) {
+  const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(env.LEADER_DIR)}/db/private.json`));
+  const j = r.ok ? await r.json().catch(() => ({})) : {};
+  return Response.json(Object.assign({id: who.id}, (j.members || {})[String(who.id)] || {}, {averages: j.averages || {}}),
+                       {headers: {"Cache-Control": "no-store"}});
+}
 async function dispatch(env, wf, inputs) {
   if (!env.GH_DISPATCH) { console.log("GH_DISPATCH secret missing"); return; }
   const r = await fetch(`https://api.github.com/repos/${CODE_REPO}/actions/workflows/${wf}/dispatches`, {
