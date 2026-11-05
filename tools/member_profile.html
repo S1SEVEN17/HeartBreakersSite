@@ -223,7 +223,10 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       const xc = (l_, v_, b_) => `<div class="cm"><div class="l">${l_}</div><div class="v">${v_}</div><div class="a">${b_}</div></div>`;
       h += xc("💊 Xanax used", num(X.xanax), `faction armory · last ${A.xanax_days || 90} days`)
         + xc("🏋️ Gym energy", num(X.gym), `last ${A.xanax_days || 90} days`)
-        + xc("⚔️ War & chain energy", num(X.attack_energy), `${num(X.war_hits)} war + ${num(X.chain_hits)} chain hits (outside wars) × 25`);
+        + xc("⚔️ War & chain energy", num(X.attack_energy), `${num(X.war_hits)} war + ${num(X.chain_hits)} chain hits (outside wars) × 25`)
+        + xc("💊 Xanax energy", num(X.xanax_energy), `${num(X.xanax)} Xanax × 250`)
+        + xc("⚖️ Net energy", `<span style="color:${X.net >= 0 ? "#78c878" : "#e4382e"}">${X.net >= 0 ? "+" : ""}${num(X.net)}</span>`,
+             "energy used (gym + war & chain) − Xanax energy");
     }
     $("relb").innerHTML = h;
   });

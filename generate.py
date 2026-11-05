@@ -4644,12 +4644,14 @@ def _spark(vals: list) -> str:
 #     of the faction's Xanax items"; Xanax from members' own inventories isn't visible)
 #   - gym energy trained (data/gym_history.json, by month - the months overlapping the period; saved from Nov 2026)
 #   - energy spent attacking: (ranked war hits + chain hits outside wars) x energy_per_hit (25)
-# No expected / ratio calculations - just the three totals.
+#   - Xanax energy = Xanax used x energy_per_xanax (250); NET ENERGY = energy used (gym + attacking) - Xanax energy
+#     (positive = they used more than their armory Xanax gave - natural regen, refills, own Xanax; negative = armory
+#     Xanax energy that didn't show up as gym training or attacks)
 # Log: data/xanax_log.json {"last": newest news time read, "events": [[time, member id, count], ...]} - read
 # incrementally every full update (the first run reads back `days`).
 # ==========================================================================
 XANAX_LOG_PATH = ROOT / "data" / "xanax_log.json"
-XANAX_DEFAULTS = {"days": 90, "energy_per_hit": 25}
+XANAX_DEFAULTS = {"days": 90, "energy_per_hit": 25, "energy_per_xanax": 250}
 
 
 def xanax_cfg(cfg: dict) -> dict:
@@ -4674,7 +4676,8 @@ def update_xanax_log(key: str, cfg: dict):
     except SystemExit as e:
         print(f"Xanax log skipped: {e}")
         return
-    for _ in range(60):                         # 60 pages x 100 rows; whatever's left is read next time
+    # catching up (first read / backlog): up to 250 pages a run, else 60 - whatever's left is read next time
+    for _ in range(250 if now - start > 2 * 86400 else 60):
         items = _as_list(data.get("news"))
         for n in items:
             t = int(n.get("timestamp") or 0)
@@ -4725,10 +4728,13 @@ def xanax_data(db: dict, cfg: dict) -> dict:
         gym = sum(sum(v.get(str(i), [0, 0, 0, 0])) for v in gym_h.values())
         war_hits = sum(next((x[1] for x in w.get("m", []) if x[0] == i), 0) for w in wars)
         chain_hits = sum(next((x[1] for x in c["m"] if x[0] == i), 0) for c in chains)
-        out[str(i)] = {"name": m["name"], "xanax": xan, "gym": gym, "war_hits": war_hits, "chain_hits": chain_hits,
-                       "attack_energy": (war_hits + chain_hits) * int(xc["energy_per_hit"])}
+        att = (war_hits + chain_hits) * int(xc["energy_per_hit"])
+        xe = xan * int(xc["energy_per_xanax"])
+        out[str(i)] = {"name": m["name"], "xanax": xan, "xanax_energy": xe, "gym": gym, "war_hits": war_hits,
+                       "chain_hits": chain_hits, "attack_energy": att, "used": gym + att, "net": gym + att - xe}
     return {"generated": now, "days": xc["days"], "settings": xc, "members": out, "logged": len(events),
-            "gym_months": sorted(gym_h)}
+            "gym_months": sorted(gym_h), "log_from": events[0][0] if events else None,
+            "log_to": max((e[0] for e in events), default=None)}
 
 
 def write_xanax_page(out: Path, db: dict, cfg: dict, xd: dict):
@@ -4745,19 +4751,31 @@ def write_xanax_page(out: Path, db: dict, cfg: dict, xd: dict):
         f'({", ".join(datetime.strptime(m_, "%Y-%m").strftime("%b %Y") for m_ in gm) if gm else "no monthly gym data yet"}'
         ' - gym data is saved monthly from November 2026), and <b>war &amp; chain energy</b> = (ranked war hits + '
         f'chain hits outside wars) × {xc["energy_per_hit"]}. Members see their own figures on their profile.</div>')
-    body += _stat_strip([(fmt_int(sum(v["xanax"] for _k, v in rows)), "Xanax used"),
-                         (fmt_int(sum(v["gym"] for _k, v in rows)), "Gym energy"),
-                         (fmt_int(sum(v["attack_energy"] for _k, v in rows)), "War & chain energy")])
+    T = lambda k: sum(v[k] for _k, v in rows)
+    netc = lambda n: "#78c878" if n >= 0 else "#e4382e"
+    body += _stat_strip([(fmt_int(T("xanax")), "Xanax used"), (fmt_int(T("xanax_energy")), "Total Xanax energy"),
+                         (fmt_int(T("gym")), "Gym energy"), (fmt_int(T("attack_energy")), "War & chain energy"),
+                         (f'<span style="color:{netc(T("net"))}">{T("net"):+,}</span>', "Net energy")])
+    body += ('<p class="tag" style="text-align:center">Net energy = energy used (gym + war &amp; chain) − Xanax energy '
+             f'({xc["energy_per_xanax"]} per Xanax). Negative (red) = armory Xanax energy that didn\'t show up as gym '
+             'training or attacks. Natural energy regen, refills and their own Xanax add energy too, so most members '
+             'should be well above zero.</p>')
     body += ('<h2>All members <span class="tag">(tap a column to sort)</span></h2><table class="srt"><tr><th>Member</th>'
-             '<th>Xanax used</th><th>Gym energy</th><th>War &amp; chain energy</th><th>War hits</th><th>Chain hits (no war)</th></tr>')
+             '<th>Xanax used</th><th>Xanax energy</th><th>Gym energy</th><th>War &amp; chain energy</th>'
+             '<th>Energy used</th><th>Net energy</th><th>War hits</th><th>Chain hits (no war)</th></tr>')
     for i, v in rows:
         body += (f'<tr><td><a href="{mb}/member.html?id={i}">{_html.escape(v["name"])}</a></td>'
-                 f'<td data-v="{v["xanax"]}">{fmt_int(v["xanax"])}</td><td data-v="{v["gym"]}">{fmt_int(v["gym"])}</td>'
-                 f'<td data-v="{v["attack_energy"]}">{fmt_int(v["attack_energy"])}</td>'
+                 f'<td data-v="{v["xanax"]}">{fmt_int(v["xanax"])}</td><td data-v="{v["xanax_energy"]}">{fmt_int(v["xanax_energy"])}</td>'
+                 f'<td data-v="{v["gym"]}">{fmt_int(v["gym"])}</td><td data-v="{v["attack_energy"]}">{fmt_int(v["attack_energy"])}</td>'
+                 f'<td data-v="{v["used"]}">{fmt_int(v["used"])}</td>'
+                 f'<td data-v="{v["net"]}"><b style="color:{netc(v["net"])}">{v["net"]:+,}</b></td>'
                  f'<td data-v="{v["war_hits"]}">{fmt_int(v["war_hits"])}</td><td data-v="{v["chain_hits"]}">{fmt_int(v["chain_hits"])}</td></tr>')
     body += "</table>" + SORT_JS
     if not xd["logged"]:
         body += '<p class="tag">No armory Xanax logged yet - the log fills in on the next full update.</p>'
+    elif xd["log_to"] and xd["log_to"] < xd["generated"] - 2 * 86400:
+        body = body.replace('<h2>All members', f'<p class="note">⏳ The armory log is still catching up - Xanax read up to '
+                            f'{datetime.fromtimestamp(xd["log_to"], timezone.utc):%b %d}; the rest fills in over the next updates.</p><h2>All members', 1)
     _hub_page(lout / "xanax.html", "Xanax Monitor", f"Xanax used, gym energy and war & chain energy - last {xd['days']} days", body)
 
 
@@ -4777,7 +4795,8 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     for r in md["members"]:
         x_ = xd["members"].get(str(r["id"])) or {}
         priv[str(r["id"])] = {"reliability": {"score": r["score"], "parts": r["parts"], "detail": r["detail"]},
-                              "xanax": {k: x_.get(k) for k in ("xanax", "gym", "war_hits", "chain_hits", "attack_energy")}
+                              "xanax": {k: x_.get(k) for k in ("xanax", "xanax_energy", "gym", "war_hits", "chain_hits",
+                                                               "attack_energy", "used", "net")}
                                        if x_ else None}
     avg_parts = {k: round(sum(r["parts"][k] for r in md["members"]) / len(md["members"]), 1) if md["members"] else 0
                  for k in ("war", "chains", "crimes", "activity")}
