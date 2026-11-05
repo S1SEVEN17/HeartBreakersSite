@@ -4063,7 +4063,7 @@ document.getElementById("o").onclick=function(){{var l=link();old(D.h);window.op
 
 
 REPORTS_DIR = ROOT / "data" / "reports"
-REPORTS_KEEP = 40          # newest reports kept per kind (war / chain) - the hubs list the last 15
+REPORTS_KEEP = 500         # newest reports kept per kind (war / chain) - every war has its report; hubs list the last 15
 DEPLOY_REQUEST = ROOT / "data" / ".deploy_request"   # chain runs don't deploy: ask the workflow for a full run
 
 
@@ -4639,19 +4639,17 @@ def _spark(vals: list) -> str:
 
 
 # ==========================================================================
-# XANAX MONITOR (leaders) - Xanax members take from the FACTION ARMORY (faction news, cat=armoryAction:
-#   "<a ...XID=1>Name</a> used one of the faction's Xanax items"), compared with what that energy should show up as:
-#   - during a ranked war (and its stacking time): 1 Xanax = 250 energy = 10 war/chain hits (25 energy a hit).
-#     Stacking time = the stack_hours before the war starts: up to stack_allow (4) Xanax there are expected to be
-#     spent as war hits too (members stack ~1000 energy) - not counted against the gym. More than that = peace.
-#   - any other time: 1 Xanax = 250 energy expected as gym energy that month (data/gym_history.json, monthly).
-#   Ratios under flag_below (70%) are flagged. Xanax from members' own inventories isn't visible (armory only).
+# XANAX MONITOR (leaders) - over the last `days` (90), per current member, side by side:
+#   - Xanax used: taken from the FACTION ARMORY (faction news, cat=armoryAction - "<a ...XID=1>Name</a> used one
+#     of the faction's Xanax items"; Xanax from members' own inventories isn't visible)
+#   - gym energy trained (data/gym_history.json, by month - the months overlapping the period; saved from Nov 2026)
+#   - energy spent attacking: (ranked war hits + chain hits outside wars) x energy_per_hit (25)
+# No expected / ratio calculations - just the three totals.
 # Log: data/xanax_log.json {"last": newest news time read, "events": [[time, member id, count], ...]} - read
 # incrementally every full update (the first run reads back `days`).
 # ==========================================================================
 XANAX_LOG_PATH = ROOT / "data" / "xanax_log.json"
-XANAX_DEFAULTS = {"stack_hours": 24, "stack_allow": 4, "days": 90, "energy_per_xanax": 250, "energy_per_hit": 25,
-                  "flag_below": 0.7}
+XANAX_DEFAULTS = {"days": 90, "energy_per_hit": 25}
 
 
 def xanax_cfg(cfg: dict) -> dict:
@@ -4703,8 +4701,8 @@ def update_xanax_log(key: str, cfg: dict):
 
 
 def xanax_data(db: dict, cfg: dict) -> dict:
-    """Per current member over the last `days`: war Xanax (incl. up to stack_allow in each war's stacking time)
-    vs war/chain hits, and peace Xanax vs gym energy (by month). See the XANAX MONITOR note above."""
+    """Per current member over the last `days`: Xanax used (armory), gym energy, and attack energy
+    ((war hits + chain hits outside wars) x energy_per_hit). See the XANAX MONITOR note above."""
     xc = xanax_cfg(cfg)
     now = db["generated"]
     try:
@@ -4713,121 +4711,54 @@ def xanax_data(db: dict, cfg: dict) -> dict:
         events = []
     since = now - int(xc["days"]) * 86400
     events = [e for e in events if e[0] >= since]
-    per_hit = xc["energy_per_xanax"] / xc["energy_per_hit"]          # 10 hits per Xanax
     wars = [w for w in db["wars"]["wars"] if (w.get("end") or 0) >= since]
-    chains = db["chains"]["chains"]
-    gym_h = (db.get("gym") or {}).get("history", {})
-    members = [m for m in db["members"]["members"] if m["current"]]
+    windows = [((w.get("start") or w["end"]), w["end"]) for w in wars]
+    # chains that ended in the period and don't overlap a war (their hits are "non-war" chain hits)
+    chains = [c for c in db["chains"]["chains"] if c["end"] >= since and
+              not any((c.get("start") or c["end"]) <= we and c["end"] >= ws for ws, we in windows)]
+    first_mon = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m")
+    gym_h = {mo: v for mo, v in ((db.get("gym") or {}).get("history") or {}).items() if mo >= first_mon}
     out = {}
-    for m in members:
+    for m in (m for m in db["members"]["members"] if m["current"]):
         i = m["id"]
-        mine = [(t, n) for t, mid, n in events if mid == i]
-        used = set()                                                 # event index -> counted as war
-        war_rows = []
-        for w in wars:
-            ws, we = w.get("start") or w["end"], w["end"]
-            stack = [k for k, (t, n) in enumerate(mine) if ws - xc["stack_hours"] * 3600 <= t < ws and k not in used]
-            during = [k for k, (t, n) in enumerate(mine) if ws <= t <= we and k not in used]
-            st_n, allow = 0, []
-            for k in stack:                                         # first stack_allow Xanax of stacking time
-                if st_n + mine[k][1] <= xc["stack_allow"]:
-                    allow.append(k)
-                    st_n += mine[k][1]
-            x_war = sum(mine[k][1] for k in during) + st_n
-            if not x_war and not any(x[0] == i for x in w.get("m", [])):
-                continue
-            used.update(during + allow)
-            war_hits = next((x[1] for x in w.get("m", []) if x[0] == i), 0)
-            chain_hits = sum(next((x[1] for x in c["m"] if x[0] == i), 0) for c in chains
-                             if (c.get("start") or c["end"]) <= we and c["end"] >= ws)
-            hits = max(war_hits, chain_hits)                        # chain hits during a war include its war hits
-            exp = x_war * per_hit
-            war_rows.append({"war": w["id"], "opponent": w.get("opponent", "?"), "end": we, "xanax": x_war,
-                             "stack": st_n, "expected": round(exp), "hits": hits, "war_hits": war_hits,
-                             "chain_hits": chain_hits, "ratio": round(hits / exp, 2) if exp else None})
-        peace = {}
-        for k, (t, n) in enumerate(mine):
-            if k not in used:
-                mon = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m")
-                peace[mon] = peace.get(mon, 0) + n
-        peace_rows = []
-        for mon in sorted(set(peace) | {mo for mo in gym_h if mo >= datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m")}):
-            g_ = gym_h.get(mon)
-            gym = sum((g_ or {}).get(str(i), [0, 0, 0, 0])) if g_ is not None else None
-            x_ = peace.get(mon, 0)
-            exp = x_ * xc["energy_per_xanax"]
-            if not x_ and not gym:
-                continue
-            peace_rows.append({"month": mon, "xanax": x_, "expected": exp, "gym": gym,
-                               "ratio": round(gym / exp, 2) if exp and gym is not None else None})
-        wx, wexp, whit = (sum(r[k] for r in war_rows) for k in ("xanax", "expected", "hits"))
-        px = sum(r["xanax"] for r in peace_rows)
-        pr_ = [r for r in peace_rows if r["gym"] is not None]
-        pexp, pgym = sum(r["expected"] for r in pr_), sum(r["gym"] for r in pr_)
-        w_ratio = round(whit / wexp, 2) if wexp else None
-        p_ratio = round(pgym / pexp, 2) if pexp else None
-        out[str(i)] = {"name": m["name"], "total": sum(n for _t, n in mine), "war_xanax": wx, "war_expected": wexp,
-                       "war_hits": whit, "war_ratio": w_ratio, "peace_xanax": px, "peace_expected": pexp, "gym": pgym,
-                       # outside-war Xanax in months that HAVE gym data (gym saved from Nov 2026) - the ones scored
-                       "peace_rated": sum(r["xanax"] for r in pr_),
-                       "peace_ratio": p_ratio,
-                       "flag": any(r is not None and r < xc["flag_below"] for r in (w_ratio, p_ratio)),
-                       "wars": war_rows, "months": peace_rows}
-    return {"generated": now, "days": xc["days"], "settings": xc, "members": out,
-            "logged": len(events), "first": events[0][0] if events else None}
+        xan = sum(n for _t, mid, n in events if mid == i)
+        gym = sum(sum(v.get(str(i), [0, 0, 0, 0])) for v in gym_h.values())
+        war_hits = sum(next((x[1] for x in w.get("m", []) if x[0] == i), 0) for w in wars)
+        chain_hits = sum(next((x[1] for x in c["m"] if x[0] == i), 0) for c in chains)
+        out[str(i)] = {"name": m["name"], "xanax": xan, "gym": gym, "war_hits": war_hits, "chain_hits": chain_hits,
+                       "attack_energy": (war_hits + chain_hits) * int(xc["energy_per_hit"])}
+    return {"generated": now, "days": xc["days"], "settings": xc, "members": out, "logged": len(events),
+            "gym_months": sorted(gym_h)}
 
 
 def write_xanax_page(out: Path, db: dict, cfg: dict, xd: dict):
-    """xanax.html (leaders): the Xanax monitor table + each flagged member's wars / months."""
+    """xanax.html (leaders): per member - Xanax used, gym energy, energy spent attacking (last `days`)."""
     import html as _html
     lout = out / leader_dir()
     mb = member_base()
     xc = xd["settings"]
-    pct = lambda r: "-" if r is None else f'<span style="color:{"#78c878" if r >= 1 else "#e8be5a" if r >= xc["flag_below"] else "#e4382e"}">{round(r * 100)}%</span>'
-    rows = sorted(xd["members"].items(), key=lambda kv: (not kv[1]["flag"], -kv[1]["total"]))
+    rows = sorted(xd["members"].items(), key=lambda kv: -kv[1]["xanax"])
+    gm = xd["gym_months"]
     body = leader_menu("") + HIST_STATS_CSS + (
-        '<div class="note">🛡️ Leaders only. Xanax taken from the <b>faction armory</b> (faction news) in the last '
-        f'{xd["days"]} days, compared with where that energy should show up: <b>during wars</b> 1 Xanax = '
-        f'{int(xc["energy_per_xanax"] // xc["energy_per_hit"])} war/chain hits (up to {xc["stack_allow"]} Xanax in the '
-        f'{xc["stack_hours"]}h before a war count as stacking for it); <b>other times</b> 1 Xanax = '
-        f'{xc["energy_per_xanax"]} gym energy that month. Under {round(xc["flag_below"] * 100)}% is flagged. '
-        'Xanax from members\' own inventories isn\'t visible. Members see their own figures on their profile.</div>')
-    tot = sum(v["total"] for _k, v in rows)
-    body += _stat_strip([(fmt_int(tot), "Armory Xanax"), (fmt_int(sum(1 for _k, v in rows if v["total"])), "Members using"),
-                         (fmt_int(sum(1 for _k, v in rows if v["flag"])), "Flagged")])
+        f'<div class="note">🛡️ Leaders only. The last {xd["days"]} days: <b>Xanax used</b> from the faction armory '
+        '(faction news - Xanax from members\' own inventories isn\'t visible), <b>gym energy</b> trained '
+        f'({", ".join(datetime.strptime(m_, "%Y-%m").strftime("%b %Y") for m_ in gm) if gm else "no monthly gym data yet"}'
+        ' - gym data is saved monthly from November 2026), and <b>war &amp; chain energy</b> = (ranked war hits + '
+        f'chain hits outside wars) × {xc["energy_per_hit"]}. Members see their own figures on their profile.</div>')
+    body += _stat_strip([(fmt_int(sum(v["xanax"] for _k, v in rows)), "Xanax used"),
+                         (fmt_int(sum(v["gym"] for _k, v in rows)), "Gym energy"),
+                         (fmt_int(sum(v["attack_energy"] for _k, v in rows)), "War & chain energy")])
     body += ('<h2>All members <span class="tag">(tap a column to sort)</span></h2><table class="srt"><tr><th>Member</th>'
-             '<th>Xanax</th><th>War Xanax</th><th>Expected hits</th><th>Hits</th><th>War</th><th>Other Xanax</th>'
-             '<th>Expected gym</th><th>Gym energy</th><th>Gym</th></tr>')
+             '<th>Xanax used</th><th>Gym energy</th><th>War &amp; chain energy</th><th>War hits</th><th>Chain hits (no war)</th></tr>')
     for i, v in rows:
-        if not v["total"] and not v["war_hits"]:
-            continue
-        nm = f'<a href="{mb}/member.html?id={i}">{_html.escape(v["name"])}</a>' + (" 🚩" if v["flag"] else "")
-        body += (f'<tr><td>{nm}</td><td data-v="{v["total"]}">{v["total"]}</td><td data-v="{v["war_xanax"]}">{v["war_xanax"]}</td>'
-                 f'<td data-v="{v["war_expected"]}">{fmt_int(v["war_expected"])}</td><td data-v="{v["war_hits"]}">{fmt_int(v["war_hits"])}</td>'
-                 f'<td data-v="{v["war_ratio"] if v["war_ratio"] is not None else 9}">{pct(v["war_ratio"])}</td>'
-                 f'<td data-v="{v["peace_xanax"]}">{v["peace_xanax"]}</td><td data-v="{v["peace_expected"]}">{fmt_int(v["peace_expected"])}</td>'
-                 f'<td data-v="{v["gym"]}">{fmt_int(v["gym"])}</td>'
-                 f'<td data-v="{v["peace_ratio"] if v["peace_ratio"] is not None else 9}">{pct(v["peace_ratio"])}</td></tr>')
+        body += (f'<tr><td><a href="{mb}/member.html?id={i}">{_html.escape(v["name"])}</a></td>'
+                 f'<td data-v="{v["xanax"]}">{fmt_int(v["xanax"])}</td><td data-v="{v["gym"]}">{fmt_int(v["gym"])}</td>'
+                 f'<td data-v="{v["attack_energy"]}">{fmt_int(v["attack_energy"])}</td>'
+                 f'<td data-v="{v["war_hits"]}">{fmt_int(v["war_hits"])}</td><td data-v="{v["chain_hits"]}">{fmt_int(v["chain_hits"])}</td></tr>')
     body += "</table>" + SORT_JS
-    flagged = [(i, v) for i, v in rows if v["flag"]]
-    if flagged:
-        body += "<h2>🚩 Flagged - details</h2>"
-        for i, v in flagged:
-            body += f'<h3 style="color:#e8be5a;margin:14px 0 6px">{_html.escape(v["name"])}</h3><table><tr><th>When</th><th>Xanax</th><th>Expected</th><th>Actual</th><th></th></tr>'
-            for r in v["wars"]:
-                if r["xanax"]:
-                    body += (f'<tr><td>War vs {_html.escape(str(r["opponent"]))} ({datetime.fromtimestamp(r["end"], timezone.utc):%b %d})'
-                             f'{" · " + str(r["stack"]) + " stacked" if r["stack"] else ""}</td><td>{r["xanax"]}</td>'
-                             f'<td>{fmt_int(r["expected"])} hits</td><td>{fmt_int(r["hits"])} hits</td><td>{pct(r["ratio"])}</td></tr>')
-            for r in v["months"]:
-                if r["xanax"]:
-                    body += (f'<tr><td>{datetime.strptime(r["month"], "%Y-%m"):%B %Y} (no war)</td><td>{r["xanax"]}</td>'
-                             f'<td>{fmt_int(r["expected"])} gym energy</td><td>{"no gym data" if r["gym"] is None else fmt_int(r["gym"]) + " gym energy"}</td>'
-                             f'<td>{pct(r["ratio"])}</td></tr>')
-            body += "</table>"
     if not xd["logged"]:
         body += '<p class="tag">No armory Xanax logged yet - the log fills in on the next full update.</p>'
-    _hub_page(lout / "xanax.html", "Xanax Monitor", "Faction-armory Xanax vs war hits and gym energy", body)
+    _hub_page(lout / "xanax.html", "Xanax Monitor", f"Xanax used, gym energy and war & chain energy - last {xd['days']} days", body)
 
 
 def write_monitor(out: Path, db: dict, cfg: dict = None):
@@ -4846,8 +4777,7 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     for r in md["members"]:
         x_ = xd["members"].get(str(r["id"])) or {}
         priv[str(r["id"])] = {"reliability": {"score": r["score"], "parts": r["parts"], "detail": r["detail"]},
-                              "xanax": {k: x_.get(k) for k in ("total", "war_xanax", "war_expected", "war_hits", "war_ratio",
-                                                               "peace_xanax", "peace_rated", "peace_expected", "gym", "peace_ratio", "flag")}
+                              "xanax": {k: x_.get(k) for k in ("xanax", "gym", "war_hits", "chain_hits", "attack_energy")}
                                        if x_ else None}
     avg_parts = {k: round(sum(r["parts"][k] for r in md["members"]) / len(md["members"]), 1) if md["members"] else 0
                  for k in ("war", "chains", "crimes", "activity")}
@@ -6063,7 +5993,7 @@ def _one_war(raw: dict, wid: str, my_id, cfg: dict):
     return one[0] if one else None
 
 
-WAR_REPORT_V = 2      # saved war reports older than this (no "rv") are redrawn with the full members list
+WAR_REPORT_V = 3      # saved war reports older than this are redrawn in the current (full members list) format
 
 
 def war_report_full_png(w0: dict, wh_: dict) -> bytes:
@@ -6187,33 +6117,19 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     todo = sorted((k for k in wars if k not in posted), key=lambda k: wars[k]["end"])
     my_id = raw["basic"].get("basic", raw["basic"]).get("id")
     scfg = cfg.get("announcements", {}).get("slacker_watch", {})
-    # new wars: full War Report (summary + slacker tiers) saved as the report page
-    for wid in todo:
-        w0 = _one_war(raw, wid, my_id, cfg)
-        save_report("war", wid, slacker_image(scfg, summary, w0), _war_report_meta(w0 or {}, wars[wid]))
-        posted.add(wid)
-        print(f"War report saved: {wid}")
-    # recent wars posted before reports were saved: their war summary as the report page
+    # EVERY war in the history has a report page in the current format (war_report_full_png: the War Summary +
+    # every member who was in the war with hits / respect). New wars, wars that never had a report, and reports
+    # drawn in an older format (no / lower "rv" - e.g. the old summary + slackers layout) are (re)drawn here.
+    # Drawn from saved data - no API calls.
     order = sorted(wars, key=lambda k: -wars[k]["end"])
-    made = 0
-    for wid in order[:WAR_HUB_DIRECTORY + 1]:
-        if not (REPORTS_DIR / f"war-{wid}.json").exists() and made < WAR_BACKFILL_PER_RUN:
-            w0 = _one_war(raw, wid, my_id, cfg)
-            if w0:
-                save_report("war", wid, frame_png(war_summary_card(w0), bar="War Report"), _war_report_meta(w0, wars[wid]))
-                made += 1
-    # reports saved before the full members list (no "rv"): redraw them with every member (not the newest war -
-    # it has the full War Report with the slacker tiers)
     redrawn = 0
-    for wid in order[1:]:
+    for wid in order:
         f_ = REPORTS_DIR / f"war-{wid}.json"
-        if not f_.exists():
-            continue
         try:
-            meta_ = json.loads(f_.read_text(encoding="utf-8"))
+            meta_ = json.loads(f_.read_text(encoding="utf-8")) if f_.exists() else {}
         except ValueError:
-            continue
-        if meta_.get("rv", 0) >= WAR_REPORT_V:
+            meta_ = {}
+        if f_.exists() and meta_.get("rv", 0) >= WAR_REPORT_V and wid in posted:
             continue
         try:
             w0 = _one_war(raw, wid, my_id, cfg)
@@ -6221,9 +6137,12 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
                 save_report("war", wid, war_report_full_png(w0, wars[wid]), _war_report_meta(w0, wars[wid]))
                 redrawn += 1
         except Exception as e:                 # one bad war never stops the run
-            print(f"War report {wid} not redrawn ({type(e).__name__})")
+            print(f"War report {wid} not drawn ({type(e).__name__})")
+        if wid in todo:
+            print(f"War report saved: {wid}")
+        posted.add(wid)
     if redrawn:
-        print(f"War reports redrawn with the full members list: {redrawn}")
+        print(f"War reports drawn (full members list): {redrawn}")
     state["posted"] = sorted(posted)
     # ---- hub ----
     base = member_base()

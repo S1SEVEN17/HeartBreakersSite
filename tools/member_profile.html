@@ -217,14 +217,13 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
       + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
       + part("🕐 Activity", "activity", 15, `idle ${D.idle_days} days`);
+    // Xanax (last 90 days): armory Xanax used, gym energy, war & chain energy - just the totals
     const X = pv.xanax;
-    if (X && X.total) {
-      const xr = (r_, l_, a_, b_) => `<div class="cm"><div class="l">💊 ${l_}${r_ == null ? "" : `<span class="pc" style="color:${r_ >= 1 ? "#78c878" : r_ >= 0.7 ? "#e8be5a" : "#e4382e"}">${Math.round(r_ * 100)}%</span>`}</div>`
-        + `<div class="v">${a_}</div><div class="a">${b_}</div></div>`;
-      h += xr(X.war_ratio, "Xanax in wars", `${num(X.war_hits)} hits`, `${X.war_xanax} Xanax = ${num(X.war_expected)} hits expected`)
-        + xr(X.peace_ratio, "Xanax outside wars", `${num(X.gym)} gym energy`,
-             `${X.peace_xanax} Xanax` + (X.peace_rated !== X.peace_xanax ? ` (${X.peace_rated} in months with gym data)` : "")
-             + ` = ${num(X.peace_expected)} energy expected`);
+    if (X && (X.xanax || X.gym || X.attack_energy)) {
+      const xc = (l_, v_, b_) => `<div class="cm"><div class="l">${l_}</div><div class="v">${v_}</div><div class="a">${b_}</div></div>`;
+      h += xc("💊 Xanax used", num(X.xanax), `faction armory · last ${A.xanax_days || 90} days`)
+        + xc("🏋️ Gym energy", num(X.gym), `last ${A.xanax_days || 90} days`)
+        + xc("⚔️ War & chain energy", num(X.attack_energy), `${num(X.war_hits)} war + ${num(X.chain_hits)} chain hits (outside wars) × 25`);
     }
     $("relb").innerHTML = h;
   });
