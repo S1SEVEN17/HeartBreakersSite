@@ -4676,8 +4676,9 @@ def update_xanax_log(key: str, cfg: dict):
     except SystemExit as e:
         print(f"Xanax log skipped: {e}")
         return
-    # catching up (first read / backlog): up to 250 pages a run, else 60 - whatever's left is read next time
-    for _ in range(250 if now - start > 2 * 86400 else 60):
+    # at most 30 pages (3,000 news rows) a run - Torn caps the history records one key may pull per day ("Daily read
+    # limit reached", code 14), shared with the vault check and attack logs. A backlog just finishes over a few runs.
+    for _ in range(30):
         items = _as_list(data.get("news"))
         for n in items:
             t = int(n.get("timestamp") or 0)
