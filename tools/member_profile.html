@@ -194,7 +194,6 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   const ws_ = warStats(id), oc_ = ocOf(id);
   const cmp = [
     card("⚔️ Hits per war", ws_.per, favg(u => warStats(u).per), n1, `${recentW.length} war${recentW.length !== 1 ? "s" : ""}`),
-    card("⚔️ Wars hit in", ws_.part, favg(u => warStats(u).part), pctF),
     card("⛓️ Chain hits", chainHits(id), favg(chainHits), num),
     card("🏋️ Gym energy / month", gymPer(id), favg(gymPer), num, gymMonths3.length ? gymMonths3.length + " month" + (gymMonths3.length > 1 ? "s" : "") : "saved from Nov 2026"),
     card("🕵️ Crimes done", oc_.n, favg(u => ocOf(u).n), num),
@@ -217,16 +216,16 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
       + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
       + part("🕐 Activity", "activity", 15, `idle ${D.idle_days} days`);
-    // Xanax (last 90 days): armory Xanax used, gym energy, war & chain energy - just the totals
+    // energy (since the recording start, Nov 1): armory Xanax energy vs energy used (gym + every attack x 25)
     const X = pv.xanax;
-    if (X && (X.xanax || X.gym || X.attack_energy)) {
+    if (X && (X.xanax || X.gym || X.attacks)) {
+      const since = A.xanax_from ? new Date(A.xanax_from * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", timeZone: "UTC"}) : "Nov 1";
       const xc = (l_, v_, b_) => `<div class="cm"><div class="l">${l_}</div><div class="v">${v_}</div><div class="a">${b_}</div></div>`;
-      h += xc("💊 Xanax used", num(X.xanax), `faction armory · last ${A.xanax_days || 90} days`)
-        + xc("🏋️ Gym energy", num(X.gym), `last ${A.xanax_days || 90} days`)
-        + xc("⚔️ War & chain energy", num(X.attack_energy), `${num(X.war_hits)} war + ${num(X.chain_hits)} chain hits (outside wars) × 25`)
-        + xc("💊 Xanax energy", num(X.xanax_energy), `${num(X.xanax)} Xanax × 250`)
+      h += xc("💊 Xanax energy", num(X.xanax_energy), `${num(X.xanax)} armory Xanax × 250 · since ${since}`)
+        + xc("🏋️ Gym energy", num(X.gym), `since ${since}`)
+        + xc("⚔️ Attack energy", num(X.attack_energy), `${num(X.attacks)} attacks (all kinds) × 25`)
         + xc("⚖️ Net energy", `<span style="color:${X.net >= 0 ? "#78c878" : "#e4382e"}">${X.net >= 0 ? "+" : ""}${num(X.net)}</span>`,
-             "energy used (gym + war & chain) − Xanax energy");
+             "energy used (gym + attacks) − Xanax energy");
     }
     $("relb").innerHTML = h;
   });

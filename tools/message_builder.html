@@ -721,6 +721,10 @@ $("publish").onclick = async () => {
   try {
     // the letter itself (WITHOUT the buttons - in Torn each button is its own clickable image)
     await ghPut(`data/panels/${name}.png`, await canvasBlob(cv), tok, `Message Builder: ${name}`);
+    // title + time next to the image - the Members Hub's "Latest" shows the newest newsletters with these
+    await ghPut(`data/panels/${name}.json`, new Blob([JSON.stringify({title: (D.head && D.head.title) || name,
+      heading: ((D.blocks || []).find(b => b.t === "heading") || {}).text || "", created: Math.floor(Date.now() / 1000)})],
+      {type: "application/json"}), tok, `Newsletter Builder: ${name} details`);
     const urls = [];
     for (let k = 0; k < btnCanvases.length; k++) {
       $("pubStatus").textContent = `Publishing… button ${k + 1} of ${btnCanvases.length}`;
