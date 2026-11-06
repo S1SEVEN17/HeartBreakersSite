@@ -1,4 +1,4 @@
-# Quick health check of the gatekeeper (Actions -> Gatekeeper check -> Run workflow): status codes only.
+# Quick health check of the gatekeeper (Actions -> Gatekeeper check -> Run workflow, or runs when this file changes): status codes only.
 name: Gatekeeper check
 on:
   workflow_dispatch: {}
