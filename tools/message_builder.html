@@ -100,7 +100,9 @@ __MENU__
     <button class="g" id="dl">Download PNG</button><button id="copyImg">Copy image</button>
     <div class="small">Copy image → paste straight into a Discord DM or chat.</div>
     <label>Publish to the site (needs the GitHub token saved in the payout calculator on this device)</label>
-    <div class="row"><input id="pubName" placeholder="file name, e.g. welcome-message"><button class="g" id="publish">Publish</button></div>
+    <div class="row"><select id="pubType" title="What you're publishing - it's named after this and the date"></select>
+      <button class="g" id="publish">Publish</button></div>
+    <div class="small" id="pubAs"></div>
     <div class="small" id="pubStatus"></div>
     <label>Torn HTML (newsletter / mail) - uses the published image</label>
     <textarea id="out" readonly></textarea>
@@ -693,7 +695,7 @@ const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace
 function pngBlob(c) { return new Promise(ok => (c || compositeCanvas()).toBlob(ok, "image/png")); }
 const canvasBlob = c => new Promise(ok => c.toBlob(ok, "image/png"));
 $("dl").onclick = async () => { const a = document.createElement("a"); a.href = URL.createObjectURL(await pngBlob());
-  a.download = slugify($("pubName").value || D.head.title) + ".png"; document.body.appendChild(a); a.click(); a.remove(); };
+  a.download = slugify(pubLabel() || D.head.title) + ".png"; document.body.appendChild(a); a.click(); a.remove(); };
 $("copyImg").onclick = async () => {
   try { await navigator.clipboard.write([new ClipboardItem({"image/png": pngBlob()})]); $("copyImg").textContent = "Copied!"; }
   catch (e) { alert("This browser can't copy images - use Download PNG instead."); }
@@ -712,17 +714,36 @@ async function ghPut(path, blob, tok, msg) {
     body: JSON.stringify({message: msg, content: btoa(bin), branch: CFG.branch})});
   if (!r.ok) throw new Error(r.status + " " + ((await r.json().catch(() => ({}))).message || ""));
 }
+// what's being published -> its name: "<Type>-MM/DD/YYYY" (file: <type>-YYYY-MM-DD, -2 / -3 ... on the same day)
+const PUB_TYPES = ["Newsletter", "War Report", "War Payout", "Chain Report", "Monthly Recap", "Pre-War Notice",
+  "New Recruit Letter", "Event Notification", "Announcement", "Direct Message"];
+$("pubType").innerHTML = `<option value="">Choose what you're publishing…</option>` + PUB_TYPES.map(t => `<option>${t}</option>`).join("");
+const pubDate = () => { const d = new Date(), z = n => String(n).padStart(2, "0");
+  return {show: `${z(d.getUTCMonth() + 1)}/${z(d.getUTCDate())}/${d.getUTCFullYear()}`, file: `${d.getUTCFullYear()}-${z(d.getUTCMonth() + 1)}-${z(d.getUTCDate())}`}; };
+const pubLabel = () => $("pubType").value ? `${$("pubType").value}-${pubDate().show}` : "";
+$("pubType").onchange = () => { $("pubAs").textContent = pubLabel() ? `Publishes as: ${pubLabel()}` : ""; };
+// template chosen -> preselect the matching type
+$("tpl").addEventListener("change", () => { const t = $("tpl").value.replace("War Report / Payout", "War Report");
+  if (PUB_TYPES.includes(t)) { $("pubType").value = t; $("pubType").onchange(); } });
 $("publish").onclick = async () => {
+  if (!$("pubType").value) { $("pubType").focus(); return alert("Choose what you're publishing first (Newsletter, War Report, ...)."); }
   const tok = CFG.ghproxy ? "gate" : load("hb_gh_token");     // gatekeeper: no token needed
   if (!tok) { $("tokcard").style.display = "block"; $("tokcard").scrollIntoView({behavior: "smooth"});
     return alert("No GitHub token on this device yet - paste one in the GitHub token box at the top. (Download PNG / Copy image work without one.)"); }
-  const name = slugify($("pubName").value || D.head.title) + "-" + Date.now().toString(36);
+  // free name for today: <type>-YYYY-MM-DD, then -2, -3 ... (a GET that 404s = free)
+  const base = slugify($("pubType").value) + "-" + pubDate().file;
+  let name = base, label = pubLabel();
+  for (let k = 2; k < 20; k++) {
+    const r = await fetch(`${GHC}data/panels/${name}.png?ref=${CFG.branch}`, {headers: {Authorization: "Bearer " + tok}, cache: "no-store"}).catch(() => null);
+    if (!r || r.status === 404) break;
+    name = `${base}-${k}`; label = `${pubLabel()} (${k})`;
+  }
   $("pubStatus").textContent = "Publishing…";
   try {
     // the letter itself (WITHOUT the buttons - in Torn each button is its own clickable image)
     await ghPut(`data/panels/${name}.png`, await canvasBlob(cv), tok, `Message Builder: ${name}`);
     // title + time next to the image - the Members Hub's "Latest" shows the newest newsletters with these
-    await ghPut(`data/panels/${name}.json`, new Blob([JSON.stringify({title: (D.head && D.head.title) || name,
+    await ghPut(`data/panels/${name}.json`, new Blob([JSON.stringify({title: label, type: $("pubType").value,
       heading: ((D.blocks || []).find(b => b.t === "heading") || {}).text || "", created: Math.floor(Date.now() / 1000)})],
       {type: "application/json"}), tok, `Newsletter Builder: ${name} details`);
     const urls = [];
@@ -733,7 +754,7 @@ $("publish").onclick = async () => {
     }
     published = `${CFG.member_base}/panels/${name}.png`; save("hb_builder_published", published);
     publishedBtns = urls; save("hb_builder_published_btns", urls);
-    $("pubStatus").innerHTML = `Published ✓ - online in a few minutes: <a href="${published}" target="_blank" style="color:#e8be5a">${name}.png</a>`;
+    $("pubStatus").innerHTML = `Published ✓ <b>${label}</b> - online in a few minutes: <a href="${published}" target="_blank" style="color:#e8be5a">${name}.png</a>`;
     updateHtml();
   } catch (e) { $("pubStatus").textContent = "Publish failed: " + e.message; }
 };

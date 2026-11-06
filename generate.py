@@ -3889,7 +3889,7 @@ NAV = [("🏠 Home", "G:/", None, False),
                               ("Leader Monitor", "L:monitor.html"), ("Xanax Monitor", "L:xanax.html"),
                               ("Payout Calculator", "L:payout.html")], True),
        ("🖼️ Site Panels", None, [("Announcements", "L:announcements.html"), ("Faction Description", "L:description.html"),
-                                  ("Newsletter Builder", "L:builder.html")], True),
+                                  ("Newsletter Builder", "L:builder.html"), ("Homepage", "L:homepage.html")], True),
        ("📊 Leaderboards", None, [("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
                                   ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html")], False),
        ("⚔️ Wars & Chains", None, [("War History", "M:wars.html"), ("War Payouts", "M:payouts.html"),
@@ -4286,9 +4286,11 @@ def latest_newsletters(n: int = 2) -> list:
             except ValueError:
                 t = 0
         kind = f.stem.rsplit("-", 1)[0].replace("-", " ").title()
-        title = meta.get("heading") or meta.get("title") or kind
+        # named publishes ("Newsletter-11/07/2026") show that name; older ones their heading
+        title = meta.get("title") if meta.get("type") else (meta.get("heading") or meta.get("title") or kind)
         when = datetime.fromtimestamp(t, timezone.utc).strftime("%b %d, %Y") if t else ""
-        items.append((t, f.stem, str(title).title() if title.isupper() else str(title), f"Newsletter · {when}" if when else "Newsletter"))
+        sub = f"{meta.get('type') or 'Newsletter'} · {when}" if when else (meta.get("type") or "Newsletter")
+        items.append((t, f.stem, str(title).title() if str(title).isupper() else str(title), sub))
     return [(nm, ti, su) for _t, nm, ti, su in sorted(items, reverse=True)[:n]]
 
 
@@ -4365,45 +4367,106 @@ def _reports_page(mout: Path):
     _hub_page(mout / "reports.html", "Reports", "Every war and chain report posted to Discord", body)
 
 
-def write_homepages(out: Path):
-    """index.html in the MEMBERS' folder (Members Hub) and in the LEADERS' folder (Leaders Hub:
-    leader tools + every member page). Each shows the newest recap / payout / war + chain report."""
+# HOMEPAGES (Members Hub = members' index.html, Leaders Hub = leaders' index.html) are built from
+# config.json "homepage" - leaders edit it on the Homepage editor (Site Panels -> Homepage), no code changes:
+#   {"members": {"sections": [...]}, "leaders": {"sections": [...]}}
+#   section: {"type": "tiles", "title": "Pages", "tiles": [{"icon", "title", "desc", "link"}]}
+#            {"type": "latest", "title": "Latest"}   (newest newsletters, recap, payout, war + chain report)
+#            {"type": "text", "title": "...", "text": "..."}   (a note; blank lines = paragraphs)
+#   link: "M:<page>" members' folder · "L:<page>" leaders' folder · "G:/" the dashboard · a full https:// address
+# With no "homepage" in config.json the hubs use HOMEPAGE_DEFAULT (the layout they had before the editor).
+def homepage_default() -> dict:
+    tiles = lambda rows: [{"icon": i_, "title": t_, "desc": d_, "link": l_} for i_, t_, d_, l_ in rows]
+    member_tiles = tiles([
+        ("🙋", "My Profile", "Your own wars, chains, crimes and payouts · sign out", "M:me"),
+        ("⚔️", "War History", "Every ranked war on record", "M:wars.html"),
+        ("💰", "War Payouts", "Every war payout receipt", "M:payouts.html"),
+        ("⛓️", "Chain History", "Every chain on record", "M:chains.html"),
+        ("🕵️", "Organized Crimes", "Pass rates, payouts and respect for every crime", "M:crimes.html"),
+        ("🏆", "Leaderboards", "War, chain, organized crime and gym leaders - this month, all time, past months", "M:leaderboards.html"),
+        ("🏋️", "Gym Leaderboards", "Gym energy this month and all time - plus past months", "M:gym.html"),
+        ("👥", "Members", "Every member - open a profile", "M:members.html"),
+        ("📰", "Monthly Recap", "The latest monthly recap", "M:newsletter.html"),
+        ("🗂️", "Recap Archive", "Every monthly recap with all its pages", "M:recaps.html")])
+    leader_tiles = tiles([
+        ("🧮", "Payout Calculator", "Work out war payouts, pay members, save receipts", "L:payout.html"),
+        ("📊", "Leader Monitor", "Participation trend, reliability score, payout ledger, crime delays", "L:monitor.html"),
+        ("💊", "Xanax Monitor", "Energy in vs energy used per member", "L:xanax.html"),
+        ("📢", "Announcements", "Edit the members' announcement (live preview + HTML for Torn)", "L:announcements.html"),
+        ("🖼️", "Faction Description", "Edit the faction description banner (live preview + HTML for Torn)", "L:description.html"),
+        ("🎨", "Newsletter Builder", "Framed messages from templates - newsletters, war reports, recruits, events", "L:builder.html"),
+        ("🏠", "Homepage Editor", "Edit these hubs: sections, tiles, layout", "L:homepage.html"),
+        ("🧩", "Newsletter Filler", "Userscript - fills Torn's newsletter for you (Tampermonkey / PDA)", "L:hb-newsletter-filler.user.js"),
+        ("⚙️", "Run an update", "GitHub Actions - Faction banner - Run workflow",
+         f"https://github.com/{CODE_REPO}/actions/workflows/banner.yml")])
+    return {"members": {"sections": [{"type": "latest", "title": "Latest"},
+                                     {"type": "tiles", "title": "Pages", "tiles": member_tiles}]},
+            "leaders": {"sections": [{"type": "tiles", "title": "🛡️ Leader tools", "tiles": leader_tiles},
+                                     {"type": "latest", "title": "Latest"},
+                                     {"type": "tiles", "title": "👥 Member pages",
+                                      "tiles": member_tiles + tiles([("🏠", "Members Hub", "The members' homepage", "M:index.html")])}]}}
+
+
+def _hub_link(link: str, hub: str) -> str:
+    """A homepage tile's link -> href on that hub ("members" / "leaders")."""
+    link = str(link or "").strip()
+    g_ = gate_cfg()
+    if link.startswith("M:"):
+        return (link[2:] if hub == "members" else member_base() + "/" + link[2:])
+    if link.startswith("L:"):
+        return (link[2:] if hub == "leaders" else (leader_base() + "/" + link[2:] if leader_dir() else "#"))
+    if link.startswith("G:"):
+        return (g_["url"].rstrip("/") + link[2:]) if g_ else ("index.html" if hub == "members" else member_base() + "/index.html")
+    return link or "#"
+
+
+def _hub_sections(sections: list, hub: str) -> str:
+    import html as _html
+    h = ""
+    for sec in sections or []:
+        title = str(sec.get("title") or "")
+        if title:
+            h += f"<h2>{_html.escape(title)}</h2>"
+        t_ = sec.get("type", "tiles")
+        if t_ == "latest":
+            h += _hub_latest("" if hub == "members" else member_base() + "/")
+        elif t_ == "text":
+            h += '<div class="note">' + "".join(f"<p>{_html.escape(p_).replace(chr(10), '<br>')}</p>"
+                                               for p_ in str(sec.get("text") or "").split("\n\n") if p_.strip()) + "</div>"
+        else:
+            h += _hub_tiles([(x.get("icon", ""), x.get("title", ""), x.get("desc", ""), _hub_link(x.get("link"), hub))
+                             for x in sec.get("tiles") or []], "l" if hub == "leaders" else "")
+    return h
+
+
+def write_homepages(out: Path, cfg: dict = None):
+    """index.html in the MEMBERS' folder (Members Hub) and in the LEADERS' folder (Leaders Hub), laid out from
+    config.json "homepage" (Homepage editor) - see the HOMEPAGES note above."""
+    hp = (cfg or {}).get("homepage") or homepage_default()
     mout = member_out(out)
-    # (reports.html is no longer published - War History / Chain History list every report)
-    member_items = ([("🙋", "My Profile", "Your own wars, chains, crimes and payouts · sign out", "me")]
-                    if gate_cfg() else []) + [
-        ("⚔️", "War History", "Every ranked war on record", "wars.html"),
-        ("💰", "War Payouts", "Every war payout receipt", "payouts.html"),
-        ("⛓️", "Chain History", "Every chain on record", "chains.html"),
-        ("🕵️", "Organized Crimes", "Pass rates, payouts and respect for every crime", "crimes.html"),
-        ("🏆", "Leaderboards", "War, chain, organized crime and gym leaders - this month, all time, past months", "leaderboards.html"),
-        ("🏋️", "Gym Leaderboards", "Gym energy this month and all time - plus past months", "gym.html"),
-        ("👥", "Members", "Every member - open a profile", "members.html"),
-        ("📰", "Monthly Recap", "The latest monthly recap", "newsletter.html"),
-        ("🗂️", "Recap Archive", "Every monthly recap with all its pages", "recaps.html")]
     _hub_page(mout / "index.html", "Heart Breakers", "Members Hub",
-              site_menu("") + "<h2>Latest</h2>" + _hub_latest("") + "<h2>Pages</h2>" + _hub_tiles(member_items))
+              site_menu("") + _hub_sections((hp.get("members") or {}).get("sections"), "members"))
     if not leader_dir():
         return
-    mb = member_base() + "/"
     lout = out / leader_dir()
-    leader_items = [
-        ("🧮", "Payout Calculator", "Work out war payouts, pay members, save receipts", "payout.html"),
-        ("📊", "Leader Monitor", "Participation trend, reliability score, payout ledger, crime delays", "monitor.html"),
-        ("📢", "Announcements", "Edit the members' announcement (live preview + HTML for Torn)", "announcements.html"),
-        ("🖼️", "Faction Description", "Edit the faction description banner (live preview + HTML for Torn)", "description.html"),
-        ("🎨", "Newsletter Builder", "Framed messages from templates - newsletters, war reports, recruits, events", "builder.html"),
-        ("💊", "Xanax Monitor", "Faction-armory Xanax vs gym energy (peace) and war/chain hits (war)", "xanax.html"),
-        ("🧩", "Newsletter Filler", "Userscript - fills Torn's newsletter for you (Tampermonkey / PDA)",
-         "hb-newsletter-filler.user.js"),
-        ("⚙️", "Run an update", "GitHub Actions - Faction banner - Run workflow",
-         f"https://github.com/{CODE_REPO}/actions/workflows/banner.yml")]
     _hub_page(lout / "index.html", "Heart Breakers", "Leaders Hub - leaders only",
-              leader_menu("")
-              + "<h2>🛡️ Leader tools</h2>" + _hub_tiles(leader_items, "l")
-              + "<h2>Latest</h2>" + _hub_latest(mb)
-              + "<h2>👥 Member pages</h2>" + _hub_tiles([(i, t, d, mb + u) for i, t, d, u in member_items]
-                                                        + [("🏠", "Members Hub", "The members' homepage", mb + "index.html")]))
+              leader_menu("") + _hub_sections((hp.get("leaders") or {}).get("sections"), "leaders"))
+    # the Homepage editor (leaders) - its preview uses the same CSS, the current "Latest" cards and these defaults
+    pages = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:index.html"), ("War History", "M:wars.html"),
+             ("War Payouts", "M:payouts.html"), ("Chain History", "M:chains.html"), ("Organized Crimes", "M:crimes.html"),
+             ("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
+             ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html"), ("Members", "M:members.html"),
+             ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
+             ("Leaders Hub", "L:index.html"), ("Leader Monitor", "L:monitor.html"), ("Xanax Monitor", "L:xanax.html"),
+             ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
+             ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
+             ("Homepage Editor", "L:homepage.html")]]
+    conf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": pages, "default": homepage_default(),
+            "member_base": member_base(),
+            "css": HUB_CSS, "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
+    (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
+                                        .replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", leader_menu("")),
+                                        encoding="utf-8")
 
 
 # ==========================================================================
@@ -9162,7 +9225,7 @@ def main():
     if raw.get("_war_history") and "rankedwars" in raw:
         war_history_page(out, raw, cfg)
     write_message_builder(out)
-    write_homepages(out)
+    write_homepages(out, cfg)
     if not args.mock and os.environ.get("RUN_KIND", "full") == "full":
         update_xanax_log(api_key, cfg)            # armory Xanax since the last update (Xanax Monitor)
         update_attack_log(api_key, cfg, raw["basic"].get("basic", raw["basic"]).get("id"))   # every member attack
