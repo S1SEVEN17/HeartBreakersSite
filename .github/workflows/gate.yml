@@ -1,5 +1,5 @@
 # Gatekeeper secrets (Actions -> Gatekeeper secrets -> Run workflow): puts MEMBER_DIR / LEADER_DIR and GH_DISPATCH
-# (= DATA_TOKEN, used by the worker's timer to start the update workflows) and TORN_KEY (= TORN_API_KEY, the hubs' live war/chain) on the Cloudflare worker. Only needed if those GitHub secrets change. The worker code + site are deployed by
+# (= DATA_TOKEN, used by the worker's timer to start the update workflows) on the Cloudflare worker. Only needed if those GitHub secrets change. The worker code + site are deployed by
 # banner.yml (tools/deploy_site.sh).
 name: Gatekeeper secrets
 
@@ -28,7 +28,6 @@ jobs:
           MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
           LEADER_DIR: ${{ secrets.LEADER_DIR }}
           GH_DISPATCH: ${{ secrets.DATA_TOKEN }}
-          TORN_KEY: ${{ secrets.TORN_API_KEY }}
         run: |
           mkdir -p ../site
           npm install --no-save --silent wrangler@4 >/dev/null 2>&1
@@ -36,7 +35,7 @@ jobs:
           printf '%s' "$LEADER_DIR" | npx wrangler secret put LEADER_DIR >/dev/null 2>&1
           # the worker's timer starts the update workflows with this (Actions: write on this repo)
           printf '%s' "$GH_DISPATCH" | npx wrangler secret put GH_DISPATCH >/dev/null 2>&1
-          # the hubs' live war / chain / crimes (/m/live.json) - read on Cloudflare, never sent to a browser
-          printf '%s' "$TORN_KEY" | npx wrangler secret put TORN_KEY >/dev/null 2>&1
+          # no Torn key on the worker - the site needs only each member's Public key at sign-in
+          npx wrangler secret delete TORN_KEY --force >/dev/null 2>&1 || true
           npx wrangler secret delete PAGES_ORIGIN --force >/dev/null 2>&1 || true
           echo "Worker secrets set"

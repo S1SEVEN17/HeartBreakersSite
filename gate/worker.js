@@ -11,8 +11,6 @@
 //   /m/mine.json      the signed-in member's OWN reliability / Xanax figures (from the leaders' db/private.json)
 //   /l/gh/contents/*  leaders' tools save to the private data repo through here (faction token, never on devices)
 //   /m/whoami.json    JSON {id, name, position, leader, since, until} for the signed-in member (My Account, menus, scripts)
-//   /m/live.json      the hubs' "Right now" / "Needs attention": current ranked war, running chain and crimes waiting
-//                     on members, read from Torn with the TORN_KEY secret (cached ~1 min - see live())
 //   /m/...            members' pages  (pass + still in the faction)
 //   /m/me             -> their own profile (member.html?id=<their id>)
 //   /l/...            leaders' pages  (pass + position in LEADER_POSITIONS)
@@ -37,7 +35,7 @@
 //   LEADER_POSITIONS   comma list, e.g. "Leader,Co-leader"   (case-insensitive)
 //   MEMBER_DIR, LEADER_DIR   (secrets - same values as the GitHub secrets)
 //   SESSION_SECRET     (secret) signs the passes; changing it signs everyone out
-//   TORN_KEY           (secret) the faction's Torn API key for /m/live.json - stays on Cloudflare, never sent to a browser
+//   (no Torn key here: members' Public keys at sign-in are the only Torn access the site uses)
 // =====================================================================================================
 
 const COOKIE = "hb_s";
@@ -211,8 +209,6 @@ export default {
     if (rest === "whoami.json") return Response.json(who, {headers: {"Cache-Control": "no-store"}});
     // a member's OWN private figures (reliability, Xanax) - picked out of the leaders' db/private.json
     if (area === "m" && rest === "mine.json") return mine(env, who);
-    // live war / chain / crimes for the hubs
-    if (area === "m" && rest === "live.json") return live(env);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
     if (area === "l" && rest.startsWith("gh/contents/")) return ghProxy(env, req, who, rest.slice("gh/contents/".length));
     return proxy(env, dir, rest, req, true);
@@ -280,59 +276,3 @@ async function dispatch(env, wf, inputs) {
   console.log(`dispatch ${wf}: ${r.status}`);
 }
 
-// ---------- live war / chain / crimes (the hubs' "Right now" + "Needs attention") ----------
-// Read from Torn with the faction's key (TORN_KEY secret) only when someone has a hub open, and kept in this
-// worker's memory: war + chain for LIVE_TTL, crimes for CRIMES_TTL - so however many members are looking it's
-// at most a few Torn calls a minute. Answers {war, chain, crimes, at}; {off: true} when TORN_KEY isn't set
-// (the hubs then fall back to the war snapshot in db/home.json).
-//   war     {kind: "upcoming"|"ongoing", opponent, start, end, our, their} or null
-//   chain   {current, max, timeout_at, cooldown_at} (timestamps, seconds) or null
-//   crimes  {waiting: crimes with an empty slot} or null
-const LIVE_TTL = 60e3, CRIMES_TTL = 120e3;
-let LIVE = {t: 0, v: null, p: null}, CRIMES = {t: 0, v: null, p: null};
-async function torn(env, path) {
-  const r = await fetch(`https://api.torn.com/v2/faction/${path}${path.includes("?") ? "&" : "?"}comment=HBGate`,
-                        {headers: {Authorization: "ApiKey " + env.TORN_KEY, Accept: "application/json"}});
-  const j = await r.json();
-  if (j.error) throw new Error("torn " + (j.error.code || "?"));     // never the key / URL
-  return j;
-}
-const tsOf = (v, now) => !v ? 0 : (Number(v) > 1e9 ? Number(v) : now + Number(v));   // seconds left or timestamp
-function readChain(j, now) {
-  const c = (j && j.chain) || {};
-  return {current: +c.current || 0, max: +c.max || 0, timeout_at: tsOf(c.timeout, now), cooldown_at: tsOf(c.cooldown, now)};
-}
-function readWar(env, j, now) {
-  let w = j && j.wars && j.wars.ranked;
-  if (Array.isArray(w)) w = w[0];
-  if (!w || !w.factions || (w.end && w.end <= now)) return null;
-  const facs = Array.isArray(w.factions) ? w.factions : Object.entries(w.factions).map(([id, f]) => ({id, ...f}));
-  const me = facs.find(f => String(f.id) === String(env.FACTION_ID)) || {}, them = facs.find(f => String(f.id) !== String(env.FACTION_ID)) || {};
-  return {kind: w.start && w.start <= now ? "ongoing" : "upcoming", opponent: them.name || "?", start: w.start || 0,
-          end: w.end || 0, our: me.score || 0, their: them.score || 0};
-}
-function readCrimes(j) {
-  const list = Array.isArray(j && j.crimes) ? j.crimes : Object.values((j && j.crimes) || {});
-  const open = c => (c.slots || []).some(s => !(s.user && (s.user.id || typeof s.user === "number")) && !s.user_id);
-  return {waiting: list.filter(c => ["planning", "recruiting", ""].includes(String(c.status || "").toLowerCase()) && open(c)).length};
-}
-async function cached(box, ttl, load) {
-  if (box.v && Date.now() - box.t < ttl) return box.v;
-  if (!box.p) box.p = load().then(v => { box.v = v; box.t = Date.now(); }).catch(e => { console.log("live: " + e.message); box.t = Date.now() - ttl / 2; })
-                            .finally(() => { box.p = null; });
-  await box.p;
-  return box.v;
-}
-async function live(env) {
-  const h = {headers: {"Cache-Control": "no-store"}};
-  if (!env.TORN_KEY) return Response.json({off: true}, h);
-  const [wc, cr] = await Promise.all([
-    cached(LIVE, LIVE_TTL, async () => {
-      const now = Math.floor(Date.now() / 1e3);
-      const [c, w] = await Promise.all([torn(env, "chain"), torn(env, "wars")]);
-      return {chain: readChain(c, now), war: readWar(env, w, now)};
-    }),
-    cached(CRIMES, CRIMES_TTL, async () => readCrimes(await torn(env, "crimes?cat=planning")))]);
-  if (!wc) return Response.json({off: true}, h);
-  return Response.json({...wc, crimes: cr || null, at: LIVE.t}, h);
-}

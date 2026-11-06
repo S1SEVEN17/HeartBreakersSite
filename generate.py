@@ -4258,15 +4258,6 @@ HUB_CSS += """
 .stats>div{background:var(--card);border:1px solid #2e1719;border-radius:10px;padding:10px}
 .stats .l{color:var(--sub);font-size:12px}.stats .v{color:#fff;font-size:22px;font-weight:700;line-height:1.25}
 .stats .s{font-size:12px;color:var(--sub)}.up{color:var(--green)!important}.dn{color:#ff6b61!important}
-.nowc{display:flex;flex-direction:column;gap:8px}
-.nowc a{display:flex;align-items:center;gap:12px;border-radius:10px;padding:11px 13px;border:1px solid}
-.nowc .war{background:#3b1513;border-color:#6b2420}.nowc .chain{background:#2e2410;border-color:#5c4716}
-.nowc i{font-style:normal;font-size:22px}.nowc .x{flex:1;min-width:0}.nowc b{display:block;color:#fff}
-.nowc .x span{color:var(--sub);font-size:13px}.nowc .war em{color:#ff6b61;font-style:normal;font-weight:700}
-.nowc .chain em{color:var(--gold);font-style:normal;font-weight:700}
-.nowc .go{font-size:12px;padding:3px 10px;border-radius:8px;background:#6b2420;color:#ffd6d2}
-.nowc .chain .go{background:#5c4716;color:#ffe9b8}
-.pbar{height:5px;background:#3a2d12;border-radius:3px;margin:6px 0 4px}.pbar u{display:block;height:5px;background:var(--gold);border-radius:3px}
 .attn{background:var(--card);border:1px solid #6b4a18;border-radius:12px;padding:10px 14px;margin:18px 0 6px}
 .attn .ah{display:flex;align-items:center;gap:8px;margin-bottom:4px}.attn .ah b{flex:1;color:#fff;font-size:15px}
 .attn .cnt{background:#3a2d12;color:var(--gold);font-size:12px;padding:2px 9px;border-radius:8px}
@@ -4294,10 +4285,10 @@ HUB_CSS += """
 
 # HOME_JS: the hubs' live parts. window.HBH (home_js_cfg) says where to read from:
 #   who   /m/whoami.json  - name, position, leader      mine  /m/mine.json - own reliability (leaders' badge)
-#   home  db/home.json    - own numbers vs average + war snapshot
-#   live  /m/live.json    - war / chain / crimes from Torn, ~1 min old (gatekeeper); falls back to home.war
-#   att   leaders' db/attention.json - unpaid payouts, idle recruits
-# Timers tick every second between the 1-minute refreshes. "Right now" / "Needs attention" hide when empty.
+#   home  db/home.json    - own numbers vs average
+#   att   leaders' db/attention.json - unpaid payouts, idle recruits ("Needs attention" hides when empty)
+# Nothing is read from Torn here - only the site's own files and the sign-in, so a member's Public key is all the
+# site ever needs (no faction key on the gatekeeper).
 HOME_JS = r"""
 (function(){
 const H=window.HBH||{},$=id=>document.getElementById(id),now=()=>Date.now()/1e3;
@@ -4306,11 +4297,8 @@ const get=u=>u?fetch(u,{cache:"no-store",credentials:"same-origin"}).then(r=>r.o
 const k=v=>v>=1e6?(v/1e6).toFixed(1).replace(/\.0$/,"")+"m":v>=1e4?Math.round(v/1e3)+"k":v>=1e3?(v/1e3).toFixed(1).replace(/\.0$/,"")+"k":String(Math.round(v));
 const ago=t=>{const s=now()-t;return s<3600?Math.max(1,Math.round(s/60))+"m":s<86400?Math.round(s/3600)+"h":Math.round(s/86400)+"d"};
 const agoL=t=>{const s=now()-t;return s<3600?"posted "+Math.max(1,Math.round(s/60))+" min ago":s<86400?"posted "+Math.round(s/3600)+" h ago":s<172800?"posted yesterday":"posted "+Math.round(s/86400)+" days ago"};
-const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=s%60;
-  return d?`${d}d ${h}h ${String(m).padStart(2,"0")}m`:h?`${h}h ${String(m).padStart(2,"0")}m ${String(x).padStart(2,"0")}s`:`${m}:${String(x).padStart(2,"0")}`};
-const BONUS=[10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000];
 document.querySelectorAll(".ago[data-t]").forEach(e=>{const t=+e.dataset.t;if(t)e.textContent=e.dataset.long?agoL(t):ago(t)});
-let WHO=null,HOME=null,LIVE=null,ATT=null;
+let WHO=null,HOME=null,ATT=null;
 
 function welcome(){const el=$("hbWel");if(!el)return;
   const hr=new Date().getHours(),hi=hr<5?"Good evening":hr<12?"Good morning":hr<18?"Good afternoon":"Good evening";
@@ -4331,35 +4319,15 @@ function welcome(){const el=$("hbWel");if(!el)return;
     if(b&&s!=null){b.textContent="Reliability "+Math.round(s);b.hidden=false}});
 }
 
-// war + chain cards (redrawn every second for the timers)
-function nowCards(){const el=$("hbNow");if(!el)return;const t=now(),L=H.links||{};let h="";
-  const w=(LIVE&&LIVE.war!==undefined)?LIVE.war:(HOME&&HOME.war);
-  if(w&&w.kind){const live_=w.kind==="ongoing"||(w.start&&w.start<=t);
-    if(!(w.end&&w.end<=t))h+=`<a class="war" href="${L.torn_war}" target="_blank" rel="noopener"><i>⚔️</i><div class="x"><b>Ranked war vs ${esc(w.opponent||"?")}</b>`
-      +(live_?`<span>Live · <em>${(w.our||0).toLocaleString("en-US")} - ${(w.their||0).toLocaleString("en-US")}</em></span>`
-             :`<span>Starts in <em>${dur(w.start-t)}</em></span>`)+`</div><span class="go">${live_?"Fight":"Plan"}</span></a>`}
-  const c=LIVE&&LIVE.chain;
-  if(c&&c.current>0&&c.timeout_at>t-30){const nx=BONUS.find(b=>b>c.current)||c.max||c.current,pv=[0].concat(BONUS).filter(b=>b<=c.current).pop()||0;
-    const pc=Math.max(3,Math.min(100,Math.round(100*(c.current-pv)/Math.max(1,nx-pv))));
-    h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>⛓️</i><div class="x"><b>Chain ${c.current.toLocaleString("en-US")} / ${nx.toLocaleString("en-US")}</b>`
-      +`<div class="pbar"><u style="width:${pc}%"></u></div><span>${c.timeout_at>t?`Timeout <em>${dur(c.timeout_at-t)}</em>`:"Checking…"} · ${(nx-c.current).toLocaleString("en-US")} to the next bonus</span></div><span class="go">Hit</span></a>`}
-  el.querySelector(".nowc").innerHTML=h;el.hidden=!h;
-}
-
 function attention(){const el=$("hbAtt");if(!el)return;const L=H.links||{},rows=[];
   ((ATT&&ATT.unpaid)||[]).forEach(u=>rows.push(`<a href="${L.payout}"><i>💰</i><span>War payout vs ${esc(u.opponent||"?")} unpaid</span><em>Pay</em></a>`));
-  const cw=LIVE&&LIVE.crimes&&LIVE.crimes.waiting;
-  if(cw)rows.push(`<a href="${L.torn_crimes}" target="_blank" rel="noopener"><i>🕵️</i><span>${cw} crime${cw>1?"s":""} waiting on members</span><em>View</em></a>`);
   const rc=(ATT&&ATT.recruits)||[];
   if(rc.length)rows.push(`<a href="${rc.length===1?L.profile+"?id="+rc[0].id:L.members}"><i>🙍</i><span>${rc.length===1?esc(rc[0].name)+" (recruit) inactive "+rc[0].idle+" days"
     :rc.length+" recruits inactive "+Math.min(...rc.map(r=>r.idle))+"+ days"}</span><em>${rc.length===1?"Profile":"Members"}</em></a>`);
   el.querySelector(".rows").innerHTML=rows.join("");el.querySelector(".cnt").textContent=rows.length;el.hidden=!rows.length;
 }
 
-function refresh(){return get(H.live).then(l=>{if(l&&!l.off)LIVE=l;nowCards();attention()})}
-Promise.all([get(H.who),get(H.home),$("hbAtt")?get(H.att):null]).then(([w,h,a])=>{WHO=w;HOME=h;ATT=a;welcome();nowCards();attention();
-  if(H.live&&($("hbNow")||$("hbAtt"))){refresh();setInterval(refresh,60e3)}
-  if($("hbNow"))setInterval(nowCards,1e3)});
+Promise.all([get(H.who),get(H.home),$("hbAtt")?get(H.att):null]).then(([w,h,a])=>{WHO=w;HOME=h;ATT=a;welcome();attention()});
 })();
 """
 
@@ -4528,12 +4496,10 @@ def _reports_page(mout: Path):
 #     {"type": "welcome"}                       greeting with the signed-in member's name, position, days in faction
 #                                               + 3 of their own numbers vs the faction average (db/home.json);
 #                                               leaders also see their reliability badge (/m/mine.json)
-#     {"type": "now", "title": "Right now"}     live war countdown / score and the running chain (gatekeeper
-#                                               /m/live.json, refreshed every minute, timers tick every second);
-#                                               the whole section hides itself when nothing is going on
-#     {"type": "attention", "title": "Needs attention"}   LEADERS HUB ONLY: unpaid war payouts, crimes waiting
-#                                               on members, inactive recruits (leaders' db/attention.json + live);
-#                                               hides itself when everything is clear
+#     ("now" - a live war / chain section - was removed Nov 2026; a saved layout that still has one skips it)
+#     {"type": "attention", "title": "Needs attention"}   LEADERS HUB ONLY: unpaid war payouts and inactive
+#                                               recruits (leaders' db/attention.json); hides itself when all is clear
+#   Nothing on the hubs reads Torn live - the site runs on each member's Public key at sign-in alone.
 #     {"type": "actions", "tiles": [{"icon", "title", "link"}]}   big icon buttons (quick actions)
 #     {"type": "latest", "title": "Latest"}     newest post as a big card + the next few as a list (automatic)
 #     {"type": "groups", "title": "Explore", "groups": [{"title", "links": [{"icon", "title", "link"}]}]}
@@ -4563,12 +4529,10 @@ def homepage_default() -> dict:
         ("🧩", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
     return {"v": HOME_LAYOUT_V,
             "members": {"sections": [{"type": "welcome", "title": ""},
-                                     {"type": "now", "title": "Right now"},
                                      actions,
                                      {"type": "latest", "title": "Latest"},
                                      {"type": "groups", "title": "Explore", "groups": [compete, grow, faction]}]},
             "leaders": {"sections": [{"type": "welcome", "title": ""},
-                                     {"type": "now", "title": "Right now"},
                                      {"type": "attention", "title": "Needs attention"},
                                      actions,
                                      {"type": "latest", "title": "Latest"},
@@ -4595,13 +4559,8 @@ def home_js_cfg(hub: str) -> dict:
     return {"hub": hub, "home": member_base() + "/db/home.json",
             "att": (leader_base() + "/db/attention.json") if leader_dir() else "",
             "who": gate + "/m/whoami.json" if gate else "", "mine": gate + "/m/mine.json" if gate else "",
-            "live": gate + "/m/live.json" if gate else "",
-            "links": {"wars": _hub_link("M:wars.html", hub), "payout": _hub_link("L:payout.html", hub),
-                      "crimes": _hub_link("M:crimes.html", hub), "members": _hub_link("M:members.html", hub),
-                      "profile": _hub_link("M:member.html", hub),
-                      "torn_war": "https://www.torn.com/factions.php?step=your#/war/rank",
-                      "torn_chain": "https://www.torn.com/factions.php?step=your#/war/chain",
-                      "torn_crimes": "https://www.torn.com/factions.php?step=your#/tab=crimes"}}
+            "links": {"payout": _hub_link("L:payout.html", hub), "members": _hub_link("M:members.html", hub),
+                      "profile": _hub_link("M:member.html", hub)}}
 
 
 def _hub_sections(sections: list, hub: str) -> str:
@@ -4617,8 +4576,7 @@ def _hub_sections(sections: list, hub: str) -> str:
                  '<span>Loading your numbers…</span></div></div><div class="stats"></div></div>'
             live = True
         elif t_ == "now":
-            h += f'<div class="hbsec" id="hbNow" hidden>{head}<div class="nowc"></div></div>'
-            live = True
+            continue                         # live war / chain section - removed (Nov 2026)
         elif t_ == "attention":
             if hub != "leaders":
                 continue                     # leaders only - never on the Members Hub
@@ -4694,11 +4652,10 @@ def write_homepages(out: Path, cfg: dict = None):
 def write_home_data(out: Path, db: dict, raw: dict):
     """Data for the hubs' live parts (HOME_JS):
       members' db/home.json   per CURRENT member [days in faction, hits in the last war (None = not in it),
-                              gym energy this month, crime success last 3 months (None = no crimes)], the
-                              faction averages of those, and a war snapshot (the gatekeeper's /m/live.json is
-                              newer - this is the fallback)
+                              gym energy this month, crime success last 3 months (None = no crimes)] and the
+                              faction averages of those
       leaders' db/attention.json   wars ended in the last ATTN_PAYOUT_DAYS days with no payout receipt, and
-                              recruits idle ATTN_RECRUIT_IDLE_DAYS+ days (crimes waiting on members come live)"""
+                              recruits idle ATTN_RECRUIT_IDLE_DAYS+ days """
     now = db["generated"]
     cur = [m for m in db["members"]["members"] if m["current"]]
     wars = db["wars"]["wars"]
@@ -4720,14 +4677,10 @@ def write_home_data(out: Path, db: dict, raw: dict):
         if rate is not None:
             avg_src["oc"].append(rate)
     mean = lambda a: round(sum(a) / len(a), 1) if a else None
-    my_id = raw["basic"].get("basic", raw["basic"]).get("id") if raw.get("basic") else None
-    ws = war_status(raw, my_id) if raw.get("rankedwars") else {"kind": "none"}
     home = {"generated": now, "cols": ["days", "last_war_hits", "gym_month", "crime_success"],
             "last_war": {"id": last["id"], "opponent": last.get("opponent"), "end": last["end"]} if last else None,
             "avg": {"war": mean(avg_src["war"]), "gym": mean(avg_src["gym"]), "oc": mean(avg_src["oc"])},
-            "m": rows,
-            "war": ({"kind": ws["kind"], "opponent": ws.get("opponent"), "start": ws.get("start"),
-                     "our": ws.get("our"), "their": ws.get("their")} if ws.get("kind") != "none" else None)}
+            "m": rows}
     _jdump(member_out(out) / "db" / "home.json", home)
     if not leader_dir():
         return
