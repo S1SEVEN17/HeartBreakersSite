@@ -4245,15 +4245,136 @@ td a{color:var(--gold)}.w{color:var(--green)}.d{color:var(--red)}
 """
 
 
-def _hub_page(path: Path, title: str, tagline: str, body: str):
+# Homepage (hub) layout: welcome · right now · needs attention · quick actions · latest · explore groups.
+# A narrower column so it reads like an app on a phone and doesn't sprawl on a desktop.
+HUB_CSS += """
+.hubw{max-width:760px;margin:0 auto}
+.hbsec[hidden]{display:none}
+.wel{display:flex;align-items:center;gap:12px;margin:14px 2px 12px}
+.av{width:48px;height:48px;border-radius:50%;background:#3b1513;color:#ff6b61;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex:none}
+.wt{flex:1;min-width:0}.wt b{display:block;color:#fff;font-size:18px}.wt span{color:var(--sub);font-size:13px}
+.relb{background:#3a2d12;color:var(--gold);font-size:12px;padding:3px 9px;border-radius:8px;white-space:nowrap}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:6px}
+.stats>div{background:var(--card);border:1px solid #2e1719;border-radius:10px;padding:10px}
+.stats .l{color:var(--sub);font-size:12px}.stats .v{color:#fff;font-size:22px;font-weight:700;line-height:1.25}
+.stats .s{font-size:12px;color:var(--sub)}.up{color:var(--green)!important}.dn{color:#ff6b61!important}
+.nowc{display:flex;flex-direction:column;gap:8px}
+.nowc a{display:flex;align-items:center;gap:12px;border-radius:10px;padding:11px 13px;border:1px solid}
+.nowc .war{background:#3b1513;border-color:#6b2420}.nowc .chain{background:#2e2410;border-color:#5c4716}
+.nowc i{font-style:normal;font-size:22px}.nowc .x{flex:1;min-width:0}.nowc b{display:block;color:#fff}
+.nowc .x span{color:var(--sub);font-size:13px}.nowc .war em{color:#ff6b61;font-style:normal;font-weight:700}
+.nowc .chain em{color:var(--gold);font-style:normal;font-weight:700}
+.nowc .go{font-size:12px;padding:3px 10px;border-radius:8px;background:#6b2420;color:#ffd6d2}
+.nowc .chain .go{background:#5c4716;color:#ffe9b8}
+.pbar{height:5px;background:#3a2d12;border-radius:3px;margin:6px 0 4px}.pbar u{display:block;height:5px;background:var(--gold);border-radius:3px}
+.attn{background:var(--card);border:1px solid #6b4a18;border-radius:12px;padding:10px 14px;margin:18px 0 6px}
+.attn .ah{display:flex;align-items:center;gap:8px;margin-bottom:4px}.attn .ah b{flex:1;color:#fff;font-size:15px}
+.attn .cnt{background:#3a2d12;color:var(--gold);font-size:12px;padding:2px 9px;border-radius:8px}
+.attn a{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #2e1719;font-size:14px}
+.attn a i{font-style:normal;width:22px;text-align:center}.attn a span{flex:1}.attn a em{color:var(--gold);font-style:normal;font-size:13px}
+.qa{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:18px 0 4px}
+.qa a{text-align:center;color:var(--sub);font-size:12px}
+.qa a i{display:flex;align-items:center;justify-content:center;height:52px;font-style:normal;font-size:24px;background:var(--card);border:1px solid var(--edge);border-radius:12px;margin-bottom:5px;transition:border-color .15s}
+.qa a:hover i{border-color:var(--red)}
+.feat{display:block;background:var(--card);border:1px solid var(--edge);border-radius:12px;overflow:hidden;margin-bottom:10px}
+.feat:hover{border-color:var(--red)}.feat img{width:100%;max-height:260px;object-fit:cover;object-position:top;display:block;background:#000}
+.feat div{padding:10px 13px}.feat b{display:block;color:#fff;font-size:16px;margin:6px 0 1px}.feat .sub{color:var(--sub);font-size:12px}
+.badge{display:inline-block;background:#3b1513;color:#ff6b61;font-size:11px;padding:2px 9px;border-radius:8px}
+.list{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:0 13px}
+.list a{display:flex;align-items:center;gap:11px;padding:10px 0;border-top:1px solid #2e1719}.list a:first-child{border-top:0}
+.list a i{font-style:normal;font-size:18px;width:24px;text-align:center}.list .t{flex:1;min-width:0;color:#eee;font-size:14px}
+.list .t small{display:block;color:var(--sub);font-size:12px}.list .ago{color:var(--sub);font-size:12px;white-space:nowrap}
+.list a:hover .t{color:var(--gold)}
+.groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 14px;background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:12px 14px}
+.groups p{margin:0 0 4px;color:var(--gold);font-size:12px;letter-spacing:1px;text-transform:uppercase}
+.groups a{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:14px;color:#ddd}.groups a:hover{color:var(--gold)}
+.groups a i{font-style:normal;width:20px;text-align:center}
+@media(max-width:420px){.stats .v{font-size:19px}.groups{grid-template-columns:repeat(2,minmax(0,1fr))}}
+"""
+
+# HOME_JS: the hubs' live parts. window.HBH (home_js_cfg) says where to read from:
+#   who   /m/whoami.json  - name, position, leader      mine  /m/mine.json - own reliability (leaders' badge)
+#   home  db/home.json    - own numbers vs average + war snapshot
+#   live  /m/live.json    - war / chain / crimes from Torn, ~1 min old (gatekeeper); falls back to home.war
+#   att   leaders' db/attention.json - unpaid payouts, idle recruits
+# Timers tick every second between the 1-minute refreshes. "Right now" / "Needs attention" hide when empty.
+HOME_JS = r"""
+(function(){
+const H=window.HBH||{},$=id=>document.getElementById(id),now=()=>Date.now()/1e3;
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const get=u=>u?fetch(u,{cache:"no-store",credentials:"same-origin"}).then(r=>r.ok?r.json():null).catch(()=>null):Promise.resolve(null);
+const k=v=>v>=1e6?(v/1e6).toFixed(1).replace(/\.0$/,"")+"m":v>=1e4?Math.round(v/1e3)+"k":v>=1e3?(v/1e3).toFixed(1).replace(/\.0$/,"")+"k":String(Math.round(v));
+const ago=t=>{const s=now()-t;return s<3600?Math.max(1,Math.round(s/60))+"m":s<86400?Math.round(s/3600)+"h":Math.round(s/86400)+"d"};
+const agoL=t=>{const s=now()-t;return s<3600?"posted "+Math.max(1,Math.round(s/60))+" min ago":s<86400?"posted "+Math.round(s/3600)+" h ago":s<172800?"posted yesterday":"posted "+Math.round(s/86400)+" days ago"};
+const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=s%60;
+  return d?`${d}d ${h}h ${String(m).padStart(2,"0")}m`:h?`${h}h ${String(m).padStart(2,"0")}m ${String(x).padStart(2,"0")}s`:`${m}:${String(x).padStart(2,"0")}`};
+const BONUS=[10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000];
+document.querySelectorAll(".ago[data-t]").forEach(e=>{const t=+e.dataset.t;if(t)e.textContent=e.dataset.long?agoL(t):ago(t)});
+let WHO=null,HOME=null,LIVE=null,ATT=null;
+
+function welcome(){const el=$("hbWel");if(!el)return;
+  const hr=new Date().getHours(),hi=hr<5?"Good evening":hr<12?"Good morning":hr<18?"Good afternoon":"Good evening";
+  const r=WHO&&HOME&&HOME.m?HOME.m[String(WHO.id)]:null,A=(HOME&&HOME.avg)||{};
+  const ini=WHO?String(WHO.name).replace(/[^A-Za-z0-9]/g,"").slice(0,2).toUpperCase()||"HB":"HB";
+  const days=r&&r[0]!=null?` · ${Number(r[0]).toLocaleString("en-US")} days in faction`:"";
+  el.querySelector(".wel").innerHTML=`<div class="av">${esc(ini)}</div><div class="wt"><b>${WHO?`${hi}, ${esc(WHO.name)}`:"Welcome to Heart Breakers"}</b>`
+    +`<span>${WHO?esc(WHO.position||"Member")+days:"Members hub"}</span></div><span class="relb" id="hbRel" hidden></span>`;
+  if(!r){el.querySelector(".stats").innerHTML="";return}
+  const diff=(v,a,u)=>{if(v==null||a==null)return'<div class="s">&nbsp;</div>';const d=Math.round((v-a)*10)/10;
+    return `<div class="s ${d>=0?"up":"dn"}">${d>=0?"+":""}${d}${u||""} vs avg</div>`};
+  const lw=HOME.last_war;
+  el.querySelector(".stats").innerHTML=
+    `<div><div class="l">Last war hits</div><div class="v">${r[1]==null?"-":r[1]}</div>${r[1]==null?`<div class="s">${lw?"not in vs "+esc(lw.opponent):"no wars yet"}</div>`:diff(r[1],A.war)}</div>`
+   +`<div><div class="l">Gym this month</div><div class="v">${k(r[2]||0)}</div><div class="s">avg ${A.gym!=null?k(A.gym):"-"}</div></div>`
+   +`<div><div class="l">Crime success</div><div class="v">${r[3]==null?"-":r[3]+"%"}</div>${r[3]==null?'<div class="s">no crimes yet</div>':diff(r[3],A.oc," pts")}</div>`;
+  if(WHO.leader&&H.mine)get(H.mine).then(m=>{const s=m&&m.reliability&&m.reliability.score;const b=$("hbRel");
+    if(b&&s!=null){b.textContent="Reliability "+Math.round(s);b.hidden=false}});
+}
+
+// war + chain cards (redrawn every second for the timers)
+function nowCards(){const el=$("hbNow");if(!el)return;const t=now(),L=H.links||{};let h="";
+  const w=(LIVE&&LIVE.war!==undefined)?LIVE.war:(HOME&&HOME.war);
+  if(w&&w.kind){const live_=w.kind==="ongoing"||(w.start&&w.start<=t);
+    if(!(w.end&&w.end<=t))h+=`<a class="war" href="${L.torn_war}" target="_blank" rel="noopener"><i>⚔️</i><div class="x"><b>Ranked war vs ${esc(w.opponent||"?")}</b>`
+      +(live_?`<span>Live · <em>${(w.our||0).toLocaleString("en-US")} - ${(w.their||0).toLocaleString("en-US")}</em></span>`
+             :`<span>Starts in <em>${dur(w.start-t)}</em></span>`)+`</div><span class="go">${live_?"Fight":"Plan"}</span></a>`}
+  const c=LIVE&&LIVE.chain;
+  if(c&&c.current>0&&c.timeout_at>t-30){const nx=BONUS.find(b=>b>c.current)||c.max||c.current,pv=[0].concat(BONUS).filter(b=>b<=c.current).pop()||0;
+    const pc=Math.max(3,Math.min(100,Math.round(100*(c.current-pv)/Math.max(1,nx-pv))));
+    h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>⛓️</i><div class="x"><b>Chain ${c.current.toLocaleString("en-US")} / ${nx.toLocaleString("en-US")}</b>`
+      +`<div class="pbar"><u style="width:${pc}%"></u></div><span>${c.timeout_at>t?`Timeout <em>${dur(c.timeout_at-t)}</em>`:"Checking…"} · ${(nx-c.current).toLocaleString("en-US")} to the next bonus</span></div><span class="go">Hit</span></a>`}
+  el.querySelector(".nowc").innerHTML=h;el.hidden=!h;
+}
+
+function attention(){const el=$("hbAtt");if(!el)return;const L=H.links||{},rows=[];
+  ((ATT&&ATT.unpaid)||[]).forEach(u=>rows.push(`<a href="${L.payout}"><i>💰</i><span>War payout vs ${esc(u.opponent||"?")} unpaid</span><em>Pay</em></a>`));
+  const cw=LIVE&&LIVE.crimes&&LIVE.crimes.waiting;
+  if(cw)rows.push(`<a href="${L.torn_crimes}" target="_blank" rel="noopener"><i>🕵️</i><span>${cw} crime${cw>1?"s":""} waiting on members</span><em>View</em></a>`);
+  const rc=(ATT&&ATT.recruits)||[];
+  if(rc.length)rows.push(`<a href="${rc.length===1?L.profile+"?id="+rc[0].id:L.members}"><i>🙍</i><span>${rc.length===1?esc(rc[0].name)+" (recruit) inactive "+rc[0].idle+" days"
+    :rc.length+" recruits inactive "+Math.min(...rc.map(r=>r.idle))+"+ days"}</span><em>${rc.length===1?"Profile":"Members"}</em></a>`);
+  el.querySelector(".rows").innerHTML=rows.join("");el.querySelector(".cnt").textContent=rows.length;el.hidden=!rows.length;
+}
+
+function refresh(){return get(H.live).then(l=>{if(l&&!l.off)LIVE=l;nowCards();attention()})}
+Promise.all([get(H.who),get(H.home),$("hbAtt")?get(H.att):null]).then(([w,h,a])=>{WHO=w;HOME=h;ATT=a;welcome();nowCards();attention();
+  if(H.live&&($("hbNow")||$("hbAtt"))){refresh();setInterval(refresh,60e3)}
+  if($("hbNow"))setInterval(nowCards,1e3)});
+})();
+"""
+
+
+def _hub_page(path: Path, title: str, tagline: str, body: str, hub: bool = False, top: bool = True, menu: str = ""):
+    """A page in the hub style. hub=True: the homepage column (.hubw); top=False: no big title (the hub's
+    welcome section greets the member instead)."""
     import html as _html
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%b %d, %Y %H:%M TCT")
     path.write_text(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>{_html.escape(title)}</title><style>{HUB_CSS}</style></head><body>
-<div class="top"><h1>{_html.escape(title)}</h1><div class="tag">{tagline}</div></div>
-{body}
+{menu}{f'<div class="top"><h1>{_html.escape(title)}</h1><div class="tag">{tagline}</div></div>' if top else ""}
+{f'<div class="hubw">{body}</div>' if hub else body}
 <div class="foot">Updated {stamp}</div></body></html>""", encoding="utf-8")
 
 
@@ -4265,8 +4386,8 @@ def _hub_tiles(items, cls="") -> str:
         for ic, t, d, u in items) + "</div>"
 
 
-def latest_newsletters(n: int = 2) -> list:
-    """Newest Newsletter Builder images: [(name, title, subtitle)] newest first. The name ends in the publish time
+def latest_newsletters(n: int = 2, with_time: bool = False) -> list:
+    """Newest Newsletter Builder images: [(name, title, subtitle)] newest first (with_time: + publish time). The name ends in the publish time
     (base 36, e.g. newsletter-mw371ul2); data/panels/<name>.json (saved with it since Nov 2026) has the title."""
     if not PANELS_DIR.exists():
         return []
@@ -4291,22 +4412,29 @@ def latest_newsletters(n: int = 2) -> list:
         when = datetime.fromtimestamp(t, timezone.utc).strftime("%b %d, %Y") if t else ""
         sub = f"{meta.get('type') or 'Newsletter'} · {when}" if when else (meta.get("type") or "Newsletter")
         items.append((t, f.stem, str(title).title() if str(title).isupper() else str(title), sub))
+    if with_time:
+        return [(nm, ti, su, _t) for _t, nm, ti, su in sorted(items, reverse=True)[:n]]
     return [(nm, ti, su) for _t, nm, ti, su in sorted(items, reverse=True)[:n]]
 
 
-def _hub_latest(mb: str) -> str:
-    """Newest recap, payout receipt, war report and chain report as picture cards (mb = link prefix)."""
-    import html as _html
-    cards = []
+def _hub_latest_items(mb: str) -> list:
+    """Everything the "Latest" section can show, newest first:
+    [{"t": time, "url", "img", "title", "sub", "kind": newsletter|recap|payout|war|chain}] (mb = link prefix)."""
+    items = []
     months = sorted(RECAP_DIR.glob("*.png"), reverse=True) if RECAP_DIR.exists() else []
     if months:
         m = months[0].stem
         lab = datetime.strptime(m, "%Y-%m").strftime("%B %Y")
         first = f"recaps/{m}/recap-1.png" if (RECAP_DIR / m / "recap-1.png").exists() else f"recaps/{m}.png"
-        cards.append((f"{mb}newsletter.html#{m}", f"{mb}{first}", f"{lab} Recap", "Monthly recap"))
+        # a recap is posted at the start of the NEXT month - use that, not the file time (checkouts reset it)
+        y_, mo_ = int(m[:4]), int(m[5:7])
+        t_ = int(datetime(y_ + (mo_ == 12), mo_ % 12 + 1, 1, tzinfo=timezone.utc).timestamp())
+        items.append({"t": t_, "url": f"{mb}newsletter.html#{m}", "img": f"{mb}{first}",
+                      "title": f"{lab} recap", "sub": "Monthly recap", "kind": "recap"})
     # newest newsletters (Newsletter Builder -> data/panels/<name>.png; copied to the members' panels/ folder)
-    for nm, title, sub in latest_newsletters(2):
-        cards.append((f"{mb}panels/{nm}.png", f"{mb}panels/{nm}.png", title, sub))
+    for nm, title, sub, t_ in latest_newsletters(3, with_time=True):
+        items.append({"t": t_, "url": f"{mb}panels/{nm}.png", "img": f"{mb}panels/{nm}.png",
+                      "title": title, "sub": sub, "kind": "newsletter"})
     rec = _latest_receipts()
     if rec:
         def end_of(w):
@@ -4317,8 +4445,9 @@ def _hub_latest(mb: str) -> str:
         wid = max(rec, key=end_of)
         try:
             r = json.loads((PAYOUT_DIR / f"{rec[wid]}.json").read_text(encoding="utf-8"))
-            cards.append((f"{mb}payouts/war-{wid}.html", f"{mb}payouts/war-{wid}.png",
-                          f"Payout vs {r['war'].get('opponent', '?')}", f"${r.get('paid', 0):,} paid"))
+            items.append({"t": int(r.get("created") or r["war"].get("end") or 0), "url": f"{mb}payouts/war-{wid}.html",
+                          "img": f"{mb}payouts/war-{wid}.png", "title": f"Payout vs {r['war'].get('opponent', '?')}",
+                          "sub": f"${r.get('paid', 0):,} paid", "kind": "payout"})
         except (OSError, ValueError):
             pass
     metas = []
@@ -4333,10 +4462,35 @@ def _hub_latest(mb: str) -> str:
             slug, m = mk[0]
             title, _ = report_newsletter(m, slug)
             when = datetime.fromtimestamp(m.get("end", 0), timezone.utc).strftime("%b %d, %Y")
-            cards.append((f"{mb}reports/{slug}.html", f"{mb}reports/{slug}.png", title, when))
-    return '<div class="latest">' + "".join(
-        f'<a href="{u}"><img src="{im}" alt="" loading="lazy"><div><b>{_html.escape(t)}</b><span>{_html.escape(d)}</span></div></a>'
-        for u, im, t, d in cards) + "</div>" if cards else '<p class="tag">Nothing posted yet.</p>'
+            items.append({"t": int(m.get("end", 0)), "url": f"{mb}reports/{slug}.html", "img": f"{mb}reports/{slug}.png",
+                          "title": title, "sub": ("War report · " if kind == "war" else "Chain report · ") + when, "kind": kind})
+    items.sort(key=lambda x: -x["t"])
+    return items
+
+
+LATEST_ICON = {"newsletter": "📰", "recap": "🗓️", "payout": "💰", "war": "🏆", "chain": "⛓️"}
+LATEST_LABEL = {"newsletter": "Newsletter", "recap": "Recap", "payout": "Payout", "war": "War report", "chain": "Chain report"}
+
+
+def _hub_latest(mb: str) -> str:
+    """The "Latest" section: the NEWEST post as one big picture card (type badge, name, how long ago), then the
+    next few as a compact list. Times are shown as "2h" / "3d" by HOME_JS (data-t), dates otherwise."""
+    import html as _html
+    items = _hub_latest_items(mb)
+    if not items:
+        return '<p class="tag">Nothing posted yet.</p>'
+    f, rest = items[0], items[1:6]
+    when = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%b %d") if t else ""
+    h = (f'<a class="feat" href="{f["url"]}"><img src="{f["img"]}" alt="" loading="lazy"><div>'
+         f'<span class="badge">{LATEST_LABEL.get(f["kind"], "")}</span><b>{_html.escape(f["title"])}</b>'
+         f'<span class="sub">{_html.escape(f["sub"])} · <span class="ago" data-t="{f["t"]}" data-long="1">{when(f["t"])}</span></span>'
+         f'</div></a>')
+    if rest:
+        h += '<div class="list">' + "".join(
+            f'<a href="{x["url"]}"><i>{LATEST_ICON.get(x["kind"], "•")}</i><span class="t">{_html.escape(x["title"])}'
+            f'<small>{_html.escape(x["sub"])}</small></span><span class="ago" data-t="{x["t"]}">{when(x["t"])}</span></a>'
+            for x in rest) + "</div>"
+    return h
 
 
 def _reports_page(mout: Path):
@@ -4370,41 +4524,55 @@ def _reports_page(mout: Path):
 # HOMEPAGES (Members Hub = members' index.html, Leaders Hub = leaders' index.html) are built from
 # config.json "homepage" - leaders edit it on the Homepage editor (Site Panels -> Homepage), no code changes:
 #   {"members": {"sections": [...]}, "leaders": {"sections": [...]}}
-#   section: {"type": "tiles", "title": "Pages", "tiles": [{"icon", "title", "desc", "link"}]}
-#            {"type": "latest", "title": "Latest"}   (newest newsletters, recap, payout, war + chain report)
-#            {"type": "text", "title": "...", "text": "..."}   (a note; blank lines = paragraphs)
+#   section types:
+#     {"type": "welcome"}                       greeting with the signed-in member's name, position, days in faction
+#                                               + 3 of their own numbers vs the faction average (db/home.json);
+#                                               leaders also see their reliability badge (/m/mine.json)
+#     {"type": "now", "title": "Right now"}     live war countdown / score and the running chain (gatekeeper
+#                                               /m/live.json, refreshed every minute, timers tick every second);
+#                                               the whole section hides itself when nothing is going on
+#     {"type": "attention", "title": "Needs attention"}   LEADERS HUB ONLY: unpaid war payouts, crimes waiting
+#                                               on members, inactive recruits (leaders' db/attention.json + live);
+#                                               hides itself when everything is clear
+#     {"type": "actions", "tiles": [{"icon", "title", "link"}]}   big icon buttons (quick actions)
+#     {"type": "latest", "title": "Latest"}     newest post as a big card + the next few as a list (automatic)
+#     {"type": "groups", "title": "Explore", "groups": [{"title", "links": [{"icon", "title", "link"}]}]}
+#                                               page links sorted into short labelled groups
+#     {"type": "tiles", "title": "Pages", "tiles": [{"icon", "title", "desc", "link"}]}   tile grid (older style)
+#     {"type": "text", "title": "...", "text": "..."}   a note; blank lines = paragraphs
 #   link: "M:<page>" members' folder · "L:<page>" leaders' folder · "G:/" the dashboard · a full https:// address
-# With no "homepage" in config.json the hubs use HOMEPAGE_DEFAULT (the layout they had before the editor).
+# With no "homepage" in config.json the hubs use homepage_default().
+HOME_LAYOUT_V = 2          # bumped Nov 2026 for the redesigned hubs (welcome / right now / needs attention ...)
+
+
 def homepage_default() -> dict:
-    tiles = lambda rows: [{"icon": i_, "title": t_, "desc": d_, "link": l_} for i_, t_, d_, l_ in rows]
-    member_tiles = tiles([
-        ("🙋", "My Profile", "Your own wars, chains, crimes and payouts · sign out", "M:me"),
-        ("⚔️", "War History", "Every ranked war on record", "M:wars.html"),
-        ("💰", "War Payouts", "Every war payout receipt", "M:payouts.html"),
-        ("⛓️", "Chain History", "Every chain on record", "M:chains.html"),
-        ("🕵️", "Organized Crimes", "Pass rates, payouts and respect for every crime", "M:crimes.html"),
-        ("🏆", "Leaderboards", "War, chain, organized crime and gym leaders - this month, all time, past months", "M:leaderboards.html"),
-        ("🏋️", "Gym Leaderboards", "Gym energy this month and all time - plus past months", "M:gym.html"),
-        ("👥", "Members", "Every member - open a profile", "M:members.html"),
-        ("📰", "Monthly Recap", "The latest monthly recap", "M:newsletter.html"),
-        ("🗂️", "Recap Archive", "Every monthly recap with all its pages", "M:recaps.html")])
-    leader_tiles = tiles([
-        ("🧮", "Payout Calculator", "Work out war payouts, pay members, save receipts", "L:payout.html"),
-        ("📊", "Leader Monitor", "Participation trend, reliability score, payout ledger, crime delays", "L:monitor.html"),
-        ("💊", "Xanax Monitor", "Energy in vs energy used per member", "L:xanax.html"),
-        ("📢", "Announcements", "Edit the members' announcement (live preview + HTML for Torn)", "L:announcements.html"),
-        ("🖼️", "Faction Description", "Edit the faction description banner (live preview + HTML for Torn)", "L:description.html"),
-        ("🎨", "Newsletter Builder", "Framed messages from templates - newsletters, war reports, recruits, events", "L:builder.html"),
-        ("🏠", "Homepage Editor", "Edit these hubs: sections, tiles, layout", "L:homepage.html"),
-        ("🧩", "Newsletter Filler", "Userscript - fills Torn's newsletter for you (Tampermonkey / PDA)", "L:hb-newsletter-filler.user.js"),
-        ("⚙️", "Run an update", "GitHub Actions - Faction banner - Run workflow",
-         f"https://github.com/{CODE_REPO}/actions/workflows/banner.yml")])
-    return {"members": {"sections": [{"type": "latest", "title": "Latest"},
-                                     {"type": "tiles", "title": "Pages", "tiles": member_tiles}]},
-            "leaders": {"sections": [{"type": "tiles", "title": "🛡️ Leader tools", "tiles": leader_tiles},
+    link = lambda rows: [{"icon": i_, "title": t_, "link": l_} for i_, t_, l_ in rows]
+    actions = {"type": "actions", "title": "", "tiles": link([
+        ("🙋", "Profile", "M:me"), ("💰", "Payouts", "M:payouts.html"),
+        ("🕵️", "Crimes", "M:crimes.html"), ("🏋️", "Gym", "M:gym.html")])}
+    compete = {"title": "Compete", "links": link([("⚔️", "Wars", "M:wars.html"), ("⛓️", "Chains", "M:chains.html"),
+                                                  ("🏆", "Boards", "M:leaderboards.html")])}
+    grow = {"title": "Grow", "links": link([("🏋️", "Gym", "M:gym.html"), ("🕵️", "Crimes", "M:crimes.html"),
+                                            ("📜", "History", "M:leaderboard-history.html")])}
+    faction = {"title": "Faction", "links": link([("👥", "Members", "M:members.html"), ("📰", "Recaps", "M:recaps.html"),
+                                                  ("💰", "Payouts", "M:payouts.html")])}
+    leaders = {"title": "Leaders", "links": link([
+        ("🧮", "Payout calculator", "L:payout.html"), ("📊", "Leader monitor", "L:monitor.html"),
+        ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
+        ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
+        ("🧩", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
+    return {"v": HOME_LAYOUT_V,
+            "members": {"sections": [{"type": "welcome", "title": ""},
+                                     {"type": "now", "title": "Right now"},
+                                     actions,
                                      {"type": "latest", "title": "Latest"},
-                                     {"type": "tiles", "title": "👥 Member pages",
-                                      "tiles": member_tiles + tiles([("🏠", "Members Hub", "The members' homepage", "M:index.html")])}]}}
+                                     {"type": "groups", "title": "Explore", "groups": [compete, grow, faction]}]},
+            "leaders": {"sections": [{"type": "welcome", "title": ""},
+                                     {"type": "now", "title": "Right now"},
+                                     {"type": "attention", "title": "Needs attention"},
+                                     actions,
+                                     {"type": "latest", "title": "Latest"},
+                                     {"type": "groups", "title": "Explore", "groups": [compete, grow, faction, leaders]}]}}
 
 
 def _hub_link(link: str, hub: str) -> str:
@@ -4420,38 +4588,91 @@ def _hub_link(link: str, hub: str) -> str:
     return link or "#"
 
 
+def home_js_cfg(hub: str) -> dict:
+    """Where the homepage's live parts read from (HOME_JS) - same addresses on the editor's preview."""
+    g_ = gate_cfg()
+    gate = g_["url"].rstrip("/") if g_ else ""
+    return {"hub": hub, "home": member_base() + "/db/home.json",
+            "att": (leader_base() + "/db/attention.json") if leader_dir() else "",
+            "who": gate + "/m/whoami.json" if gate else "", "mine": gate + "/m/mine.json" if gate else "",
+            "live": gate + "/m/live.json" if gate else "",
+            "links": {"wars": _hub_link("M:wars.html", hub), "payout": _hub_link("L:payout.html", hub),
+                      "crimes": _hub_link("M:crimes.html", hub), "members": _hub_link("M:members.html", hub),
+                      "profile": _hub_link("M:member.html", hub),
+                      "torn_war": "https://www.torn.com/factions.php?step=your#/war/rank",
+                      "torn_chain": "https://www.torn.com/factions.php?step=your#/war/chain",
+                      "torn_crimes": "https://www.torn.com/factions.php?step=your#/tab=crimes"}}
+
+
 def _hub_sections(sections: list, hub: str) -> str:
     import html as _html
-    h = ""
+    h, live = "", False
     for sec in sections or []:
         title = str(sec.get("title") or "")
-        if title:
-            h += f"<h2>{_html.escape(title)}</h2>"
         t_ = sec.get("type", "tiles")
-        if t_ == "latest":
-            h += _hub_latest("" if hub == "members" else member_base() + "/")
+        head = f"<h2>{_html.escape(title)}</h2>" if title else ""
+        if t_ == "welcome":
+            # filled in by HOME_JS from the sign-in + db/home.json
+            h += '<div class="hbsec" id="hbWel"><div class="wel"><div class="av">HB</div><div class="wt"><b>Welcome to Heart Breakers</b>' \
+                 '<span>Loading your numbers…</span></div></div><div class="stats"></div></div>'
+            live = True
+        elif t_ == "now":
+            h += f'<div class="hbsec" id="hbNow" hidden>{head}<div class="nowc"></div></div>'
+            live = True
+        elif t_ == "attention":
+            if hub != "leaders":
+                continue                     # leaders only - never on the Members Hub
+            h += f'<div class="hbsec" id="hbAtt" hidden><div class="attn"><div class="ah"><b>🔔 {_html.escape(title or "Needs attention")}</b>' \
+                 '<span class="cnt"></span></div><div class="rows"></div></div></div>'
+            live = True
+        elif t_ == "actions":
+            h += head + '<div class="qa">' + "".join(
+                f'<a href="{_hub_link(x.get("link"), hub)}"><i>{_html.escape(str(x.get("icon", "")))}</i>{_html.escape(str(x.get("title", "")))}</a>'
+                for x in sec.get("tiles") or []) + "</div>"
+        elif t_ == "latest":
+            h += head + _hub_latest("" if hub == "members" else member_base() + "/")
+            live = True                      # "2h ago" times
+        elif t_ == "groups":
+            h += head + '<div class="groups">' + "".join(
+                f'<div><p>{_html.escape(str(gr.get("title", "")))}</p>' + "".join(
+                    f'<a href="{_hub_link(x.get("link"), hub)}"><i>{_html.escape(str(x.get("icon", "")))}</i>{_html.escape(str(x.get("title", "")))}</a>'
+                    for x in gr.get("links") or []) + "</div>"
+                for gr in sec.get("groups") or []) + "</div>"
         elif t_ == "text":
-            h += '<div class="note">' + "".join(f"<p>{_html.escape(p_).replace(chr(10), '<br>')}</p>"
-                                               for p_ in str(sec.get("text") or "").split("\n\n") if p_.strip()) + "</div>"
+            h += head + '<div class="note">' + "".join(f"<p>{_html.escape(p_).replace(chr(10), '<br>')}</p>"
+                                                      for p_ in str(sec.get("text") or "").split("\n\n") if p_.strip()) + "</div>"
         else:
-            h += _hub_tiles([(x.get("icon", ""), x.get("title", ""), x.get("desc", ""), _hub_link(x.get("link"), hub))
-                             for x in sec.get("tiles") or []], "l" if hub == "leaders" else "")
+            h += head + _hub_tiles([(x.get("icon", ""), x.get("title", ""), x.get("desc", ""), _hub_link(x.get("link"), hub))
+                                    for x in sec.get("tiles") or []], "l" if hub == "leaders" else "")
+    if live:
+        h += f"<script>window.HBH={json.dumps(home_js_cfg(hub))};</script><script>{HOME_JS}</script>"
     return h
+
+
+def _home_layout(cfg: dict) -> dict:
+    """config.json "homepage", or the built-in layout when there is none / it's from before the redesign
+    (no "v" - saved with the old editor) so the new hubs show up without anyone having to reset them."""
+    hp = (cfg or {}).get("homepage")
+    return hp if hp and hp.get("v", 0) >= HOME_LAYOUT_V else homepage_default()
 
 
 def write_homepages(out: Path, cfg: dict = None):
     """index.html in the MEMBERS' folder (Members Hub) and in the LEADERS' folder (Leaders Hub), laid out from
     config.json "homepage" (Homepage editor) - see the HOMEPAGES note above."""
-    hp = (cfg or {}).get("homepage") or homepage_default()
+    hp = _home_layout(cfg)
     mout = member_out(out)
+    msec = (hp.get("members") or {}).get("sections") or []
     _hub_page(mout / "index.html", "Heart Breakers", "Members Hub",
-              site_menu("") + _hub_sections((hp.get("members") or {}).get("sections"), "members"))
+              _hub_sections(msec, "members"), hub=True, menu=site_menu(""),
+              top=not any(s.get("type") == "welcome" for s in msec))
     if not leader_dir():
         return
     lout = out / leader_dir()
+    lsec = (hp.get("leaders") or {}).get("sections") or []
     _hub_page(lout / "index.html", "Heart Breakers", "Leaders Hub - leaders only",
-              leader_menu("") + _hub_sections((hp.get("leaders") or {}).get("sections"), "leaders"))
-    # the Homepage editor (leaders) - its preview uses the same CSS, the current "Latest" cards and these defaults
+              _hub_sections(lsec, "leaders"), hub=True, menu=leader_menu(""),
+              top=not any(s.get("type") == "welcome" for s in lsec))
+    # the Homepage editor (leaders) - its preview uses the same CSS + script, the current "Latest" and these defaults
     pages = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:index.html"), ("War History", "M:wars.html"),
              ("War Payouts", "M:payouts.html"), ("Chain History", "M:chains.html"), ("Organized Crimes", "M:crimes.html"),
              ("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
@@ -4462,11 +4683,69 @@ def write_homepages(out: Path, cfg: dict = None):
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html")]]
     conf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": pages, "default": homepage_default(),
-            "member_base": member_base(),
-            "css": HUB_CSS, "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
+            "member_base": member_base(), "layout_v": HOME_LAYOUT_V,
+            "css": HUB_CSS, "js": HOME_JS, "jscfg": {"members": home_js_cfg("members"), "leaders": home_js_cfg("leaders")},
+            "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
     (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
-                                        .replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", leader_menu("")),
-                                        encoding="utf-8")
+                                        .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
+                                        .replace("__MENU__", leader_menu("")), encoding="utf-8")
+
+
+def write_home_data(out: Path, db: dict, raw: dict):
+    """Data for the hubs' live parts (HOME_JS):
+      members' db/home.json   per CURRENT member [days in faction, hits in the last war (None = not in it),
+                              gym energy this month, crime success last 3 months (None = no crimes)], the
+                              faction averages of those, and a war snapshot (the gatekeeper's /m/live.json is
+                              newer - this is the fallback)
+      leaders' db/attention.json   wars ended in the last ATTN_PAYOUT_DAYS days with no payout receipt, and
+                              recruits idle ATTN_RECRUIT_IDLE_DAYS+ days (crimes waiting on members come live)"""
+    now = db["generated"]
+    cur = [m for m in db["members"]["members"] if m["current"]]
+    wars = db["wars"]["wars"]
+    last = wars[-1] if wars else None
+    lw = {x[0]: x[1] for x in (last or {}).get("m", [])}
+    since = now - 91 * 86400
+    crimes = [c for c in db["crimes"]["crimes"] if (c.get("t") or 0) >= since]
+    rows, avg_src = {}, {"war": [], "gym": [], "oc": []}
+    for m in cur:
+        i = m["id"]
+        hits = lw.get(i)
+        gym = int(sum((m.get("gym_month") or {}).values()))
+        mine_ = [c for c in crimes if i in (c.get("m") or [])]
+        rate = round(100 * sum(1 for c in mine_ if str(c.get("status")).lower() == "successful") / len(mine_)) if mine_ else None
+        rows[str(i)] = [m.get("days"), hits, gym, rate]
+        if hits is not None:
+            avg_src["war"].append(hits)
+        avg_src["gym"].append(gym)
+        if rate is not None:
+            avg_src["oc"].append(rate)
+    mean = lambda a: round(sum(a) / len(a), 1) if a else None
+    my_id = raw["basic"].get("basic", raw["basic"]).get("id") if raw.get("basic") else None
+    ws = war_status(raw, my_id) if raw.get("rankedwars") else {"kind": "none"}
+    home = {"generated": now, "cols": ["days", "last_war_hits", "gym_month", "crime_success"],
+            "last_war": {"id": last["id"], "opponent": last.get("opponent"), "end": last["end"]} if last else None,
+            "avg": {"war": mean(avg_src["war"]), "gym": mean(avg_src["gym"]), "oc": mean(avg_src["oc"])},
+            "m": rows,
+            "war": ({"kind": ws["kind"], "opponent": ws.get("opponent"), "start": ws.get("start"),
+                     "our": ws.get("our"), "their": ws.get("their")} if ws.get("kind") != "none" else None)}
+    _jdump(member_out(out) / "db" / "home.json", home)
+    if not leader_dir():
+        return
+    paid = set(_latest_receipts())
+    unpaid = [{"war": w["id"], "opponent": w.get("opponent"), "end": w["end"]} for w in wars
+              if w["end"] >= now - ATTN_PAYOUT_DAYS * 86400 and str(w["id"]) not in paid]
+    recruits = []
+    for m in cur:
+        la = m.get("last_action")
+        idle = (now - int(la)) / 86400 if la else 0
+        if str(m.get("position", "")).lower() == "recruit" and idle >= ATTN_RECRUIT_IDLE_DAYS:
+            recruits.append({"id": m["id"], "name": m["name"], "idle": int(idle)})
+    _jdump(out / leader_dir() / "db" / "attention.json",
+           {"generated": now, "unpaid": unpaid, "recruits": sorted(recruits, key=lambda r: -r["idle"])})
+
+
+ATTN_PAYOUT_DAYS = 14          # Needs attention: wars ended this recently with no payout receipt
+ATTN_RECRUIT_IDLE_DAYS = 3     # Needs attention: recruits idle this long
 
 
 # ==========================================================================
@@ -9232,6 +9511,7 @@ def main():
     db_ = write_databases(out, raw, cfg)          # shared data layer (db/*.json)
     write_profiles(out, db_)
     write_monitor(out, db_, cfg)
+    write_home_data(out, db_, raw)               # hubs: welcome numbers, war snapshot, needs attention
     # (write_legacy_images: only for the GitHub Pages days - the site is now on Cloudflare, so the old
     #  github.io image addresses are gone and there's nothing to keep there)
     # keep search engines out of the whole site
