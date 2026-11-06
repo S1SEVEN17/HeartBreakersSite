@@ -2,6 +2,9 @@
 name: Gatekeeper check
 on:
   workflow_dispatch: {}
+  push:                        # also runs when this file changes
+    branches: [main]
+    paths: [".github/workflows/gate-check.yml"]
 permissions:
   contents: read
 jobs:
@@ -16,3 +19,19 @@ jobs:
           done
           echo "headers on an image: $(curl -sI $G/banner-animated.webp | tr -d "\r" | cut -d: -f1 | tr "\n" " ")"
           echo "login page title: $(curl -s $G/login | grep -o '<title>[^<]*')"
+      - name: Signed-in check (hubs + live data)
+        env:
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+          LEADER_DIR: ${{ secrets.LEADER_DIR }}
+        run: |
+          # a short-lived pass for a current member, signed the way the worker does (no SESSION_SECRET set)
+          PASS=$(node -e '
+            const c=require("crypto"),b=x=>Buffer.from(x).toString("base64url");
+            const k=c.createHash("sha256").update(process.env.MEMBER_DIR+"|"+process.env.LEADER_DIR+"|hb-session").digest("hex");
+            const body=b(JSON.stringify({i:974757,n:"check",p:"",t:Date.now(),e:Date.now()+300e3}));
+            console.log(body+"."+c.createHmac("sha256",k).update(body).digest("base64url"));')
+          G=https://hb-gate.heartbreakers.workers.dev
+          echo "live.json: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/live.json)"
+          echo "home.json: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/db/home.json | head -c 300)"
+          echo "members hub sections: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/ | grep -o 'id="hb[A-Za-z]*"\|class="qa"\|class="feat"\|class="groups"' | tr '\n' ' ')"
+          echo "leaders hub sections: $(curl -s -H "Cookie: hb_s=$PASS" $G/l/ | grep -o 'id="hb[A-Za-z]*"\|class="qa"\|class="feat"\|class="groups"' | tr '\n' ' ')"
