@@ -5,6 +5,9 @@ name: Gatekeeper secrets
 
 on:
   workflow_dispatch: {}
+  push:                        # also runs by itself when this file changes (e.g. a new secret added below)
+    branches: [main]
+    paths: [".github/workflows/gate.yml"]
 
 permissions:
   contents: read
