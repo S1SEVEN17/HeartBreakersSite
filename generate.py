@@ -533,12 +533,12 @@ def war_attack_stats(key: str, start: int, end: int, my_id, opp_id=None) -> dict
                 t["losses"] += 1
             if res in ("attacked", "hospitalized", "mugged"):
                 if int(a.get("chain") or 0) in CHAIN_BONUS_HITS:
-                    # chain bonus hit (10th, 25th, ...): its respect is mostly the
-                    # bonus - kept out of Biggest Hit and Respect / Hit
+                    # chain bonus hit (10th, 25th, ...): counted (Bonus Hunter); its respect IS included in every
+                    # respect total and Respect / Hit (Nov 2026) - but kept OUT of Biggest Hit
                     t["bonus_resp"] += float(a.get("respect_gain") or 0)
                     t["bonus_hits"] += 1
                 else:
-                    # Biggest Hit: best respect from ONE war hit, chain bonus hits excluded
+                    # Biggest Hit: best respect from ONE war hit, chain bonus hits excluded (decided Nov 2026)
                     t["best"] = max(t["best"], float(a.get("respect_gain") or 0))
             if res == "assist":
                 t["assists"] += 1
@@ -568,14 +568,15 @@ def war_attack_stats(key: str, start: int, end: int, my_id, opp_id=None) -> dict
 
 
 def nb(m: dict):
-    """(respect, hits) for a member's war WITHOUT chain bonus hits - used by
-    every Respect / Hit figure. Wars whose attack log isn't read yet fall
-    back to the war report totals."""
-    return ((m.get("score") or 0) - (m.get("bonus_resp") or 0),
-            (m.get("attacks") or 0) - (m.get("bonus_hits") or 0))
+    """(respect, hits) for a member's war - used by every Respect / Hit figure. Chain bonus respect is INCLUDED
+    (decided Nov 2026 - it was left out before): the war report's whole score over all its hits. (The name is
+    kept from when it meant "no bonus"; bonus_resp / bonus_hits are still recorded, e.g. for the Bonus Hunter award.)"""
+    return (m.get("score") or 0), (m.get("attacks") or 0)
 
 
 ATTACK_LOG_DAYS = 40
+# 7 = payout stats: raids + "special" excluded, exact war window (Biggest Hit without chain bonus hits)
+ATTACK_LOG_V = 7
 
 
 def fill_war_attack_log(hist: dict, key: str, my_id) -> bool:
@@ -585,7 +586,7 @@ def fill_war_attack_log(hist: dict, key: str, my_id) -> bool:
     wars = hist.get("wars", {})
     for wid in hist.get("attack_log_queue", []):
         w = wars.get(wid)
-        if not w or w.get("attack_log") == 7 or not w.get("opp_id"):
+        if not w or w.get("attack_log") == ATTACK_LOG_V or not w.get("opp_id"):
             continue
         stats = war_attack_stats(key, w.get("start") or w["end"] - 86400 * 4, w["end"], my_id, w["opp_id"])
         if stats is None:
@@ -601,7 +602,7 @@ def fill_war_attack_log(hist: dict, key: str, my_id) -> bool:
                 m[k_] = st.get(k_, 0)
             for k_ in ("resp_war", "resp_out", "out_bonus_resp"):
                 m[k_] = round(st.get(k_, 0.0), 2)
-        w["attack_log"] = 7                # 7 = payout stats: raids + "special" excluded, exact war window
+        w["attack_log"] = ATTACK_LOG_V     # see ATTACK_LOG_V
         print(f"War attack log: war {wid} filled")
         return True
     return False
@@ -719,7 +720,7 @@ def leaderboard(hist: dict, current_ids: set, lcfg: dict, since: int = 0, monthl
             t["hits"] += m["attacks"]
             t["respect"] += m["score"]                     # total respect (bonuses included)
             r_nb, h_nb = nb(m)
-            t["resp_nb"] = t.get("resp_nb", 0.0) + r_nb    # Respect / Hit: no chain bonus hits
+            t["resp_nb"] = t.get("resp_nb", 0.0) + r_nb    # Respect / Hit (chain bonus respect included)
             t["hits_nb"] = t.get("hits_nb", 0) + h_nb
             t["wars"] += 1
             if m["attacks"]:
@@ -903,8 +904,8 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
             saved[cid]["non_attackers"] = [x.get("id") if isinstance(x, dict) else x for x in na]
         read += 1
     # Back-fill chain bonus hits (who made them, their respect) for EVERY chain saved before bonuses were
-    # recorded - needed to keep bonus respect out of every Respect / Hit figure. Longest chains first (they carry
-    # the most bonus respect), CHAIN_BONUS_BACKFILL reports per run until done.
+    # recorded - for the bonus-hit lists and the Bonus Hunter award (bonus respect itself is counted everywhere,
+    # Nov 2026). Longest chains first, CHAIN_BONUS_BACKFILL reports per run until done.
     if key:
         need = sorted((k for k, c in saved.items() if c["length"] >= 10
                        and "bonuses" not in c and not c.get("bonus_checked")),
@@ -1307,10 +1308,8 @@ def chain_report(cid: str, chist: dict, members: list, ccfg: dict) -> dict:
         "hit": len(hit), "present": len(elig), "attackers": len(att),
         # full summary: every member who hit, most successful attacks first
         "rows": [{"name": nm(a["id"]), "hits": a["hits"], "respect": a["respect"],
-                  # AVG leaves out the member's chain bonus hits (their respect is the bonus)
-                  "avg": (lambda br, bh: (a["respect"] - br) / (a["hits"] - bh) if a["hits"] - bh > 0 else 0)(
-                      sum(b.get("respect", 0) for b in c.get("bonuses", []) if b["id"] == a["id"]),
-                      sum(1 for b in c.get("bonuses", []) if b["id"] == a["id"])),
+                  # AVG = respect / hits, chain bonus respect included (Nov 2026)
+                  "avg": a["respect"] / a["hits"] if a["hits"] else 0,
                   "rets": a.get("rets", 0), "assists": a.get("assists")}
                  for a in sorted(att, key=lambda a: (-a["hits"], -a["respect"]))],
         "bonuses": [(b["chain"], nm(b["id"])) for b in sorted(c.get("bonuses", []), key=lambda b: b["chain"])
@@ -1641,7 +1640,7 @@ def normalize_wars(raw: dict, my_id, rw_cfg: dict) -> list:
             "top_hosps": [slim(m) for m in sorted(members, key=lambda m: -(m.get("hosps") or 0))[:top_n]
                           if (m.get("hosps") or 0) > 0],
             "has_attack_log": any("hosps" in m for m in members),
-            # Big Hitter: best single war hit (respect, no chain bonus hits)
+            # Big Hitter: best single war hit (respect, chain bonus hits excluded)
             "top_best": [slim(m) for m in sorted(members, key=lambda m: -(m.get("best") or 0))[:top_n]
                          if (m.get("best") or 0) > 0],
             # Respect / Hit (min 10 war hits so one lucky hit doesn't win)
@@ -6535,12 +6534,6 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
             a["rets"] += a_.get("rets", 0) or 0; a["best"] = max(a["best"], a_.get("hits", 0))
             if c.get("length", 0) >= CHAIN_AVG_MIN:            # hits per chain: 250+ chains only
                 a["big"] = a.get("big", 0) + 1; a["bigh"] = a.get("bigh", 0) + a_.get("hits", 0)
-            # respect per hit WITHOUT chain bonus respect (bonus hits only count toward total respect): their own bonus
-            # hits are taken out; a chain whose bonus breakdown isn't saved yet is left out of the figure altogether
-            if "bonuses" in c or c.get("length", 0) < 10:
-                mb_ = [b for b in c.get("bonuses", []) if str(b["id"]) == str(a_["id"])]
-                a["nbh"] = a.get("nbh", 0) + a_.get("hits", 0) - len(mb_)
-                a["nbr"] = a.get("nbr", 0.0) + a_.get("respect", 0) - sum(b["respect"] for b in mb_)
     for i, n in CURRENT_MEMBERS.items():
         agg.setdefault(i, {"id": int(i), "name": n, "chains": 0, "hits": 0, "resp": 0.0, "rets": 0, "best": 0})
     rows_ = []
@@ -6548,11 +6541,11 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
         a["current"] = i in CURRENT_MEMBERS if CURRENT_MEMBERS else True
         a["name"] = CURRENT_MEMBERS.get(i, a["name"])
         a["per"] = round(a.get("bigh", 0) / a["big"], 1) if a.get("big") else None
-        a["rph"] = round(a["nbr"] / a["nbh"], 2) if a.get("nbh") else None
+        a["rph"] = round(a["resp"] / a["hits"], 2) if a["hits"] else None     # chain bonus respect included
         rows_.append(a)
     rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
     msum = _member_summary(rows_, [("Chains", "chains", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
-                                   (f"Hits / chain ({CHAIN_AVG_MIN}+)", "per", lambda v: f"{v:,.1f}"), ("Respect / hit (no bonus hits)", "rph", lambda v: f"{v:,.2f}"),
+                                   (f"Hits / chain ({CHAIN_AVG_MIN}+)", "per", lambda v: f"{v:,.1f}"), ("Respect / hit", "rph", lambda v: f"{v:,.2f}"),
                                    ("Best chain", "best", fmt_int), ("Retals", "rets", fmt_int)], "csumT")
     body = (site_menu("") + "<h2>⛓️ Chain Summary</h2>" + HIST_STATS_CSS + _stat_strip([
                 (fmt_int(len(chains)), f"Chains ({min_len}+)"), (fmt_int(best), "Longest"), (fmt_int(tot_hits), "Chain hits"),
@@ -7309,21 +7302,9 @@ def recap_data(start: int, end: int, label: str, whist: dict, chist: dict, membe
     for w in wars:
         for m in w["members"]:
             single[m["id"]] = max(single.get(m["id"], 0), m["attacks"])
-    # respect / hit WITHOUT chain bonus hits (nb() for wars; chain bonus hits taken out where they're saved)
-    wnb = {}
-    for w in wars:
-        for m in w["members"]:
-            r_, h_ = nb(m)
-            x_ = wnb.setdefault(m["id"], [0.0, 0])
-            x_[0] += r_; x_[1] += h_
-    war_rph = {i: v[0] / v[1] for i, v in wnb.items() if v[1] >= 50}
-    cbr = {}
-    for c in chains:
-        for b in c.get("bonuses", []):
-            x_ = cbr.setdefault(b["id"], [0.0, 0])
-            x_[0] += b.get("respect", 0); x_[1] += 1
-    ch_rph = {i: (ch_r[i] - cbr.get(i, [0, 0])[0]) / (ch_h[i] - cbr.get(i, [0, 0])[1])
-              for i in ch_h if ch_h[i] - cbr.get(i, [0, 0])[1] >= 100}
+    # respect / hit - chain bonus respect included (Nov 2026)
+    war_rph = {i: wr[i] / wh[i] for i in wh if wh[i] >= 50}          # 50+ war hits
+    ch_rph = {i: ch_r[i] / ch_h[i] for i in ch_h if ch_h[i] >= 100}  # 100+ chain hits
     bigc = {}
     for c in chains:
         if c["length"] >= 1000:
@@ -7570,7 +7551,7 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
             t = wl.setdefault(m["id"], {"name": m.get("name") or nm(m["id"]), "in": 0, "hit": 0, "hits": 0,
                                         "resp": 0.0, "best": 0, "resp_nb": 0.0, "hits_nb": 0})
             t["in"] += 1; t["hit"] += m["attacks"] > 0; t["hits"] += m["attacks"]; t["resp"] += m["score"]
-            r_nb, h_nb = nb(m)                 # Respect / Hit without chain bonus hits
+            r_nb, h_nb = nb(m)                 # Respect / Hit (chain bonus respect included)
             t["resp_nb"] += r_nb; t["hits_nb"] += h_nb
             t["best"] = max(t["best"], m["attacks"])
             t["low"] = min(t.get("low", m["attacks"]), m["attacks"])
@@ -7607,7 +7588,7 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
             t = cl.setdefault(b["id"], {"name": nm(b["id"]), "chains": 0, "big": 0, "hits": 0, "resp": 0.0,
                                         "rets": 0, "assists": 0, "bonus": 0, "war": 0})
             t["bonus"] += 1
-            t["bonus_resp"] = t.get("bonus_resp", 0.0) + b.get("respect", 0)   # out of AVG / Precision Striker
+            t["bonus_resp"] = t.get("bonus_resp", 0.0) + b.get("respect", 0)   # recorded (bonus respect counts in every figure)
         top = max(att, key=lambda a: a["hits"]) if att else None
         chain_rows.append({"end": c["end"], "start": c.get("start"), "length": c["length"],
                            "dur": (c["end"] - c["start"]) if c.get("start") else 0,
@@ -7885,8 +7866,7 @@ def panel_chain_board(r: dict, label: str, aw: dict = None) -> bytes:
     show_ast = any(v["assists"] for v in r["chain_board"])
     show_bon = any(v["bonus"] for v in r["chain_board"])
     rows = [(v["name"], [str(v["chains"]), fmt_int(v["hits"]), fmt_int(round(v["resp"])),
-                         f"{(v['resp'] - v.get('bonus_resp', 0)) / (v['hits'] - v['bonus']):.1f}"
-                         if v["hits"] - v["bonus"] > 0 else "-", fmt_int(v["rets"])]
+                         f"{v['resp'] / v['hits']:.1f}" if v["hits"] > 0 else "-", fmt_int(v["rets"])]
              + ([fmt_int(v["assists"])] if show_ast else []))
             for v in r["chain_board"]]
     cols = [("CHAINS", 86), ("HITS", 86), ("RESPECT", 106), ("AVG", 70), ("RETALS", 86)] \
@@ -8035,7 +8015,7 @@ AWARDS = [
     ("chain_hits", "chain", "Top Chain Hitter", "chain_board", lambda v: v["hits"], None, 0),
     ("chain_resp", "chain", "Top Chain Respect", "chain_board", lambda v: v["resp"], None, 0),
     ("chain_rph", "chain", "Chain Respect / Hit", "chain_board",
-     lambda v: (v["resp"] - v.get("bonus_resp", 0)) / (v["hits"] - v["bonus"]) if v["hits"] - v["bonus"] > 0 else 0,
+     lambda v: v["resp"] / v["hits"] if v["hits"] > 0 else 0,       # chain bonus respect included (Nov 2026)
      lambda v: v["hits"] >= 100, 1),
     ("rets", "chain", "Most Retaliations", "chain_board", lambda v: v["rets"], None, 0),
     ("chain_war", "chain", "War Chainer", "chain_board", lambda v: v["war"], None, 0),
@@ -8892,7 +8872,7 @@ def write_payout_data(d_: Path, raw: dict):
     index = []
     for wid, w in sorted(hist.get("wars", {}).items(), key=lambda kv: -kv[1]["end"]):
         mt = meta.get(wid, {})
-        ready = w.get("attack_log") == 7
+        ready = (w.get("attack_log") or 0) >= 7      # 7+ = payout stats saved
         index.append({"id": int(wid), "end": w["end"], "start": w.get("start"), "opp": mt.get("opponent", "?"),
                       "won": mt.get("won"), "ready": ready})
         if not ready:
@@ -8937,7 +8917,7 @@ def write_payout_calculator(cfg: dict, out: Path):
             "defaults": pcfg.get("defaults", {
                 "mode": "pct", "budget": 0, "minHits": 1,
                 "expenses": [{"label": "Faction tax", "type": "pct", "value": 10}],
-                "filters": {"chainOnly": True, "noBonus": True, "warRespect": True},
+                "filters": {"chainOnly": True, "noBonus": False, "warRespect": True},
                 "weights": {"war": 75, "out": 25, "resp": 0, "assists": 0, "hosps": 0, "mugs": 0, "stealth": 0},
                 "rules": [], "adjust": []})}
     html_ = (ROOT / "tools" / "payout_calculator.html").read_text(encoding="utf-8")
