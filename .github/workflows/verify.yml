@@ -1,0 +1,47 @@
+# Verify data (Actions -> Verify data -> Run workflow; also runs when tools/verify.py or this file changes):
+# re-reads a sample of everything from Torn and compares it with the saved data. The report goes to the PRIVATE
+# data repo (data/verify_report.json) - the public log shows only pass / fail counts. See tools/verify.py.
+name: Verify data
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ["tools/verify.py", ".github/workflows/verify.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: data-repo-write
+  cancel-in-progress: false
+
+env:
+  DATA_REPO: S1SEVEN17/HeartBreakersLogo
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the private data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DATA_REPO }}
+          token: ${{ secrets.DATA_TOKEN }}
+          path: store
+      - name: Link data
+        run: tools/store.sh link
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Verify
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+          LEADER_DIR: ${{ secrets.LEADER_DIR }}
+        run: python tools/verify.py
+      - name: Save the report (private data repo)
+        run: tools/store.sh save "Verification report" data/verify_report.json

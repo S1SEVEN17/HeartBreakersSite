@@ -805,6 +805,7 @@ CHAIN_REPORT_DELAY = API_PAGE_DELAY  # s between chain report reads: ~30/min max
 
 
 CHAIN_SETTLE = 15 * 60      # a chain counts as finished this long after its end time
+CHAIN_BONUS_BACKFILL = 40   # chain reports read per run to fill in who made the bonus hits (older chains)
 
 
 def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
@@ -901,14 +902,13 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
         if isinstance(na, list):
             saved[cid]["non_attackers"] = [x.get("id") if isinstance(x, dict) else x for x in na]
         read += 1
-    # Back-fill chain bonus hits (who made them, their respect) for chains of
-    # the last ~2 months saved before bonuses were recorded - needed to keep
-    # bonus respect out of Respect / Hit. 25 reports per run, then done.
+    # Back-fill chain bonus hits (who made them, their respect) for EVERY chain saved before bonuses were
+    # recorded - needed to keep bonus respect out of every Respect / Hit figure. Longest chains first (they carry
+    # the most bonus respect), CHAIN_BONUS_BACKFILL reports per run until done.
     if key:
-        cutoff = int(datetime.now(timezone.utc).timestamp()) - 62 * 86400
-        need = sorted((k for k, c in saved.items() if c["end"] >= cutoff and c["length"] >= 10
+        need = sorted((k for k, c in saved.items() if c["length"] >= 10
                        and "bonuses" not in c and not c.get("bonus_checked")),
-                      key=lambda k: -saved[k]["end"])[:25]
+                      key=lambda k: (-saved[k]["length"], -saved[k]["end"]))[:CHAIN_BONUS_BACKFILL]
         for cid in need:
             try:
                 rep_ = fetch_section(f"{cid}/chainreport", key)
@@ -6530,6 +6530,12 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
             a["rets"] += a_.get("rets", 0) or 0; a["best"] = max(a["best"], a_.get("hits", 0))
             if c.get("length", 0) >= CHAIN_AVG_MIN:            # hits per chain: 250+ chains only
                 a["big"] = a.get("big", 0) + 1; a["bigh"] = a.get("bigh", 0) + a_.get("hits", 0)
+            # respect per hit WITHOUT chain bonus respect (bonus hits only count toward total respect): their own bonus
+            # hits are taken out; a chain whose bonus breakdown isn't saved yet is left out of the figure altogether
+            if "bonuses" in c or c.get("length", 0) < 10:
+                mb_ = [b for b in c.get("bonuses", []) if str(b["id"]) == str(a_["id"])]
+                a["nbh"] = a.get("nbh", 0) + a_.get("hits", 0) - len(mb_)
+                a["nbr"] = a.get("nbr", 0.0) + a_.get("respect", 0) - sum(b["respect"] for b in mb_)
     for i, n in CURRENT_MEMBERS.items():
         agg.setdefault(i, {"id": int(i), "name": n, "chains": 0, "hits": 0, "resp": 0.0, "rets": 0, "best": 0})
     rows_ = []
@@ -6537,11 +6543,11 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
         a["current"] = i in CURRENT_MEMBERS if CURRENT_MEMBERS else True
         a["name"] = CURRENT_MEMBERS.get(i, a["name"])
         a["per"] = round(a.get("bigh", 0) / a["big"], 1) if a.get("big") else None
-        a["rph"] = round(a["resp"] / a["hits"], 2) if a["hits"] else None
+        a["rph"] = round(a["nbr"] / a["nbh"], 2) if a.get("nbh") else None
         rows_.append(a)
     rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
     msum = _member_summary(rows_, [("Chains", "chains", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
-                                   (f"Hits / chain ({CHAIN_AVG_MIN}+)", "per", lambda v: f"{v:,.1f}"), ("Respect / hit", "rph", lambda v: f"{v:,.2f}"),
+                                   (f"Hits / chain ({CHAIN_AVG_MIN}+)", "per", lambda v: f"{v:,.1f}"), ("Respect / hit (no bonus hits)", "rph", lambda v: f"{v:,.2f}"),
                                    ("Best chain", "best", fmt_int), ("Retals", "rets", fmt_int)], "csumT")
     body = (site_menu("") + "<h2>⛓️ Chain Summary</h2>" + HIST_STATS_CSS + _stat_strip([
                 (fmt_int(len(chains)), f"Chains ({min_len}+)"), (fmt_int(best), "Longest"), (fmt_int(tot_hits), "Chain hits"),
@@ -7298,8 +7304,21 @@ def recap_data(start: int, end: int, label: str, whist: dict, chist: dict, membe
     for w in wars:
         for m in w["members"]:
             single[m["id"]] = max(single.get(m["id"], 0), m["attacks"])
-    war_rph = {i: wr[i] / wh[i] for i in wh if wh[i] >= 50}          # respect/hit, 50+ war hits
-    ch_rph = {i: ch_r[i] / ch_h[i] for i in ch_h if ch_h[i] >= 100}  # respect/hit, 100+ chain hits
+    # respect / hit WITHOUT chain bonus hits (nb() for wars; chain bonus hits taken out where they're saved)
+    wnb = {}
+    for w in wars:
+        for m in w["members"]:
+            r_, h_ = nb(m)
+            x_ = wnb.setdefault(m["id"], [0.0, 0])
+            x_[0] += r_; x_[1] += h_
+    war_rph = {i: v[0] / v[1] for i, v in wnb.items() if v[1] >= 50}
+    cbr = {}
+    for c in chains:
+        for b in c.get("bonuses", []):
+            x_ = cbr.setdefault(b["id"], [0.0, 0])
+            x_[0] += b.get("respect", 0); x_[1] += 1
+    ch_rph = {i: (ch_r[i] - cbr.get(i, [0, 0])[0]) / (ch_h[i] - cbr.get(i, [0, 0])[1])
+              for i in ch_h if ch_h[i] - cbr.get(i, [0, 0])[1] >= 100}
     bigc = {}
     for c in chains:
         if c["length"] >= 1000:
