@@ -29,7 +29,8 @@
   BUSY: members already in an active crime are left out unless "Include members already in a crime" is on.
   ENV: test / live (prod) - separate settings, plans and shared rates. The OC Optimizer test fork uses test.
   Data: CFG (__CONFIG__: catalog, hist, members, ghproxy) + live reads through the gatekeeper (leaders' pass):
-    oc/config.json?env=  oc/rates.json?env=  (D1)   and   data/oc_active.json (via the leaders' gh/contents proxy).
+    oc/config.json?env=  oc/rates.json?env=  (D1)   and   data/oc_active.json + data/oc_pool.json (leaders' gh/contents proxy).
+    🔄 Refresh: POST oc/refresh (once a minute) starts a crime check that rewrites both files; the page polls for them.
   The working board (draft) is kept in this browser only until it's deployed. __MENU__ = the site menu.
 -->
 <style>
@@ -90,7 +91,8 @@ th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 __MENU__
 <h1>OC Management</h1>
 <div class="sub">Choose which crimes the OC Optimizer suggests, build teams and deploy them to members using the script</div>
-<div class="bar"><span class="lab">Data set</span><button data-env="test">🧪 Test</button><button data-env="prod">✅ Live</button></div>
+<div class="bar"><span class="lab">Data set</span><button data-env="test">🧪 Test</button><button data-env="prod">✅ Live</button>
+  <button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
 <div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button></div>
 <div id="view"></div>
@@ -118,18 +120,28 @@ const st = (m, err) => { $("st").textContent = m; $("st").classList.toggle("err"
 
 // ---------- data ----------
 async function getJSON(u) { const r = await fetch(u, {cache: "no-store"}); if (!r.ok) throw new Error(u.split("?")[0] + " " + r.status); return r.json(); }
+// a data-repo file through the leaders' gh/contents proxy (base64 JSON) -> object, or null
+async function ghJSON(path) {
+  try {
+    const r = await fetch(CFG.ghproxy + path + "?ref=" + CFG.branch, {cache: "no-store"});
+    if (!r.ok) return null;
+    const j = await r.json();
+    return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(String(j.content || "").replace(/\n/g, "")), c => c.charCodeAt(0))));
+  } catch (e) { return null; }
+}
 async function load() {
   st("Loading…");
   try {
-    const [cfg, rates, act] = await Promise.all([
+    const [cfg, rates, act, pool] = await Promise.all([
       getJSON("oc/config.json?env=" + ENV), getJSON("oc/rates.json?env=" + ENV),
       // active crimes (who's in what, right now) - the crime check saves it every 15 minutes
-      fetch(CFG.ghproxy + "data/oc_active.json?ref=" + CFG.branch, {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null)]);
+      ghJSON("data/oc_active.json"),
+      // members + history rates from the last Refresh - used when newer than the copy built into this page
+      ghJSON("data/oc_pool.json")]);
     D.config = cfg; D.rates = rates || {};
-    D.active = []; D.activeT = null;
-    if (act && act.content) {
-      try { const j = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(act.content.replace(/\n/g, "")), c => c.charCodeAt(0))));
-        D.active = j.crimes || []; D.activeT = j.t || null; } catch (e) {}
+    D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
+    if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
+      CFG.members = pool.members; CFG.hist = pool.hist || {}; CFG.built = pool.t;
     }
     const shared = Object.keys(D.rates).length;
     st(`${ENV === "prod" ? "Live" : "Test"} data · ${shared} member${shared === 1 ? "" : "s"} sharing rates · ${D.active.length} active crime${D.active.length === 1 ? "" : "s"}`
@@ -217,8 +229,11 @@ function autoBuild() {
   }
   BOARD.teams.sort((a, b) => (b.difficulty || 0) - (a.difficulty || 0) || (teamAvg(b) || 0) - (teamAvg(a) || 0));
   saveBoard();
+  const busyN = Object.keys(CFG.members).filter(p => busyMap()[p]).length, total = Object.keys(CFG.members).length;
   st(made ? `Built ${made} team${made === 1 ? "" : "s"} at ${OPT.target}%+ average${keep.length ? ` (+${keep.length} locked kept)` : ""}.`
-          : `No team reaches ${OPT.target}% with the members and rates available - lower the target or the lowest role %, or add members' rates.`, !made);
+     : !OPT.includeBusy && busyN > total / 2
+       ? `No teams: ${busyN} of ${total} members are already in a crime - tick "Include members already in a crime" to plan their next one.`
+       : `No team reaches ${OPT.target}% with the members and rates available - lower the target or the lowest role %, or add members' rates.`, !made);
 }
 // a team for one chosen crime: best available (even below the target), empty roles where nobody fits
 function addTeam(crime) {
@@ -236,7 +251,47 @@ function addTeam(crime) {
 
 // ---------- views ----------
 function draw() {
-  document.querySelectorAll("[data-env]").forEach(b => b.classList.toggle("on", b.dataset.env === ENV));
+  // ---------- Refresh (once a minute - the gatekeeper enforces it for all leaders together) ----------
+// Reloads the shared rates + deployed plan at once, and asks the gatekeeper to start a crime check now; that check
+// saves the active crimes, current members and newest completed crimes' rates - polled here until they arrive.
+const REFRESH_GAP = 60 * 1000;
+let polling = false;
+function refreshBtn() {
+  const left = Math.ceil((LS.get("hb_oc_refresh_at", 0) + REFRESH_GAP - Date.now()) / 1000);
+  const b = $("refresh");
+  b.disabled = polling || left > 0;
+  b.textContent = polling ? "⏳ Checking Torn…" : left > 0 ? `🔄 Refresh (${left}s)` : "🔄 Refresh";
+}
+setInterval(refreshBtn, 1000);
+$("refresh").onclick = async () => {
+  if ($("refresh").disabled) return;
+  const startT = Math.floor(Date.now() / 1000);
+  LS.set("hb_oc_refresh_at", Date.now()); polling = true; refreshBtn();
+  try {
+    const r = await fetch("oc/refresh", {method: "POST", headers: {"X-HB-Save": "1"}});
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 429) {                      // another leader refreshed in the last minute
+      LS.set("hb_oc_refresh_at", Date.now() - REFRESH_GAP + (j.retry_in || 60) * 1000);
+      polling = false; refreshBtn(); await load();
+      st(`Refreshed shared rates and plan. Torn was re-checked under a minute ago - try again in ${j.retry_in || 60}s.`);
+      return;
+    }
+    if (!r.ok || !j.ok) throw new Error(j.error || ("refresh " + r.status));
+    await load();
+    st("Rates and plan refreshed - checking Torn for members and crimes (about 1-2 minutes)…");
+    // the crime check takes ~1-2 min on GitHub; poll every 10 s for up to 4 min
+    for (let i = 0; i < 24; i++) {
+      await new Promise(res => setTimeout(res, 10000));
+      const pool = await ghJSON("data/oc_pool.json");
+      if (pool && pool.t >= startT) { polling = false; await load(); st($("st").textContent + " · refreshed from Torn just now"); refreshBtn(); return; }
+    }
+    throw new Error("the crime check hasn't finished yet - the page will show it on the next load");
+  } catch (e) { st("Refresh: " + e.message, true); }
+  polling = false; refreshBtn();
+};
+refreshBtn();
+
+document.querySelectorAll("[data-env]").forEach(b => b.classList.toggle("on", b.dataset.env === ENV));
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
   if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else drawBuilder();
 }
@@ -275,6 +330,8 @@ function drawBuilder() {
   $("view").innerHTML = `<div class="panel">
     <div class="hn">Auto-build fills the <b>hardest</b> crimes first with the members who pass them best, building as many teams as reach the target average.
       Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
+    ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
+      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Tick <b>Include members already in a crime</b> to plan their next crime.</div>` : ""}
     <div class="opts">
       <label>Target team success <input type="number" id="o_t" min="1" max="100" value="${OPT.target}">%</label>
       <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>

@@ -5697,6 +5697,21 @@ def write_armory_page(out: Path, db: dict, ad: dict):
                                      '<title>Armory Monitor</title>', encoding="utf-8")
 
 
+def oc_hist(crimes, cur: dict) -> dict:
+    """History pass rates for the Team Builder: {"Crime|Role": {member id: [rate %, when]}} - each CURRENT member's
+    latest rate per crime + role from completed crimes (their "slots")."""
+    hist = {}
+    for c in crimes:
+        t = int(c.get("executed_at") or 0)
+        for pid, label, rate in c.get("slots") or []:
+            if not pid or rate is None or str(pid) not in cur:
+                continue
+            b = hist.setdefault(f"{c.get('name')}|{oc_role(label)}", {})
+            if str(pid) not in b or t > b[str(pid)][1]:
+                b[str(pid)] = [int(rate), t]
+    return hist
+
+
 def write_oc_management(out: Path, db: dict):
     """oc.html (leaders) - OC MANAGEMENT (Nov 2026): turn crimes on/off for the OC Optimizer script's suggestions,
     build teams (Team Builder, ported from the script's simulator + an automatic multi-team builder) and deploy them -
@@ -5713,22 +5728,13 @@ def write_oc_management(out: Path, db: dict):
     except (OSError, ValueError):
         catalog = {}
     cur = {str(m["id"]): m["name"] for m in db["members"]["members"] if m["current"]}
-    hist = {}
     try:
         ch = json.loads(CRIME_HIST_PATH.read_text(encoding="utf-8")).get("crimes", {})
     except (OSError, ValueError):
         ch = {}
-    for c in ch.values():
-        t = int(c.get("executed_at") or 0)
-        for pid, label, rate in c.get("slots") or []:
-            if not pid or rate is None or str(pid) not in cur:
-                continue
-            k = f"{c.get('name')}|{oc_role(label)}"
-            b = hist.setdefault(k, {})
-            if str(pid) not in b or t > b[str(pid)][1]:
-                b[str(pid)] = [int(rate), t]
-    conf = {"catalog": catalog, "hist": hist, "members": cur, "member_base": member_base(), "repo": REPO,
-            "branch": "main", "ghproxy": gh_proxy_url()}
+    # "built": when this copy was made - the page prefers data/oc_pool.json (Refresh button) when that's newer
+    conf = {"catalog": catalog, "hist": oc_hist(ch.values(), cur), "members": cur, "member_base": member_base(),
+            "repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "built": int(datetime.now(timezone.utc).timestamp())}
     tpl = (ROOT / "tools" / "oc_management.html").read_text(encoding="utf-8")
     (lout / "oc.html").write_text(tpl.replace("__CONFIG__", json.dumps(conf, separators=(",", ":")).replace("</", "<\\/"))
                                   .replace("__MENU__", leader_menu("")), encoding="utf-8")
@@ -8820,6 +8826,7 @@ def oc_slots(c: dict) -> list:
 
 OC_CATALOG_PATH = ROOT / "data" / "oc_catalog.json"
 OC_ACTIVE_PATH = ROOT / "data" / "oc_active.json"
+OC_POOL_PATH = ROOT / "data" / "oc_pool.json"     # members + history rates, written only by OC Management's Refresh
 
 
 def oc_catalog(key: str) -> dict:
@@ -10209,6 +10216,35 @@ def log_crime_delays(delayed: dict, now: int):
     CRIME_DELAYS_PATH.write_text(json.dumps(log, indent=1) + "\n", encoding="utf-8")
 
 
+def oc_pool_refresh(key: str, members: list, now: int):
+    """OC Management's Refresh button (crimes.yml with oc_refresh=1): the current members (from the members call this
+    check already made) + history pass rates, including crimes completed since the last full update (completed crimes,
+    newest first, stopping at the first one already saved - normally 1 call; NOT saved to crime_history.json, the
+    full update does that). Written to data/oc_pool.json {members, hist, t}; the page uses it when newer than its copy."""
+    try:
+        cur = {str(m.get("id")): m.get("name", "?") for m in members if m.get("id")}
+        try:
+            saved = json.loads(CRIME_HIST_PATH.read_text(encoding="utf-8")).get("crimes", {})
+        except (OSError, ValueError):
+            saved = {}
+        crimes = dict(saved)
+        try:
+            # API: OC Management refresh - completed crimes since the last saved one (Torn V2 /faction/crimes)
+            new, _ = all_pages("crimes", "crimes", key, "Completed crimes", {"cat": "completed"}, stop_ids=set(saved) or None)
+            for c in new:
+                if str(c.get("id")) not in crimes and c.get("executed_at"):
+                    crimes[str(c.get("id"))] = {"name": c.get("name"), "executed_at": int(c.get("executed_at") or 0),
+                                                "slots": oc_slots(c)}
+        except SystemExit as e:
+            print(f"OC refresh: new completed crimes skipped: {e}")
+        hist = oc_hist(crimes.values(), cur)
+        OC_POOL_PATH.write_text(json.dumps({"members": cur, "hist": hist, "t": now}, separators=(",", ":"),
+                                           sort_keys=True) + "\n", encoding="utf-8")
+        print(f"OC refresh: {len(cur)} members, {len(hist)} crime roles, {len(crimes) - len(saved)} new completed crimes")
+    except Exception as e:
+        print(f"OC refresh not saved: {type(e).__name__}")
+
+
 def discord_crime_alerts(key: str, cfg: dict):
     """Every 15 minutes (crimes.yml), to DISCORD_WEBHOOK_CRIMES:
       1. OVERVIEW - one post, edited every run (re-posted if deleted): every planning crime with a live
@@ -10283,11 +10319,14 @@ def discord_crime_alerts(key: str, cfg: dict):
                 "ready_at": c.get("ready_at"), "slots": oc_slots(c)} for c in crimes]
         old = OC_ACTIVE_PATH.read_text(encoding="utf-8") if OC_ACTIVE_PATH.exists() else ""
         body = json.dumps({"crimes": act}, separators=(",", ":"), sort_keys=True)
-        if not old.startswith(body[:-1]):           # only rewrite when something changed (fewer data commits)
+        # only rewrite when something changed (fewer data commits) - or when OC Management's Refresh asked for this check
+        if not old.startswith(body[:-1]) or os.environ.get("OC_FORCE_ACTIVE") == "1":
             OC_ACTIVE_PATH.write_text(json.dumps({"crimes": act, "t": now}, separators=(",", ":"), sort_keys=True) + "\n",
                                       encoding="utf-8")
     except Exception as e:
         print(f"OC active crimes not saved: {type(e).__name__}")
+    if os.environ.get("OC_FORCE_ACTIVE") == "1":
+        oc_pool_refresh(key, members, now)
     log_crime_delays(delayed, now)
 
     # ---- 1b. second post: Recruiting (crimes with at least one member) + Recent Delays (Nov 2026) ----

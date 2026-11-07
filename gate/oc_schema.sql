@@ -16,8 +16,8 @@ CREATE INDEX IF NOT EXISTS idx_oc_cpr_lookup ON oc_cpr (env, faction_id);
 --   'disabled'  ["Crime name", ...]  crimes the OC Optimizer script should NOT suggest
 --   'plan'      {teams: [{id, crime, difficulty, roles: [{position, pid, name, rate}]}], deployed, by}
 CREATE TABLE IF NOT EXISTS oc_config (
-  env   TEXT    NOT NULL,          -- 'test' | 'prod'
-  k     TEXT    NOT NULL,          -- 'disabled' | 'plan'
+  env   TEXT    NOT NULL,          -- 'test' | 'prod' ('all' for the shared Refresh cooldown)
+  k     TEXT    NOT NULL,          -- 'disabled' | 'plan' | 'refresh' (last Refresh time, env 'all')
   v     TEXT    NOT NULL,          -- JSON
   ts    INTEGER NOT NULL,          -- epoch ms of last save
   by    TEXT,                      -- leader who saved it ("Name [id]")

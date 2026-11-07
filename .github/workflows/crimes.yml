@@ -3,7 +3,11 @@
 name: Crime delay check
 
 on:
-  workflow_dispatch: {}        # every 15 min by the gatekeeper's Cloudflare timer (gate/worker.js scheduled)
+  workflow_dispatch:           # every 15 min by the gatekeeper's Cloudflare timer (gate/worker.js scheduled)
+    inputs:
+      oc_refresh:                # "1" = started by OC Management's Refresh button: always rewrite data/oc_active.json
+        required: false          #       (with a new time) so the page sees the check finished, even with no changes
+        default: ""
 
 permissions:
   contents: read
@@ -44,6 +48,7 @@ jobs:
         env:
           TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
           RUN_KIND: crimes
+          OC_FORCE_ACTIVE: ${{ inputs.oc_refresh }}
           DISCORD_WEBHOOK_CRIMES: ${{ secrets.DISCORD_WEBHOOK_CRIMES }}
           DISCORD_WEBHOOK_LEADERS: ${{ secrets.DISCORD_WEBHOOK_LEADERS }}
           MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
@@ -53,4 +58,4 @@ jobs:
         run: >
           tools/store.sh save "Update crime alert state"
           data/discord_crime_state.json data/leader_alerts.json data/discord_messages_crimes.json
-          data/item_names.json data/crime_delays.json data/oc_active.json
+          data/item_names.json data/crime_delays.json data/oc_active.json data/oc_pool.json

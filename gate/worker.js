@@ -259,9 +259,13 @@ const DATA_REPO = "S1SEVEN17/HeartBreakersLogo";       // private: config.json +
 // faction's own token (GH_DISPATCH secret = DATA_TOKEN, Contents: write on the data repo) and forwards the call.
 // No GitHub token is needed - or ever shown - on any device. Only these paths can be read / written:
 const GH_PATHS = [/^config\.json$/, /^data\/payouts\/[\w.-]+$/, /^data\/panels\/[\w.-]+$/];
+// read-only for leaders (OC Management): the active crimes and the Refresh button's members + history rates
+const GH_READ_ONLY = [/^data\/oc_active\.json$/, /^data\/oc_pool\.json$/];
 async function ghProxy(env, req, who, path) {
   path = decodeURIComponent(path.split("?")[0]);
-  if (!GH_PATHS.some(rx => rx.test(path))) return new Response("Not allowed", {status: 403});
+  const readOnly = GH_READ_ONLY.some(rx => rx.test(path));
+  if (!readOnly && !GH_PATHS.some(rx => rx.test(path))) return new Response("Not allowed", {status: 403});
+  if (readOnly && req.method !== "GET") return new Response("Read only", {status: 403});
   if (!["GET", "PUT"].includes(req.method)) return new Response("Method not allowed", {status: 405});
   // a custom header can't be sent cross-site without CORS approval -> blocks other sites posting with the cookie
   if (req.method === "PUT" && req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
@@ -600,6 +604,9 @@ async function ocIdentify(env, ctx, key) {
 //     GET  /l/oc/config.json?env=   -> {disabled, plan, disabled_ts, plan_ts, disabled_by, plan_by}
 //     PUT  /l/oc/config  (X-HB-Save: 1) {env, k: "disabled"|"plan", v}   -> saved (by = the signed-in leader)
 //     GET  /l/oc/rates.json?env=    -> the OC Optimizer's shared rates for that env (same shape as /oc/cpr/read)
+//     POST /l/oc/refresh (X-HB-Save: 1)  -> starts a crime check now (crimes.yml, oc_refresh=1) so the active crimes are
+//                                    current; ONE per minute for all leaders together (oc_config env 'all', k 'refresh')
+//                                    -> {ok, next_at} or 429 {ok:false, retry_in (seconds)}
 // =====================================================================================================
 async function ocConfig(env, envName) {
   const {results} = await env.OC_DB.prepare("SELECT k, v, ts, by FROM oc_config WHERE env = ?").bind(envName).all();
@@ -647,6 +654,22 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     const out = {};
     for (const r of results || []) { let roles = {}; try { roles = JSON.parse(r.roles); } catch (e) {} out[String(r.player_id)] = {name: r.name, ts: r.ts, roles}; }
     return Response.json(out, H);
+  }
+  if (req.method === "POST" && sub === "refresh") {
+    if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+    const now = Date.now(), GAP = 60 * 1000;
+    const last = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'refresh'").first();
+    if (last && now - Number(last.ts) < GAP)
+      return Response.json({ok: false, retry_in: Math.ceil((GAP - (now - Number(last.ts))) / 1000)}, {status: 429, headers: H.headers});
+    await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'refresh', '{}', ?, ?) " +
+      "ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts, by = excluded.by").bind(now, `${who.name} [${who.id}]`).run();
+    if (!env.GH_DISPATCH) return Response.json({ok: false, error: "can't start a crime check (no dispatch token)"}, {status: 503});
+    const r = await fetch(`https://api.github.com/repos/${CODE_REPO}/actions/workflows/crimes.yml/dispatches`, {
+      method: "POST", body: JSON.stringify({ref: "main", inputs: {oc_refresh: "1"}}),
+      headers: {Authorization: "Bearer " + env.GH_DISPATCH, Accept: "application/vnd.github+json", "User-Agent": "hb-gate",
+                "Content-Type": "application/json"}});
+    if (!r.ok) return Response.json({ok: false, error: "couldn't start a crime check (" + r.status + ")"}, {status: 502});
+    return Response.json({ok: true, next_at: now + GAP}, H);
   }
   if (req.method === "PUT" && sub === "config") {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
