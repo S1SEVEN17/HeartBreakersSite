@@ -19,13 +19,14 @@ except Exception: pass"; }
 kv_id() { npx wrangler kv namespace list 2>/dev/null | python3 -c "import json,sys
 try: print(next(n['id'] for n in json.load(sys.stdin) if n.get('title') in ('hb-oc-cache','hb-gate-hb-oc-cache')))
 except Exception: pass"; }
-D1=$(d1_id); [ -n "$D1" ] || { npx wrangler d1 create hb-oc >/dev/null 2>&1 || true; D1=$(d1_id); }
-KV=$(kv_id); [ -n "$KV" ] || { npx wrangler kv namespace create hb-oc-cache >/dev/null 2>&1 || true; KV=$(kv_id); }
+# (|| true: "not found yet" must never stop the deploy - set -e / pipefail)
+D1=$(d1_id || true); [ -n "$D1" ] || { npx wrangler d1 create hb-oc >/dev/null 2>&1 || true; D1=$(d1_id || true); }
+KV=$(kv_id || true); [ -n "$KV" ] || { npx wrangler kv namespace create hb-oc-cache >/dev/null 2>&1 || true; KV=$(kv_id || true); }
 if [ -n "$D1" ]; then
   if npx wrangler d1 execute hb-oc --remote --file=oc_schema.sql -y > "$RUNNER_TEMP/d1.log" 2>&1; then
     cp wrangler.toml wrangler.deploy.toml
     printf '\n[[d1_databases]]\nbinding = "OC_DB"\ndatabase_name = "hb-oc"\ndatabase_id = "%s"\n' "$D1" >> wrangler.deploy.toml
-    [ -n "$KV" ] && printf '\n[[kv_namespaces]]\nbinding = "OC_KV"\nid = "%s"\n' "$KV" >> wrangler.deploy.toml
+    if [ -n "$KV" ]; then printf '\n[[kv_namespaces]]\nbinding = "OC_KV"\nid = "%s"\n' "$KV" >> wrangler.deploy.toml; fi
     CFG=wrangler.deploy.toml
     echo "OC storage: ready (D1$([ -n "$KV" ] && echo " + KV"))"
   else
