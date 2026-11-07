@@ -77,7 +77,38 @@ ICON_DIR = ROOT / "art" / "icons"
 CONFIG_PATH = ROOT / "config.json"
 
 API_BASE = "https://api.torn.com/v2/faction"
-API_COMMENT = "Heart Breakers Hub"  # on EVERY Torn API call the site makes (here, gatekeeper, pages)
+API_COMMENT = "Heart Breakers Hub"
+# ==========================================================================
+# FIXED CLOCK SCHEDULE (TCT = UTC). Every Torn read is tied to a clock slot: a dataset is read by the first run
+# after its slot starts (the scheduled :00 runs hit them exactly; a missed slot is caught up by the next run) and
+# NOT again until the next slot - runs started by a leader's save / an opt-in change / a push just rebuild from
+# saved data. Slot lengths (hours) - slots start at 00:00 TCT and every N hours after:
+#   faction basics + member list      3   00 03 06 09 12 15 18 21   (positions + upgrades: 24 -> 00:00)
+#   gym contributors (4 calls)        6   00 06 12 18  (00:00 on the 1st = exact month boundary)
+#   organized crime history           3   00 03 ... 21
+#   armory news                       3
+#   payout vault checks               3   (a newly saved receipt is checked straight away)
+#   opt-in battle / work stats        3   (members' own keys)
+#   item types                        weekly, Monday 00:00
+#   ranked war list + chain list      every run (hourly; war updates hourly while a war is on)
+#   crime check / chain watch         every 15 min (:00 :15 :30 :45 / :07 :22 :37 :52) - Cloudflare timer
+# tools/should_run.py makes the 3-hourly FULL update land on the same 3-hour slots.
+# ==========================================================================
+SLOT_H = {"core": 3, "core_slow": 24, "gym": 6, "crimes": 3, "armory": 3, "vault": 3, "optin": 3, "item_types": 168}
+_MONDAY = 4 * 86400                 # 1970-01-05 00:00 UTC was a Monday - weekly slots start on Mondays
+
+
+def slot_start(name: str, now: int = None) -> int:
+    """Start time (unix, UTC/TCT) of the current clock slot for a dataset (SLOT_H)."""
+    now = int(now if now is not None else datetime.now(timezone.utc).timestamp())
+    per = int(SLOT_H[name] * 3600)
+    anchor = _MONDAY if SLOT_H[name] == 168 else 0
+    return now - (now - anchor) % per
+
+
+def due(name: str, last_read) -> bool:
+    """True when a dataset hasn't been read yet in its current clock slot."""
+    return int(last_read or 0) < slot_start(name)  # on EVERY Torn API call the site makes (here, gatekeeper, pages)
 # pause between paged API calls (war attack log, vault log): 2 s = at most ~30 calls a minute, so even
 # while a war's attack log is read the account stays far below Torn's 100/minute (shared with the key
 # owner's other tools - PDA, userscripts, Torn Stats)
@@ -169,13 +200,11 @@ def core_sections(key: str, cfg: dict) -> dict:
     (default 3), cached in data/core_cache.json in between. Only the fields
     the banner uses are kept (it's a public repo). The ranked war list,
     chains and gym data keep their own schedules."""
-    hours = float(cfg.get("core_refresh_hours", 3))
-    if os.environ.get("RUN_KIND") in ("war", "chain"):
-        hours = 24              # hourly war/chain-only run: reuse cached faction data
+    # clock slots (FIXED CLOCK SCHEDULE): read once per 3-hour slot; hourly war / chain runs reuse the cache
     now = int(datetime.now(timezone.utc).timestamp())
     try:
         cache = json.loads(CORE_CACHE_PATH.read_text(encoding="utf-8"))
-        if now - int(cache.get("fetched", 0)) < hours * 3600 - 300:   # 5 min slack for late runs
+        if os.environ.get("RUN_KIND") in ("war", "chain") or not due("core", cache.get("fetched")):
             print("Core sections: using cache")
             return {s: cache[s] for s in SECTIONS}
     except (OSError, ValueError, KeyError):
@@ -186,8 +215,7 @@ def core_sections(key: str, cfg: dict) -> dict:
         old = json.loads(CORE_CACHE_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
-    slow_ok = (old.get("positions") and old.get("upgrades")
-               and now - int(old.get("fetched_slow", 0)) < float(cfg.get("slow_refresh_hours", 24)) * 3600 - 300)
+    slow_ok = (old.get("positions") and old.get("upgrades") and not due("core_slow", old.get("fetched_slow")))
     raw = {s: fetch_section(s, key) for s in SECTIONS if not (slow_ok and s in ("positions", "upgrades"))}
     if slow_ok:
         raw["positions"], raw["upgrades"] = old["positions"], old["upgrades"]
@@ -233,6 +261,10 @@ def write_run_state(summary: dict, cfg: dict):
         state["last_full"] = 0
     if os.environ.get("RUN_KIND", "full") == "full":
         state["last_full"] = now
+    # the 3-hour slot whose SCHEDULED full update has run (tools/should_run.py) - triggered renders don't count
+    state["last_slot_full"] = old.get("last_slot_full", 0) if "old" in locals() else 0
+    if os.environ.get("RUN_KIND", "full") == "full" and os.environ.get("HB_SLOT_RUN") == "true":
+        state["last_slot_full"] = now - now % (3 * 3600)
     RUN_STATE_PATH.parent.mkdir(exist_ok=True)
     RUN_STATE_PATH.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -906,7 +938,7 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
     # Back-fill chain bonus hits (who made them, their respect) for EVERY chain saved before bonuses were
     # recorded - for the bonus-hit lists and the Bonus Hunter award (bonus respect itself is counted everywhere,
     # Nov 2026). Longest chains first, CHAIN_BONUS_BACKFILL reports per run until done.
-    if key:
+    if key and os.environ.get("RUN_KIND", "full") == "full":     # full updates only (3-hour slots)
         need = sorted((k for k, c in saved.items() if c["length"] >= 10
                        and "bonuses" not in c and not c.get("bonus_checked")),
                       key=lambda k: (-saved[k]["length"], -saved[k]["end"]))[:CHAIN_BONUS_BACKFILL]
@@ -1030,7 +1062,6 @@ def _gym_board(gym: dict, cur: dict, base: dict, top: int, names: dict) -> list:
 
 def update_gym(raw: dict, cfg: dict, key: str = None) -> dict:
     gcfg = cfg.get("announcements", {}).get("leaderboard", {})
-    refresh = float(gcfg.get("gym_refresh_hours", 6)) * 3600
     now = int(datetime.now(timezone.utc).timestamp())
     gym = {}
     if key:
@@ -1043,9 +1074,9 @@ def update_gym(raw: dict, cfg: dict, key: str = None) -> dict:
         return gym
     if os.environ.get("RUN_KIND") == "war" and gym.get("current"):
         return gym                           # hourly war-only run: no gym calls
-    # 30 min slack so a late-starting scheduled run doesn't skip a refresh
-    if now - int(gym.get("fetched", 0)) < refresh - 1800 and gym.get("month") == _month_of(now):
-        return gym                           # fresh enough - no API calls
+    # clock slots: 00:00 06:00 12:00 18:00 TCT (and straight away when the month rolls over)
+    if not due("gym", gym.get("fetched")) and gym.get("month") == _month_of(now):
+        return gym                           # read this slot already - no API calls
     cur = {}
     try:
         for stat, _ in GYM_FETCH:
@@ -5230,7 +5261,7 @@ def item_types(key: str) -> dict:
         c = json.loads(ITEM_TYPES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         c = {"fetched": 0, "types": {}}
-    if key and time.time() - c.get("fetched", 0) > 7 * 86400:
+    if key and due("item_types", c.get("fetched")):       # weekly, Monday 00:00 TCT
         try:
             data = fetch_url("https://api.torn.com/v2/torn/items", key)
             items = data.get("items")
@@ -5299,6 +5330,9 @@ def update_armory_log(key: str, founded: int = 0):
         log = {}
     if log.get("v") == 2:                        # keep v2's events, re-read the older months the v3 way
         log.update(v=ARMORY_LOG_V, oldest=_utc_month_start(now), done=False, back=None)
+    if log.get("v") == ARMORY_LOG_V and not due("armory", log.get("read")):
+        print("Armory log: read this slot already")
+        return
     if log.get("v") != ARMORY_LOG_V:            # new / old-format log: start again from this month
         ms = _utc_month_start(now)
         log = {"v": ARMORY_LOG_V, "items": [], "last": ms - 1, "oldest": ms, "done": False, "events": [], "back": None}
@@ -5374,6 +5408,7 @@ def update_armory_log(key: str, founded: int = 0):
             log["back"] = {"w0": w0, "pos": (hi or pos - 1) + 1 if hi else pos}
             break
     log["events"].sort()
+    log["read"] = now
     ARMORY_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
     since = datetime.fromtimestamp(log["oldest"], timezone.utc).strftime("%b %d, %Y")
     print(f"Armory log: {stats['new']} new + {stats['back']} older uses ({stats['pages']} pages) · "
@@ -5526,6 +5561,10 @@ def optin_update(raw: dict):
     except (OSError, ValueError):
         st = {}
     current = {str(m.get("id")) for m in _as_list((raw.get("members") or {}).get("members"))}
+    if not due("optin", (st.get("_meta") or {}).get("read")):
+        print("Opt-in: read this slot already")
+        return opt, {k: v for k, v in st.items() if k != "_meta"}
+    st.pop("_meta", None)
     gone, bad = set(), set()
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cutoff = (datetime.now(timezone.utc) - timedelta(days=OPTIN_KEEP_DAYS)).strftime("%Y-%m-%d")
@@ -5577,7 +5616,8 @@ def optin_update(raw: dict):
                 st[i].pop(part, None)
         if not st[i]:
             del st[i]
-    OPTIN_STATS_PATH.write_text(json.dumps(st, separators=(",", ":")) + "\n", encoding="utf-8")
+    OPTIN_STATS_PATH.write_text(json.dumps(dict(st, _meta={"read": int(time.time())}), separators=(",", ":")) + "\n",
+                                encoding="utf-8")
     _optin_remove(gone, "left the faction")
     _optin_remove(bad, "key deleted or no longer theirs")
     for i in gone | bad:
@@ -5610,6 +5650,7 @@ def optin_saved():
         opt = {}
     try:
         st = json.loads(OPTIN_STATS_PATH.read_text(encoding="utf-8"))
+        st.pop("_meta", None)
     except (OSError, ValueError):
         st = {}
     return opt, st
@@ -8398,8 +8439,8 @@ def update_crime_history(key: str) -> dict:
     # saved before item rewards / prerequisite links were recorded -> read the whole history once more
     refill = any("items" not in c or "prev" not in c for c in saved.values())
     now_ = int(datetime.now(timezone.utc).timestamp())
-    if saved and not refill and now_ - int(hist.get("fetched", 0)) < CRIME_HIST_HOURS * 3600 - 600:
-        return hist                         # read at most every CRIME_HIST_HOURS (6)
+    if saved and not refill and not due("crimes", hist.get("fetched")):
+        return hist                         # read once per 3-hour clock slot (FIXED CLOCK SCHEDULE)
     hist["fetched"] = now_
     try:
         crimes, _ = all_pages("crimes", "crimes", key, "Completed crimes", {"cat": "completed"},
@@ -9029,8 +9070,8 @@ def update_vault_checks(latest: dict, key: str) -> dict:
     now = int(time.time())
     for wid, (f, r) in latest.items():
         cur = vs.get(f.stem)
-        if cur and cur.get("final"):
-            continue
+        if cur and (cur.get("final") or not due("vault", cur.get("checked"))):
+            continue                       # done, or already checked this 3-hour slot (a new receipt: straight away)
         end = int(r["war"].get("end") or r.get("created", now))
         stop = min(now, end + VAULT_CHECK_DAYS * 86400)
         got = vault_payments(key, end - 3600, stop)

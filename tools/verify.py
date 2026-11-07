@@ -171,8 +171,8 @@ def _crimes():
     split_off = [c["id"] for c in crimes if c.get("split") and c.get("money") and not c.get("via")
                  and abs(c["share"] * c["split"] - c["money"] * (1 - g.CRIME_TAX)) > c["split"]]
     ok = not off and not split_off and len(missing) <= 2
-    return {"ok": ok, "summary": f"newest {len(lst)} completed on Torn: {len(missing)} not saved yet (read every "
-            f"{g.CRIME_HIST_HOURS} h), {len(off)} with different status / money / members; payout split off {len(split_off)}",
+    return {"ok": ok, "summary": f"newest {len(lst)} completed on Torn: {len(missing)} not saved yet (read once "
+            f"per 3-hour slot), {len(off)} with different status / money / members; payout split off {len(split_off)}",
             "missing": missing, "different": off, "split_off": split_off}
 
 

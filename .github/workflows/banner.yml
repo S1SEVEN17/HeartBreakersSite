@@ -77,6 +77,7 @@ jobs:
         env:
           TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
           RUN_KIND: ${{ steps.gate.outputs.kind }}
+          HB_SLOT_RUN: ${{ steps.gate.outputs.scheduled }}      # true = the scheduled run of a clock slot
           DISCORD_WEBHOOK_SLACKERS: ${{ secrets.DISCORD_WEBHOOK_SLACKERS }}
           DISCORD_WEBHOOK_CHAINS: ${{ secrets.DISCORD_WEBHOOK_CHAINS }}
           DISCORD_WEBHOOK_CRIMES: ${{ secrets.DISCORD_WEBHOOK_CRIMES }}

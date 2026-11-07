@@ -2,43 +2,41 @@
 """
 Workflow gate - decides what kind of run this is (no API calls).
 
-The workflow is scheduled HOURLY, but a normal ("full") run is only wanted
-every 3 hours. In between, an hourly "war" run happens only while a ranked
-war is ongoing or about to start (data/run_state.json, written by
-generate.py). War runs refresh just the ranked war data (~2 API calls) and
-reuse the cached faction info / gym data.
-
-Every other hour is a "chain" run: it only checks for newly finished
-chains and posts their Discord Chain Reports (~1 API call), with no
-banner render or Pages deploy.
-
+FIXED CLOCK SCHEDULE (TCT = UTC, Nov 2026). The gatekeeper's Cloudflare timer starts this workflow at :00 every hour
+(workflow_dispatch with scheduled=1). The run kind follows the CLOCK, not the time since the last run:
+  full   the first scheduled run in each 3-hour slot - 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00
+         (a missed slot - e.g. GitHub was down - is caught up by the next hourly run)
+  war    other hours while a ranked war is on or starts within war_lookahead_hours (run_state.json war_active)
+  chain  every other hour: newly finished chains only, no deploy
+Runs started any other way (a leader saving something, an opt-in change, a code push, Run workflow) are "full"
+renders: every Torn dataset is read only when its own clock slot has come round (see SCHEDULE in generate.py), so
+these just rebuild the site from saved data straight away.
 Prints to $GITHUB_OUTPUT:  run=true|false   kind=full|war|chain   deploy=true|false
-Manual and push-triggered runs are always full.
 """
 import json
 import os
 import time
 from pathlib import Path
 
-FULL_EVERY = 3 * 3600 - 20 * 60      # 3 h, with 20 min slack for late starts
+FULL_SLOT = 3 * 3600                 # full updates on the 3-hour clock slots (UTC/TCT)
 
 event = os.environ.get("GITHUB_EVENT_NAME", "")
-# hourly runs are started by the gatekeeper's Cloudflare timer (gate/worker.js scheduled) as a workflow_dispatch
-# with input scheduled=1 - treat those exactly like GitHub's own schedule
 if os.environ.get("HB_SCHEDULED") == "1":
     event = "schedule"
 now = int(time.time())
+slot = now - now % FULL_SLOT          # start of the current 3-hour slot
 try:
     st = json.loads(Path("data/run_state.json").read_text())
 except (OSError, ValueError):
     st = {}
-if event != "schedule" or now - int(st.get("last_full", 0)) >= FULL_EVERY:
+# last_slot_full = the slot the last SCHEDULED full update belonged to (triggered renders don't count)
+if event != "schedule" or int(st.get("last_slot_full", 0)) < slot:
     run, kind = "true", "full"
 elif st.get("war_active"):
     run, kind = "true", "war"
 else:
     run, kind = "true", "chain"
 deploy = "true" if kind in ("full", "war") else "false"
-print(f"gate: run={run} kind={kind} deploy={deploy}")
+print(f"gate: run={run} kind={kind} deploy={deploy} ({'scheduled' if event == 'schedule' else 'triggered'})")
 with open(os.environ.get("GITHUB_OUTPUT", "/dev/null"), "a") as f:
-    f.write(f"run={run}\nkind={kind}\ndeploy={deploy}\n")
+    f.write(f"run={run}\nkind={kind}\ndeploy={deploy}\nscheduled={'true' if event == 'schedule' else 'false'}\n")
