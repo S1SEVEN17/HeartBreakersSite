@@ -57,3 +57,15 @@ jobs:
               print(f"{r['env']:5} {r['ds']:8} {m:7.1f} min old  {r['bytes']:>8} {'rows' if r['src'] == 'rows' else 'bytes'}  ({r['src']})")
           if not rows: print("No feed data yet.")
           PY
+      - name: Feed timer + key present?
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # yes/no answers only - no values
+          curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/hb-gate/schedules" \
+            | python3 -c "import json,sys;d=json.load(sys.stdin);print('timers:', [s.get('cron') for s in (d.get('result') or {}).get('schedules',[])], 'ok' if d.get('success') else d.get('errors'))"
+          curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/hb-gate/secrets" \
+            | python3 -c "import json,sys;d=json.load(sys.stdin);print('feed key set:', any(s.get('name')=='HUB_TORN_KEY' for s in (d.get('result') or [])), 'ok' if d.get('success') else d.get('errors'))"
