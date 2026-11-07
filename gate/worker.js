@@ -206,6 +206,7 @@ export default {
     // OC Payout Optimizer script (runs on torn.com, authenticates with the member's own Torn key)
     if (p === "/oc/cpr" || p === "/oc/cpr/read" || p === "/oc/cpr/delete") return ocRoute(env, ctx, req, url, p);
     if (p === "/oc/plan") return ocPlanRoute(env, ctx, req);
+    if (p === "/oc/snapshot/read" || p === "/oc/snapshot/write" || p === "/oc/bundle") return ocFeedRoute(env, ctx, req, p);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -241,8 +242,10 @@ export default {
 
   // ---------- timer: starts the update workflows (GitHub's own schedule proved unreliable) ----------
   // wrangler.toml [triggers]: "0,15,30,45 * * * *" -> Crime delay check (+ Faction banner on the hour),
-  // "7,22,37,52 * * * *" -> Chain watch. Needs the GH_DISPATCH secret (token with Actions: write on CODE_REPO).
+  // "7,22,37,52 * * * *" -> Chain watch, "*/3 * * * *" -> OC data feed pull (no GitHub). Needs the GH_DISPATCH secret (token with Actions: write on CODE_REPO).
   async scheduled(event, env, ctx) {
+    // "*/3 * * * *" -> the OC data feed: the Hub pulls OC data from Torn itself (ocFeedPull, below)
+    if (event.cron.startsWith("*/3")) { ctx.waitUntil(ocFeedPull(env).catch(() => {})); return; }
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     const runs = event.cron.startsWith("7,") ? [["chainwatch.yml", {}]]
       : [["crimes.yml", {}]].concat(minute === 0 ? [["banner.yml", {scheduled: "1"}]] : []);
@@ -473,9 +476,9 @@ async function readiness(env, ctx) {
 //   OC_DB  D1 database "hb-oc"     OC_KV  KV namespace "hb-oc-cache" (optional)
 // =====================================================================================================
 const OC_ENVS = new Set(["test", "prod"]);
-// the old GET read with ?key= in the address: kept ONLY until the OC Optimizer (test fork) reads through
-// POST /oc/cpr/read - then set to false (GET answers 410 "use POST /oc/cpr/read")
-const OC_GET_KEY_IN_URL = true;
+// the old GET read with ?key= in the address: switched OFF (Nov 2026 - the script reads with POST /oc/cpr/read
+// since v1.45.0); the GET now answers 410 "use POST /oc/cpr/read"
+const OC_GET_KEY_IN_URL = false;
 const OC_CACHE_SECS = 600;            // key -> identity cache (10 min)
 const OC_WRITE_GAP_MS = 60 * 1000;    // one write per player per minute
 const OC_MAX_ROLES = 500, OC_MAX_KEY_LEN = 120;
@@ -506,16 +509,19 @@ async function ocRead(env, ctx, envName, key) {
     if (!OC_ENVS.has(envName)) return ocErr(400, "env must be test or prod");
     const id = await ocIdentify(env, ctx, key);
     if (id.err) return ocErr(id.status, id.err);
-    const fid = Number(env.FACTION_ID);
+    return ocJson(await ocRatesObj(env, envName));
+}
+// {player_id: {name, ts, roles}} for one env (POST /oc/cpr/read and /oc/bundle)
+async function ocRatesObj(env, envName) {
     const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
-      .bind(envName, fid).all();
+      .bind(envName, Number(env.FACTION_ID)).all();
     const out = {};
     for (const r of results || []) {
       let roles = {};
       try { roles = JSON.parse(r.roles); } catch (e) {}
       out[String(r.player_id)] = {name: r.name, ts: r.ts, roles};
     }
-    return ocJson(out);
+    return out;
 }
 
 // publish (upsert) or delete the CALLER's own row
@@ -629,7 +635,11 @@ async function ocPlanRoute(env, ctx, req) {
   if (!body || !OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
   const id = await ocIdentify(env, ctx, ocKey(req, body.key));
   if (id.err) return ocErr(id.status, id.err);
-  const cfg = await ocConfig(env, body.env);
+  return ocJson(await ocPlanObj(env, body.env, id));
+}
+// {ok, disabled, assignment, plan_ts} for the caller (POST /oc/plan and /oc/bundle)
+async function ocPlanObj(env, envName, id) {
+  const cfg = await ocConfig(env, envName);
   let assignment = null;
   for (const t of ((cfg.plan || {}).teams || [])) {
     for (const r of (t.roles || [])) {
@@ -639,7 +649,7 @@ async function ocPlanRoute(env, ctx, req) {
       }
     }
   }
-  return ocJson({ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null});
+  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null};
 }
 
 async function ocLeaderRoute(env, req, url, who, sub) {
@@ -696,4 +706,237 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     return Response.json({ok: true}, H);
   }
   return new Response("Not found", {status: 404});
+}
+
+
+// =====================================================================================================
+// OC DATA FEED (Nov 2026) - project doc claude/oc-optimizer-hub-datafeed-contract.md
+// The Hub is the single source of faction-wide OC data for the OC Optimizer script: it pulls from Torn ITSELF
+// (this Worker's timer, every 3 minutes, with the faction key HUB_TORN_KEY - a Worker secret copied from the
+// site's GitHub secret by tools/deploy_site.sh) and serves it to members; members' own Torn pulls are written
+// back so the shared copy is as fresh as the latest member who looked.
+//   Datasets (per env; the Hub's pulls go to BOTH test and prod):
+//     crimes   faction/crimes?cat=available (recruiting + planning) - every 3 min          -> oc_snap
+//     history  faction/crimes?cat=successful, newest first until a known id - every 30 min -> oc_hist (row per crime)
+//     roster   faction/members -> {id: name} - hourly                                     -> oc_snap
+//     catalog  torn/organizedcrimes, as Torn returns it - weekly                          -> oc_snap
+//     prices   torn/items for every reward item id in history -> {id: {name, price}} - daily -> oc_snap
+//   OPEN-SLOT checkpoint_pass_rate and item_requirement.is_available are the PULLING key's own view, so they're
+//   blanked (null) on every stored crime - the script fills the member's own rates from /oc/cpr/read.
+//   POST /oc/snapshot/read  {key, env, have: {crimes, history, roster, catalog, prices}}  (as_of ms the client has)
+//        -> {ok, <dataset>: {as_of, data}, ...} only datasets newer than have. history = only crimes STORED after
+//           have.history (a delta to merge by id; newest first, at most 500 - so have 0 = the newest 500).
+//   POST /oc/snapshot/write {key, env, as_of, crimes?, history?, roster?, catalog?, prices?}
+//        -> each dataset stored only if as_of > the stored as_of (latest wins; as_of in the future = now);
+//           history rows are added by id. One write per member per minute ({ok, throttled:true} otherwise).
+//           Checks (bad data is dropped, not stored): crime names must be in the catalog, slot members in the
+//           roster, sizes capped. -> {ok, stored: [...], dropped: [...]}
+//   POST /oc/bundle {key, env, have} -> {ok, snapshot: <as read>, rates: <as /oc/cpr/read>, plan: <as /oc/plan>}
+// API: Hub pull ~25 calls/hour on HUB_TORN_KEY (comment=Heart Breakers Hub, key in the Authorization header).
+// =====================================================================================================
+const FEED_SETS = ["crimes", "roster", "catalog", "prices"];
+const FEED_EVERY = {crimes: 0, history: 30 * 60e3, roster: 60 * 60e3, catalog: 7 * 24 * 3600e3, prices: 24 * 3600e3};
+const FEED_HIST_MAX = 500;                    // most history rows in one read
+const FEED_MAX_BODY = 1500000;                // write-back body limit (bytes)
+
+async function ocFeedRoute(env, ctx, req, p) {
+  if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
+  if (!env.OC_DB) return ocErr(503, "OC sharing isn't set up yet");
+  if (req.method !== "POST") return ocErr(405, "method not allowed");
+  const raw = await req.text();
+  if (raw.length > FEED_MAX_BODY) return ocErr(413, "too much data");
+  let body;
+  try { body = JSON.parse(raw); } catch (e) { return ocErr(400, "body must be JSON"); }
+  if (!body || typeof body !== "object" || !OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
+  const id = await ocIdentify(env, ctx, ocKey(req, body.key));
+  if (id.err) return ocErr(id.status, id.err);
+  if (p === "/oc/snapshot/write") return ocFeedWrite(env, body, id);
+  const snap = await ocFeedRead(env, body.env, body.have || {});
+  if (p === "/oc/snapshot/read") return new Response(snap, {headers: {...OC_CORS, "Content-Type": "application/json"}});
+  // bundle: the snapshot (already JSON text - not re-parsed) + rates + plan
+  const [rates, plan] = await Promise.all([ocRatesObj(env, body.env), ocPlanObj(env, body.env, id)]);
+  return new Response(`{"ok":true,"snapshot":${snap},"rates":${JSON.stringify(rates)},"plan":${JSON.stringify(plan)}}`,
+                      {headers: {...OC_CORS, "Content-Type": "application/json"}});
+}
+
+// the read answer as JSON TEXT, built from the stored text (big blobs are never parsed here - CPU)
+async function ocFeedRead(env, envName, have) {
+  const h = k => Number(have[k]) || 0;
+  const parts = ['"ok":true'];
+  const {results} = await env.OC_DB.prepare("SELECT ds, as_of FROM oc_snap WHERE env = ? AND ds IN ('crimes','roster','catalog','prices')")
+    .bind(envName).all();
+  const want = (results || []).filter(r => Number(r.as_of) > h(r.ds)).map(r => r.ds);
+  if (want.length) {
+    const rows = await env.OC_DB.prepare(`SELECT ds, as_of, data FROM oc_snap WHERE env = ? AND ds IN (${want.map(() => "?").join(",")})`)
+      .bind(envName, ...want).all();
+    for (const r of rows.results || []) parts.push(`"${r.ds}":{"as_of":${Number(r.as_of)},"data":${r.data}}`);
+  }
+  const top = await env.OC_DB.prepare("SELECT MAX(as_of) AS a FROM oc_hist WHERE env = ?").bind(envName).first();
+  if (top && Number(top.a) > h("history")) {
+    const rows = await env.OC_DB.prepare("SELECT data FROM oc_hist WHERE env = ? AND as_of > ? ORDER BY executed_at DESC LIMIT ?")
+      .bind(envName, h("history"), FEED_HIST_MAX).all();
+    parts.push(`"history":{"as_of":${Number(top.a)},"data":[${(rows.results || []).map(r => r.data).join(",")}]}`);
+  }
+  return "{" + parts.join(",") + "}";
+}
+
+// blank what's the PULLING key's own view on open slots (rates + "has the item") - true for nobody else
+function ocFeedCleanCrime(c) {
+  for (const s of Array.isArray(c.slots) ? c.slots : []) {
+    if (s && !s.user) {
+      if ("checkpoint_pass_rate" in s) s.checkpoint_pass_rate = null;
+      if (s.item_requirement && typeof s.item_requirement === "object") s.item_requirement.is_available = null;
+    }
+  }
+  return c;
+}
+
+async function ocSnapGet(env, envName, ds) {
+  const r = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = ? AND ds = ?").bind(envName, ds).first();
+  if (!r) return null;
+  try { return {as_of: Number(r.as_of), data: JSON.parse(r.data)}; } catch (e) { return null; }
+}
+// store a dataset only if newer than what's there (latest as_of wins)
+function ocSnapPut(env, envName, ds, asOf, data, by) {
+  return env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES (?, ?, ?, ?, ?) " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by WHERE excluded.as_of > oc_snap.as_of")
+    .bind(envName, ds, asOf, typeof data === "string" ? data : JSON.stringify(data), by);
+}
+// history rows, 150 crimes per statement through json_each (D1 allows few queries per run - one statement, not one
+// per crime); a crime already stored is left alone (completed crimes never change)
+function ocHistPut(env, envName, crimes, asOf) {
+  const out = [];
+  for (let i = 0; i < crimes.length; i += 150)
+    out.push(env.OC_DB.prepare("INSERT INTO oc_hist (env, id, executed_at, as_of, data) " +
+      "SELECT ?, json_extract(value, '$.id'), json_extract(value, '$.executed_at'), ?, value FROM json_each(?) WHERE true " +
+      "ON CONFLICT (env, id) DO NOTHING").bind(envName, asOf, JSON.stringify(crimes.slice(i, i + 150))));
+  return out;
+}
+
+// ---- member write-back ----
+async function ocFeedWrite(env, body, id) {
+  const now = Date.now(), envName = body.env, fid = Number(env.FACTION_ID);
+  const last = await env.OC_DB.prepare("SELECT ts FROM oc_wb WHERE env = ? AND player_id = ?").bind(envName, id.player_id).first();
+  if (last && now - Number(last.ts) < OC_WRITE_GAP_MS) return ocJson({ok: true, throttled: true, stored: []});
+  let asOf = Number(body.as_of);
+  if (!Number.isFinite(asOf) || asOf <= 0) return ocErr(400, "as_of (epoch ms) is required");
+  asOf = Math.min(Math.round(asOf), now);                     // a fast clock can't freeze the feed
+  const by = `${String(id.name || "").slice(0, 40)} [${id.player_id}]`;
+  const [cat, ros] = await Promise.all([ocSnapGet(env, envName, "catalog"), ocSnapGet(env, envName, "roster")]);
+  const names = new Set(((cat && cat.data && cat.data.organizedcrimes) || []).map(c => c && c.name).filter(Boolean));
+  const members = ros && ros.data && typeof ros.data === "object" ? ros.data : null;
+  const okName = n => typeof n === "string" && n.length <= 60 && (!names.size || names.has(n));
+  const okUser = s => !s.user || (s.user && Number(s.user.id) > 0 && (!members || members[String(s.user.id)] != null));
+  const okCrime = c => c && typeof c === "object" && Number(c.id) > 0 && okName(c.name) && Array.isArray(c.slots) && c.slots.length <= 10
+    && c.slots.every(s => s && typeof s === "object" && okUser(s));
+  const stored = [], dropped = [], ops = [];
+
+  if (body.crimes !== undefined) {
+    if (Array.isArray(body.crimes) && body.crimes.length <= 200 && body.crimes.every(okCrime))
+      { ops.push(ocSnapPut(env, envName, "crimes", asOf, body.crimes.map(ocFeedCleanCrime), by)); stored.push("crimes"); }
+    else dropped.push("crimes");
+  }
+  if (body.history !== undefined) {
+    const ok = Array.isArray(body.history) && body.history.length <= FEED_HIST_MAX
+      && body.history.every(c => okCrime(c) && Number(c.executed_at) > 0 && c.status === "Successful");
+    if (ok) { ops.push(...ocHistPut(env, envName, body.history, asOf)); stored.push("history"); }
+    else dropped.push("history");
+  }
+  if (body.roster !== undefined) {
+    const r = body.roster, ks = r && typeof r === "object" && !Array.isArray(r) ? Object.keys(r) : null;
+    if (ks && ks.length && ks.length <= 100 && ks.every(k => /^\d+$/.test(k) && typeof r[k] === "string" && r[k].length <= 40))
+      { ops.push(ocSnapPut(env, envName, "roster", asOf, r, by)); stored.push("roster"); }
+    else dropped.push("roster");
+  }
+  if (body.catalog !== undefined) {
+    const list = body.catalog && body.catalog.organizedcrimes;
+    if (Array.isArray(list) && list.length && list.length <= 200 && list.every(c => c && typeof c.name === "string"))
+      { ops.push(ocSnapPut(env, envName, "catalog", asOf, body.catalog, by)); stored.push("catalog"); }
+    else dropped.push("catalog");
+  }
+  if (body.prices !== undefined) {
+    const r = body.prices, ks = r && typeof r === "object" && !Array.isArray(r) ? Object.keys(r) : null;
+    if (ks && ks.length <= 500 && ks.every(k => /^\d+$/.test(k) && r[k] && Number.isFinite(Number(r[k].price)) && Number(r[k].price) >= 0))
+      { ops.push(ocSnapPut(env, envName, "prices", asOf, r, by)); stored.push("prices"); }
+    else dropped.push("prices");
+  }
+  ops.push(env.OC_DB.prepare("INSERT INTO oc_wb (env, player_id, ts) VALUES (?, ?, ?) ON CONFLICT (env, player_id) DO UPDATE SET ts = excluded.ts")
+    .bind(envName, id.player_id, now));
+  await env.OC_DB.batch(ops);
+  return ocJson({ok: true, stored, dropped});
+}
+
+// ---- the Hub's own pull (timer, every 3 min) ----
+async function ocTorn(env, path) {
+  // API: Heart Breakers Hub - OC data feed (Torn V2). Key in the Authorization header, never in the address.
+  const base = env.TORN_API_BASE || "https://api.torn.com";          // TORN_API_BASE: local tests only
+  const sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(`${base}/v2/${path}${sep}comment=${encodeURIComponent(API_COMMENT)}`,
+                        {headers: {Authorization: "ApiKey " + env.HUB_TORN_KEY, Accept: "application/json"}});
+  const d = await r.json();
+  if (d && d.error) throw new Error("torn " + d.error.code);
+  return d;
+}
+async function ocFeedPull(env) {
+  if (!env.OC_DB || !env.HUB_TORN_KEY) return;
+  const now = Date.now(), ENVS = ["prod", "test"];
+  // when the Hub last pulled each dataset (pull:<ds> rows, env 'hub')
+  const {results} = await env.OC_DB.prepare("SELECT ds, as_of FROM oc_snap WHERE env = 'hub'").all();
+  const lastPull = {};
+  (results || []).forEach(r => { lastPull[r.ds.replace(/^pull:/, "")] = Number(r.as_of); });
+  const due = ds => now - (lastPull[ds] || 0) >= FEED_EVERY[ds] - 30e3;
+  const ops = [], mark = ds => ops.push(env.OC_DB.prepare(
+    "INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', ?, ?, '{}', 'hub') ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of")
+    .bind("pull:" + ds, now));
+  const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
+
+  // crimes - every run (1 call)
+  try {
+    const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
+    put("crimes", (d.crimes || []).map(ocFeedCleanCrime));
+  } catch (e) {}
+  // roster - hourly (1 call)
+  if (due("roster")) try {
+    const d = await ocTorn(env, "faction/members");
+    const out = {};
+    (Array.isArray(d.members) ? d.members : Object.values(d.members || {})).forEach(m => { if (m && m.id) out[String(m.id)] = String(m.name || ""); });
+    if (Object.keys(out).length) put("roster", out);
+  } catch (e) {}
+  // catalog - weekly (1 call)
+  if (due("catalog")) try {
+    const d = await ocTorn(env, "torn/organizedcrimes");
+    if ((d.organizedcrimes || []).length) put("catalog", d);
+  } catch (e) {}
+  // history - every 30 min: newest first until a crime we already have (normally 1 call; first time up to 6)
+  if (due("history")) try {
+    const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 200").all()).results || [])
+      .map(r => Number(r.id)));
+    const fresh = [];
+    for (let page = 0; page < 6; page++) {
+      const d = await ocTorn(env, `faction/crimes?cat=successful&limit=100&offset=${page * 100}&sort=DESC`);
+      const list = d.crimes || [];
+      let hit = false;
+      for (const c of list) { if (known.has(Number(c.id))) { hit = true; continue; } if (c && c.id && c.executed_at) fresh.push(c); }
+      if (hit || list.length < 100) break;
+    }
+    // stored now (not with the rest at the end) so the prices step below already sees new reward items
+    const hops = [];
+    if (fresh.length) ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now)));
+    if (hops.length) await env.OC_DB.batch(hops);
+    mark("history");
+  } catch (e) {}
+  // prices - daily: every reward item id seen in history (1 call per 100 ids)
+  if (due("prices")) try {
+    // the ids come out of the stored JSON inside D1 (no parsing of every crime here - Worker CPU)
+    const rows = (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
+      "json_each(oc_hist.data, '$.rewards.items') AS j WHERE oc_hist.env = 'prod'").all()).results || [];
+    const out = {}, list = rows.map(r => Number(r.i)).filter(i => i > 0);
+    for (let i = 0; i < list.length; i += 100) {
+      const d = await ocTorn(env, "torn/items?ids=" + list.slice(i, i + 100).join(","));
+      (Array.isArray(d.items) ? d.items : Object.values(d.items || {})).forEach(it => {
+        if (it && it.id) out[String(it.id)] = {name: String(it.name || ""), price: Number((it.value || {}).market_price) || 0}; });
+    }
+    if (Object.keys(out).length) put("prices", out);      // nothing priced yet -> try again next run
+  } catch (e) {}
+  if (ops.length) await env.OC_DB.batch(ops);
 }

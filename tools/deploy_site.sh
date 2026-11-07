@@ -47,3 +47,15 @@ else
   grep -iE "error|limit|exceed|too large|denied|auth" "$RUNNER_TEMP/deploy.log" | sed -E 's#[^ ]*/[^ ]*#<path>#g' | head -15
   exit 1
 fi
+
+# ---- OC data feed (Nov 2026): the Worker pulls OC data from Torn itself with the site's own Torn key ----
+# Copied from the GitHub secret into a Cloudflare Worker secret (encrypted; never in a file, log or address).
+# Piped on stdin; the output goes to a temp file and only a yes/no is printed.
+if [ -n "${TORN_API_KEY:-}" ]; then
+  if printf '%s' "$TORN_API_KEY" | npx wrangler secret put HUB_TORN_KEY -c "$CFG" > "$RUNNER_TEMP/secret.log" 2>&1; then
+    echo "OC data feed: key set"
+  else
+    echo "::warning::OC data feed: couldn't set the Worker's Torn key (the feed pull stays off)"
+  fi
+  rm -f "$RUNNER_TEMP/secret.log"
+fi

@@ -38,3 +38,22 @@ jobs:
           for r in rows:
               print(f"env={r['env']}: {r['members']} member(s) sharing - newest write {ago(r['newest'])}, oldest {ago(r['oldest'])}")
           PY
+      - name: OC data feed status
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # dataset ages + sizes only (who wrote it: 'hub' or 'member' - never names)
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT env, ds, as_of, LENGTH(data) AS bytes, CASE WHEN by = 'hub' THEN 'hub' ELSE 'member' END AS src FROM oc_snap WHERE env != 'hub' UNION ALL SELECT env, 'history', MAX(as_of), COUNT(*), 'rows' FROM oc_hist GROUP BY env ORDER BY 1, 2" > feed.json 2> err.log \
+            || { echo "::warning::feed tables not there yet"; exit 0; }
+          python3 - <<'PY'
+          import json, time
+          d = json.load(open("feed.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
+          now = time.time() * 1000
+          for r in rows:
+              m = (now - (r["as_of"] or 0)) / 60000
+              print(f"{r['env']:5} {r['ds']:8} {m:7.1f} min old  {r['bytes']:>8} {'rows' if r['src'] == 'rows' else 'bytes'}  ({r['src']})")
+          if not rows: print("No feed data yet.")
+          PY

@@ -23,3 +23,34 @@ CREATE TABLE IF NOT EXISTS oc_config (
   by    TEXT,                      -- leader who saved it ("Name [id]")
   PRIMARY KEY (env, k)
 );
+
+-- OC DATA FEED (Nov 2026, project doc claude/oc-optimizer-hub-datafeed-contract.md): faction-wide OC data the Hub
+-- pulls from Torn itself (Worker timer, every 3 min) and serves to the OC Optimizer script, plus members' write-backs.
+--   oc_snap  one row per env + dataset ('crimes' | 'roster' | 'catalog' | 'prices'), data = JSON text as served
+--            (+ 'pull:<dataset>' rows: when the Hub itself last pulled it - drives the timer's schedule)
+--   oc_hist  completed (successful) crimes, one row per crime: a read sends only rows stored after the client's 'have'
+--   oc_wb    last write-back per member (one per minute)
+CREATE TABLE IF NOT EXISTS oc_snap (
+  env    TEXT    NOT NULL,          -- 'test' | 'prod'
+  ds     TEXT    NOT NULL,          -- dataset name
+  as_of  INTEGER NOT NULL,          -- epoch ms the data is from
+  data   TEXT    NOT NULL,          -- JSON
+  by     TEXT,                      -- 'hub' or the member who wrote it back ("Name [id]")
+  PRIMARY KEY (env, ds)
+);
+CREATE TABLE IF NOT EXISTS oc_hist (
+  env          TEXT    NOT NULL,
+  id           INTEGER NOT NULL,    -- Torn crime id
+  executed_at  INTEGER,             -- epoch s
+  as_of        INTEGER NOT NULL,    -- epoch ms the row was stored (the delta key)
+  data         TEXT    NOT NULL,    -- the crime as Torn returned it (JSON)
+  PRIMARY KEY (env, id)
+);
+CREATE INDEX IF NOT EXISTS idx_oc_hist_asof ON oc_hist (env, as_of);
+CREATE INDEX IF NOT EXISTS idx_oc_hist_exec ON oc_hist (env, executed_at);
+CREATE TABLE IF NOT EXISTS oc_wb (
+  env        TEXT    NOT NULL,
+  player_id  INTEGER NOT NULL,
+  ts         INTEGER NOT NULL,
+  PRIMARY KEY (env, player_id)
+);

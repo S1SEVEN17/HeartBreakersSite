@@ -27,7 +27,8 @@
     Live wins when it's newer than "Shared rates max age"; otherwise history. Members with no rate for a crime + role
     are never placed in it (a rate from an easier crime would overstate what they'd manage).
   BUSY: members already in an active crime are left out unless "Include members already in a crime" is on.
-  ENV: test / live (prod) - separate settings, plans and shared rates. The OC Optimizer test fork uses test.
+  ENV: always prod (LIVE) - the Test data set was removed when the OC tools went live (Nov 2026). The Worker still
+  keeps a separate 'test' env for the script's test fork; this page no longer shows or edits it.
   Data: CFG (__CONFIG__: catalog, hist, members, ghproxy) + live reads through the gatekeeper (leaders' pass):
     oc/config.json?env=  oc/rates.json?env=  (D1)   and   data/oc_active.json + data/oc_pool.json (leaders' gh/contents proxy).
     🔄 Refresh: POST oc/refresh (once a minute) starts a crime check that rewrites both files; the page polls for them.
@@ -91,8 +92,7 @@ th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 __MENU__
 <h1>OC Management</h1>
 <div class="sub">Choose which crimes the OC Optimizer suggests, build teams and deploy them to members using the script</div>
-<div class="bar"><span class="lab">Data set</span><button data-env="test">🧪 Test</button><button data-env="prod">✅ Live</button>
-  <button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
+<div class="bar"><button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
 <div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button></div>
 <div id="view"></div>
@@ -109,11 +109,14 @@ const nameOf = pid => CFG.members[String(pid)] || ("[" + pid + "]");
 const col = r => r == null ? "" : r >= 75 ? "ok" : r >= 65 ? "mid" : "bad";
 const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
 
-let ENV = LS.get("hb_oc_env", "test"), TAB = LS.get("hb_oc_tab", "builder");
+const ENV = "prod";
+let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
 const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, maxAge: 24}, LS.get("hb_oc_opts", {}));
 const saveOpts = () => LS.set("hb_oc_opts", OPT);
 const boardKey = () => "hb_oc_board_" + ENV;
+// a draft built on the old Test data set carries over once (Test was removed - Nov 2026)
+if (!LS.get(boardKey(), null) && LS.get("hb_oc_board_test", null)) LS.set(boardKey(), LS.get("hb_oc_board_test", {teams: []}));
 let BOARD = LS.get(boardKey(), {teams: []});
 const saveBoard = () => LS.set(boardKey(), BOARD);
 const st = (m, err) => { $("st").textContent = m; $("st").classList.toggle("err", !!err); };
@@ -144,7 +147,7 @@ async function load() {
       CFG.members = pool.members; CFG.hist = pool.hist || {}; CFG.built = pool.t;
     }
     const shared = Object.keys(D.rates).length;
-    st(`${ENV === "prod" ? "Live" : "Test"} data · ${shared} member${shared === 1 ? "" : "s"} sharing rates · ${D.active.length} active crime${D.active.length === 1 ? "" : "s"}`
+    st(`${shared} member${shared === 1 ? "" : "s"} sharing rates · ${D.active.length} active crime${D.active.length === 1 ? "" : "s"}`
       + (D.activeT ? ` (checked ${ago(D.activeT * 1000)})` : ""));
   } catch (e) { st("Couldn't load: " + e.message, true); }
   draw();
@@ -410,7 +413,6 @@ function addTeam(crime) {
 
 // ---------- views ----------
 function draw() {
-  document.querySelectorAll("[data-env]").forEach(b => b.classList.toggle("on", b.dataset.env === ENV));
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
   if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else drawBuilder();
 }
@@ -432,7 +434,7 @@ function drawCrimes() {
   $("allon").onclick = () => { document.querySelectorAll("[data-cr]").forEach(x => { x.checked = true; x.closest(".cr").classList.remove("off"); }); count(); };
   $("savecr").onclick = async () => {
     const v = [...document.querySelectorAll("[data-cr]:not(:checked)")].map(x => x.dataset.cr);
-    try { st("Saving…"); await saveConfig("disabled", v); D.config.disabled = v; D.config.disabled_ts = Date.now(); st(`Saved - ${v.length} crime${v.length === 1 ? "" : "s"} off for the script (${ENV === "prod" ? "Live" : "Test"}).`); }
+    try { st("Saving…"); await saveConfig("disabled", v); D.config.disabled = v; D.config.disabled_ts = Date.now(); st(`Saved - ${v.length} crime${v.length === 1 ? "" : "s"} off for the script (Live).`); }
     catch (e) { st("Save failed: " + e.message, true); }
   };
 }
@@ -485,7 +487,7 @@ function drawBuilder() {
           `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${fmt$(x.pay)}/day · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
         <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(valueOf(n).pot / valueOf(n).days / (rolesOf(n).length || 1))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
-      <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to ${ENV === "prod" ? "Live" : "Test"}</button>
+      <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to Live</button>
     </div>
     <div class="stat"><div><b>${BOARD.teams.length}</b><span>Teams</span></div><div><b>${placed}</b><span>Members placed</span></div>
       <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average success</span></div>
@@ -544,16 +546,16 @@ function wireTeams() {
 }
 async function deploy() {
   const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
-  if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to ${ENV === "prod" ? "LIVE" : "Test"}?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
+  if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
   const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, avg: Math.round(teamAvg(t) || 0),
     roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate}))}))};
-  try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (${ENV === "prod" ? "Live" : "Test"}).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
+  try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
 
 function drawDeployed() {
   const plan = D.config.plan, busy = busyMap();
-  if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel"><div class="hn">Nothing deployed to ${ENV === "prod" ? "Live" : "Test"} yet - build teams in the Team Builder and press Deploy.</div></div>`; return; }
+  if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel"><div class="hn">Nothing deployed to Live yet - build teams in the Team Builder and press Deploy.</div></div>`; return; }
   let joined = 0, total = 0;
   const cards = plan.teams.map(t => {
     const rows = t.roles.map(r => {
@@ -619,7 +621,6 @@ $("refresh").onclick = async () => {
 };
 refreshBtn();
 
-document.querySelectorAll("[data-env]").forEach(b => b.onclick = () => { ENV = b.dataset.env; LS.set("hb_oc_env", ENV); BOARD = LS.get(boardKey(), {teams: []}); load(); });
 document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { TAB = b.dataset.tab; LS.set("hb_oc_tab", TAB); draw(); });
 load();
 </script>

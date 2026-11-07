@@ -15,7 +15,7 @@ not_found_handling = "none"
 
 # timer that starts the update workflows (see worker.js scheduled)
 [triggers]
-crons = ["0,15,30,45 * * * *", "7,22,37,52 * * * *"]
+crons = ["0,15,30,45 * * * *", "7,22,37,52 * * * *", "*/3 * * * *"]   # last: OC data feed pull (worker.js ocFeedPull)
 
 [vars]
 FACTION_ID = "51384"
