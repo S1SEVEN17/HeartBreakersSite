@@ -52,7 +52,7 @@ fi
 # Copied from the GitHub secret into a Cloudflare Worker secret (encrypted; never in a file, log or address).
 # Piped on stdin; the output goes to a temp file and only a yes/no is printed.
 if [ -n "${TORN_API_KEY:-}" ]; then
-  if printf '%s' "$TORN_API_KEY" | npx wrangler secret put HUB_TORN_KEY -c "$CFG" > "$RUNNER_TEMP/secret.log" 2>&1; then
+  if printf '%s' "$TORN_API_KEY" | tr -d '[:space:]' | npx wrangler secret put HUB_TORN_KEY -c "$CFG" > "$RUNNER_TEMP/secret.log" 2>&1; then
     echo "OC data feed: key set"
   else
     echo "::warning::OC data feed: couldn't set the Worker's Torn key (the feed pull stays off)"

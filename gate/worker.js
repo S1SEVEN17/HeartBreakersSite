@@ -872,7 +872,7 @@ async function ocTorn(env, path) {
   const base = env.TORN_API_BASE || "https://api.torn.com";          // TORN_API_BASE: local tests only
   const sep = path.includes("?") ? "&" : "?";
   const r = await fetch(`${base}/v2/${path}${sep}comment=${encodeURIComponent(API_COMMENT)}`,
-                        {headers: {Authorization: "ApiKey " + env.HUB_TORN_KEY, Accept: "application/json"}});
+                        {headers: {Authorization: "ApiKey " + String(env.HUB_TORN_KEY).trim(), Accept: "application/json"}});
   const d = await r.json();
   if (d && d.error) throw new Error("torn " + d.error.code);
   return d;
@@ -888,25 +888,28 @@ async function ocFeedPull(env) {
   const ops = [], mark = ds => ops.push(env.OC_DB.prepare(
     "INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', ?, ?, '{}', 'hub') ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of")
     .bind("pull:" + ds, now));
+  // what went wrong, for the OC check workflow (step + Torn error code / error type - nothing else)
+  const errs = [];
+  const fail = (step, e) => errs.push(step + ": " + String((e && e.message) || e).slice(0, 60));
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
     put("crimes", (d.crimes || []).map(ocFeedCleanCrime));
-  } catch (e) {}
+  } catch (e) { fail("crimes", e); }
   // roster - hourly (1 call)
   if (due("roster")) try {
     const d = await ocTorn(env, "faction/members");
     const out = {};
     (Array.isArray(d.members) ? d.members : Object.values(d.members || {})).forEach(m => { if (m && m.id) out[String(m.id)] = String(m.name || ""); });
     if (Object.keys(out).length) put("roster", out);
-  } catch (e) {}
+  } catch (e) { fail("roster", e); }
   // catalog - weekly (1 call)
   if (due("catalog")) try {
     const d = await ocTorn(env, "torn/organizedcrimes");
     if ((d.organizedcrimes || []).length) put("catalog", d);
-  } catch (e) {}
+  } catch (e) { fail("catalog", e); }
   // history - every 30 min: newest first until a crime we already have (normally 1 call; first time up to 6)
   if (due("history")) try {
     const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 200").all()).results || [])
@@ -924,7 +927,7 @@ async function ocFeedPull(env) {
     if (fresh.length) ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now)));
     if (hops.length) await env.OC_DB.batch(hops);
     mark("history");
-  } catch (e) {}
+  } catch (e) { fail("history", e); }
   // prices - daily: every reward item id seen in history (1 call per 100 ids)
   if (due("prices")) try {
     // the ids come out of the stored JSON inside D1 (no parsing of every crime here - Worker CPU)
@@ -937,6 +940,8 @@ async function ocFeedPull(env) {
         if (it && it.id) out[String(it.id)] = {name: String(it.name || ""), price: Number((it.value || {}).market_price) || 0}; });
     }
     if (Object.keys(out).length) put("prices", out);      // nothing priced yet -> try again next run
-  } catch (e) {}
-  if (ops.length) await env.OC_DB.batch(ops);
+  } catch (e) { fail("prices", e); }
+  ops.push(env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pull:errors', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(errs)));
+  await env.OC_DB.batch(ops);
 }
