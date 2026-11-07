@@ -31,6 +31,9 @@ jobs:
             const body=b(JSON.stringify({i:974757,n:"check",p:"",t:Date.now(),e:Date.now()+300e3}));
             console.log(body+"."+c.createHmac("sha256",k).update(body).digest("base64url"));')
           G=https://hb-gate.heartbreakers.workers.dev
+          echo "optin.json (own opt-in settings): $(curl -s -H "Cookie: hb_s=$PASS" $G/m/optin.json)"
+          echo "readiness.json (leaders): $(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: hb_s=$PASS" $G/l/readiness.json)"
+          echo "my-data.html: $(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: hb_s=$PASS" $G/m/my-data.html) · armory: $(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: hb_s=$PASS" $G/l/armory.html) · stats: $(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: hb_s=$PASS" $G/l/stats.html)"
           echo "live.json (removed - should be 404): $(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: hb_s=$PASS" $G/m/live.json)"
           echo "home.json: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/db/home.json | head -c 300)"
           echo "members hub sections: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/ | grep -o 'id="hb[A-Za-z]*"\|class="qa"\|class="feat"\|class="groups"' | tr '\n' ' ')"
