@@ -5209,15 +5209,18 @@ def _utc_month_start(t: int) -> int:
     return int(datetime(d.year, d.month, 1, tzinfo=timezone.utc).timestamp())
 
 
-ARMORY_LOG_V = 2        # 2: history read in explicit month windows (v1 marked it "complete" after the newest pages)
+ARMORY_LOG_V = 3        # 2: month windows (v1 marked it "complete" after the newest pages)
+                        # 3: each month window read OLDEST first with its place kept ("back") - Torn's newest-first
+                        #    paging cut windows short; v2 logs keep their events and re-read the older months
 
 
 def update_armory_log(key: str, founded: int = 0):
     """Full runs -> data/armory_log.json:
       1) forward: everything since the newest news read (a new log starts at the 1st of this month)
-      2) backfill: month by month, newest month first - [month start, oldest read) - each window read newest first;
-         a finished window moves on to the month before. Done when the window reaches the faction's founding
-         month (founded = its creation time, from basic days_old)."""
+      2) backfill: month by month, newest month first - the window [month start, oldest read) is read OLDEST first
+         (the paging that works reliably), its place kept in log["back"] = {"w0": window start, "pos": next time}
+         so a month bigger than one run's page budget carries on next run. A finished window moves on to the
+         month before. Done when the window reaches the faction's founding month (founded = from basic days_old)."""
     import time
     if not key:
         return
@@ -5226,9 +5229,11 @@ def update_armory_log(key: str, founded: int = 0):
         log = json.loads(ARMORY_LOG_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         log = {}
+    if log.get("v") == 2:                        # keep v2's events, re-read the older months the v3 way
+        log.update(v=ARMORY_LOG_V, oldest=_utc_month_start(now), done=False, back=None)
     if log.get("v") != ARMORY_LOG_V:            # new / old-format log: start again from this month
         ms = _utc_month_start(now)
-        log = {"v": ARMORY_LOG_V, "items": [], "last": ms - 1, "oldest": ms, "done": False, "events": []}
+        log = {"v": ARMORY_LOG_V, "items": [], "last": ms - 1, "oldest": ms, "done": False, "events": [], "back": None}
     idx = {n: k for k, n in enumerate(log["items"])}
     seen = {(e[0], e[1], e[2]) for e in log["events"]}
     stats = {"new": 0, "back": 0, "pages": 0}
@@ -5284,17 +5289,21 @@ def update_armory_log(key: str, founded: int = 0):
         log["last"] = max(log["last"], hi)
     # 2) backfill, newest month first, while the page budget lasts
     stop = _utc_month_start(founded) if founded else 0
-    while not log["done"] and budget["n"] > 0:
+    back_pages = ARMORY_PAGES_BACK
+    while not log["done"] and budget["n"] > 0 and back_pages > 0:
         w0 = _utc_month_start(log["oldest"] - 1)            # the month just before what's read
         if w0 < stop:
             log["done"] = True
             break
-        lo, _hi, ended = walk(w0, log["oldest"] - 1, "DESC", ARMORY_PAGES_BACK, "back")
+        bk = log.get("back") or {}
+        pos = bk.get("pos", w0) if bk.get("w0") == w0 else w0
+        before = budget["n"]
+        _lo, hi, ended = walk(pos, log["oldest"] - 1, "ASC", back_pages, "back")
+        back_pages -= before - budget["n"]
         if ended:
-            log["oldest"] = w0                             # that whole month is read
+            log["oldest"], log["back"] = w0, None            # that whole month is read
         else:
-            if lo:
-                log["oldest"] = min(log["oldest"], lo)
+            log["back"] = {"w0": w0, "pos": (hi or pos - 1) + 1 if hi else pos}
             break
     log["events"].sort()
     ARMORY_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
