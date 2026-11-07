@@ -202,7 +202,7 @@ export default {
     if (p === "/logout") return new Response(null, {status: 302, headers: {Location: "/login?out=1", "Set-Cookie": cookie("", 0)}});
     if (p === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n");
     // OC Payout Optimizer script (runs on torn.com, authenticates with the member's own Torn key)
-    if (p === "/oc/cpr" || p === "/oc/cpr/delete") return ocRoute(env, ctx, req, url, p);
+    if (p === "/oc/cpr" || p === "/oc/cpr/read" || p === "/oc/cpr/delete") return ocRoute(env, ctx, req, url, p);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -444,7 +444,9 @@ async function readiness(env, ctx) {
 // OC OPTIMIZER - checkpoint pass-rate (CPR) sharing for the "OC Payout Optimizer" userscript (Nov 2026).
 // Contract: project doc claude/oc-optimizer-worker-contract.md (the script already calls exactly this).
 //   POST /oc/cpr          {key, env, name, roles}  -> upsert the CALLER's own row          -> {ok:true}
-//   GET  /oc/cpr?env=&key=                         -> every member's row for that env, keyed by player_id
+//   POST /oc/cpr/read     {key, env}               -> every member's row for that env, keyed by player_id
+//   GET  /oc/cpr?env=&key=                         -> the same (OLD - key in the address; switched off with
+//                                                     OC_GET_KEY_IN_URL once the script uses POST /oc/cpr/read)
 //   POST /oc/cpr/delete   {key, env}               -> delete the CALLER's own row           -> {ok:true}
 // Rules:
 //   - auth = the member's own Torn key, checked with Torn (user/profile). player_id + faction come from Torn,
@@ -453,14 +455,18 @@ async function readiness(env, ctx) {
 //     a SHA-256 of the key (KV "OC_KV" when bound, else the Cache API) so repeat calls don't re-ask Torn.
 //   - env "test" | "prod" kept apart (part of the primary key). Writes: at most one per player per minute
 //     (a faster repeat answers {ok:true, throttled:true} without writing - the script only needs non-error).
-//   - key: body (POST), query string (GET - Torn PDA's PDA_httpGet can't set headers), or X-API-Key /
-//     Authorization: Bearer headers when present.
+//   - key: in the request BODY (all POSTs - Nov 2026: reading moved to POST /oc/cpr/read so the key never sits in
+//     a web address, where request logs could pick it up; PDA_httpPost sends bodies), or X-API-Key /
+//     Authorization: Bearer headers. The GET's ?key= is only accepted while OC_GET_KEY_IN_URL is true.
 //   - CORS for https://www.torn.com (fetch fallback / PDA WebView); OPTIONS -> 204.
 //   Torn API calls carry comment=Heart Breakers Hub (API_COMMENT) like every other Hub call.
 // Bindings (tools/deploy_site.sh creates them on the first deploy and applies gate/oc_schema.sql):
 //   OC_DB  D1 database "hb-oc"     OC_KV  KV namespace "hb-oc-cache" (optional)
 // =====================================================================================================
 const OC_ENVS = new Set(["test", "prod"]);
+// the old GET read with ?key= in the address: kept ONLY until the OC Optimizer (test fork) reads through
+// POST /oc/cpr/read - then set to false (GET answers 410 "use POST /oc/cpr/read")
+const OC_GET_KEY_IN_URL = true;
 const OC_CACHE_SECS = 600;            // key -> identity cache (10 min)
 const OC_WRITE_GAP_MS = 60 * 1000;    // one write per player per minute
 const OC_MAX_ROLES = 500, OC_MAX_KEY_LEN = 120;
@@ -473,11 +479,23 @@ const ocErr = (status, error) => ocJson({ok: false, error}, status);
 async function ocRoute(env, ctx, req, url, p) {
   if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
   if (!env.OC_DB) return ocErr(503, "OC sharing isn't set up yet");
-  const del = p === "/oc/cpr/delete";
-  if (req.method === "GET" && !del) {
-    const envName = url.searchParams.get("env");
+  const del = p === "/oc/cpr/delete", read = p === "/oc/cpr/read";
+  if (req.method === "GET" && p === "/oc/cpr") {
+    if (!OC_GET_KEY_IN_URL) return ocErr(410, "use POST /oc/cpr/read");
+    return ocRead(env, ctx, url.searchParams.get("env"), ocKey(req, url.searchParams.get("key")));
+  }
+  if (req.method !== "POST") return ocErr(405, "method not allowed");
+  let body;
+  try { body = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
+  if (!body || typeof body !== "object") return ocErr(400, "body must be JSON");
+  if (read) return ocRead(env, ctx, body.env, ocKey(req, body.key));
+  return ocWrite(env, ctx, req, body, del);
+}
+
+// every member's shared rates for one env, keyed by player_id (both read routes)
+async function ocRead(env, ctx, envName, key) {
     if (!OC_ENVS.has(envName)) return ocErr(400, "env must be test or prod");
-    const id = await ocIdentify(env, ctx, ocKey(req, url.searchParams.get("key")));
+    const id = await ocIdentify(env, ctx, key);
     if (id.err) return ocErr(id.status, id.err);
     const fid = Number(env.FACTION_ID);
     const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
@@ -489,11 +507,10 @@ async function ocRoute(env, ctx, req, url, p) {
       out[String(r.player_id)] = {name: r.name, ts: r.ts, roles};
     }
     return ocJson(out);
-  }
-  if (req.method !== "POST") return ocErr(405, "method not allowed");
-  let body;
-  try { body = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
-  if (!body || typeof body !== "object") return ocErr(400, "body must be JSON");
+}
+
+// publish (upsert) or delete the CALLER's own row
+async function ocWrite(env, ctx, req, body, del) {
   if (!OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
   const id = await ocIdentify(env, ctx, ocKey(req, body.key));
   if (id.err) return ocErr(id.status, id.err);
