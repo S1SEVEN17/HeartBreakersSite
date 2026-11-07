@@ -204,6 +204,16 @@ def fetch_all(key: str, cfg: dict) -> dict:
 CORE_CACHE_PATH = ROOT / "data" / "core_cache.json"
 
 
+def members_asof(now: int) -> int:
+    """When the member list (last actions) was last READ - idle times are measured to this moment, not to the
+    build time, so rebuilds from the same data give the same numbers and the site is only re-uploaded on real changes
+    (Nov 2026). At most one 3-hour slot behind; never later than `now`."""
+    try:
+        return min(now, int(json.loads(CORE_CACHE_PATH.read_text(encoding="utf-8")).get("fetched") or now))
+    except (OSError, ValueError, TypeError):
+        return now
+
+
 def core_sections(key: str, cfg: dict) -> dict:
     """basic / members / positions / upgrades (header, Faction Information,
     Leadership, Faction Perks) - refreshed only every core_refresh_hours
@@ -888,6 +898,8 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
             and activity <= int(hist.get("listed_at") or 0):
         print("Chain history: no chain activity since the last read - chain list not read")
         return hist
+    if key:
+        hist["checked"] = int(time.time())     # when the chain list was last read (site footer: "Chains")
     # chain list: mock file, full history while backfilling, else newest page
     if key is None:
         chains = _as_list((raw.get("chains") or {}).get("chains"))
@@ -1001,7 +1013,7 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
     if key and not pending:
         hist["listed_at"] = now_
     if key and (read or filled or hist.get("min_length") != min_len or hist.get("complete") != complete
-                or hist.get("listed_at") != listed):
+                or hist.get("listed_at") != listed or key):     # key: "checked" moved
         hist["min_length"] = min_len
         hist["complete"] = complete
         CHAIN_HIST_PATH.parent.mkdir(exist_ok=True)
@@ -1264,7 +1276,9 @@ def slacker_watch(hist: dict, members: list, scfg: dict) -> dict:
         i = str(m.get("id"))
         st = stats.get(i, {"present": 0, "missed": 0, "low": []})
         la = m.get("last_action")
-        idle = (now - int(la)) / 86400 if la else 0
+        # idle time as of when the member list was READ (not this build) - the data's own moment, so rebuilds from the
+        # same data give the same numbers (site deploys only on real changes, Nov 2026); ≤3 h behind at most
+        idle = (members_asof(now) - int(la)) / 86400 if la else 0
         reasons = []
         if st["missed"]:
             shown = st["missed"]
@@ -4906,8 +4920,9 @@ def write_freshness(out: Path, db: dict, mock: bool = False):
     fr = {"built": now,
           "read": {"members": safe(lambda: rd(CORE_CACHE_PATH, "fetched")), "gym": (db.get("gym") or {}).get("fetched"),
                    "crimes": safe(lambda: rd(CRIME_HIST_PATH, "fetched")),
-                   # war + chain history are checked on every update that deploys (this build)
-                   "wars": None if mock else now, "chains": None if mock else now},
+                   # the ranked war list is read on every full / war update (this build); the chain list only when
+                   # chain watch saw activity or at the 3-hour slot (Nov 2026) - its own "checked" time
+                   "wars": None if mock else now, "chains": None if mock else safe(lambda: rd(CHAIN_HIST_PATH, "checked"))},
           "since": {"wars": wars[0]["end"] if wars else None, "chains": chains[0]["end"] if chains else None,
                     "crimes": min((c["t"] for c in crimes if c.get("t")), default=None),
                     "gym_months": gm[0] if gm else None},
@@ -4977,7 +4992,9 @@ def write_home_data(out: Path, db: dict, raw: dict):
     recruits = []
     for m in cur:
         la = m.get("last_action")
-        idle = (now - int(la)) / 86400 if la else 0
+        # idle time as of when the member list was READ (not this build) - the data's own moment, so rebuilds from the
+        # same data give the same numbers (site deploys only on real changes, Nov 2026); ≤3 h behind at most
+        idle = (members_asof(now) - int(la)) / 86400 if la else 0
         if str(m.get("position", "")).lower() == "recruit" and idle >= ATTN_RECRUIT_IDLE_DAYS:
             recruits.append({"id": m["id"], "name": m["name"], "idle": int(idle)})
     _jdump(out / leader_dir() / "db" / "attention.json",
@@ -5216,7 +5233,9 @@ def monitor_data(db: dict) -> dict:
         long_d = {e["crime"] for e in mine if (e["minutes"] if e["minutes"] is not None else (now - e["start"]) // 60) >= 120}
         crime_pts = max(0, 25 - 8 * len(crimes_d) - 4 * len(long_d))
         la = m.get("last_action")
-        idle = (now - int(la)) / 86400 if la else 0
+        # idle time as of when the member list was READ (not this build) - the data's own moment, so rebuilds from the
+        # same data give the same numbers (site deploys only on real changes, Nov 2026); ≤3 h behind at most
+        idle = (members_asof(now) - int(la)) / 86400 if la else 0
         act_pts = 15 if idle <= 1 else 12 if idle <= 2 else 9 if idle <= 3 else 5 if idle <= 5 else 0
         score = round(war_pts + chain_pts + crime_pts + act_pts)
         rows.append({"id": i, "name": m["name"], "position": m.get("position", ""), "last": last, "rate": rate,

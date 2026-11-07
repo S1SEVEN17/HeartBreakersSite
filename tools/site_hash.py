@@ -5,7 +5,8 @@ Cloudflare upload when nothing a visitor would see has changed (Nov 2026).
 
 Build-time stamps that change on every build are blanked before hashing, so a rebuild from the same data
 gives the same fingerprint:
-  "Page built <date> TCT" footers, "updated"/"generated_at" text stamps, "generated"/"built" times in db/*.json and manifests
+  "Page built <date> TCT" footers, db/freshness.json's build time + war-list check time (the footer keeps the
+  previous "checked" time - still true, the data is the same), "updated"/"generated_at" text stamps, "generated"/"built" times in db/*.json and manifests
 Anything else that differs (new data, a timer drawn into an image, a code change) gives a new fingerprint
 and the site is deployed.
 
@@ -31,6 +32,15 @@ TEXT = {".html", ".json", ".js", ".css", ".txt", ".svg", ".toml", ".xml"}
 
 def norm(p: Path) -> bytes:
     b = p.read_bytes()
+    if p.name == "freshness.json":           # footer times: build time + the war list (read on every update) blanked;
+        import json                          # the stored "checked at" time stays true when nothing else changed
+        try:
+            d = json.loads(b)
+            d["built"] = 0
+            d.get("read", {})["wars"] = 0
+            return json.dumps(d, sort_keys=True).encode()
+        except (ValueError, AttributeError, TypeError):
+            pass
     if p.suffix.lower() in TEXT:
         for rx, rep in STAMPS:
             b = rx.sub(rep, b)
