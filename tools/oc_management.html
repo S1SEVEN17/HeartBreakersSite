@@ -210,30 +210,176 @@ function bestTeam(crime, blocked) {
   return {id: uid(), crime, difficulty: diffOf(crime), lock: false,
           roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: best[i].name, rate: best[i].rate, src: best[i].src}))};
 }
-// Auto-build: hardest switched-on crime first, as many teams per crime as reach the target average; locked teams kept
+// ---------- pay per day (Nov 2026) ----------
+// CFG.values {crime: {g: average gross reward $ (cash + items at market price), pp: payout % to members, n, ok}}
+// from the latest successful completed crimes. Planning takes one day per role (24 h each, one after another), so a
+// crime with s roles locks its members for s days:
+//   member pot  = g × pp%                       (what the members split; the faction keeps the rest)
+//   team $/day  = pot × team success % ÷ days   (expected pay per day for the whole team)
+//   each $/day  = team $/day ÷ roles
+// Prerequisite chains (No Reserve -> Bidding War): only the final crime pays, split over every seat in the chain.
+//   prerequisite: pot = final pot × its seats ÷ all seats × the target % (the final still has to succeed),
+//                 days = its roles + the final's roles (its members wait for the final to pay)
+//   final:        pot = final pot × its seats ÷ all seats, days = its roles
+const fmt$ = n => n == null ? "-" : n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "b" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n);
+const PP_DEFAULT = (() => { const v = Object.values(CFG.values || {}).map(x => x.pp).filter(x => x != null).sort((a, b) => a - b);
+  return v.length ? v[v.length >> 1] : 100; })();           // typical payout % when a crime's own isn't known
+const potRaw = crime => { const v = (CFG.values || {})[crime]; return v ? v.g * (v.pp ?? PP_DEFAULT) / 100 : 0; };
+function valueOf(crime) {
+  const s = rolesOf(crime).length || 1, pre = (CFG.catalog[crime] || {}).prereq;
+  const fin = Object.keys(CFG.catalog).find(n => (CFG.catalog[n] || {}).prereq === crime);
+  if (fin) { const sf = rolesOf(fin).length || 1;
+    return {pot: potRaw(fin) * s / (s + sf) * OPT.target / 100, days: s + sf, seats: s, chain: fin}; }
+  if (pre) { const sp = rolesOf(pre).length || 1;
+    return {pot: potRaw(crime) * s / (s + sp), days: s, seats: s, chain: pre}; }
+  return {pot: potRaw(crime), days: s, seats: s};
+}
+const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
+const crimeOk = crime => { const off = new Set(D.config.disabled || []);
+  return !off.has(crime) && rolesOf(crime).length && (OPT.chains || !(CFG.catalog[crime] || {}).prereq); };
+
+// Best team for one crime from a pool, for AUTO-BUILD: every role at or above minRole, team average at or above the
+// target, maximising   team $/day  −  α × (what these members could earn in their own best crime)  −  release costs.
+//   α (0..1) = how much to save strong members for better crimes: at 0 the strongest go here; higher α fills the
+//              target with "just enough" members, so an 80% member can take an easier role when that pays more overall.
+//   cost(pid) = extra cost of using a member (auto-build's stealing step: the pay their current team loses).
+function teamFor(crime, pool, alpha, opp, cost) {
+  const roles = rolesOf(crime); if (!roles.length) return null;
+  const v = valueOf(crime), k = v.pot / v.days / roles.length / 100;   // $/day per pass-rate point in one role
+  const need = OPT.target * roles.length - 1e-9;
+  const cands = roles.map(pos => {
+    const all = [];
+    pool.forEach(pid => { const r = rateOf(pid, crime, pos); if (r && r.rate >= OPT.minRole)
+      all.push({pid: +pid, name: nameOf(pid), rate: r.rate, src: r.src, sc: k * r.rate - alpha * (opp[pid] || 0) - (cost ? cost(+pid) : 0)}); });
+    if (!all.length) return all;
+    // best by score + best by rate (the high-rate ones keep the target reachable)
+    const bySc = all.slice().sort((a, b) => b.sc - a.sc), byRt = all.slice().sort((a, b) => b.rate - a.rate);
+    const lim = roles.length >= 6 ? 7 : roles.length >= 5 ? 8 : 10, out = [], seen = new Set();
+    for (const c of bySc.slice(0, lim).concat(byRt.slice(0, lim))) if (!seen.has(c.pid)) { seen.add(c.pid); out.push(c); }
+    return out.sort((a, b) => b.sc - a.sc);
+  });
+  if (cands.some(c => !c.length)) return null;
+  const order = roles.map((_, i) => i).sort((a, b) => cands[a].length - cands[b].length);
+  const maxSc = order.map((_, j) => order.slice(j).reduce((s, i) => s + cands[i][0].sc, 0));
+  const maxRt = order.map((_, j) => order.slice(j).reduce((s, i) => s + Math.max(...cands[i].map(c => c.rate)), 0));
+  let best = null, bestSc = -Infinity, nodes = 0;
+  const pick = new Array(roles.length), used = new Set();
+  (function dfs(j, sc, rt) {
+    if (++nodes > 40000) return;                                      // safety cap per call
+    if (sc + (maxSc[j] || 0) <= bestSc || rt + (maxRt[j] || 0) < need) return;
+    if (j === order.length) { bestSc = sc; best = pick.slice(); return; }
+    const i = order[j];
+    for (const c of cands[i]) {
+      if (used.has(c.pid)) continue;
+      used.add(c.pid); pick[i] = c;
+      dfs(j + 1, sc + c.sc, rt + c.rate);
+      used.delete(c.pid);
+    }
+  })(0, 0, 0);
+  if (!best) return null;
+  return {id: uid(), crime, difficulty: diffOf(crime), lock: false,
+          roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: best[i].name, rate: best[i].rate, src: best[i].src}))};
+}
+// total for comparing whole plans: members' pay per day, then more crimes running, then harder crimes
+const planScore = teams => teams.reduce((s, t) => s + (teamPay(t) || 0) + 1 + (t.difficulty || 0) * 0.1, 0);
+
+// Auto-build (Nov 2026): MOST PAY PER DAY for all members together, every team at the target average or better.
+//   1. every switched-on crime ranked by pay per member-day; several passes (different α and crime orders) fill
+//      teams greedily from the free members
+//   2. improve each plan: (a) STEAL - build another team using members from existing teams when their team can
+//      backfill them from the free members and still reach the target (strong members move to easier roles if
+//      that adds an extra crime), (b) UPGRADE - swap a free member into a role where they pass better
+//   3. keep the plan with the highest pay per day (ties: more crimes running, then harder crimes)
+// Locked teams are kept as they are. Difficulty only breaks ties - pay per day decides.
 function autoBuild() {
   const keep = BOARD.teams.filter(t => t.lock);
-  BOARD.teams = keep.slice();                        // a copy - keep.length stays the number of locked teams
-  const blocked = usedIds();
-  const off = new Set(D.config.disabled || []);
-  const crimes = Object.keys(CFG.catalog).filter(n => !off.has(n) && rolesOf(n).length && (OPT.chains || !(CFG.catalog[n] || {}).prereq))
-    .sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || rolesOf(b).length - rolesOf(a).length);
-  let made = 0;
-  for (const crime of crimes) {
-    for (let guard = 0; guard < 20; guard++) {
-      const t = bestTeam(crime, blocked);
-      if (!t || teamAvg(t) < OPT.target) break;
-      t.roles.forEach(r => blocked.add(r.pid));
-      BOARD.teams.push(t); made++;
-    }
+  const blocked = usedIds(), busy = busyMap();
+  const crimes = Object.keys(CFG.catalog).filter(crimeOk);
+  const pool0 = Object.keys(CFG.members).map(Number).filter(p => !blocked.has(p) && (OPT.includeBusy || !busy[p]));
+  // opp[pid] = $/day this member earns in their best crime at their own rate (what α saves them for)
+  const opp = {};
+  pool0.forEach(pid => { let b = 0;
+    crimes.forEach(c => { const v = valueOf(c), n = rolesOf(c).length;
+      rolesOf(c).forEach(pos => { const r = rateOf(pid, c, pos); if (r && r.rate >= OPT.minRole) b = Math.max(b, v.pot * r.rate / 100 / v.days / n); }); });
+    opp[pid] = b; });
+  const density = c => { const v = valueOf(c); return v.pot / v.days / rolesOf(c).length; };
+  const t0 = performance.now();
+  let best = null, bestScore = -1, runs = 0;
+  const alphas = [0, 0.5, 1, 0.25, 0.75];
+  while (runs < 5 || (performance.now() - t0 < 900 && runs < 60)) {
+    const alpha = runs < alphas.length ? alphas[runs] : Math.random();
+    const noise = runs < alphas.length ? 0 : 0.35;
+    const order = crimes.slice().sort((a, b) => density(b) * (1 + noise * Math.random()) - density(a) * (1 + noise * Math.random())
+      || (diffOf(b) || 0) - (diffOf(a) || 0));
+    const free = new Set(pool0), teams = [];
+    const fill = () => { for (const c of order) for (let g = 0; g < 20; g++) {
+      const t = teamFor(c, free, alpha, opp); if (!t) break;
+      t.roles.forEach(r => free.delete(r.pid)); teams.push(t); } };
+    fill();
+    improve(teams, free, order, opp);
+    fill();
+    const sc = planScore(teams);
+    if (sc > bestScore) { bestScore = sc; best = teams; }
+    runs++;
   }
-  BOARD.teams.sort((a, b) => (b.difficulty || 0) - (a.difficulty || 0) || (teamAvg(b) || 0) - (teamAvg(a) || 0));
+  BOARD.teams = keep.concat(best || []);
+  BOARD.teams.sort((a, b) => (teamPay(b) || 0) - (teamPay(a) || 0) || (b.difficulty || 0) - (a.difficulty || 0));
   saveBoard();
-  const busyN = Object.keys(CFG.members).filter(p => busyMap()[p]).length, total = Object.keys(CFG.members).length;
-  st(made ? `Built ${made} team${made === 1 ? "" : "s"} at ${OPT.target}%+ average${keep.length ? ` (+${keep.length} locked kept)` : ""}.`
+  const made = (best || []).length, pay = (best || []).reduce((s, t) => s + (teamPay(t) || 0), 0);
+  const busyN = Object.keys(CFG.members).filter(p => busy[p]).length, total = Object.keys(CFG.members).length;
+  st(made ? `Built ${made} team${made === 1 ? "" : "s"} at ${OPT.target}%+ average · about ${fmt$(pay)}/day for members${keep.length ? ` (+${keep.length} locked kept)` : ""}.`
      : !OPT.includeBusy && busyN > total / 2
        ? `No teams: ${busyN} of ${total} members are already in a crime - tick "Include members already in a crime" to plan their next one.`
        : `No team reaches ${OPT.target}% with the members and rates available - lower the target or the lowest role %, or add members' rates.`, !made);
+}
+// step 2 of auto-build (changes teams + free in place)
+function improve(teams, free, order, opp) {
+  const where = () => { const m = new Map(); teams.forEach((t, ti) => t.roles.forEach((r, ri) => m.set(r.pid, [ti, ri]))); return m; };
+  // best free member for one role of team t (other than `not`), keeping the team at the target -> {c, pay} or null
+  const backfill = (t, ri, not) => {
+    let b = null;
+    free.forEach(pid => { if (not && not.has(pid)) return;
+      const r = rateOf(pid, t.crime, t.roles[ri].position); if (!r || r.rate < OPT.minRole) return;
+      const tt = {crime: t.crime, roles: t.roles.map((x, i) => i === ri ? {rate: r.rate} : x)};
+      if (teamAvg(tt) < OPT.target) return;
+      const pay = teamPay(tt); if (!b || pay > b.pay) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay}; });
+    return b;
+  };
+  for (let round = 0; round < 6; round++) {
+    let changed = false;
+    // (a) STEAL: one more team, using members from other teams that can be backfilled
+    for (const crime of order) {
+      const pos = where();
+      const lossOf = new Map();
+      const cost = pid => { if (free.has(pid)) return 0; if (lossOf.has(pid)) return lossOf.get(pid);
+        const [ti, ri] = pos.get(pid), t = teams[ti], bf = backfill(t, ri);
+        const l = bf ? (teamPay(t) || 0) - bf.pay : Infinity; lossOf.set(pid, l); return l; };
+      const pool = new Set([...free, ...pos.keys()]);
+      const nt = teamFor(crime, pool, 0, opp, cost);
+      if (!nt || !nt.roles.some(r => !free.has(r.pid))) continue;          // nothing stolen -> the fill step does it
+      // apply: backfill each robbed team (one at a time, the free set shrinking), undo if any fails
+      const snap = teams.map(t => t.roles.map(r => Object.assign({}, r))), freeSnap = new Set(free);
+      const take = new Set(nt.roles.map(r => r.pid));
+      let ok = true;
+      nt.roles.forEach(r => free.delete(r.pid));
+      for (const r of nt.roles) {
+        if (!pos.has(r.pid)) continue;
+        const [ti, ri] = pos.get(r.pid), bf = backfill(teams[ti], ri, take);
+        if (!bf) { ok = false; break; }
+        teams[ti].roles[ri] = Object.assign({}, teams[ti].roles[ri], bf.c); free.delete(bf.c.pid);
+      }
+      const before = snap.reduce((s, roles, i) => s + (teamPay({crime: teams[i].crime, roles}) || 0), 0);
+      const after = teams.reduce((s, t) => s + (teamPay(t) || 0), 0) + (teamPay(nt) || 0);
+      if (ok && teams.every(t => teamAvg(t) >= OPT.target) && after + 1 > before) { teams.push(nt); changed = true; }
+      else { teams.forEach((t, i) => t.roles = snap[i]); free.clear(); freeSnap.forEach(p => free.add(p)); }
+    }
+    // (b) UPGRADE: a free member who passes a role better than whoever has it
+    teams.forEach(t => t.roles.forEach((r, ri) => {
+      const bf = backfill(t, ri);
+      if (bf && bf.c.rate > r.rate) { free.add(r.pid); t.roles[ri] = Object.assign({}, r, bf.c); free.delete(bf.c.pid); changed = true; }
+    }));
+    if (!changed) break;
+  }
 }
 // a team for one chosen crime: best available (even below the target), empty roles where nobody fits
 function addTeam(crime) {
@@ -251,47 +397,7 @@ function addTeam(crime) {
 
 // ---------- views ----------
 function draw() {
-  // ---------- Refresh (once a minute - the gatekeeper enforces it for all leaders together) ----------
-// Reloads the shared rates + deployed plan at once, and asks the gatekeeper to start a crime check now; that check
-// saves the active crimes, current members and newest completed crimes' rates - polled here until they arrive.
-const REFRESH_GAP = 60 * 1000;
-let polling = false;
-function refreshBtn() {
-  const left = Math.ceil((LS.get("hb_oc_refresh_at", 0) + REFRESH_GAP - Date.now()) / 1000);
-  const b = $("refresh");
-  b.disabled = polling || left > 0;
-  b.textContent = polling ? "⏳ Checking Torn…" : left > 0 ? `🔄 Refresh (${left}s)` : "🔄 Refresh";
-}
-setInterval(refreshBtn, 1000);
-$("refresh").onclick = async () => {
-  if ($("refresh").disabled) return;
-  const startT = Math.floor(Date.now() / 1000);
-  LS.set("hb_oc_refresh_at", Date.now()); polling = true; refreshBtn();
-  try {
-    const r = await fetch("oc/refresh", {method: "POST", headers: {"X-HB-Save": "1"}});
-    const j = await r.json().catch(() => ({}));
-    if (r.status === 429) {                      // another leader refreshed in the last minute
-      LS.set("hb_oc_refresh_at", Date.now() - REFRESH_GAP + (j.retry_in || 60) * 1000);
-      polling = false; refreshBtn(); await load();
-      st(`Refreshed shared rates and plan. Torn was re-checked under a minute ago - try again in ${j.retry_in || 60}s.`);
-      return;
-    }
-    if (!r.ok || !j.ok) throw new Error(j.error || ("refresh " + r.status));
-    await load();
-    st("Rates and plan refreshed - checking Torn for members and crimes (about 1-2 minutes)…");
-    // the crime check takes ~1-2 min on GitHub; poll every 10 s for up to 4 min
-    for (let i = 0; i < 24; i++) {
-      await new Promise(res => setTimeout(res, 10000));
-      const pool = await ghJSON("data/oc_pool.json");
-      if (pool && pool.t >= startT) { polling = false; await load(); st($("st").textContent + " · refreshed from Torn just now"); refreshBtn(); return; }
-    }
-    throw new Error("the crime check hasn't finished yet - the page will show it on the next load");
-  } catch (e) { st("Refresh: " + e.message, true); }
-  polling = false; refreshBtn();
-};
-refreshBtn();
-
-document.querySelectorAll("[data-env]").forEach(b => b.classList.toggle("on", b.dataset.env === ENV));
+  document.querySelectorAll("[data-env]").forEach(b => b.classList.toggle("on", b.dataset.env === ENV));
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
   if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else drawBuilder();
 }
@@ -328,8 +434,9 @@ function drawBuilder() {
   const benched = Object.keys(CFG.members).filter(p => !used.has(+p) && (OPT.includeBusy || !busy[p]))
     .filter(p => Object.keys(CFG.hist).some(k => CFG.hist[k][p]) || D.rates[p]);
   $("view").innerHTML = `<div class="panel">
-    <div class="hn">Auto-build fills the <b>hardest</b> crimes first with the members who pass them best, building as many teams as reach the target average.
-      Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
+    <div class="hn">Auto-build aims for the <b>most pay per day for all members together</b>: crimes that pay the most per day come first,
+      every team reaches the target average, and strong members move to easier roles when that lets another crime run. Pay = recent average
+      reward (items at market price) × payout % × team success ÷ planning days. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
     ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
       ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Tick <b>Include members already in a crime</b> to plan their next crime.</div>` : ""}
     <div class="opts">
@@ -341,12 +448,13 @@ function drawBuilder() {
     </div>
     <div class="bar" style="justify-content:flex-start;margin-top:10px">
       <button class="gold" id="auto">⚡ Auto-build teams</button>
-      <select id="addc">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)}${off.has(n) ? " (off)" : ""}</option>`).join("")}</select>
+      <select id="addc">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(valueOf(n).pot / valueOf(n).days / (rolesOf(n).length || 1))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
       <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to ${ENV === "prod" ? "Live" : "Test"}</button>
     </div>
     <div class="stat"><div><b>${BOARD.teams.length}</b><span>Teams</span></div><div><b>${placed}</b><span>Members placed</span></div>
       <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average success</span></div>
+      <div><b>${fmt$(BOARD.teams.reduce((x, t) => x + (teamPay(t) || 0), 0))}</b><span>Members' pay / day</span></div>
       <div><b>${free}</b><span>Not in a crime now</span></div></div>
     <div class="teams">${BOARD.teams.map(teamCard).join("") || '<div class="tag">No teams yet - press Auto-build, or pick a crime and Add team.</div>'}</div>
     ${benched.length ? `<h2>Not placed (${benched.length})</h2><div class="bench">${benched.map(p => `<span>${esc(nameOf(p))}</span>`).join("")}</div>` : ""}
@@ -375,6 +483,9 @@ function teamCard(t) {
       <button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
+    <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
+      return p == null ? "" : v.pot ? `💰 ${fmt$(p)}/day team · ${fmt$(p / t.roles.length)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""}`
+        : "💰 no pay data yet"; })()}</div>
     ${rows}</div>`;
 }
 function wireTeams() {
@@ -428,6 +539,46 @@ function drawDeployed() {
   $("undeploy").onclick = async () => { if (!confirm("Withdraw the deployed plan? Members stop seeing their assigned roles.")) return;
     try { await saveConfig("plan", {teams: []}); D.config.plan = {teams: []}; st("Plan withdrawn."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
 }
+
+// ---------- Refresh (once a minute - the gatekeeper enforces it for all leaders together) ----------
+// Reloads the shared rates + deployed plan at once, and asks the gatekeeper to start a crime check now; that check
+// saves the active crimes, current members and newest completed crimes' rates - polled here until they arrive.
+const REFRESH_GAP = 60 * 1000;
+let polling = false;
+function refreshBtn() {
+  const left = Math.ceil((LS.get("hb_oc_refresh_at", 0) + REFRESH_GAP - Date.now()) / 1000);
+  const b = $("refresh");
+  b.disabled = polling || left > 0;
+  b.textContent = polling ? "⏳ Checking Torn…" : left > 0 ? `🔄 Refresh (${left}s)` : "🔄 Refresh";
+}
+setInterval(refreshBtn, 1000);
+$("refresh").onclick = async () => {
+  if ($("refresh").disabled) return;
+  const startT = Math.floor(Date.now() / 1000);
+  LS.set("hb_oc_refresh_at", Date.now()); polling = true; refreshBtn();
+  try {
+    const r = await fetch("oc/refresh", {method: "POST", headers: {"X-HB-Save": "1"}});
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 429) {                      // another leader refreshed in the last minute
+      LS.set("hb_oc_refresh_at", Date.now() - REFRESH_GAP + (j.retry_in || 60) * 1000);
+      polling = false; refreshBtn(); await load();
+      st(`Refreshed shared rates and plan. Torn was re-checked under a minute ago - try again in ${j.retry_in || 60}s.`);
+      return;
+    }
+    if (!r.ok || !j.ok) throw new Error(j.error || ("refresh " + r.status));
+    await load();
+    st("Rates and plan refreshed - checking Torn for members and crimes (about 1-2 minutes)…");
+    // the crime check takes ~1-2 min on GitHub; poll every 10 s for up to 4 min
+    for (let i = 0; i < 24; i++) {
+      await new Promise(res => setTimeout(res, 10000));
+      const pool = await ghJSON("data/oc_pool.json");
+      if (pool && pool.t >= startT) { polling = false; await load(); st($("st").textContent + " · refreshed from Torn just now"); refreshBtn(); return; }
+    }
+    throw new Error("the crime check hasn't finished yet - the page will show it on the next load");
+  } catch (e) { st("Refresh: " + e.message, true); }
+  polling = false; refreshBtn();
+};
+refreshBtn();
 
 document.querySelectorAll("[data-env]").forEach(b => b.onclick = () => { ENV = b.dataset.env; LS.set("hb_oc_env", ENV); BOARD = LS.get(boardKey(), {teams: []}); load(); });
 document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { TAB = b.dataset.tab; LS.set("hb_oc_tab", TAB); draw(); });

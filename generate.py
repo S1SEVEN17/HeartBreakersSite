@@ -5720,6 +5720,7 @@ def write_oc_management(out: Path, db: dict):
       hist      history pass rates {"Crime|Role": {member id: [rate %, when]}} - each CURRENT member's latest rate per
                 crime + role from completed crimes (data/crime_history.json slots)
       members   current members {id: name}
+      values    pay per crime {name: {g gross $, pp payout %, n, ok}} (oc_values) - auto-build ranks by members' $/day
     Read live by the page through the gatekeeper (leaders' pass): the OC Optimizer's shared rates (D1, /l/oc/rates),
     the deployed settings + plan (D1, /l/oc/config) and the active crimes (data/oc_active.json, every crime check)."""
     lout = out / leader_dir()
@@ -5733,7 +5734,13 @@ def write_oc_management(out: Path, db: dict):
     except (OSError, ValueError):
         ch = {}
     # "built": when this copy was made - the page prefers data/oc_pool.json (Refresh button) when that's newer
-    conf = {"catalog": catalog, "hist": oc_hist(ch.values(), cur), "members": cur, "member_base": member_base(),
+    try:
+        prices = json.loads(OC_PRICES_PATH.read_text(encoding="utf-8")).get("prices", {})
+    except (OSError, ValueError):
+        prices = {}
+    # "values": pay per crime (oc_values) - the Team Builder ranks teams by members' pay per day with these
+    conf = {"catalog": catalog, "hist": oc_hist(ch.values(), cur), "values": oc_values(ch.values(), prices),
+            "members": cur, "member_base": member_base(),
             "repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "built": int(datetime.now(timezone.utc).timestamp())}
     tpl = (ROOT / "tools" / "oc_management.html").read_text(encoding="utf-8")
     (lout / "oc.html").write_text(tpl.replace("__CONFIG__", json.dumps(conf, separators=(",", ":")).replace("</", "<\\/"))
@@ -8824,6 +8831,74 @@ def oc_slots(c: dict) -> list:
     return out
 
 
+def oc_reward_items(rw) -> list:
+    """[[item id, quantity], ...] from a completed crime's rewards (some crimes pay in items, not cash)."""
+    out = []
+    for it in _as_list((rw or {}).get("items")) if isinstance(rw, dict) else []:
+        if isinstance(it, dict):
+            iid = it.get("id") or it.get("item_id") or it.get("ID")
+            if iid:
+                out.append([int(iid), int(it.get("quantity") or it.get("amount") or 1)])
+    return out
+
+
+def oc_payout_pct(rw):
+    """% of a completed crime's reward paid out to its members (rewards.payout.percentage; the faction keeps the
+    rest) - None when the API doesn't say (not paid out yet / older crimes)."""
+    po = (rw or {}).get("payout") if isinstance(rw, dict) else None
+    v = po.get("percentage") if isinstance(po, dict) else None
+    return int(v) if isinstance(v, (int, float)) else None
+
+
+OC_PRICES_PATH = ROOT / "data" / "oc_item_prices.json"   # reward item id -> market price, weekly
+
+
+def oc_item_prices(key: str, ids: set) -> dict:
+    """Market prices of the items OCs reward ({id: price}), in data/oc_item_prices.json - re-read once a week
+    (weekly slot, like the OC catalog) or when a new reward item turns up. API: torn/items, up to 100 ids a call."""
+    try:
+        c = json.loads(OC_PRICES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        c = {"fetched": 0, "prices": {}}
+    have = c.setdefault("prices", {})
+    need = sorted(str(i) for i in ids if str(i) not in have)
+    want = sorted(str(i) for i in ids) if due("item_types", c.get("fetched")) else need
+    if key and want:
+        try:
+            for i in range(0, len(want), 100):
+                # API: OC Management - reward item market prices (Torn V2 /torn/items)
+                data = fetch_url(f"https://api.torn.com/v2/torn/items?ids={','.join(want[i:i + 100])}", key)
+                items = data.get("items")
+                for it in (items.values() if isinstance(items, dict) else _as_list(items)):
+                    if isinstance(it, dict) and it.get("id"):
+                        have[str(it["id"])] = int(((it.get("value") or {}).get("market_price")) or 0)
+            c["fetched"] = int(datetime.now(timezone.utc).timestamp())
+            OC_PRICES_PATH.write_text(json.dumps(c, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
+            print(f"OC item prices: {len(want)} read")
+        except SystemExit as e:
+            print(f"OC item prices skipped: {e}")
+    return have
+
+
+def oc_values(crimes, prices: dict, recent: int = 25) -> dict:
+    """Pay value per crime name for the Team Builder, from the latest `recent` SUCCESSFUL completed crimes:
+    {name: {g: average gross reward $ (cash + items at today's market price), pp: typical payout % to members,
+    n: crimes averaged, ok: success % of all of that crime's completed crimes}}."""
+    by = {}
+    for c in crimes:
+        by.setdefault(c.get("name"), []).append(c)
+    out = {}
+    for name, lst in by.items():
+        good = sorted((c for c in lst if c.get("status") == "Successful"), key=lambda c: -int(c.get("executed_at") or 0))[:recent]
+        if not good:
+            continue
+        g = [int(c.get("money") or 0) + sum(int(prices.get(str(i)) or 0) * q for i, q in c.get("ritems") or []) for c in good]
+        pps = sorted(c["pp"] for c in good if isinstance(c.get("pp"), int))
+        out[name] = {"g": round(sum(g) / len(g)), "pp": pps[len(pps) // 2] if pps else None, "n": len(good),
+                     "ok": round(100 * sum(1 for c in lst if c.get("status") == "Successful") / len(lst))}
+    return out
+
+
 OC_CATALOG_PATH = ROOT / "data" / "oc_catalog.json"
 OC_ACTIVE_PATH = ROOT / "data" / "oc_active.json"
 OC_POOL_PATH = ROOT / "data" / "oc_pool.json"     # members + history rates, written only by OC Management's Refresh
@@ -8868,7 +8943,8 @@ def update_crime_history(key: str) -> dict:
     saved = hist.setdefault("crimes", {})
     # saved before item rewards / prerequisite links / slot roles + pass rates were recorded -> read the whole
     # history once more (slots added Nov 2026 for the OC Management Team Builder)
-    refill = any("items" not in c or "prev" not in c or "slots" not in c for c in saved.values())
+    # (Nov 2026: + "ritems" reward item ids and "pp" payout % for the Team Builder's pay-per-day values)
+    refill = any("items" not in c or "prev" not in c or "slots" not in c or "ritems" not in c for c in saved.values())
     now_ = int(datetime.now(timezone.utc).timestamp())
     if saved and not refill and not due("crimes", hist.get("fetched")):
         return hist                         # read once per 3-hour clock slot (FIXED CLOCK SCHEDULE)
@@ -8886,10 +8962,13 @@ def update_crime_history(key: str) -> dict:
         cid = str(c.get("id"))
         rw = c.get("rewards") or {}
         n_items = sum(int(x.get("quantity") or 1) for x in _as_list(rw.get("items"))) if isinstance(rw, dict) else 0
-        if cid in saved and ("items" not in saved[cid] or "prev" not in saved[cid] or "slots" not in saved[cid]):
+        if cid in saved and ("items" not in saved[cid] or "prev" not in saved[cid] or "slots" not in saved[cid]
+                             or "ritems" not in saved[cid]):
             saved[cid]["items"] = n_items
             saved[cid]["prev"] = c.get("previous_crime_id")
             saved[cid]["slots"] = oc_slots(c)
+            saved[cid]["ritems"] = oc_reward_items(rw)
+            saved[cid]["pp"] = oc_payout_pct(rw)
             added += 1
             continue
         if cid in saved or not c.get("executed_at"):
@@ -8904,7 +8983,9 @@ def update_crime_history(key: str) -> dict:
                       # prerequisite crime (e.g. No Reserve before Bidding War): its members share this payout
                       "prev": c.get("previous_crime_id"),
                       # [member id, role, checkpoint pass rate %] per slot - the Team Builder's history rates
-                      "slots": oc_slots(c)}
+                      "slots": oc_slots(c),
+                      # [[item id, quantity]] rewarded + % of the reward paid out to members (Team Builder $/day)
+                      "ritems": oc_reward_items(rw), "pp": oc_payout_pct(rw)}
         added += 1
     if True:                                # always save (records the fetch time)
         CRIME_HIST_PATH.parent.mkdir(exist_ok=True)
@@ -10686,6 +10767,8 @@ def main():
             log_respect(raw)
             raw["_crime_history"] = update_crime_history(api_key)
             oc_catalog(api_key)                  # weekly: OC structure for the OC Management page
+            # weekly (or on a new reward item): market prices of OC reward items, for the Team Builder's $/day
+            oc_item_prices(api_key, {i for c in raw["_crime_history"].get("crimes", {}).values() for i, _ in c.get("ritems") or []})
         monthly_recap(raw, cfg, out)
     if not args.mock:
         write_run_state(summary, cfg)
