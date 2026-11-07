@@ -10,6 +10,8 @@ Anything else that differs (new data, a timer drawn into an image, a code change
 and the site is deployed.
 
 Usage: site_hash.py [site_dir] [gate_dir]   -> prints the hex fingerprint (nothing else - public log)
+       site_hash.py site gate --manifest F  -> also write {file: hash} to F (kept in the PRIVATE data repo next to
+                                               the fingerprint - never printed, the paths hold the secret folders)
        site_hash.py --diff A B              -> local debugging: list files whose normalised content differs
 """
 import hashlib
@@ -40,14 +42,17 @@ def files(root: Path):
     return sorted(f for f in root.rglob("*") if f.is_file() and not (skip & set(f.relative_to(root).parts)))
 
 
-def fingerprint(*roots: Path) -> str:
+def fingerprint(*roots: Path, manifest: dict = None) -> str:
     h = hashlib.sha256()
     for root in roots:
         if not root.exists():
             continue
         for f in files(root):
+            d = hashlib.sha256(norm(f)).digest()
             h.update(str(f.relative_to(root)).encode() + b"\0")
-            h.update(hashlib.sha256(norm(f)).digest())
+            h.update(d)
+            if manifest is not None:
+                manifest[f"{root.name}/{f.relative_to(root)}"] = d.hex()[:16]
     return h.hexdigest()
 
 
@@ -61,6 +66,13 @@ if __name__ == "__main__":
             if k not in na or k not in nb or norm(na[k]) != norm(nb[k]):
                 print(k)
         sys.exit(0)
+    man_path = None
+    if "--manifest" in a:
+        i = a.index("--manifest"); man_path = a[i + 1]; del a[i:i + 2]
     site = Path(a[0]) if a else Path("site")
     gate = Path(a[1]) if len(a) > 1 else Path("gate")
-    print(fingerprint(site, gate))
+    man = {} if man_path else None
+    print(fingerprint(site, gate, manifest=man))
+    if man_path:
+        import json
+        Path(man_path).write_text(json.dumps(man, indent=0, sort_keys=True) + "\n")

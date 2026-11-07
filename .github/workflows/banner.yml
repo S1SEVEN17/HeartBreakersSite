@@ -112,7 +112,7 @@ jobs:
         if: steps.gate.outputs.deploy == 'true'
         run: |
           LEADERS=$(python3 -c "import json;print(','.join(json.load(open('config.json')).get('gate',{}).get('leader_positions',['Leader','Co-leader'])))")
-          FP=$( (python3 tools/site_hash.py site gate; echo "$LEADERS") | sha256sum | cut -c1-64)
+          FP=$( (python3 tools/site_hash.py site gate --manifest "$RUNNER_TEMP/site_manifest.json"; echo "$LEADERS") | sha256sum | cut -c1-64)
           OLD=$(cat data/site_fingerprint.txt 2>/dev/null || true)
           echo "fp=$FP" >> "$GITHUB_OUTPUT"
           if [ "$FP" = "$OLD" ]; then
@@ -137,7 +137,8 @@ jobs:
         if: steps.gate.outputs.deploy == 'true' && steps.fp.outputs.changed == 'true'
         run: |
           echo "${{ steps.fp.outputs.fp }}" > data/site_fingerprint.txt
-          tools/store.sh save "Site fingerprint" data/site_fingerprint.txt
+          cp "$RUNNER_TEMP/site_manifest.json" data/site_manifest.json     # per-file list, for checking what changed
+          tools/store.sh save "Site fingerprint" data/site_fingerprint.txt data/site_manifest.json
 
       # Monthly (Nov 2026): squash the data repo's history to one commit so it stops growing - on the 1st of the
       # month, in the scheduled 03:00 TCT full update (quiet hour; this workflow's concurrency group means no other
