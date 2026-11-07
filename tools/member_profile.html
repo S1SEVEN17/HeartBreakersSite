@@ -53,7 +53,10 @@ h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercas
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
 td,th{padding:8px 10px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px}th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px}
 td.n,th.n{text-align:right}.w{color:var(--green)}.d{color:var(--red)}.tag{color:var(--sub);font-size:12px}
-.scroll{overflow-x:auto}.badge{display:inline-block;background:#2a1416;border:1px solid var(--edge);border-radius:6px;padding:2px 8px;font-size:12px;color:var(--sub);margin-left:6px}
+.scroll{overflow-x:auto}
+/* Wars / Recent chains / Organized crimes: past 10 rows the table scrolls inside its box (header stays on top) */
+.cap10{overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.cap10 th{position:sticky;top:0;z-index:1;background:var(--card,#170d0e)}.badge{display:inline-block;background:#2a1416;border:1px solid var(--edge);border-radius:6px;padding:2px 8px;font-size:12px;color:var(--sub);margin-left:6px}
 .rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:22px 0 0}
 .rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
 .rng button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
@@ -117,9 +120,9 @@ __MENU__
   <div class="chart" id="cg"></div>
   <div class="scroll" style="margin-top:8px"><table id="tg"></table></div></section>
   <section data-sec="payouts"><h2 id="payouts">💰 War payouts <span class="tag" id="payt"></span></h2><div class="scroll"><table id="tp"></table></div></section>
-  <section data-sec="wars"><h2 id="wars">⚔️ Wars</h2><div class="scroll"><table id="tw"></table></div></section>
-  <section data-sec="chains"><h2 id="chains">⛓️ Recent chains</h2><div class="scroll"><table id="tc"></table></div></section>
-  <section data-sec="crimes"><h2 id="crimes">🕵️ Organized crimes</h2><div class="scroll"><table id="to"></table></div></section>
+  <section data-sec="wars"><h2 id="wars">⚔️ Wars</h2><div class="scroll cap10"><table id="tw"></table></div></section>
+  <section data-sec="chains"><h2 id="chains">⛓️ Recent chains</h2><div class="scroll cap10"><table id="tc"></table></div></section>
+  <section data-sec="crimes"><h2 id="crimes">🕵️ Organized crimes</h2><div class="scroll cap10"><table id="to"></table></div></section>
   </div>
 </div>
 <script>
@@ -435,4 +438,25 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
 }).catch(e => { $("err").textContent = "Couldn't load the faction data (" + e.message + ")."; });
 </script>
 __FRESH__
+<script>
+// cap the Wars / Recent chains / Organized crimes tables at 10 rows: the box is cut just under the 10th data row and
+// scrolls from there. Re-measured whenever a table is (re)drawn (range buttons, sorting) and on resize.
+(function () {
+  function cap(box) {
+    var rows = box.querySelectorAll("tbody tr, table > tr"), head = box.querySelector("tr");
+    var data = [].filter.call(rows, function (r) { return !r.querySelector("th"); });
+    if (!box.offsetParent) return;            // hidden right now - measured when it shows (ResizeObserver)
+    if (data.length > 10) {
+      var last = data[9], b = box.getBoundingClientRect(), r = last.getBoundingClientRect();
+      box.style.maxHeight = Math.ceil(r.bottom - b.top + box.scrollTop) + "px";
+    } else box.style.maxHeight = "";
+  }
+  document.querySelectorAll(".cap10").forEach(function (box) {
+    new MutationObserver(function () { cap(box); }).observe(box, {childList: true, subtree: true});
+    if (window.ResizeObserver) new ResizeObserver(function () { cap(box); }).observe(box.querySelector("table"));
+    cap(box);
+  });
+  addEventListener("resize", function () { document.querySelectorAll(".cap10").forEach(cap); });
+})();
+</script>
 </body></html>

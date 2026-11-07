@@ -636,6 +636,7 @@ def nb(m: dict):
 
 
 ATTACK_LOG_DAYS = 40
+WAR_REFRESH_SECONDS = 8 * 60      # full war-history refresh: attack-log time per full run (see update_war_history)
 # 7 = payout stats: raids + "special" excluded, exact war window (Biggest Hit without chain bonus hits)
 ATTACK_LOG_V = 7
 
@@ -689,26 +690,44 @@ def update_war_history(raw: dict, key: str = None, recent: int = 5) -> dict:
     reports = raw.get("rankedwarreports", {})
     changed = False
     recent_ids = {str(w["id"]) for w in pick_wars(raw["rankedwars"], recent)}
+    # FULL REFRESH (Nov 2026): bump config "war_history_refresh" -> the next full update re-reads EVERY war's report
+    # from Torn (one call each) and re-queues every war's attack-log stats (assists, hosps, bonus respect, outside
+    # hits...), which then fill a few wars per run (WAR_REFRESH_SECONDS of each full run, 1 per hourly run) until all
+    # are done. Saved stats stay in place until their war is re-read, so nothing goes blank meanwhile.
+    try:
+        want_refresh = str(load_config().get("war_history_refresh", "") or "") if key else ""
+    except (OSError, ValueError):
+        want_refresh = ""
+    full_refresh = bool(want_refresh) and hist.get("refresh_done") != want_refresh
+    refresh_ok = True
+    if full_refresh:
+        print(f"War history: full refresh {want_refresh} - re-reading every war report")
     for w in _as_list(raw["rankedwars"].get("rankedwars")):
         wid, end = str(w.get("id")), int(w.get("end") or 0)
         if not end or end > now:
             continue
-        if wid in wars and ("rank" in wars[wid] or wid not in recent_ids) and "reward" in wars[wid]:
+        if not full_refresh and wid in wars and ("rank" in wars[wid] or wid not in recent_ids) and "reward" in wars[wid]:
             continue
-        rep_ = reports.get(wid)
+        rep_ = None if full_refresh else reports.get(wid)
         if rep_ is None:
             if not key:
                 continue
             try:
+                if full_refresh:
+                    import time as _tw
+                    _tw.sleep(API_PAGE_DELAY)
                 rep_ = fetch_section(f"{wid}/rankedwarreport", key)
             except SystemExit as e:
                 print(f"War history: report {wid} skipped: {e}")
+                refresh_ok = False
                 continue
         rep_ = rep_.get("rankedwarreport", rep_)
         mine = next((f for f in _as_list(rep_.get("factions")) if str(f.get("id")) == my_id), None)
         if not mine:
             continue
         rwd = mine.get("rewards") or {}
+        old_w = wars.get(wid) or {}
+        old_m = {str(m.get("id")): m for m in old_w.get("members", [])}
         wars[wid] = {"end": end, "start": int(w.get("start") or rep_.get("start") or 0),
                      # bonus respect awarded for the war result (not from hits)
                      "reward": int((rwd.get("respect") if isinstance(rwd, dict) else 0) or 0),
@@ -717,7 +736,20 @@ def update_war_history(raw: dict, key: str = None, recent: int = 5) -> dict:
                      "members": [
             {"id": m.get("id"), "name": m.get("name", "?"), "attacks": int(m.get("attacks") or 0),
              "score": round(float(m.get("score") or 0), 2)} for m in _as_list(mine.get("members"))]}
+        # a re-read keeps what the report doesn't hold (attack-log stats, opponent id) - refreshed separately
+        for m in wars[wid]["members"]:
+            for k_, v_ in (old_m.get(str(m["id"])) or {}).items():
+                m.setdefault(k_, v_)
+        for k_ in ("opp_id", "attack_log"):
+            if k_ in old_w:
+                wars[wid][k_] = old_w[k_]
+        if full_refresh:
+            wars[wid]["attack_log"] = None         # re-read its attack-log stats too
         changed = True
+    if full_refresh and refresh_ok:
+        hist["refresh_done"] = want_refresh
+        hist["refresh_attacks"] = True
+        print(f"War history: every war report re-read ({len(wars)} wars) - attack logs queued")
     # opponent faction id per war (from the list, no calls) - lets the attack
     # log keep only attacks on THIS war's enemy
     for w in _as_list(raw["rankedwars"].get("rankedwars")):
@@ -733,9 +765,19 @@ def update_war_history(raw: dict, key: str = None, recent: int = 5) -> dict:
     # Torn with the leader's API key only when that war is selected.
     import time as _t
     cutoff = _t.time() - ATTACK_LOG_DAYS * 86400
-    hist["attack_log_queue"] = sorted((k for k in wars if wars[k].get("end", 0) >= cutoff),
+    refreshing = bool(hist.get("refresh_attacks"))
+    hist["attack_log_queue"] = sorted((k for k in wars if refreshing or wars[k].get("end", 0) >= cutoff),
                                       key=lambda k: -wars[k].get("end", 0))
     if key and fill_war_attack_log(hist, key, my_id):
+        changed = True
+        # full refresh: keep going for up to WAR_REFRESH_SECONDS on full runs
+        if refreshing and os.environ.get("RUN_KIND", "full") == "full":
+            t0 = _t.time()
+            while _t.time() - t0 < WAR_REFRESH_SECONDS and fill_war_attack_log(hist, key, my_id):
+                pass
+    if refreshing and all(wars[k].get("attack_log") == ATTACK_LOG_V for k in wars):
+        hist.pop("refresh_attacks", None)
+        print("War history: full refresh complete - every war's report and attack log re-read")
         changed = True
     if key and changed:
         WAR_HIST_PATH.parent.mkdir(exist_ok=True)
@@ -7166,21 +7208,27 @@ def _one_war(raw: dict, wid: str, my_id, cfg: dict):
     return one[0] if one else None
 
 
-WAR_REPORT_V = 4      # saved war reports older than this are redrawn in the current format
-                      # (3: full members list · 4: the war's payout merged in - War Report & Payout)
+WAR_REPORT_V = 5      # saved war reports older than this are redrawn in the current format
+                      # (3: full members list · 4: the war's payout merged in - War Report & Payout
+                      #  · 5: "Every member in the war" card removed)
 
 
 def war_report_full_png(w0: dict, wh_: dict, pay_layer=None) -> bytes:
     """A war's report image: the War Summary card, then - when the war was paid out - its payout (summary,
-    metrics, vault check, member payouts: payout_receipt_image(layer=True)), then EVERY member who was in the
-    war - hits · respect, most hits first, members with no hits at the end. Drawn from saved data (no API calls).
-    With a payout this is the war's ONE combined image (War Report & Payout) - the payout pages and posts use it."""
+    metrics, vault check, member payouts: payout_receipt_image(layer=True)). Drawn from saved data (no API calls).
+    With a payout this is the war's ONE combined image (War Report & Payout) - the payout pages and posts use it.
+    (The "Every member in the war" card was removed Nov 2026 - war_members_card below keeps the code.)"""
     top = war_summary_card(w0)
     if pay_layer is not None:
         both_ = Image.new("RGBA", (top.width, top.height + pay_layer.height - PAD_TOP), (0, 0, 0, 0))
         both_.alpha_composite(top, (0, 0))
         both_.alpha_composite(pay_layer.crop((0, PAD_TOP, pay_layer.width, pay_layer.height)), (0, top.height))
         top = both_
+    return frame_png(top, bar="War Report & Payout" if pay_layer is not None else "War Report")
+
+
+def war_members_card(w0: dict, wh_: dict, top):
+    """(Unused since Nov 2026) the report's old "Every member in the war" card under `top` - kept in case it's wanted."""
     ms_ = sorted(wh_.get("members", []), key=lambda m: (-m.get("attacks", 0), -m.get("score", 0), str(m.get("name", ""))))
     people = [(m.get("name", "?"), fmt_int(m.get("attacks", 0)), fmt_int(round(m.get("score", 0)))) for m in ms_]
     hit = sum(1 for m in ms_ if m.get("attacks", 0) > 0)
@@ -7191,7 +7239,7 @@ def war_report_full_png(w0: dict, wh_: dict, pay_layer=None) -> bytes:
     both = Image.new("RGBA", (top.width, top.height + card.height - PAD_TOP), (0, 0, 0, 0))
     both.alpha_composite(top, (0, 0))
     both.alpha_composite(card.crop((0, PAD_TOP, card.width, card.height)), (0, top.height))
-    return frame_png(both, bar="War Report & Payout" if pay_layer is not None else "War Report")
+    return both                   # the layer (frame it with frame_png)
 
 
 def war_payout_sig(wid: str):
@@ -7395,7 +7443,7 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
                                                War Report & Payout image + the payout summary (edited in place)
          embed 3  📚 War Report Directory      previous wars, easy to scan: result + opponent, date + score,
                                                🤝 Termed when flagged, 💰 when paid, report link
-       + buttons: Latest Report (& Payout) · War History · Paid wars.
+       + buttons: Latest Report (& Payout) · War History.
     Each finished war's report page is saved; a NEW war re-posts the hub (newest message, notifies); a payout, a
     corrected receipt, a termed flag or new numbers EDIT it in place (only when its content changed)."""
     import hashlib
@@ -7458,7 +7506,7 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
                 + (f" · Rank **{w0['rank_after']}**" if w0.get("rank_after") else "")
                 + (f"\n**{w0['hit']}/{w0['present']}** members hit" if w0.get("present") else ""))
     if termed0:
-        desc += "\n🤝 **Termed war** - agreed before it began; not counted against anyone"
+        desc += "\n🤝 **Termed war**"
     # the payout, once it's been made (the receipt) - the image is the combined War Report & Payout then
     pay_txt = ""
     if lk in rec:
@@ -7494,8 +7542,7 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     # the latest war's report page includes its payout once paid (War Report & Payout)
     btns = [{"type": 2, "style": 5, "label": "Latest Report & Payout" if lk in rec else "Latest Report",
              "url": f"{base}/reports/war-{lk}.html"},
-            {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"},
-            {"type": 2, "style": 5, "label": "Paid wars", "url": f"{base}/wars.html#paid"}]
+            {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"}]
     payload = {"username": dcfg.get("username", "War Reports"),
                "content": f"## ⚔️ War Reports\n-# updated <t:{int(datetime.now(timezone.utc).timestamp())}:R>",
                "embeds": embeds,
@@ -9960,8 +10007,8 @@ def oc_recruit_payload(crimes: list, mem: dict, now: int, ocfg: dict) -> dict:
     """The SECOND Organized Crimes post (Nov 2026):
       embed "📝 Recruiting"     crimes still filling up that already have at least ONE member in them (empty ones
                                 aren't shown) - who's in, which roles are still open
-      embed "🕐 Recent Delays"  members who held up a crime in the last recent_delay_days (7): how long and the
-                                original reason - from the delay log"""
+      embed "🕐 Recent Delays"  members who held up a crime in the last recent_delay_days (7) and the original
+                                reason - from the delay log (no durations)"""
     fields = []
     for c in crimes:
         slots = _as_list(c.get("slots"))
@@ -9989,13 +10036,14 @@ def oc_recruit_payload(crimes: list, mem: dict, now: int, ocfg: dict) -> dict:
                        "description": "No crimes with members waiting on recruits right now."})
     days = int(ocfg.get("recent_delay_days", OC_RECENT_DELAY_DAYS))
     rd = oc_recent_delays(now, days)
-    lines = [f"{x['icon']} **{x['name']}** · {'⏳ ' if x['open'] else ''}{x['dur']}{' so far' if x['open'] else ''}"
-             f" · {x['reason'] or 'not ready'}\n-# {x['crime']} · <t:{x['start']}:R>" for x in rd[:OC_RECENT_DELAY_MAX]]
+    # (no delay duration - removed Nov 2026; ⏳ = still holding it up)
+    lines = [f"{x['icon']} **{x['name']}** · {x['reason'] or 'not ready'}{' · ⏳ still delayed' if x['open'] else ''}"
+             f"\n-# {x['crime']} · <t:{x['start']}:R>" for x in rd[:OC_RECENT_DELAY_MAX]]
     desc = "\n".join(lines) if lines else f"Nobody has delayed a crime in the last {days} days. 👏"
     if len(rd) > OC_RECENT_DELAY_MAX:
         desc += f"\n-# …and {len(rd) - OC_RECENT_DELAY_MAX} more"
     embeds.append({"title": f"🕐 Recent Delays (last {days} days)", "color": 0xd08a3a, "description": desc[:4000],
-                   "footer": {"text": "How long each member held a ready crime up, and the original reason"}})
+                   "footer": {"text": "Members who held up a ready crime, with the original reason"}})
     head = f"## 📝 Recruiting & Recent Delays\n-# {len(fields)} recruiting · {len(rd)} recent delay{'s' if len(rd) != 1 else ''} · updated <t:{now}:R>"
     return {"username": ocfg.get("username", "Organized Crimes"), "content": head, "embeds": embeds[:10],
             "allowed_mentions": {"parse": []}}
@@ -10223,7 +10271,6 @@ def _leader_post(cfg: dict, sections: list) -> bool:
         lmsg = _discord_request(f"{url}?wait=true&with_components=true", "POST",
                          {"username": lcfg.get("username", "Leader Alerts"), "content": text,
                           "components": [{"type": 1, "components": [
-                              {"type": 2, "style": 5, "label": "Paid wars", "url": f"{member_base()}/wars.html#paid"},
                               {"type": 2, "style": 5, "label": "Announcements", "url": f"{leader_base()}/announcements.html"}]}],
                           "allowed_mentions": {"parse": []}})
         discord_msg_save(f"leader:{int(_t.time())}", (lmsg or {}).get("id"))
