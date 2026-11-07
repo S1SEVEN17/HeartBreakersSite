@@ -16,6 +16,8 @@
 //   /l/...            leaders' pages  (pass + position in LEADER_POSITIONS)
 //   /                 the dashboard: Leaders Hub (/l/) for leader access, else the Members Hub (/m/)
 //   /<image>          public images at the site root (the faction description banner: banner-animated.webp ...)
+//   /oc/cpr           OC Payout Optimizer pass-rate sharing (D1 "OC_DB") - its own auth: the member's Torn key
+//                     on every call (not the pass cookie). See OC OPTIMIZER below.
 //
 // Nothing from GitHub shows through: GitHub's response headers are dropped (only type / caching headers are
 // passed on) and GitHub's own error pages are replaced by ours, so visitors only ever see this address.
@@ -199,6 +201,8 @@ export default {
     // signing out also tells the login page to forget a key kept in this browser (?out=1)
     if (p === "/logout") return new Response(null, {status: 302, headers: {Location: "/login?out=1", "Set-Cookie": cookie("", 0)}});
     if (p === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n");
+    // OC Payout Optimizer script (runs on torn.com, authenticates with the member's own Torn key)
+    if (p === "/oc/cpr" || p === "/oc/cpr/delete") return ocRoute(env, ctx, req, url, p);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -433,4 +437,131 @@ async function readiness(env, ctx) {
   }));
   READY_CACHE = {t: Date.now(), v: {at: Math.floor(Date.now() / 1000), members: rows}};
   return Response.json(READY_CACHE.v, H);
+}
+
+
+// =====================================================================================================
+// OC OPTIMIZER - checkpoint pass-rate (CPR) sharing for the "OC Payout Optimizer" userscript (Nov 2026).
+// Contract: project doc claude/oc-optimizer-worker-contract.md (the script already calls exactly this).
+//   POST /oc/cpr          {key, env, name, roles}  -> upsert the CALLER's own row          -> {ok:true}
+//   GET  /oc/cpr?env=&key=                         -> every member's row for that env, keyed by player_id
+//   POST /oc/cpr/delete   {key, env}               -> delete the CALLER's own row           -> {ok:true}
+// Rules:
+//   - auth = the member's own Torn key, checked with Torn (user/profile). player_id + faction come from Torn,
+//     NEVER from the request body, so a member can only write / delete their own row. Heart Breakers only.
+//   - the key is never stored: the key -> {player_id, faction_id, name} answer is cached for 10 minutes under
+//     a SHA-256 of the key (KV "OC_KV" when bound, else the Cache API) so repeat calls don't re-ask Torn.
+//   - env "test" | "prod" kept apart (part of the primary key). Writes: at most one per player per minute
+//     (a faster repeat answers {ok:true, throttled:true} without writing - the script only needs non-error).
+//   - key: body (POST), query string (GET - Torn PDA's PDA_httpGet can't set headers), or X-API-Key /
+//     Authorization: Bearer headers when present.
+//   - CORS for https://www.torn.com (fetch fallback / PDA WebView); OPTIONS -> 204.
+//   Torn API calls carry comment=Heart Breakers Hub (API_COMMENT) like every other Hub call.
+// Bindings (tools/deploy_site.sh creates them on the first deploy and applies gate/oc_schema.sql):
+//   OC_DB  D1 database "hb-oc"     OC_KV  KV namespace "hb-oc-cache" (optional)
+// =====================================================================================================
+const OC_ENVS = new Set(["test", "prod"]);
+const OC_CACHE_SECS = 600;            // key -> identity cache (10 min)
+const OC_WRITE_GAP_MS = 60 * 1000;    // one write per player per minute
+const OC_MAX_ROLES = 500, OC_MAX_KEY_LEN = 120;
+const OC_CORS = {"Access-Control-Allow-Origin": "https://www.torn.com", "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                 "Access-Control-Allow-Headers": "Content-Type, X-API-Key, Authorization", "Access-Control-Max-Age": "86400",
+                 "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"};
+const ocJson = (obj, status = 200) => new Response(JSON.stringify(obj), {status, headers: {...OC_CORS, "Content-Type": "application/json"}});
+const ocErr = (status, error) => ocJson({ok: false, error}, status);
+
+async function ocRoute(env, ctx, req, url, p) {
+  if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
+  if (!env.OC_DB) return ocErr(503, "OC sharing isn't set up yet");
+  const del = p === "/oc/cpr/delete";
+  if (req.method === "GET" && !del) {
+    const envName = url.searchParams.get("env");
+    if (!OC_ENVS.has(envName)) return ocErr(400, "env must be test or prod");
+    const id = await ocIdentify(env, ctx, ocKey(req, url.searchParams.get("key")));
+    if (id.err) return ocErr(id.status, id.err);
+    const fid = Number(env.FACTION_ID);
+    const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
+      .bind(envName, fid).all();
+    const out = {};
+    for (const r of results || []) {
+      let roles = {};
+      try { roles = JSON.parse(r.roles); } catch (e) {}
+      out[String(r.player_id)] = {name: r.name, ts: r.ts, roles};
+    }
+    return ocJson(out);
+  }
+  if (req.method !== "POST") return ocErr(405, "method not allowed");
+  let body;
+  try { body = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
+  if (!body || typeof body !== "object") return ocErr(400, "body must be JSON");
+  if (!OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
+  const id = await ocIdentify(env, ctx, ocKey(req, body.key));
+  if (id.err) return ocErr(id.status, id.err);
+  const fid = Number(env.FACTION_ID);
+  if (del) {
+    await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = ? AND faction_id = ? AND player_id = ?").bind(body.env, fid, id.player_id).run();
+    return ocJson({ok: true});
+  }
+  // roles: {"Crime|Role": integer 0-100}; anything else is refused (bad data never reaches the table)
+  const roles = body.roles;
+  if (!roles || typeof roles !== "object" || Array.isArray(roles)) return ocErr(400, "roles must be an object");
+  const clean = {};
+  const ks = Object.keys(roles);
+  if (ks.length > OC_MAX_ROLES) return ocErr(400, "too many roles");
+  for (const k of ks) {
+    const v = roles[k];
+    if (typeof k !== "string" || !k.includes("|") || k.length > OC_MAX_KEY_LEN) return ocErr(400, "bad role name");
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100) return ocErr(400, "pass rates must be 0-100");
+    clean[k] = Math.round(v);
+  }
+  const now = Date.now();
+  const last = await env.OC_DB.prepare("SELECT ts FROM oc_cpr WHERE env = ? AND faction_id = ? AND player_id = ?")
+    .bind(body.env, fid, id.player_id).first();
+  if (last && now - Number(last.ts) < OC_WRITE_GAP_MS) return ocJson({ok: true, throttled: true});
+  // name: Torn's name for the key (the body's name is only a fallback) - nobody can label a row as someone else
+  const name = String(id.name || body.name || "").slice(0, 40);
+  await env.OC_DB.prepare(
+    "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES (?, ?, ?, ?, json(?), ?) " +
+    "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
+    .bind(body.env, fid, id.player_id, name, JSON.stringify(clean), now).run();
+  return ocJson({ok: true});
+}
+
+// the key: X-API-Key / Authorization: Bearer header first, else the body / query value
+function ocKey(req, fallback) {
+  const h = req.headers.get("X-API-Key") || (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  return String(h || fallback || "").trim();
+}
+
+// key -> {player_id, faction_id, name}, cached 10 min under sha256(key) (the key itself is never stored)
+async function ocIdentify(env, ctx, key) {
+  if (!/^[A-Za-z0-9]{16}$/.test(key)) return {status: 401, err: "missing or invalid Torn API key"};
+  const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("hb-oc|" + key)))]
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+  const cacheReq = new Request(`https://oc-id.cache/${hash}`);
+  let who = null;
+  try {
+    if (env.OC_KV) who = await env.OC_KV.get(`id:${hash}`, "json");
+    else { const c = await caches.default.match(cacheReq); if (c) who = await c.json(); }
+  } catch (e) { who = null; }
+  if (!who) {
+    let d;
+    try {
+      const base = env.TORN_API_BASE || "https://api.torn.com";          // TORN_API_BASE: local tests only
+      const r = await fetch(`${base}/user/?selections=profile&key=${encodeURIComponent(key)}&comment=${encodeURIComponent(API_COMMENT)}`);
+      d = await r.json();
+    } catch (e) { return {status: 502, err: "couldn't reach Torn"}; }
+    if (d.error) {
+      // 2 = incorrect key, 13/18 = key disabled / paused, 10 = owner in federal jail
+      const bad = [2, 10, 13, 16, 18].includes(Number(d.error.code));
+      return {status: bad ? 401 : 502, err: `Torn: ${d.error.error || "error " + d.error.code}`};
+    }
+    who = {player_id: Number(d.player_id), faction_id: Number((d.faction || {}).faction_id || 0), name: String(d.name || "")};
+    const save = env.OC_KV ? env.OC_KV.put(`id:${hash}`, JSON.stringify(who), {expirationTtl: OC_CACHE_SECS})
+      : caches.default.put(cacheReq, new Response(JSON.stringify(who), {headers: {"Cache-Control": `max-age=${OC_CACHE_SECS}`}}));
+    ctx.waitUntil(save.catch(() => {}));
+  }
+  if (!who.player_id) return {status: 401, err: "Torn didn't return a player for that key"};
+  if (String(who.faction_id) !== String(env.FACTION_ID)) return {status: 403, err: "Heart Breakers members only"};
+  return who;
 }

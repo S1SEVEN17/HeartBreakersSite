@@ -8,3 +8,4 @@ config.json
 gate/node_modules/
 gate/.wrangler/
 gate/.dev.vars
+gate/wrangler.deploy.toml

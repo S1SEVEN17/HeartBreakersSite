@@ -6,7 +6,37 @@ set -euo pipefail
 LEADERS=$(python3 -c "import json;print(','.join(json.load(open('config.json')).get('gate',{}).get('leader_positions',['Leader','Co-leader'])))")
 cd gate
 npm install --no-save --silent wrangler@4 >/dev/null 2>&1
-if npx wrangler deploy --var LEADER_POSITIONS:"$LEADERS" > "$RUNNER_TEMP/deploy.log" 2>&1; then
+
+# ---- OC Payout Optimizer storage (Nov 2026): D1 "hb-oc" + KV "hb-oc-cache" ----
+# Created here the first time (needs the Cloudflare token to have D1 Edit + Workers KV Storage Edit); the schema
+# (gate/oc_schema.sql, IF NOT EXISTS) is applied every deploy. Their ids go into a deploy-only copy of
+# wrangler.toml (wrangler.deploy.toml) - nothing to keep in the repo. If anything here fails, the site still
+# deploys without them and the /oc/cpr routes answer 503 "not set up yet".
+CFG=wrangler.toml
+d1_id() { npx wrangler d1 list --json 2>/dev/null | python3 -c "import json,sys
+try: print(next((d.get('uuid') or d.get('id')) for d in json.load(sys.stdin) if d.get('name')=='hb-oc'))
+except Exception: pass"; }
+kv_id() { npx wrangler kv namespace list 2>/dev/null | python3 -c "import json,sys
+try: print(next(n['id'] for n in json.load(sys.stdin) if n.get('title') in ('hb-oc-cache','hb-gate-hb-oc-cache')))
+except Exception: pass"; }
+D1=$(d1_id); [ -n "$D1" ] || { npx wrangler d1 create hb-oc >/dev/null 2>&1 || true; D1=$(d1_id); }
+KV=$(kv_id); [ -n "$KV" ] || { npx wrangler kv namespace create hb-oc-cache >/dev/null 2>&1 || true; KV=$(kv_id); }
+if [ -n "$D1" ]; then
+  if npx wrangler d1 execute hb-oc --remote --file=oc_schema.sql -y > "$RUNNER_TEMP/d1.log" 2>&1; then
+    cp wrangler.toml wrangler.deploy.toml
+    printf '\n[[d1_databases]]\nbinding = "OC_DB"\ndatabase_name = "hb-oc"\ndatabase_id = "%s"\n' "$D1" >> wrangler.deploy.toml
+    [ -n "$KV" ] && printf '\n[[kv_namespaces]]\nbinding = "OC_KV"\nid = "%s"\n' "$KV" >> wrangler.deploy.toml
+    CFG=wrangler.deploy.toml
+    echo "OC storage: ready (D1$([ -n "$KV" ] && echo " + KV"))"
+  else
+    echo "::warning::OC storage: schema not applied - OC routes off this deploy"
+    grep -iE "error|auth|permission" "$RUNNER_TEMP/d1.log" | sed -E 's#[^ ]*/[^ ]*#<path>#g' | head -5
+  fi
+else
+  echo "::warning::OC storage: D1 database not available (the Cloudflare token may need D1 Edit) - OC routes off this deploy"
+fi
+
+if npx wrangler deploy -c "$CFG" --var LEADER_POSITIONS:"$LEADERS" > "$RUNNER_TEMP/deploy.log" 2>&1; then
   echo "Site deployed: $(find ../site -type f | wc -l) files"
   grep -oE "[0-9]+ (new or modified )?(static )?assets?[^.]*" "$RUNNER_TEMP/deploy.log" | grep -v "/" | head -3 || true
 else
