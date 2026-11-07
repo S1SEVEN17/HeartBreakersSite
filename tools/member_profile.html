@@ -303,7 +303,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     // armory usage (Armory Monitor): this month, with last month and all time on record underneath
     const AR = pv.armory;
     if (AR) {
-      const IC = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", Other: "📦"};
+      const IC = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", "Crime items": "🧰", Other: "📦"};
       const cats = Object.keys(IC).filter(c => (AR.all || {})[c]);
       const sum = o => Object.values(o || {}).reduce((a, b) => a + b, 0);
       $("armsec").style.display = $("armsec").dataset.off ? "none" : "";

@@ -5212,10 +5212,15 @@ ITEM_TYPES_PATH = ROOT / "data" / "item_types.json"     # {"fetched": time, "typ
 ARMORY_PAGES_NEW = 20
 ARMORY_PAGES_BACK = 10
 ARMORY_RECENT = 40        # latest uses kept per member for the Armory Monitor's member view
-ARMORY_CATS = ["Drugs", "Medical", "Boosters", "Refills", "Temporary", "Weapons", "Armor", "Other"]
+ARMORY_CATS = ["Drugs", "Medical", "Boosters", "Refills", "Temporary", "Weapons", "Armor", "Crime items", "Other"]
+# Torn item types -> categories. v2 /torn/items names them "Weapon", "Armor", "Tool", "Material", "Enhancer" (the
+# old v1 names - Primary / Secondary / Melee / Defensive - are kept too). Verified with tools/verify.py (Nov 2026):
+# before this, loaned weapons / armour and organized-crime items all fell into "Other".
 ARMORY_TYPE_CAT = {"drug": "Drugs", "medical": "Medical", "alcohol": "Boosters", "candy": "Boosters",
                    "energy drink": "Boosters", "booster": "Boosters", "temporary": "Temporary",
-                   "primary": "Weapons", "secondary": "Weapons", "melee": "Weapons", "defensive": "Armor"}
+                   "weapon": "Weapons", "primary": "Weapons", "secondary": "Weapons", "melee": "Weapons",
+                   "armor": "Armor", "defensive": "Armor",
+                   "tool": "Crime items", "material": "Crime items", "enhancer": "Crime items"}
 # (the old Xanax monitor's attack_log.json / gym_daily.json / xanax_log.json were removed from the data repo, Nov 2026)
 
 

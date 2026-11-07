@@ -84,8 +84,8 @@ const num = n => Math.round(n || 0).toLocaleString("en-US");
 const monthName = (m, short) => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", short ? {month: "short", timeZone: "UTC"} : {month: "long", year: "numeric", timeZone: "UTC"});
 const when = t => new Date(t * 1000).toLocaleString("en-US", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC"});
 const thisMonth = new Date().toISOString().slice(0, 7);
-const ICON = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", Other: "📦"};
-const COL = {Drugs: "#e4382e", Medical: "#ff8a80", Boosters: "#e8be5a", Refills: "#78c878", Temporary: "#d08a3a", Weapons: "#8ab4f8", Armor: "#9a9a9c", Other: "#6d6264"};
+const ICON = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", "Crime items": "🧰", Other: "📦"};
+const COL = {Drugs: "#e4382e", Medical: "#ff8a80", Boosters: "#e8be5a", Refills: "#78c878", Temporary: "#d08a3a", Weapons: "#8ab4f8", Armor: "#9a9a9c", "Crime items": "#b48ad6", Other: "#6d6264"};
 const KIND = {u: "used", r: "points refill", l: "loaned", g: "given"};
 // display names: "Refills" are points refills (not armory items) - "Energy refill (points)" -> "Energy refill · points"
 const CL = c => c === "Refills" ? "Points refills" : c;

@@ -64,8 +64,10 @@ def _members():
     pos = [i for i in live if i in saved and live[i].get("position") != saved[i].get("position")]
     days = [i for i in live if i in saved and abs(int(live[i].get("days_in_faction") or 0) - int(saved[i].get("days_in_faction") or 0)) > 1]
     age_h = round((time.time() - cache.get("fetched", 0)) / 3600, 1)
-    ok = not left and not pos and not days
-    return {"ok": ok and not joined, "summary": f"{len(live)} live, {len(saved)} saved ({age_h} h old): {len(joined)} joined since, "
+    # joins / leaves / promotions since the cached list are expected (it's refreshed every core_refresh_hours) -
+    # only days-in-faction that disagree for the same member point to a real problem
+    ok = not days
+    return {"ok": ok, "summary": f"{len(live)} live, {len(saved)} saved ({age_h} h old): {len(joined)} joined since, "
             f"{len(left)} left since, {len(pos)} position changes, {len(days)} days-in-faction off",
             "joined": joined, "left": left, "position": pos, "days": days, "cache_age_h": age_h}
 
@@ -165,7 +167,9 @@ def _crimes():
     crimes = [{"id": int(k) if k.isdigit() else k, "prev": v.get("prev"), "t": v.get("executed_at"), "status": v.get("status"),
                "money": v.get("money", 0), "m": v.get("members", []), "name": v.get("name")} for k, v in saved.items()]
     g.crime_shares(crimes)
-    split_off = [c["id"] for c in crimes if c.get("split") and abs(c["share"] * c["split"] - c["money"] * (1 - g.CRIME_TAX)) > c["split"]]
+    # only crimes that paid cash themselves (a prerequisite like No Reserve takes a share of the crime it led to - "via")
+    split_off = [c["id"] for c in crimes if c.get("split") and c.get("money") and not c.get("via")
+                 and abs(c["share"] * c["split"] - c["money"] * (1 - g.CRIME_TAX)) > c["split"]]
     ok = not off and not split_off and len(missing) <= 2
     return {"ok": ok, "summary": f"newest {len(lst)} completed on Torn: {len(missing)} not saved yet (read every "
             f"{g.CRIME_HIST_HOURS} h), {len(off)} with different status / money / members; payout split off {len(split_off)}",
