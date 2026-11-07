@@ -303,16 +303,18 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     // armory usage (Armory Monitor): this month, with last month and all time on record underneath
     const AR = pv.armory;
     if (AR) {
-      const IC = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", "Crime items": "🧰", Other: "📦"};
+      // tracked per member (Nov 2026): items USED only - loans don't count; Empty Blood Bags count as Medical
+      const IC = {Xanax: "💊", Medical: "🩸", Refills: "⚡", Temporary: "💣", Drugs: "💉", Boosters: "🍺"};
+      const CLB = {Refills: "Points refills", Temporary: "Temps", Drugs: "Other drugs"};
       const cats = Object.keys(IC).filter(c => (AR.all || {})[c]);
       const sum = o => Object.values(o || {}).reduce((a, b) => a + b, 0);
       $("armsec").style.display = $("armsec").dataset.off ? "none" : "";
-      $("armt").textContent = `(items taken from the faction armory · ${who_})`;
+      $("armt").textContent = `(items used from the faction armory · ${who_})`;
       $("armc").innerHTML = `<div class="tile"><b>${num(sum(AR.month))}</b><span>This month</span><i>${num(sum(AR.last_month))} last month · ${num(sum(AR.all))} all time</i></div>`
-        + cats.map(c => `<div class="tile"><b>${num((AR.month || {})[c] || 0)}</b><span>${IC[c]} ${c === "Refills" ? "Points refills" : c}</span><i>${num((AR.last_month || {})[c] || 0)} last month · ${num(AR.all[c])} all time</i></div>`).join("");
+        + cats.map(c => `<div class="tile"><b>${num((AR.month || {})[c] || 0)}</b><span>${IC[c]} ${CLB[c] || c}</span><i>${num((AR.last_month || {})[c] || 0)} last month · ${num(AR.all[c])} all time</i></div>`).join("");
       const since = AR.oldest ? new Date(AR.oldest * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"}) : "";
       // every item they took, listed under its category (this month · all time on record)
-      $("armc").insertAdjacentHTML("afterend", `<div class="armi">${cats.map(c => `<div class="cm"><div class="l">${IC[c]} ${c === "Refills" ? "Points refills" : c}</div>`
+      $("armc").insertAdjacentHTML("afterend", `<div class="armi">${cats.map(c => `<div class="cm"><div class="l">${IC[c]} ${CLB[c] || c}</div>`
         + ((AR.items || {})[c] || []).map(([nm, mo, al]) => `<div class="ai"><span>${esc(String(nm).replace(/ \(points\)$/, " · points"))}</span><b>${num(al)}${mo ? ` <i>(${num(mo)} this month)</i>` : ""}</b></div>`).join("")
         + "</div>").join("")}</div>`);
       $("arml").innerHTML = since ? `On record since ${since}${AR.done ? "" : " (older history still filling in)"} · totals are all time, this month in brackets` : "";

@@ -4,21 +4,26 @@
 <meta name="robots" content="noindex,nofollow">
 <title>Armory Monitor - Heart Breakers</title>
 <!--
-  ARMORY MONITOR (leaders' folder: armory.html, published by generate.py write_armory_page). Replaced the Xanax
-  monitor in Nov 2026: faction ARMORY usage only - what each member took from the armory (used, points refills,
-  items loaned / given to them) - nothing about gym, attacks or energy.
-  CFG (filled in by generate.py, from data/armory_log.json - see ARMORY MONITOR in generate.py):
-    cats       category order (Drugs, Medical, Boosters, Refills, Temporary, Weapons, Armor, Other)
-    items      item names; item_cat = each item's category (Torn item type)
-    months     "YYYY-MM" with any usage, newest first; oldest = earliest news read; done = whole history read
-    members    {id: {m: {"YYYY-MM": {item index: count}}, r: [[time, item index, count, kind], ...] newest first}}
-    names      {id: [name, current member?]}
-  Layout (Nov 2026):
-    1. period (this month / any month on record / all time) + faction totals per category
-    2. BY CATEGORY - a card per category listing every item taken from it in the period (count, members)
-    3. MEMBER - pick a member (search box, or tap a row below): their totals per category with every item under
-       its category, a 6-month trend by category, and their latest armory uses with dates
-    4. EVERY MEMBER - sortable table (tap a row -> section 3)
+  ARMORY MONITOR (leaders' folder: armory.html, published by generate.py write_armory_page).
+  Reworked Nov 2026: tracks each member's USE of specific armory items. Only "used" lines count (and points refills,
+  and Empty Blood Bags filled from the armory) - items LOANED or GIVEN to someone are never counted.
+    Tracked per member (most important first): Xanax · Medical (incl. Empty Blood Bags) · Points refills · Temporary
+      · Other drugs · Boosters
+    OC / utility items (tools, materials, crime items, anything else): faction totals only, nobody's name on them.
+  CFG (filled in by generate.py armory_data - see ARMORY MONITOR in generate.py):
+    cats, member_cats   category order / the ones tracked per member
+    items, item_cat     item names and each item's category
+    months              "YYYY-MM" with any usage, newest first; oldest = earliest news read; done = whole history read
+    members             {id: {m: {"YYYY-MM": {item index: count}}, r: [[time, item index, count, kind], ...] newest first}}
+                        (tracked categories only)
+    faction             {"YYYY-MM": {item index: count}} - OC / utility items, faction totals
+    names               {id: [name, current member?]}
+  Layout:
+    1. period (this month / last month / any month / all time) + faction totals per category
+    2. MEMBER USAGE - one row per member, a column per tracked category, sortable (Xanax first); tap a row -> 4
+    3. ITEM LOOKUP - pick one item (or a whole category) -> every member who used it in the period, most first
+    4. MEMBER - one member: totals, every item under its category, month by month (last 6), latest uses
+    5. OC / UTILITY - faction totals per item (no names)
   Placeholders: __CONFIG__, __MENU__.
   The FRESH placeholder (two underscores each side) = the data freshness footer (generate.py fresh_html).
 -->
@@ -27,174 +32,234 @@
 *{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1200px}
 h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
 .sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:12px}
-h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px;scroll-margin-top:8px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:26px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px;scroll-margin-top:8px}
 .rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:4px 0 10px}
 .rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
-.rng button,.rng select{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
+.rng button,.rng select,select.big{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
 .rng button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
-.hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin:0 0 10px}
+select.big{font-size:15px;padding:9px 10px;min-width:240px;flex:1}
+.hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:8px;margin:0 0 10px}
 .hst div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px;text-align:center}
-.hst b{display:block;color:#fff;font-size:19px}.hst span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
-.cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.hst div.key{border-color:#7a2a22;background:#1f0f10}
+.hst b{display:block;color:#fff;font-size:20px}.hst span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.hst i{display:block;color:var(--sub);font-size:11px;font-style:normal;margin-top:2px}
+.cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
 .cat{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:10px 12px}
 .cat .h{display:flex;align-items:center;gap:8px;margin-bottom:6px}.cat .h b{flex:1;color:#fff}
 .cat .h span{color:var(--gold);font-weight:700}
 .it{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
 .it span{color:#ddd;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.it b{color:#fff;white-space:nowrap}
-.it i{color:var(--sub);font-style:normal;font-size:12px;margin-left:6px}
-.more{color:var(--sub);font-size:12px;cursor:pointer;margin-top:4px;display:inline-block}
 .pick{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
 .pick input{flex:1;min-width:200px;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:8px;padding:10px;font:15px system-ui}
 .pick button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:8px;padding:9px 12px;cursor:pointer}
 #mp{background:#130b0c;border:1px solid var(--edge);border-radius:14px;padding:12px}
 .mh{display:flex;align-items:center;gap:12px;margin-bottom:10px}.mh .av{width:44px;height:44px;border-radius:50%;background:#3b1513;color:#ff6b61;display:flex;align-items:center;justify-content:center;font-weight:700}
 .mh b{font-size:18px;color:#fff}.mh a{color:var(--gold);font-size:13px}
-.trend{display:flex;gap:6px;align-items:flex-end;height:110px;margin:8px 0 2px;padding:0 4px}
-.trend .col{flex:1;display:flex;flex-direction:column-reverse;gap:1px;min-width:0}.trend .col i{display:block;border-radius:2px}
-.tl{display:flex;gap:6px;padding:0 4px}.tl span{flex:1;text-align:center;color:var(--sub);font-size:11px}
-.leg{display:flex;flex-wrap:wrap;gap:10px;color:var(--sub);font-size:12px;margin:6px 0}.leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
 td,th{padding:8px 10px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
 th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;cursor:pointer;user-select:none}
 th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}td.n,th.n{text-align:right}td a{color:var(--gold);text-decoration:none}
+th.nosort{cursor:default}
 tr.mr{cursor:pointer}tr.mr:hover td,tr.mr.sel td{background:#1f1214}
+td.hi{color:#fff;font-weight:700}
+.bar{display:inline-block;height:8px;border-radius:4px;background:var(--red);vertical-align:middle;margin-left:8px;opacity:.8}
 .tag{color:var(--sub);font-size:12px}.scroll{overflow-x:auto}tr.zero td{color:#6d6264}
 .fm{color:var(--sub);font-size:13px;margin:6px 0;display:flex;gap:6px;align-items:center}
 .note{background:#1f1608;border:1px solid #6b4a18;color:#e8d6a8;border-radius:8px;padding:8px 12px;font-size:13px;margin:8px 0}
 </style></head><body>
 __MENU__
 <h1>Armory Monitor</h1>
-<div class="sub">Items each member took from the faction armory - used, points refills, and items loaned or given to them</div>
+<div class="sub">Items each member <b>used</b> from the faction armory - loaned or given items don't count</div>
 <div class="note" id="cov"></div>
 <div class="rng" id="ctl"></div>
 <div class="hst" id="tot"></div>
-<h2>🗂️ By category <span class="tag" id="catt">(every item taken in this period)</span></h2>
-<div class="cats" id="cats"></div>
-<h2 id="mh2">👤 Member <span class="tag">(pick a member, or tap one in the table below)</span></h2>
-<div class="pick"><input id="who" list="wl" placeholder="Type a member's name"><datalist id="wl"></datalist><button id="clr">Clear</button></div>
-<div id="mp"><div class="tag">Pick a member to see everything they took, by category, with dates.</div></div>
-<h2>👥 Every member <span class="tag">(tap a column to sort · tap a row to open the member)</span></h2>
+
+<h2 id="uh2">👥 Member usage <span class="tag" id="ut"></span></h2>
 <label class="fm"><input type="checkbox" id="fmr"> Show former members</label>
 <div class="scroll"><table id="tb"></table></div>
+
+<h2>🔎 Item lookup <span class="tag">(who used a specific item in this period)</span></h2>
+<div class="pick"><select class="big" id="item"></select></div>
+<div id="lk"></div>
+
+<h2 id="mh2">👤 Member <span class="tag">(pick a member, or tap one in the table above)</span></h2>
+<div class="pick"><input id="who" list="wl" placeholder="Type a member's name"><datalist id="wl"></datalist><button id="clr">Clear</button></div>
+<div id="mp"><div class="tag">Pick a member to see every item they used, month by month, with dates.</div></div>
+
+<h2>🧰 OC / utility items <span class="tag" id="ft">(faction totals - not tracked per member)</span></h2>
+<div class="cats" id="fac"></div>
 <script>
 const CFG = __CONFIG__;
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const num = n => Math.round(n || 0).toLocaleString("en-US");
-const monthName = (m, short) => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", short ? {month: "short", timeZone: "UTC"} : {month: "long", year: "numeric", timeZone: "UTC"});
+const monthName = (m, short) => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", short ? {month: "short", year: "2-digit", timeZone: "UTC"} : {month: "long", year: "numeric", timeZone: "UTC"});
 const when = t => new Date(t * 1000).toLocaleString("en-US", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC"});
+const day = t => new Date(t * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"});
 const thisMonth = new Date().toISOString().slice(0, 7);
-const ICON = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", "Crime items": "🧰", Other: "📦"};
-const COL = {Drugs: "#e4382e", Medical: "#ff8a80", Boosters: "#e8be5a", Refills: "#78c878", Temporary: "#d08a3a", Weapons: "#8ab4f8", Armor: "#9a9a9c", "Crime items": "#b48ad6", Other: "#6d6264"};
-const KIND = {u: "used", r: "points refill", l: "loaned", g: "given"};
-// display names: "Refills" are points refills (not armory items) - "Energy refill (points)" -> "Energy refill · points"
-const CL = c => c === "Refills" ? "Points refills" : c;
+const lastMonth = (() => { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - 1); return d.toISOString().slice(0, 7); })();
+const ICON = {Xanax: "💊", Medical: "🩸", Refills: "⚡", Temporary: "💣", Drugs: "💉", Boosters: "🍺", "Crime items": "🧰", Weapons: "🔫", Armor: "🛡️", Other: "📦"};
+const CL = c => ({Refills: "Points refills", Temporary: "Temps", Drugs: "Other drugs", "Crime items": "OC items"})[c] || c;
 const IL = nm => String(nm).replace(/ \(points\)$/, " · points");
-let period = "month", key = "total", desc = true, sel = "", openCats = {};
+const MC = CFG.member_cats, FC = CFG.cats.filter(c => !MC.includes(c));
+let period = "month", key = MC[0], desc = true, sel = "", lkItem = "", lkKey = "n", lkDesc = true;
 const nameOf = id => (CFG.names[id] || ["[" + id + "]"])[0];
 
-$("cov").innerHTML = CFG.oldest
-  ? `History read back to <b>${new Date(CFG.oldest * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"})}</b>`
-    + (CFG.done ? " - the faction's whole armory history." : " - older months are still being filled in, about a month every update (newest first).")
-  : "No armory history read yet - it starts on the next full update.";
+$("cov").innerHTML = (CFG.oldest
+  ? `History read back to <b>${day(CFG.oldest)}</b>`
+    + (CFG.done ? " - the faction's whole armory history." : " - older months are still being filled in (newest first).")
+  : "No armory history read yet - it starts on the next full update.")
+  + " Empty Blood Bags filled from the armory count as Medical.";
 
-const monthsOf = p => p === "all" ? CFG.months : [p === "month" ? thisMonth : p];
-// a month not fully read yet: older than the oldest month read (being filled in now), or the month the reading
-// stopped part-way through - shown as "filling in"; the current month is "so far"
+const monthsOf = p => p === "all" ? CFG.months : [p === "month" ? thisMonth : p === "last" ? lastMonth : p];
+// a month not fully read yet (older than the oldest month read, or the month reading stopped part-way through)
 const oldestM = CFG.oldest ? new Date(CFG.oldest * 1000).toISOString().slice(0, 7) : "";
 const partial = m => !CFG.done && (m < oldestM || (m === oldestM && CFG.oldest !== Date.parse(oldestM + "-01T00:00:00Z") / 1000));
 const mlabel = m => m === thisMonth ? " (so far)" : partial(m) ? " (still filling in)" : "";
 const label = () => period === "all" ? "all time on record" + (CFG.done ? "" : " (older months still filling in)")
-  : period === "month" ? monthName(thisMonth) + " (so far)" : monthName(period) + mlabel(period);
-function usage(id, months) {           // {category: n, items: {name: n}, byCat: {cat: {name: n}}, total}
+  : period === "month" ? monthName(thisMonth) + " (so far)" : monthName(period === "last" ? lastMonth : period) + mlabel(period === "last" ? lastMonth : period);
+
+// one member's use in the given months: {cat: n, total, items: {name: n}, byCat: {cat: {name: n}}}
+function usage(id, months) {
   const m = (CFG.members[id] || {}).m || {}, r = {items: {}, byCat: {}, total: 0};
-  CFG.cats.forEach(c => r[c] = 0);
+  MC.forEach(c => r[c] = 0);
   months.forEach(mo => Object.entries(m[mo] || {}).forEach(([it, n]) => {
-    const c = CFG.item_cat[+it] || "Other", nm = CFG.items[+it];
+    const c = CFG.item_cat[+it], nm = CFG.items[+it];
+    if (!MC.includes(c)) return;
     r[c] += n; r.total += n; r.items[nm] = (r.items[nm] || 0) + n;
     (r.byCat[c] = r.byCat[c] || {})[nm] = (r.byCat[c][nm] || 0) + n; }));
   return r;
 }
 const allIds = () => [...new Set(Object.keys(CFG.members).concat(Object.keys(CFG.names).filter(i => CFG.names[i][1])))];
+const lastUse = (id, test) => { const r = ((CFG.members[id] || {}).r || []).find(([t, it]) => test(it)); return r ? r[0] : 0; };
 
-// ---- 2. by category: every item, how many, by how many members ----
-function drawCats(rows) {
-  $("catt").textContent = `(every item taken · ${label()})`;
-  const cat = {};
-  rows.forEach(r => Object.entries(r.byCat).forEach(([c, its]) => Object.entries(its).forEach(([nm, n]) => {
-    const x = ((cat[c] = cat[c] || {})[nm] = cat[c][nm] || {n: 0, who: 0}); x.n += n; x.who++; })));
-  $("cats").innerHTML = CFG.cats.filter(c => cat[c]).map(c => {
-    const list = Object.entries(cat[c]).sort((a, b) => b[1].n - a[1].n), tot = list.reduce((a, [, x]) => a + x.n, 0);
-    const show = openCats[c] ? list : list.slice(0, 8);
-    return `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${CL(c)}</b><span>${num(tot)}</span></div>`
-      + show.map(([nm, x]) => `<div class="it"><span>${esc(IL(nm))}</span><b>${num(x.n)}<i>${x.who} member${x.who > 1 ? "s" : ""}</i></b></div>`).join("")
-      + (list.length > 8 ? `<span class="more" data-c="${c}">${openCats[c] ? "Show less" : `Show all ${list.length} items`}</span>` : "") + "</div>";
-  }).join("") || '<div class="tag">Nothing taken from the armory in this period.</div>';
-  $("cats").querySelectorAll(".more").forEach(m => m.onclick = () => { openCats[m.dataset.c] = !openCats[m.dataset.c]; drawCats(rows); });
+// ---- 2. member usage table ----
+function drawTable(rows) {
+  $("ut").textContent = `(${label()} · tap a column to sort · tap a row to open the member)`;
+  const shown = rows.filter(r => r.cur || ($("fmr").checked && r.total));
+  const cols = [["Member", "name"]].concat(MC.map(c => [c, c]), [["Total", "total"]]);
+  const mx = {}; MC.concat("total").forEach(c => mx[c] = Math.max(0, ...shown.map(r => r[c] || 0)));
+  shown.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x || 0) - (y || 0);
+    return (desc ? -r : r) || a.name.localeCompare(b.name); });
+  $("tb").innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${ICON[l] ? ICON[l] + " " + CL(l) : l}</th>`).join("")}</tr>`
+    + shown.map(r => `<tr class="mr${r.total ? "" : " zero"}${r.id === sel ? " sel" : ""}" data-id="${r.id}"><td><b style="color:#e8be5a">${esc(r.name)}</b>${r.cur ? "" : ' <span class="tag">former</span>'}</td>`
+      + MC.map(c => `<td class="n${r[c] && r[c] === mx[c] ? " hi" : ""}">${r[c] ? num(r[c]) : '<span class="tag">-</span>'}</td>`).join("")
+      + `<td class="n"><b>${num(r.total)}</b></td></tr>`).join("")
+    || `<tr><td class="tag" colspan="${cols.length}">No armory use in this period.</td></tr>`;
+  $("tb").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } drawTable(rows); });
+  $("tb").querySelectorAll("tr.mr").forEach(tr => tr.onclick = () => { pick(tr.dataset.id); $("mh2").scrollIntoView({behavior: "smooth"}); });
 }
 
-// ---- 3. one member: categories with their items, 6-month trend, latest uses ----
+// ---- 3. item lookup: one item (or a whole category) -> every member who used it ----
+function itemOptions() {
+  const used = {};
+  Object.values(CFG.members).forEach(x => Object.values(x.m || {}).forEach(mo => Object.entries(mo).forEach(([it, n]) => used[it] = (used[it] || 0) + n)));
+  const groups = MC.map(c => {
+    const its = Object.keys(used).filter(it => CFG.item_cat[+it] === c).sort((a, b) => used[b] - used[a]);
+    if (!its.length) return "";
+    return `<optgroup label="${ICON[c]} ${CL(c)}"><option value="c:${c}">All ${CL(c).toLowerCase()} (${its.length} item${its.length > 1 ? "s" : ""})</option>`
+      + its.map(it => `<option value="i:${it}">${esc(IL(CFG.items[+it]))}</option>`).join("") + "</optgroup>";
+  }).join("");
+  $("item").innerHTML = `<option value="">Pick an item…</option>` + groups;
+  const x = Object.keys(used).find(it => CFG.items[+it] === "Xanax");
+  lkItem = x ? "i:" + x : "";
+  $("item").value = lkItem;
+}
+function drawLookup() {
+  if (!lkItem) { $("lk").innerHTML = '<div class="tag">Pick an item to see who used it.</div>'; return; }
+  const [kind, v] = [lkItem[0], lkItem.slice(2)];
+  const test = it => kind === "i" ? String(it) === v : CFG.item_cat[+it] === v;
+  const months = monthsOf(period), ttl = kind === "i" ? IL(CFG.items[+v]) : "All " + CL(v).toLowerCase();
+  const rows = allIds().map(id => {
+    const m = (CFG.members[id] || {}).m || {};
+    let n = 0; months.forEach(mo => Object.entries(m[mo] || {}).forEach(([it, c]) => { if (test(it)) n += c; }));
+    return {id, name: nameOf(id), cur: !!(CFG.names[id] || [0, 0])[1], n, last: lastUse(id, test)};
+  }).filter(r => r.n);
+  const tot = rows.reduce((a, r) => a + r.n, 0), mx = Math.max(1, ...rows.map(r => r.n));
+  rows.sort((a, b) => { const r = lkKey === "name" ? a.name.localeCompare(b.name) : (a[lkKey] || 0) - (b[lkKey] || 0); return lkDesc ? -r : r; });
+  $("lk").innerHTML = `<div class="hst"><div class="key"><b>${num(tot)}</b><span>${esc(ttl)}</span><i>${esc(label())}</i></div>`
+    + `<div><b>${rows.length}</b><span>Members used it</span></div><div><b>${rows.length ? num(tot / rows.length) : 0}</b><span>Average each</span></div></div>`
+    + (rows.length ? `<div class="scroll"><table id="lkt"><tr>${[["Member", "name"], ["Used", "n"], ["Share", "n"], ["Last used (TCT)", "last"]].map(([l, k], i) =>
+        `<th class="${i ? "n" : ""}${i === 2 ? " nosort" : ""}${i !== 2 && k === lkKey ? " on" + (lkDesc ? "" : " up") : ""}"${i === 2 ? "" : ` data-k="${k}"`}>${l}</th>`).join("")}</tr>`
+      + rows.map(r => `<tr class="mr${r.id === sel ? " sel" : ""}" data-id="${r.id}"><td><b style="color:#e8be5a">${esc(r.name)}</b>${r.cur ? "" : ' <span class="tag">former</span>'}</td>`
+        + `<td class="n"><b>${num(r.n)}</b><span class="bar" style="width:${Math.round(60 * r.n / mx)}px"></span></td>`
+        + `<td class="n tag">${Math.round(100 * r.n / tot)}%</td><td class="n tag">${r.last ? when(r.last) : "-"}</td></tr>`).join("") + "</table></div>"
+      : `<div class="tag">Nobody used ${esc(ttl.toLowerCase())} in this period.</div>`);
+  $("lk").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === lkKey) lkDesc = !lkDesc; else { lkKey = th.dataset.k; lkDesc = lkKey !== "name"; } drawLookup(); });
+  $("lk").querySelectorAll("tr.mr").forEach(tr => tr.onclick = () => { pick(tr.dataset.id); $("mh2").scrollIntoView({behavior: "smooth"}); });
+}
+
+// ---- 4. one member ----
 function drawMember() {
-  if (!sel) { $("mp").innerHTML = '<div class="tag">Pick a member to see everything they took, by category, with dates.</div>'; return; }
-  const u = usage(sel, monthsOf(period)), cats = CFG.cats.filter(c => u[c] > 0);
-  const last6 = []; for (let k = 5; k >= 0; k--) { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - k); last6.push(d.toISOString().slice(0, 7)); }
-  const per = last6.map(mo => usage(sel, [mo])), mx = Math.max(1, ...per.map(p => p.total));
-  const usedCats = CFG.cats.filter(c => per.some(p => p[c]));
-  const rec = ((CFG.members[sel] || {}).r || []);
+  if (!sel) { $("mp").innerHTML = '<div class="tag">Pick a member to see every item they used, month by month, with dates.</div>'; return; }
+  const u = usage(sel, monthsOf(period)), all = usage(sel, CFG.months), cats = MC.filter(c => all[c] > 0);
+  const last6 = []; for (let k = 0; k < 6; k++) { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - k); last6.push(d.toISOString().slice(0, 7)); }
+  const per = last6.map(mo => usage(sel, [mo]));
+  // latest uses, with the same item taken in the same minute merged into one row (20 beers at once = "× 20")
+  const rec = [];
+  ((CFG.members[sel] || {}).r || []).forEach(([t, it, n, k]) => {
+    const p = rec[rec.length - 1];
+    if (p && p[1] === it && p[3] === k && Math.floor(p[0] / 60) === Math.floor(t / 60)) p[2] += n; else rec.push([t, it, n, k]);
+  });
+  const kindTxt = k => k === "r" ? "points refill" : "used";
   $("mp").innerHTML = `<div class="mh"><div class="av">${esc(nameOf(sel).slice(0, 2).toUpperCase())}</div><div><b>${esc(nameOf(sel))}</b>`
     + `${(CFG.names[sel] || [0, 1])[1] ? "" : ' <span class="tag">former member</span>'}<br><a href="${CFG.member_base}/member.html?id=${sel}">Open profile →</a></div></div>`
-    + `<div class="hst"><div><b>${num(u.total)}</b><span>Items · ${esc(label())}</span></div>${cats.map(c => `<div><b>${num(u[c])}</b><span>${ICON[c]} ${CL(c)}</span></div>`).join("")}</div>`
-    + `<div class="cats">${cats.map(c => `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${CL(c)}</b><span>${num(u[c])}</span></div>`
-        + Object.entries(u.byCat[c]).sort((a, b) => b[1] - a[1]).map(([nm, n]) => `<div class="it"><span>${esc(IL(nm))}</span><b>${num(n)}</b></div>`).join("") + "</div>").join("")
-        || '<div class="tag">Nothing taken in this period.</div>'}</div>`
-    + `<h2 style="margin-top:16px">📈 Last 6 months</h2><div class="trend">${per.map(p => `<div class="col" title="${num(p.total)} items">`
-        + usedCats.map(c => p[c] ? `<i style="height:${Math.max(2, Math.round(100 * p[c] / mx))}px;background:${COL[c]}" title="${CL(c)}: ${num(p[c])}"></i>` : "").join("") + "</div>").join("")}</div>`
-    + `<div class="tl">${last6.map((mo, k) => `<span>${monthName(mo, true)}<br><b style="color:#ddd">${num(per[k].total)}</b></span>`).join("")}</div>`
-    + `<div class="leg">${usedCats.map(c => `<span><i style="background:${COL[c]}"></i>${CL(c)}</span>`).join("")}</div>`
-    + `<h2 style="margin-top:16px">🕐 Latest armory uses</h2>`
-    + (rec.length ? `<div class="scroll"><table><tr><th>When (TCT)</th><th>Item</th><th>Category</th><th class="n">Count</th><th>How</th></tr>`
-        + rec.map(([t, it, n, k]) => `<tr><td>${when(t)}</td><td>${esc(IL(CFG.items[it]))}</td><td class="tag">${ICON[CFG.item_cat[it]] || ""} ${esc(CL(CFG.item_cat[it]))}</td>`
-          + `<td class="n">${num(n)}</td><td class="tag">${KIND[k] || ""}</td></tr>`).join("") + "</table></div>"
+    + `<div class="hst">${MC.filter(c => all[c] > 0 || c === "Xanax" || c === "Medical").map(c => `<div${c === "Xanax" || c === "Medical" ? ' class="key"' : ""}><b>${num(u[c])}</b>`
+        + `<span>${ICON[c]} ${CL(c)}</span><i>${num(all[c])} all time</i></div>`).join("")}<div><b>${num(u.total)}</b><span>Total</span><i>${esc(label())}</i></div></div>`
+    + `<div class="cats">${cats.map(c => `<div class="cat"><div class="h"><span>${ICON[c]}</span><b>${CL(c)}</b><span>${num(u[c])}</span></div>`
+        + Object.entries(all.byCat[c] || {}).sort((a, b) => b[1] - a[1]).map(([nm, n]) =>
+          `<div class="it"><span>${esc(IL(nm))}</span><b>${num((u.byCat[c] || {})[nm] || 0)} <span class="tag">/ ${num(n)} all time</span></b></div>`).join("") + "</div>").join("")
+        || '<div class="tag">No armory use on record.</div>'}</div>`
+    + `<h2 style="margin-top:16px">📅 Month by month</h2><div class="scroll"><table><tr><th class="nosort">Month</th>${MC.map(c => `<th class="n nosort">${ICON[c]} ${CL(c)}</th>`).join("")}<th class="n nosort">Total</th></tr>`
+    + last6.map((mo, k) => `<tr><td>${monthName(mo)}${mlabel(mo) ? ` <span class="tag">${mlabel(mo).trim()}</span>` : ""}</td>`
+        + MC.map(c => `<td class="n">${per[k][c] ? num(per[k][c]) : '<span class="tag">-</span>'}</td>`).join("") + `<td class="n"><b>${num(per[k].total)}</b></td></tr>`).join("")
+    + `</table></div>`
+    + `<h2 style="margin-top:16px">🕐 Latest uses</h2>`
+    + (rec.length ? `<div class="scroll"><table><tr><th class="nosort">When (TCT)</th><th class="nosort">Item</th><th class="nosort">Category</th><th class="n nosort">Count</th></tr>`
+        + rec.map(([t, it, n, k]) => `<tr><td>${when(t)}</td><td>${esc(IL(CFG.items[it]))}${k === "r" ? ' <span class="tag">' + kindTxt(k) + '</span>' : ""}</td>`
+          + `<td class="tag">${ICON[CFG.item_cat[it]] || ""} ${esc(CL(CFG.item_cat[it]))}</td><td class="n">${num(n)}</td></tr>`).join("") + "</table></div>"
       : '<div class="tag">No armory uses on record.</div>');
 }
 
-// ---- 4. every member ----
-function drawTable(rows) {
-  const shown = rows.filter(r => r.cur || ($("fmr").checked && r.total));
-  const cats = CFG.cats.filter(c => rows.some(r => r[c] > 0));
-  const cols = [["Member", "name"], ["Total", "total"]].concat(cats.map(c => [c, c]));
-  shown.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x || 0) - (y || 0); return desc ? -r : r; });
-  $("tb").innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${ICON[l] ? ICON[l] + " " + CL(l) : l}</th>`).join("")}<th>Top items</th></tr>`
-    + shown.map(r => `<tr class="mr${r.total ? "" : " zero"}${r.id === sel ? " sel" : ""}" data-id="${r.id}"><td><b style="color:#e8be5a">${esc(r.name)}</b>${r.cur ? "" : ' <span class="tag">former</span>'}</td>`
-      + `<td class="n"><b>${num(r.total)}</b></td>` + cats.map(c => `<td class="n">${r[c] ? num(r[c]) : '<span class="tag">-</span>'}</td>`).join("")
-      + `<td class="tag">${Object.entries(r.items).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, v]) => `${esc(IL(n))} ×${num(v)}`).join(" · ")}</td></tr>`).join("")
-    || `<tr><td class="tag" colspan="${cols.length + 1}">No armory usage in this period.</td></tr>`;
-  $("tb").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } drawTable(rows); });
-  $("tb").querySelectorAll("tr.mr").forEach(tr => tr.onclick = () => { pick(tr.dataset.id); $("mh2").scrollIntoView({behavior: "smooth"}); });
+// ---- 5. OC / utility items: faction totals ----
+function drawFaction() {
+  const cat = {};
+  monthsOf(period).forEach(mo => Object.entries((CFG.faction || {})[mo] || {}).forEach(([it, n]) => {
+    const c = CFG.item_cat[+it] || "Other", nm = CFG.items[+it]; (cat[c] = cat[c] || {})[nm] = ((cat[c] || {})[nm] || 0) + n; }));
+  $("ft").textContent = `(faction totals · ${label()} - not tracked per member)`;
+  $("fac").innerHTML = FC.filter(c => cat[c]).map(c => {
+    const list = Object.entries(cat[c]).sort((a, b) => b[1] - a[1]), tot = list.reduce((a, [, n]) => a + n, 0);
+    return `<div class="cat"><div class="h"><span>${ICON[c]}</span><b>${CL(c)}</b><span>${num(tot)}</span></div>`
+      + list.map(([nm, n]) => `<div class="it"><span>${esc(IL(nm))}</span><b>${num(n)}</b></div>`).join("") + "</div>";
+  }).join("") || '<div class="tag">No OC / utility items used in this period.</div>';
 }
 
 function draw() {
   const months = monthsOf(period);
   const rows = allIds().map(id => Object.assign({id, name: nameOf(id), cur: !!(CFG.names[id] || [0, 0])[1]}, usage(id, months)));
-  const T = {total: 0}; CFG.cats.forEach(c => T[c] = 0);
-  rows.forEach(r => { CFG.cats.forEach(c => T[c] += r[c]); T.total += r.total; });
-  $("tot").innerHTML = `<div><b>${num(T.total)}</b><span>Items taken</span></div><div><b>${rows.filter(r => r.total).length}</b><span>Members</span></div>`
-    + CFG.cats.filter(c => T[c] > 0).map(c => `<div><b>${num(T[c])}</b><span>${ICON[c]} ${CL(c)}</span></div>`).join("");
-  drawCats(rows); drawMember(); drawTable(rows);
+  const T = {total: 0}; MC.forEach(c => T[c] = 0);
+  rows.forEach(r => { MC.forEach(c => T[c] += r[c]); T.total += r.total; });
+  let F = 0; months.forEach(mo => Object.values((CFG.faction || {})[mo] || {}).forEach(n => F += n));
+  $("tot").innerHTML = MC.map(c => `<div${c === "Xanax" || c === "Medical" ? ' class="key"' : ""}><b>${num(T[c])}</b><span>${ICON[c]} ${CL(c)}</span>`
+      + `<i>${rows.filter(r => r[c]).length} members</i></div>`).join("")
+    + `<div><b>${num(F)}</b><span>🧰 OC / utility</span><i>faction total</i></div>`;
+  drawTable(rows); drawLookup(); drawMember(); drawFaction();
 }
 function pick(id) { sel = id || ""; $("who").value = sel ? nameOf(sel) : ""; try { history.replaceState(null, "", sel ? "#m" + sel : "#"); } catch (e) {} draw(); }
 
 $("wl").innerHTML = allIds().sort((a, b) => nameOf(a).localeCompare(nameOf(b))).map(i => `<option value="${esc(nameOf(i))}">`).join("");
 $("who").onchange = $("who").oninput = () => { const v = $("who").value.trim().toLowerCase(); const id = allIds().find(i => nameOf(i).toLowerCase() === v); if (id && id !== sel) pick(id); };
 $("clr").onclick = () => pick("");
-$("ctl").innerHTML = `<span>Period</span><button data-p="month" class="on">This month (so far)</button>`
+$("ctl").innerHTML = `<span>Period</span><button data-p="month" class="on">This month</button><button data-p="last">Last month</button>`
   + `<select id="mon"><option value="">Pick a month…</option>${CFG.months.map(m => `<option value="${m}">${monthName(m)}${mlabel(m)}</option>`).join("")}</select>`
-  + `<button data-p="all">All time on record</button>`;
+  + `<button data-p="all">All time</button>`;
 const setP = p => { period = p; $("ctl").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
-  if (p === "month" || p === "all") $("mon").value = ""; draw(); };
+  if (["month", "last", "all"].includes(p)) $("mon").value = ""; draw(); };
 $("ctl").querySelectorAll("button").forEach(b => b.onclick = () => setP(b.dataset.p));
 $("mon").onchange = () => { if ($("mon").value) setP($("mon").value); };
 $("fmr").onchange = draw;
+$("item").onchange = () => { lkItem = $("item").value; drawLookup(); };
+itemOptions();
 const h0 = location.hash.match(/^#m(\d+)/);
 if (h0) sel = h0[1], $("who").value = nameOf(sel);
 draw();

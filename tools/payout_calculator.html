@@ -177,12 +177,21 @@ __MENU__
     <div class="row"><input id="ghToken" type="password" placeholder="github_pat_…" autocomplete="off">
       <div style="flex:0 0 auto"><button class="alt" id="ghSave">Save token</button><button class="alt" id="ghClear">Remove</button></div></div>
   </details>
+  <!-- Termed (Nov 2026): required before saving. Yes = the war was agreed before it began - it's marked termed
+       (config termed_wars, same as the toggle on its war report page) and left out of reliability / participation. -->
+  <div id="termQ" style="background:#1f1608;border:1px solid #6b4a18;border-radius:10px;padding:10px 12px;margin:10px 0">
+    <label style="margin:0 0 6px;display:block"><b style="color:#e8be5a">Termed war?</b> <span class="small">required</span></label>
+    <div class="small" style="margin-bottom:6px">Termed = the outcome was agreed before the war began. Termed wars don't count against anyone's reliability or participation.</div>
+    <label style="display:inline-flex;gap:6px;align-items:center;margin-right:18px;cursor:pointer"><input type="radio" name="termed" value="yes" style="width:18px;height:18px"> Yes - termed</label>
+    <label style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="radio" name="termed" value="no" style="width:18px;height:18px"> No - a normal war</label>
+    <div class="small" id="termNow" style="margin-top:6px"></div>
+  </div>
   <button class="gold" id="saveReceipt">Save receipt to archive</button>
   <div class="small" id="saveStatus"></div>
   <button class="alt" id="copyJson">Copy receipt data</button><button class="alt" id="dlJson">Download</button>
   <div class="small">"Save receipt" opens GitHub with the receipt file filled in - press <b>Commit changes</b>.
     Within a few minutes the bot draws the receipt, adds it to the members' <a id="rcptLink" href="#">Payouts archive</a>
-    and posts it to Discord.</div>
+    and updates the war's post in Discord (#war-reports).</div>
   <button class="gold" id="makeNews">Create Newsletter</button>
   <div id="newsBox" style="display:none">
     <h3 style="margin:14px 0 6px">Faction Newsletter</h3>
@@ -422,7 +431,7 @@ $("generate").onclick = async () => {
       await loadSavedWar(id);
       status(`Loaded war ${id} from saved data - no API calls used`, "good");
       showSummary(); renderSettings();
-      $("resultsCard").style.display = $("payCard").style.display = $("receiptCard").style.display = "block";
+      $("resultsCard").style.display = $("payCard").style.display = $("receiptCard").style.display = "block"; termShow();
     } catch (e) { status("Couldn't load the saved war: " + e.message, "warn"); }
     return;
   }
@@ -488,7 +497,7 @@ $("generate").onclick = async () => {
     $("bar").style.width = "100%";
     status(`Done: ${seen.size} attacks read in ${pages} pages`, "good");
     showSummary(); renderSettings();
-    $("resultsCard").style.display = $("payCard").style.display = $("receiptCard").style.display = "block";
+    $("resultsCard").style.display = $("payCard").style.display = $("receiptCard").style.display = "block"; termShow();
   } catch (e) { status(e.message, "warn"); }
   $("generate").disabled = false;
 };
@@ -634,9 +643,19 @@ $("copyBatch").onclick = () => { if (!lastResult) return; const rows = lastResul
   navigator.clipboard.writeText(`https://www.torn.com/factions.php?step=your#/tab=controls&batbal_uids=${rows.map(r => r.id).join(",")}&batbal_amounts=${rows.map(r => r.pay).join(",")}`).then(() => alert("Copied")); };
 
 // ---------------- receipt ----------------
+// ---- Termed yes / no (required) - answered per war: loading another war clears the answer ----
+let termWar = null;
+const termAns = () => { const x = document.querySelector('input[name="termed"]:checked'); return termWar === war.id && x ? x.value : ""; };
+function termShow() {
+  if (termWar !== war.id) document.querySelectorAll('input[name="termed"]').forEach(x => x.checked = false);
+  const on = (CFG.termed || []).map(String).includes(String(war.id));
+  $("termNow").textContent = `Right now this war is ${on ? "marked termed" : "not marked termed"} - your answer sets it when you save.`;
+}
+document.querySelectorAll('input[name="termed"]').forEach(x => x.onchange = () => { termWar = war.id; });
 function receipt() {
   const r = lastResult;
   return {v: 1, created: Math.floor(Date.now() / 1000), paid_by: $("paidBy").value.trim(), note: $("note").value.trim(),
+    termed: termAns() === "yes",
     war: {id: war.id, opponent: war.opp, won: war.won, start: war.start, end: war.end, our: war.our, their: war.their,
           rank_before: war.rank.before || "", rank_after: war.rank.after || ""},
     budget: Math.round(S.budget), expenses: S.expenses.map(e => ({label: e.label,
@@ -676,8 +695,30 @@ async function ghCommit(path, text, message) {
   if (!r.ok) { let m = r.status + ""; try { m += " " + (await r.json()).message; } catch (e) {} throw new Error(m); }
   return r.json();
 }
+// set config.json "termed_wars" for this war (the same list the war report page's toggle saves)
+async function saveTermed(on) {
+  const r = await fetch(`${GHC}config.json?ref=${CFG.branch}`, {headers: {Authorization: "Bearer " + ghToken(), Accept: "application/vnd.github+json"}, cache: "no-store"});
+  if (!r.ok) throw new Error("couldn't read the settings (" + r.status + ")");
+  const j = await r.json();
+  const c = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(j.content.replace(/\n/g, "")), ch => ch.charCodeAt(0))));
+  const W = String(war.id), l = (c.termed_wars || []).map(String).filter(x => x !== W);
+  if (on) l.push(W);
+  if (JSON.stringify(l) === JSON.stringify((c.termed_wars || []).map(String))) return;     // already right
+  c.termed_wars = l;
+  const bytes = new TextEncoder().encode(JSON.stringify(c, null, 2) + "\n"); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b));
+  const p = await fetch(`${GHC}config.json`, {method: "PUT",
+    headers: {Authorization: "Bearer " + ghToken(), Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-HB-Save": "1"},
+    body: JSON.stringify({message: `War ${W}${on ? " marked termed" : " no longer termed"} (payout)`, content: btoa(bin), sha: j.sha, branch: CFG.branch})});
+  if (!p.ok) throw new Error("termed setting not saved (" + p.status + ")");
+  CFG.termed = l;
+}
 $("saveReceipt").onclick = () => {
   if (!lastResult) return;
+  if (!termAns()) {
+    $("termQ").scrollIntoView({behavior: "smooth", block: "center"});
+    $("saveStatus").textContent = "Answer \"Termed war?\" (Yes or No) first.";
+    return;
+  }
   const t = new Date(), stamp = t.toISOString().slice(0, 16).replace(/[-:T]/g, "");
   const file = `data/payouts/${war.id}-${stamp}.json`;
   const json = JSON.stringify(receipt(), null, 1);
@@ -686,9 +727,13 @@ $("saveReceipt").onclick = () => {
   const full = `${base}&value=${encodeURIComponent(json)}`;
   if (ghToken()) {
     $("saveStatus").textContent = "Saving to GitHub…";
-    ghCommit(file, json, `Payout receipt: war ${war.id} vs ${war.opp}`).then(() => {
-      $("saveStatus").innerHTML = `Saved ✓ <b>${esc(file.split("/").pop())}</b> - the receipt appears in the archive and Discord within a few minutes.`;
-    }).catch(e => {
+    const tOn = termAns() === "yes";
+    ghCommit(file, json, `Payout receipt: war ${war.id} vs ${war.opp}`).then(() => saveTermed(tOn).then(() => {
+      $("saveStatus").innerHTML = `Saved ✓ <b>${esc(file.split("/").pop())}</b> (${tOn ? "termed" : "not termed"}) - the War Report &amp; Payout updates on the site and in Discord within a few minutes.`;
+      termShow();
+    }, e => {
+      $("saveStatus").innerHTML = `Receipt saved ✓ but the termed setting wasn't (${esc(e.message)}) - set it with the toggle on the war's report page.`;
+    })).catch(e => {
       $("saveStatus").textContent = "GitHub save failed (" + e.message + ") - check the token, or remove it to save manually.";
     });
     return;

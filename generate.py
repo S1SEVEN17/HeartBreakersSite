@@ -3845,17 +3845,23 @@ def render_announcement_header(acfg: dict, summary: dict, only: set = None) -> I
         start("wars", title, rec).append(
             body_of(draw_ranked_wars(rw_cfg, dict(summary, wars=summary["wars_announce"]), show_np=True)))
     lcfg = acfg.get("leaderboard", {})
-    if want("war") and lcfg.get("enabled", True) and summary.get("leaderboard"):
-        start("war", lcfg.get("war_group_title", "War Leaderboards")).append(
-            body_of(draw_leaderboard(lcfg, summary, heading=False)))
-    if want("chain") and lcfg.get("enabled", True) and summary.get("leaderboard"):
-        if summary.get("chain_leaderboard"):
+    # leaderboard panels in the order leaders set (Site Panels -> Announcements -> Leaderboard order;
+    # config announcements.leaderboard.order, Nov 2026). Missing / unknown names: the default order fills in.
+    def lb_war():
+        if want("war") and lcfg.get("enabled", True) and summary.get("leaderboard"):
+            start("war", lcfg.get("war_group_title", "War Leaderboards")).append(
+                body_of(draw_leaderboard(lcfg, summary, heading=False)))
+    def lb_chain():
+        if want("chain") and lcfg.get("enabled", True) and summary.get("leaderboard") and summary.get("chain_leaderboard"):
             start("chain", lcfg.get("chain_group_title", "Chain Leaderboards")).append(
                 body_of(draw_chain_leaderboard(lcfg, summary, heading=False)))
-    if want("gym") and lcfg.get("enabled", True) and summary.get("leaderboard"):
-        if summary.get("gym_leaderboard") and lcfg.get("gym", True):
+    def lb_gym():
+        if want("gym") and lcfg.get("enabled", True) and summary.get("leaderboard") \
+                and summary.get("gym_leaderboard") and lcfg.get("gym", True):
             start("gym", lcfg.get("gym_group_title", "Gym Leaderboards")).append(
                 body_of(draw_gym_leaderboard(lcfg, summary, heading=False)))
+    for k in leaderboard_order(lcfg):
+        {"war": lb_war, "chain": lb_chain, "gym": lb_gym}[k]()
     scfg = acfg.get("slacker_watch", {})
     if want("slackers") and scfg.get("enabled", True) and summary.get("slacker_watch"):
         start("slackers", scfg.get("title", "Slacker Watch")).append(body_of(draw_slacker_watch(scfg, summary)))
@@ -3962,17 +3968,50 @@ def member_out(out: Path) -> Path:
     d_ = out / member_dir() if member_dir() else out
     d_.mkdir(parents=True, exist_ok=True)
     return d_
-# ONE header for every page (members' and leaders'), the same everywhere; what it shows depends on the
-# signed-in member's role: leader-only groups (class "hbl") stay hidden until whoami.json (the gatekeeper's
-# "who is signed in") says leader. Dropdowns are <details>, so they work by tap on phones.
-#   (label, link, items)  link = direct button; items = dropdown. "M:" = members' folder, "L:" = leaders' folder,
-#   "G:" = gatekeeper address ("/" = the dashboard: Leaders Hub for leaders, Members Hub for everyone else)
-# Kept small (Nov 2026): the hubs' Explore section is the site's main navigation; the header just gets you home,
-# to the most-used pages and (leaders) the Leaders Hub. Every page is still linked from the hubs.
-NAV = [("🏠 Home", "G:/", None, False),
-       ("📊 Leaderboards", "M:leaderboards.html", None, False),
-       ("👥 Members", "M:members.html", None, False),
-       ("🛡️ Leaders", "L:index.html", None, True)]
+# ONE header for every page (members' and leaders'), the same everywhere. Two parts, both set by leaders in the
+# Header editor (leaders' header-editor.html -> config.json "header", Nov 2026):
+#   "members"  what EVERYONE sees (members and leaders)
+#   "leaders"  extra items only leaders see, after the members' items (class "hbl": hidden until the gatekeeper's
+#              whoami.json says leader) - by default one "🛡️ Leaders" dropdown with the leadership tools in folders
+# Item:   {"label", "link"}                       a button
+#         {"label", "items": [entry, ...]}        a dropdown; entry = {"label", "link"} or a FOLDER
+#                                                 {"label", "items": [{"label", "link"}, ...]} (tap to open)
+# link:   "M:<page>" members' folder · "L:<page>" leaders' folder · "G:/" the dashboard (Leaders Hub for leaders,
+#         Members Hub for everyone else) · a full https:// address. Dropdowns are <details>, so they work by tap.
+def header_default() -> dict:
+    L = lambda label, link: {"label": label, "link": link}
+    return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("👥 Members", "M:members.html")],
+            "leaders": [{"label": "🛡️ Leaders", "items": [
+                L("🏠 Leaders Hub", "L:index.html"),
+                {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
+                                                        L("⚔️ War readiness", "L:readiness.html"),
+                                                        L("💰 Paid wars", "M:wars.html#paid")]},
+                {"label": "👥 Members", "items": [L("🗄️ Armory monitor", "L:armory.html"), L("💪 Member stats", "L:stats.html"),
+                                                 L("👥 Members list", "M:members.html")]},
+                {"label": "📢 Torn panels", "items": [L("📢 Announcements", "L:announcements.html"),
+                                                     L("🖼️ Faction description", "L:description.html")]},
+                {"label": "📰 Newsletters", "items": [L("🎨 Newsletter builder", "L:builder.html"),
+                                                     L("🧷 Newsletter filler", "L:hb-newsletter-filler.user.js"),
+                                                     L("🗂️ Recap archive", "M:recaps.html")]},
+                {"label": "⚙️ Site settings", "items": [L("🏠 Homepage editor", "L:homepage.html"),
+                                                       L("🧭 Header editor", "L:header-editor.html"),
+                                                       L("🧩 Profile layout", "L:profile-default.html")]}]}]}
+
+
+_HEADER = {}
+
+
+def header_cfg() -> dict:
+    """config.json "header" (read once per build), else header_default()."""
+    if "v" not in _HEADER:
+        try:
+            h = load_config().get("header")
+        except (OSError, ValueError):
+            h = None
+        ok = isinstance(h, dict) and isinstance(h.get("members"), list) and isinstance(h.get("leaders"), list)
+        _HEADER["v"] = h if ok else header_default()
+    return _HEADER["v"]
+
 
 MENU_CSS = """<style>.hbm{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:0 0 12px;
 font:14px system-ui,sans-serif;position:relative;z-index:50}.hbm>a,.hbm summary{color:#e8be5a;background:#1a1012;
@@ -3984,14 +4023,19 @@ border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;text-decoration:none
 padding:4px;min-width:170px;box-shadow:0 6px 18px #000a}.hbm details div a{display:block;color:#ddd;padding:8px 10px;
 border-radius:6px;text-decoration:none;white-space:nowrap}.hbm details div a:hover{background:#2a1416;color:#fff}
 .hbm input{background:#1a1012;color:#eee;border:1px solid #5c1c1a;border-radius:7px;padding:6px 10px;width:170px;font:14px system-ui}
-.hbm .ld>a,.hbm .ld summary{border-color:#6b4a18}</style>"""
+.hbm .ld>a,.hbm .ld summary{border-color:#6b4a18}
+.hbm details details{position:static}.hbm details details summary{background:none;border:0;color:#e8be5a;padding:8px 10px;
+display:block;font-weight:600}.hbm details details summary:after{content:" ▸";color:#9a9a9c}
+.hbm details details[open] summary:after{content:" ▾"}.hbm details details>div{position:static;box-shadow:none;border:0;
+border-left:2px solid #5c1c1a;border-radius:0;margin:0 0 4px 12px;padding:0 0 0 4px;min-width:0;background:none}</style>"""
 
 
 def _menu_js(root: str) -> str:
     # dropdown behaviour only (the member search box was removed - members are on members.html)
     return ("<script>(function(){"
-            "document.querySelectorAll('.hbm details').forEach(function(d){d.addEventListener('toggle',function(){if(!d.open)return;"
-            "document.querySelectorAll('.hbm details').forEach(function(o){if(o!==d)o.open=false;});"
+            # top-level dropdowns only (folders inside a dropdown are <details> too - opening one keeps its dropdown open)
+            "document.querySelectorAll('.hbm>details').forEach(function(d){d.addEventListener('toggle',function(){if(!d.open)return;"
+            "document.querySelectorAll('.hbm>details').forEach(function(o){if(o!==d)o.open=false;});"
             # keep the opened list on screen: flip it to the right edge of its button if it would run off the right
             "var p=d.querySelector('div');if(!p)return;p.style.left='';p.style.right='';"
             "var r=p.getBoundingClientRect();if(r.right>innerWidth-6){p.style.left='auto';p.style.right='0';r=p.getBoundingClientRect();}"
@@ -4036,17 +4080,40 @@ def nav_menu(mroot: str, lroot: str) -> str:
         if k == "G":
             return groot + rest if g_ else mroot + "index.html"
         return (mroot if k == "M" else lroot) + rest
+    import html as _h
+    def href_(u):
+        u = str(u or "").strip()
+        if u[:2] in ("M:", "L:", "G:"):
+            if u.startswith("L:") and not lroot:
+                return ""
+            return href(u)
+        return u if u.startswith(("https://", "http://", "#")) else ""
+    def link_(e):
+        u = href_(e.get("link"))
+        return f'<a href="{_h.escape(u, quote=True)}">{_h.escape(str(e.get("label", "")))}</a>' if u else ""
+    def entry(e):
+        if isinstance(e.get("items"), list):              # folder inside a dropdown
+            inner = "".join(link_(x) for x in e["items"] if isinstance(x, dict))
+            return f"<details><summary>{_h.escape(str(e.get('label', '')))}</summary><div>{inner}</div></details>" if inner else ""
+        return link_(e)
     parts = []
-    for label, url, items, lead in NAV:
-        # leader-only groups: hidden until whoami says leader (always shown without the gatekeeper - local tests)
-        attr = ' class="hbl ld" style="display:none"' if lead and g_ else (' class="ld"' if lead else "")
+    hc = header_cfg()
+    for lead, row in ((False, hc.get("members") or []), (True, hc.get("leaders") or [])):
         if lead and not lroot:
             continue                      # no leaders' folder (LEADER_DIR not set)
-        if url:
-            parts.append(f'<a{attr} href="{href(url)}">{label}</a>')
-        else:
-            parts.append(f"<details{attr}><summary>{label}</summary><div>"
-                         + "".join(f'<a href="{href(u)}">{t}</a>' for t, u in items) + "</div></details>")
+        # leader-only items: hidden until whoami says leader (always shown without the gatekeeper - local tests)
+        attr = ' class="hbl ld" style="display:none"' if lead and g_ else (' class="ld"' if lead else "")
+        for it in row:
+            if not isinstance(it, dict):
+                continue
+            if isinstance(it.get("items"), list):
+                inner = "".join(entry(x) for x in it["items"] if isinstance(x, dict))
+                if inner:
+                    parts.append(f"<details{attr}><summary>{_h.escape(str(it.get('label', '')))}</summary><div>{inner}</div></details>")
+            else:
+                u = href_(it.get("link"))
+                if u:
+                    parts.append(f'<a{attr} href="{_h.escape(u, quote=True)}">{_h.escape(str(it.get("label", "")))}</a>')
     if g_:
         parts.append(account_menu(mroot))
     return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(mroot)
@@ -4176,6 +4243,9 @@ def report_links(slug: str) -> list:
 # is left out of reliability, the participation trend, Slacker Watch and "took part" figures, and a member who
 # didn't hit in it isn't counted as having missed it (their hits in it still count everywhere).
 def termed_wars(cfg: dict = None) -> set:
+    """Termed wars: config "termed_wars" - set by the toggle on a war's report page and by the payout calculator's
+    required Termed yes / no when a receipt is saved (the receipt keeps the answer too, "termed": true/false, as a
+    record; the settings list is what counts, so a later toggle on the report page always wins)."""
     try:
         cfg = cfg if cfg is not None else load_config()
     except (OSError, ValueError):
@@ -4765,7 +4835,7 @@ def homepage_default() -> dict:
         ("⚔️", "War readiness", "L:readiness.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
-        ("🧩", "Profile layout", "L:profile-default.html"),
+        ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
         ("🧷", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
     return {"v": HOME_LAYOUT_V,
             "members": {"sections": [{"type": "welcome", "title": ""},
@@ -4878,7 +4948,24 @@ def write_homepages(out: Path, cfg: dict = None):
               fresh_root=member_base() + "/",
               top=not any(s.get("type") == "welcome" for s in lsec))
     # the Homepage editor (leaders) - its preview uses the same CSS + script, the current "Latest" and these defaults
-    pages = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:index.html"), ("War History", "M:wars.html"),
+    pages = SITE_PAGES
+    conf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": pages, "default": homepage_default(),
+            "member_base": member_base(), "layout_v": HOME_LAYOUT_V,
+            "css": HUB_CSS, "js": HOME_JS, "jscfg": {"members": home_js_cfg("members"), "leaders": home_js_cfg("leaders")},
+            "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
+    (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
+                                        .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
+                                        .replace("__MENU__", leader_menu("")), encoding="utf-8")
+    # the Header editor (leaders, Nov 2026) - config.json "header": the members' header + the leaders' extra items
+    hconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": SITE_PAGES, "default": header_default(),
+             "css": MENU_CSS}
+    (lout / "header-editor.html").write_text((ROOT / "tools" / "header_editor.html").read_text(encoding="utf-8")
+                                             .replace("__CONFIG__", json.dumps(hconf).replace("</", "<\\/"))
+                                             .replace("__MENU__", leader_menu("")), encoding="utf-8")
+
+
+# every page the editors (homepage, header) can link to: (title, link)
+SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:index.html"), ("War History", "M:wars.html"),
              ("Paid wars (War History)", "M:wars.html#paid"), ("Chain History", "M:chains.html"), ("Organized Crimes", "M:crimes.html"),
              ("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
              ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html"), ("Members", "M:members.html"),
@@ -4888,14 +4975,8 @@ def write_homepages(out: Path, cfg: dict = None):
              ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
-             ("Homepage Editor", "L:homepage.html")]]
-    conf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": pages, "default": homepage_default(),
-            "member_base": member_base(), "layout_v": HOME_LAYOUT_V,
-            "css": HUB_CSS, "js": HOME_JS, "jscfg": {"members": home_js_cfg("members"), "leaders": home_js_cfg("leaders")},
-            "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
-    (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
-                                        .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
-                                        .replace("__MENU__", leader_menu("")), encoding="utf-8")
+             ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
+             ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
 # DATA FRESHNESS (Nov 2026): every page says how fresh its data is and since when it's on record - members' db/
@@ -5189,7 +5270,8 @@ def monitor_data(db: dict) -> dict:
     """Per CURRENT member:
       trend       hits in each of the last TREND_WARS wars (None = not in the faction for it), hit rate,
                   ▲/▼/► comparing the last 2 wars they were in with the 3 before
-      reliability 0-100 = War 40 (share of the last REL_WARS wars they were in where they hit)
+      reliability 0-100 = War 40 (share of the last REL_WARS wars they were in where they hit - wars that started
+                                  before they joined never count; termed wars never count)
                         + Chains 20 (share of REL_CHAIN_MIN+ chains in REL_DAYS days, since joining, they hit -
                                      half or more = full marks: nobody can make every chain across time zones)
                         + Crimes 25 (minus 8 per crime they delayed in REL_DAYS days, minus 4 more if 2h+)
@@ -5210,7 +5292,12 @@ def monitor_data(db: dict) -> dict:
     rows = []
     for m in members:
         i = m["id"]
-        hist = [next((x[1] for x in w["m"] if x[0] == i), None) for w in wars]
+        # only wars that STARTED after they joined (Nov 2026): a war from before they were here - or one that was
+        # already running when they joined - is "not in the faction for it" (None), never a miss. Join date from
+        # Torn's days-in-faction (whole days, so it errs towards leaving a borderline war out).
+        joined = now - int(m["days"]) * 86400 if m.get("days") is not None else 0
+        hist = [None if (w.get("start") or w["end"]) < joined else next((x[1] for x in w["m"] if x[0] == i), None)
+                for w in wars]
         rel = [None if h is None else h / war_avg[k] for k, h in enumerate(hist)]
         last = hist[-TREND_WARS:]
         present = [h for h in hist if h is not None]
@@ -5224,7 +5311,7 @@ def monitor_data(db: dict) -> dict:
             trend = "▲" if ra > rb + 0.15 else "▼" if ra < rb - 0.15 else "►"
         # reliability
         war_pts = 40 * (sum(1 for h in p10 if h > 0) / len(p10)) if p10 else 40
-        joined = now - int(m["days"]) * 86400 if m.get("days") is not None else 0
+        # chains: only ones that started after they joined (same rule as wars)
         elig = [c for c in recent_chains if (c.get("start") or c["end"]) >= joined]
         hit_c = sum(1 for c in elig if any(x[0] == i and x[1] > 0 for x in c["m"]))
         chain_pts = 20 * min(1.0, hit_c / len(elig) / 0.5) if elig else 20   # half the big chains or more = full
@@ -5304,7 +5391,12 @@ ARMORY_PAGES_BACK = 150   # catch-up pace (Nov 2026): ~2 busy months per 3-hour 
                           # backfill pages (log["back_pages"], min 10) and pauses the backfill until the next UTC day -
                           # the forward read always goes first, so new uses are never held up by the catch-up.
 ARMORY_RECENT = 40        # latest uses kept per member for the Armory Monitor's member view
-ARMORY_CATS = ["Drugs", "Medical", "Boosters", "Refills", "Temporary", "Weapons", "Armor", "Crime items", "Other"]
+# Categories (Nov 2026 rework): USED items only - loans / items given out are kept in the log but never counted.
+# Tracked PER MEMBER (most important first): Xanax, Medical (incl. Empty Blood Bags filled from the armory), points
+# Refills, Temporary, other Drugs, Boosters. Faction totals only (not per member): OC / utility items + anything else.
+ARMORY_CATS = ["Xanax", "Medical", "Refills", "Temporary", "Drugs", "Boosters", "Crime items", "Weapons", "Armor", "Other"]
+ARMORY_MEMBER_CATS = ["Xanax", "Medical", "Refills", "Temporary", "Drugs", "Boosters"]
+ARMORY_COUNTED = ("u", "r")      # u = used, r = points refill; l = loaned, g = given -> not usage
 # Torn item types -> categories. v2 /torn/items names them "Weapon", "Armor", "Tool", "Material", "Enhancer" (the
 # old v1 names - Primary / Secondary / Melee / Defensive - are kept too). Verified with tools/verify.py (Nov 2026):
 # before this, loaned weapons / armour and organized-crime items all fell into "Other".
@@ -5340,6 +5432,10 @@ def item_types(key: str) -> dict:
 def armory_cat(item: str, types: dict) -> str:
     if item.endswith(" refill (points)"):
         return "Refills"
+    if item == "Xanax":
+        return "Xanax"                  # its own category - the item leaders watch most
+    if "blood bag" in item.lower():
+        return "Medical"                # Empty Blood Bags (filled from the armory) count as medical
     return ARMORY_TYPE_CAT.get(str(types.get(item, "")).lower(), "Other")
 
 
@@ -5358,6 +5454,10 @@ def _armory_parse(text: str):
     m = re.search(r"\bused\s+(one|an?|\d+)\s+of the faction'?s\s+(.+?)\s+items?\b", plain, re.I)
     if m:
         return int(ids[0]), m.group(2).strip(), n_(m.group(1)), "u"
+    # "filled one of the faction's Empty Blood Bags to create a Blood Bag : A+" - the empty bag is used up (Nov 2026)
+    m = re.search(r"\bfilled\s+(one|an?|\d+)\s+of the faction'?s\s+Empty Blood Bags?\b", plain, re.I)
+    if m:
+        return int(ids[0]), "Empty Blood Bag", n_(m.group(1)), "u"
     m = re.search(r"\b(loaned|gave)\s+(\d+)\s*x\s*(.+?)\s+to\s+", plain, re.I)
     if m and len(ids) >= 2:
         return int(ids[1]), m.group(3).strip(), int(m.group(2)), "l" if m.group(1).lower() == "loaned" else "g"
@@ -5370,9 +5470,11 @@ def _utc_month_start(t: int) -> int:
     return int(datetime(d.year, d.month, 1, tzinfo=timezone.utc).timestamp())
 
 
-ARMORY_LOG_V = 3        # 2: month windows (v1 marked it "complete" after the newest pages)
+ARMORY_LOG_V = 4        # 2: month windows (v1 marked it "complete" after the newest pages)
                         # 3: each month window read OLDEST first with its place kept ("back") - Torn's newest-first
                         #    paging cut windows short; v2 logs keep their events and re-read the older months
+                        # 4: Empty Blood Bag fills are usage (Nov 2026) - v3 logs keep their events and re-read the whole
+                        #    history once (this month first) to pick up the fills; nothing already read is counted twice
 
 
 def update_armory_log(key: str, founded: int = 0):
@@ -5392,6 +5494,8 @@ def update_armory_log(key: str, founded: int = 0):
         log = {}
     if log.get("v") == 2:                        # keep v2's events, re-read the older months the v3 way
         log.update(v=ARMORY_LOG_V, oldest=_utc_month_start(now), done=False, back=None)
+    if log.get("v") == 3:                        # keep v3's events, re-read everything (this month too) for the
+        log.update(v=ARMORY_LOG_V, oldest=int(log.get("last") or now) + 1, done=False, back=None)   # blood bag fills
     if log.get("v") == ARMORY_LOG_V and not due("armory", log.get("read")):
         print("Armory log: read this slot already")
         return
@@ -5498,17 +5602,26 @@ def armory_data(db: dict) -> dict:
     except (OSError, ValueError):
         log = {"items": [], "events": []}
     types = item_types("")
-    per, months, recent = {}, set(), {}
+    item_cat = [armory_cat(n, types) for n in log.get("items", [])]
+    per, months, recent, fac = {}, set(), {}, {}
     for t, mid, it, cnt, kind in log.get("events", []):
+        if kind not in ARMORY_COUNTED:          # loaned / given out: not usage
+            continue
         mon = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m")
         months.add(mon)
+        if item_cat[it] not in ARMORY_MEMBER_CATS:
+            # OC / utility items: faction totals per month only, not who took them
+            d_ = fac.setdefault(mon, {})
+            d_[str(it)] = d_.get(str(it), 0) + cnt
+            continue
         d_ = per.setdefault(str(mid), {}).setdefault(mon, {})
         d_[str(it)] = d_.get(str(it), 0) + cnt
         recent.setdefault(str(mid), []).append([t, it, cnt, kind])     # events are in time order
     recent = {i: r[-ARMORY_RECENT:][::-1] for i, r in recent.items()}
-    return {"cats": ARMORY_CATS, "items": log.get("items", []),
-            "item_cat": [armory_cat(n, types) for n in log.get("items", [])],
+    return {"cats": ARMORY_CATS, "member_cats": ARMORY_MEMBER_CATS, "items": log.get("items", []),
+            "item_cat": item_cat,
             "oldest": log.get("oldest"), "done": bool(log.get("done")), "months": sorted(months, reverse=True),
+            "faction": fac,
             "members": {i: {"m": m, "r": recent.get(i, [])} for i, m in per.items()}}
 
 
@@ -6059,6 +6172,15 @@ def description_snippet() -> str:
             f'alt="Heart Breakers"></a></p>')
 
 
+LEADERBOARD_KINDS = ("war", "chain", "gym")
+
+
+def leaderboard_order(lcfg: dict) -> list:
+    """announcements.leaderboard.order - e.g. ["gym", "war", "chain"]; anything left out follows in the default order."""
+    want = [k for k in (lcfg.get("order") or []) if k in LEADERBOARD_KINDS]
+    return list(dict.fromkeys(want + list(LEADERBOARD_KINDS)))
+
+
 def write_announcements(cfg: dict, summary: dict, out: Path):
     acfg = cfg.get("announcements", {})
     if not acfg.get("enabled", True):
@@ -6586,7 +6708,22 @@ def compact_boards_png(sections: list, boards: list, bar: str, top: int = 5) -> 
 
 
 def chain_board_png(chist: dict, members: list, cfg: dict, top: int = 5) -> bytes:
-    """Chain Leaderboard for the chains hub: this month + all time, Chain Hits | Chain Respect | Retaliations."""
+    """Chain Leaderboard for the chains hub = the SAME Chain Leaderboards panel as the announcement (Nov 2026):
+    this month + all time, Chain Hits | Chain Respect | Retaliations, every current member (draw_chain_leaderboard).
+    Built from the saved chain history, so the hourly chain runs (no full summary) draw the same thing."""
+    lcfg = cfg.get("announcements", {}).get("leaderboard", {})
+    try:
+        ach = json.loads((ROOT / "data" / "achievements.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ach = {}
+    cl = chain_leaderboard(chist, members, ach, lcfg)
+    clm = chain_leaderboard(chist, members, ach, lcfg, since=_month_start())
+    return frame_png(draw_chain_leaderboard(lcfg, {"chain_leaderboard": cl, "chain_leaderboard_month": clm}, heading=False),
+                     bar=lcfg.get("chain_group_title", "Chain Leaderboards"))
+
+
+def chain_board_compact_png(chist: dict, members: list, cfg: dict, top: int = 5) -> bytes:
+    """(Before Nov 2026 the hub showed this compact top-5 version - kept in case it's wanted again.)"""
     lcfg = cfg.get("announcements", {}).get("leaderboard", {})
     try:
         ach = json.loads((ROOT / "data" / "achievements.json").read_text(encoding="utf-8"))
@@ -6826,10 +6963,10 @@ def chain_watch(key: str, cfg: dict):
 
 def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) -> None:
     """The chains channel's single post:
-         embed 1  🏆 Chain Leaderboard   (this month + all time, top 5)
+         embed 1  🏆 Chain Leaderboard   (the announcement's Chain Leaderboards panel - this month + all time)
          embed 2  🔥 Ongoing Chain       (live: hits, timeout timer, next bonus / cooldown timer) -
                                           also refreshed every 15 min by the crime check
-         embed 3  ⛓️ Latest Chain        (members + facts, links to its page)
+         embed 3  📄 Latest Chain Report (its report image + facts, links to its page)
          embed 4  📚 Chain Directory     (previous chains: date, hits, respect, report links)
        + buttons: Latest Report · Chain History.
     A NEW chain re-posts it (old one deleted, so it's the newest message and notifies); otherwise it is
@@ -6859,7 +6996,9 @@ def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) ->
     base = member_base()
     lk, lc = chains[0]
     r = chain_report(lk, chist, members, ccfg)
-    latest_png = chain_card_png(r)      # compact card - the full report is behind its link
+    # Latest Chain = its Chain Report (the saved report image, Nov 2026); the compact card only when there's none yet
+    rp_ = REPORTS_DIR / f"chain-{lk}.png"
+    latest_png = rp_.read_bytes() if rp_.exists() else chain_card_png(r)
     board = chain_board_png(chist, members, cfg)
     lines = []
     for k, c in chains[1:CHAIN_HUB_DIRECTORY + 1]:
@@ -6873,7 +7012,7 @@ def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) ->
     embeds = [
         {"title": "🏆 Chain Leaderboard", "color": 0xe8be5a, "image": {"url": "attachment://chain-leaderboard.png"}},
     ] + ([ongoing] if ongoing else []) + [
-        {"title": f"⛓️ Latest Chain - {fmt_int(r['length'])} hits", "url": f"{base}/reports/chain-{lk}.html",
+        {"title": f"📄 Latest Chain Report - {fmt_int(r['length'])} hits", "url": f"{base}/reports/chain-{lk}.html",
          "color": 0xe4382e,
          "description": (f"<t:{r['end']}:f>" + (f" · {_dur(r.get('start'), r['end'])}" if r.get("start") else "")
                          + f"\n**{r['respect']:,.0f}** respect · **{r['attackers']}** members"),
@@ -6891,8 +7030,9 @@ def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) ->
                    {"type": 2, "style": 5, "label": "Chain History", "url": f"{base}/chains.html"}]}],
                "allowed_mentions": {"parse": []}}
     files = [("chain-leaderboard.png", board), ("chain-latest.png", latest_png)]
-    # b"v2": bump when the hub's buttons/layout change so the existing post is edited
-    h = hashlib.sha1(b"v2" + board + latest_png + "\n".join(lines).encode() + base.encode()).hexdigest()[:12]
+    # b"v3": bump when the hub's buttons/layout change so the existing post is edited
+    # (v3, Nov 2026: the announcement's chain leaderboard + the latest chain's report image)
+    h = hashlib.sha1(b"v3" + board + latest_png + "\n".join(lines).encode() + base.encode()).hexdigest()[:12]
     hub = state.get("hub_id")
     osig = _ongoing_sig(ongoing or {})
     if hub and not new_chain and state.get("hub_hash") == h and "hub_att" in state:
@@ -7248,13 +7388,16 @@ def war_history_page(out: Path, raw: dict, cfg: dict):
 
 
 def discord_post_wars(raw: dict, summary: dict, cfg: dict):
-    """War Reports channel (DISCORD_WEBHOOK_SLACKERS): ONE hub post, like the chains channel -
-         embed 1  ⚔️ War Leaderboard          (this month + all time: War Hits | War Respect | Respect / Hit)
-         embed 2  🏴 Latest War                (its war summary card + facts, links to its full report)
-         embed 3  📚 War Report Directory      (previous wars: date, result, score, report / payout links)
-       + buttons: Latest Report · War History (· Payout when issued).
-    Each finished war's FULL War Report (summary + slacker tiers) is saved as its report page; a new war
-    re-posts the hub (newest message, notifies), otherwise it's edited in place when its content changed."""
+    """#war-reports (DISCORD_WEBHOOK_SLACKERS): ONE hub post - war reports and war payouts in one place (Nov 2026;
+    the separate #war-payouts posts were merged in here):
+         embed 1  ⚔️ War Leaderboard          the SAME war leaderboard as the announcement (draw_leaderboard)
+         embed 2  🏆/💀 Latest War             its War Report image - once the war is paid out, the combined
+                                               War Report & Payout image + the payout summary (edited in place)
+         embed 3  📚 War Report Directory      previous wars, easy to scan: result + opponent, date + score,
+                                               🤝 Termed when flagged, 💰 when paid, report link
+       + buttons: Latest Report (& Payout) · War History · Paid wars.
+    Each finished war's report page is saved; a NEW war re-posts the hub (newest message, notifies); a payout, a
+    corrected receipt, a termed flag or new numbers EDIT it in place (only when its content changed)."""
     import hashlib
     dcfg = cfg.get("discord", {})
     url = os.environ.get("DISCORD_WEBHOOK_SLACKERS", "").strip()
@@ -7271,7 +7414,6 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     posted = set(state.get("posted", []))
     todo = sorted((k for k in wars if k not in posted), key=lambda k: wars[k]["end"])
     my_id = raw["basic"].get("basic", raw["basic"]).get("id")
-    scfg = cfg.get("announcements", {}).get("slacker_watch", {})
     # EVERY war in the history has a report page in the current format (refresh_war_reports: the War Summary,
     # the payout when the war was paid, every member who was in the war) - drawn from saved data, no API calls.
     refresh_war_reports(raw, cfg, set(todo))
@@ -7285,55 +7427,83 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     lk = order[0]
     w0 = _one_war(raw, lk, my_id, cfg)
     lcfg = cfg.get("announcements", {}).get("leaderboard", {})
-    lb, lbm = summary.get("leaderboard") or {}, summary.get("leaderboard_month") or {}
-    board = compact_boards_png(
-        [(f"This Month - {_month_label()}  ({_plural(lbm.get('wars', 0), 'war')})", MONTH_COL, lbm),
-         (f"All Time  ({_plural(lb.get('wars', 0), 'war')})", ALLTIME_COL, lb)],
-        [("hits", lcfg.get("hits_title", "War Hits")), ("respect", lcfg.get("respect_title", "War Respect")),
-         ("rph", lcfg.get("rph_title", "Respect / Hit"))], "War Leaderboard")
-    latest = war_card_png(w0, wars[lk]) if w0 else (REPORTS_DIR / f"war-{lk}.png").read_bytes()
+    # the announcement's War Leaderboards panel, as is (this month + all time, every current member)
+    board = frame_png(draw_leaderboard(lcfg, summary, heading=False), bar=lcfg.get("war_group_title", "War Leaderboards"))
+    rep_png = REPORTS_DIR / f"war-{lk}.png"
+    latest = rep_png.read_bytes() if rep_png.exists() else war_card_png(w0, wars[lk])
     meta = war_meta(raw, my_id)
     rec = _latest_receipts()
-    tw_ = termed_wars(cfg)                     # termed wars are marked in the directory
+    tw_ = termed_wars(cfg)                     # termed wars are marked in the directory + on the latest war
+    # directory: two short lines per war - easy to scan on a phone
+    #   ✅ **Victory** vs **Opponent** · 🤝 Termed
+    #   -# Nov 03 · 1,234 - 567 · 💰 Paid · [Report & Payout](link)
     lines = []
     for k in order[1:WAR_HUB_DIRECTORY + 1]:
         mt = meta.get(k, {})
-        when = datetime.fromtimestamp(wars[k]["end"], timezone.utc).strftime("%b %d")
-        res = (("✅ " if mt.get("won") else "❌ ") + f"vs **{mt.get('opponent', '?')}** · "
-               f"{fmt_int(mt.get('our', 0))}-{fmt_int(mt.get('their', 0))}") if mt else "?"
-        links = ([f"[Report{' & Payout' if k in rec else ''}]({base}/reports/war-{k}.html)"]
-                 if (REPORTS_DIR / f"war-{k}.json").exists() else
-                 ([f"[Payout]({base}/payouts/war-{k}.html)"] if k in rec else []))
-        lines.append(f"`{when}` {res}" + (" · 🤝 termed" if str(k) in tw_ else "") + (" · " + " · ".join(links) if links else ""))
+        when = datetime.fromtimestamp(wars[k]["end"], timezone.utc).strftime("%b %d, %Y")
+        head = ((f"{'✅ **Victory**' if mt.get('won') else '❌ **Defeat**'} vs **{mt.get('opponent', '?')}**") if mt else "**?**") \
+            + (" · 🤝 Termed" if str(k) in tw_ else "")
+        sub = [when] + ([f"{fmt_int(mt.get('our', 0))} - {fmt_int(mt.get('their', 0))}"] if mt else []) \
+            + (["💰 Paid"] if k in rec else [])
+        if (REPORTS_DIR / f"war-{k}.json").exists():
+            sub.append(f"[Report{' & Payout' if k in rec else ''}]({base}/reports/war-{k}.html)")
+        lines.append(head + "\n-# " + " · ".join(sub))
     more = len(order) - 1 - len(lines)
     won = sum(1 for k in order if meta.get(k, {}).get("won"))
+    termed0 = str(lk) in tw_
     desc = ""
     if w0:
         desc = (f"<t:{w0['end']}:f>" + (f" · {_dur(w0.get('start'), w0['end'])}" if w0.get("start") else "")
                 + f"\nScore **{fmt_int(w0['our_score'])}** - **{fmt_int(w0['their_score'])}**"
                 + (f" · Rank **{w0['rank_after']}**" if w0.get("rank_after") else "")
                 + (f"\n**{w0['hit']}/{w0['present']}** members hit" if w0.get("present") else ""))
-    title = (f"{'🏆 Victory' if w0.get('won') else '💀 Defeat'} vs {w0.get('opponent', '?')}" if w0 else "Latest War")
+    if termed0:
+        desc += "\n🤝 **Termed war** - agreed before it began; not counted against anyone"
+    # the payout, once it's been made (the receipt) - the image is the combined War Report & Payout then
+    pay_txt = ""
+    if lk in rec:
+        try:
+            r_ = json.loads((PAYOUT_DIR / f"{rec[lk]}.json").read_text(encoding="utf-8"))
+            paid_n = sum(1 for m in r_.get("members", []) if m.get("pay"))
+            pay_txt = f"\n\n💰 **Payout:** ${r_.get('paid', 0):,} to **{paid_n}** member{'s' if paid_n != 1 else ''}"
+            try:
+                vm = (json.loads(PAYOUT_VAULT_PATH.read_text(encoding="utf-8")).get(rec[lk]) or {}).get("members") or {}
+            except (OSError, ValueError):
+                vm = {}
+            nbad = sum(1 for v in vm.values() if v.get("st") != "ok")
+            if vm:
+                pay_txt += f"\n{'⚠️ ' + str(nbad) + ' not found in the vault log yet' if nbad else '✅ all found in the vault log'}"
+            if r_.get("paid_by"):
+                pay_txt += f"\n-# Paid by {r_['paid_by']}"
+        except (OSError, ValueError):
+            pass
+    else:
+        pay_txt = "\n\n-# 💰 Payout not made yet - this post updates when it is."
+    title = (f"{'🏆 Victory' if w0.get('won') else '💀 Defeat'} vs {w0.get('opponent', '?')}" if w0 else "Latest War") \
+        + (" · 🤝 Termed" if termed0 else "")
     embeds = [
         {"title": "⚔️ War Leaderboard", "color": 0xe8be5a, "image": {"url": "attachment://war-leaderboard.png"}},
-        {"title": title[:256], "url": f"{base}/reports/war-{lk}.html", "color": 0x78c878 if (w0 or {}).get("won") else 0xe4382e,
-         "description": desc, "image": {"url": "attachment://latest-war.png"}},
+        {"title": ("📄 Latest War Report & Payout · " if lk in rec else "📄 Latest War Report · ") + title[:200],
+         "url": f"{base}/reports/war-{lk}.html", "color": 0x78c878 if (w0 or {}).get("won") else 0xe4382e,
+         "description": (desc + pay_txt)[:4000], "image": {"url": "attachment://latest-war.png"}},
         {"title": "📚 War Report Directory", "color": 0x2b2d31,
-         "description": ("\n".join(lines) or "No earlier wars yet.")
-                        + (f"\n-# …and {more} older - see the full War History" if more > 0 else ""),
-         "footer": {"text": f"{len(order)} ranked wars on record · {won} won · {len(order) - won} lost"}}]
+         "description": ("\n\n".join(lines) or "No earlier wars yet.")[:3900]
+                        + (f"\n\n-# …and {more} older - see the full War History" if more > 0 else ""),
+         "footer": {"text": f"{len(order)} ranked wars on record · {won} won · {len(order) - won} lost"
+                            + (f" · {sum(1 for k in order if str(k) in tw_)} termed" if any(str(k) in tw_ for k in order) else "")}}]
     # the latest war's report page includes its payout once paid (War Report & Payout)
     btns = [{"type": 2, "style": 5, "label": "Latest Report & Payout" if lk in rec else "Latest Report",
              "url": f"{base}/reports/war-{lk}.html"},
-            {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"}]
+            {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"},
+            {"type": 2, "style": 5, "label": "Paid wars", "url": f"{base}/wars.html#paid"}]
     payload = {"username": dcfg.get("username", "War Reports"),
                "content": f"## ⚔️ War Reports\n-# updated <t:{int(datetime.now(timezone.utc).timestamp())}:R>",
                "embeds": embeds,
                "attachments": [{"id": 0, "filename": "war-leaderboard.png"}, {"id": 1, "filename": "latest-war.png"}],
                "components": [{"type": 1, "components": btns}], "allowed_mentions": {"parse": []}}
     files = [("war-leaderboard.png", board), ("latest-war.png", latest)]
-    # b"v2": bump when the hub's buttons/layout change so the existing post is edited
-    h = hashlib.sha1(b"v2" + board + latest + "\n".join(lines).encode() + str(lk in rec).encode() + base.encode()).hexdigest()[:12]
+    # b"v3": bump when the hub's buttons/layout change so the existing post is edited (v3: payouts merged in, Nov 2026)
+    h = hashlib.sha1(b"v3" + board + latest + json.dumps(embeds, sort_keys=True).encode() + base.encode()).hexdigest()[:12]
     hub = state.get("hub_id")
     if not (hub and not todo and state.get("hub_hash") == h):
         try:
@@ -9050,6 +9220,7 @@ def write_payout_calculator(cfg: dict, out: Path):
             "member_base": member_base(),
             # newest saved receipt per war -> Create Newsletter links its image
             "receipts": _latest_receipts(),
+            "termed": sorted(termed_wars(cfg)),        # the Termed yes / no question shows the current setting
             # wars with a saved war report (reports/war-<id>.png) -> Create Newsletter adds the report image
             "war_reports": sorted(f.stem[4:] for f in REPORTS_DIR.glob("war-*.png")) if REPORTS_DIR.exists() else [],
             "defaults": pcfg.get("defaults", {
@@ -9402,7 +9573,10 @@ def update_payouts(cfg: dict, out: Path):
         state = json.loads(PAYOUT_STATE_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         state = {"posted": []}
-    url = os.environ.get("DISCORD_WEBHOOK_PAYOUTS", "").strip()
+    # Discord: war payouts are no longer posted on their own (Nov 2026) - the #war-reports hub (discord_post_wars)
+    # shows the latest war's War Report & Payout and is edited when a receipt is saved. #war-payouts is retired, so
+    # the DISCORD_WEBHOOK_PAYOUTS secret isn't used any more (the old per-war post code below is kept, switched off).
+    url = ""
     latest, cards = {}, []
     receipts = []
     for f in files:
@@ -9739,14 +9913,105 @@ def oc_overview_payload(crimes: list, mem: dict, names: dict, now: int, ocfg: di
                        "Ready but held up - the members below need to sort it out **now**.")
     if planning:
         embeds += grid(planning, f"⏳ Planning ({len(planning)})", 0xe8be5a)
-    if recruiting:
-        embeds += grid(recruiting, f"📝 Recruiting ({len(recruiting)})", 0x6b6b70)
-    head = (f"## 🕵️ Organized Crimes\n-# {len(planning)} planning · {len(recruiting)} recruiting · "
+    # recruiting crimes have their own post since Nov 2026 (oc_recruit_payload) - below this one
+    head = (f"## 🕵️ Organized Crimes\n-# {len(planning)} planning · "
             + (f"**{len(late)} delayed**" if late else "no delays") + f" · updated <t:{now}:R>")
-    if not rows:
+    if not planning and not late:
         head += "\nNo crimes planning right now."
     return {"username": ocfg.get("username", "Organized Crimes"), "content": head, "embeds": embeds[:10],
             "allowed_mentions": {"parse": []}}
+
+
+OC_RECENT_DELAY_DAYS = 7      # "Recent Delays" list: delays that began in the last N days (crimes_alert.recent_delay_days)
+OC_RECENT_DELAY_MAX = 20
+
+
+def oc_recent_delays(now: int, days: int) -> list:
+    """From the delay log (data/crime_delays.json): one line per member per delayed crime that began in the last
+    `days` days - newest first - with how long they held it up and the ORIGINAL reason (the first one logged for
+    them on that crime, e.g. "In hospital for 3 hrs" - later reasons are the same delay carrying on)."""
+    try:
+        log = json.loads(CRIME_DELAYS_PATH.read_text(encoding="utf-8")).get("delays", [])
+    except (OSError, ValueError):
+        return []
+    by = {}
+    for e in log:
+        if int(e.get("start") or 0) < now - days * 86400:
+            continue
+        k = (str(e.get("crime")), str(e.get("member")))
+        g_ = by.setdefault(k, {"name": e.get("member_name", "?"), "crime": e.get("name", "Organized Crime"),
+                               "start": int(e["start"]), "first": None, "end": 0, "open": False})
+        if g_["first"] is None or int(e.get("start") or 0) <= g_["first"][0]:
+            g_["first"] = (int(e.get("start") or 0), e.get("icon", "⚠️"), str(e.get("reason") or ""))
+        if e.get("end") is None:
+            g_["open"] = True
+        else:
+            g_["end"] = max(g_["end"], int(e["end"]))
+    out = []
+    for g_ in by.values():
+        end = now if g_["open"] else (g_["end"] or now)
+        icon, reason = g_["first"][1], g_["first"][2]
+        out.append({"name": g_["name"], "crime": g_["crime"], "start": g_["start"], "open": g_["open"],
+                    "dur": (_dur(g_["start"], end) or "<1m").removeprefix("0h "), "icon": icon, "reason": reason[:1].upper() + reason[1:]})
+    return sorted(out, key=lambda x: -x["start"])
+
+
+def oc_recruit_payload(crimes: list, mem: dict, now: int, ocfg: dict) -> dict:
+    """The SECOND Organized Crimes post (Nov 2026):
+      embed "📝 Recruiting"     crimes still filling up that already have at least ONE member in them (empty ones
+                                aren't shown) - who's in, which roles are still open
+      embed "🕐 Recent Delays"  members who held up a crime in the last recent_delay_days (7): how long and the
+                                original reason - from the delay log"""
+    fields = []
+    for c in crimes:
+        slots = _as_list(c.get("slots"))
+        filled = [sl for sl in slots if _slot_user(sl)]
+        open_ = [sl for sl in slots if not _slot_user(sl)]
+        if not open_ or not filled:
+            continue                     # full (it's in the Overview) / nobody in it yet (not shown)
+        who = ", ".join((mem.get(_slot_user(sl)) or mem.get(str(_slot_user(sl))) or {}).get("name", f"[{_slot_user(sl)}]")
+                        for sl in filled)
+        need = ", ".join(sorted({str(sl.get("position") or "?") for sl in open_}))
+        fields.append((-len(filled) / max(1, len(slots)), int(c.get("difficulty") or 0),
+                       {"name": f"{c.get('name', 'Organized Crime')} · D{c.get('difficulty', '?')}"[:256],
+                        "value": (f"👥 **{len(filled)}/{len(slots)}** filled\n🙋 {who}\n📝 Needs: {need}")[:1000] + "\n\u200b",
+                        "inline": True}))
+    fields = [f[2] for f in sorted(fields, key=lambda f: (f[0], -f[1]))]      # closest to full first
+    embeds = []
+    for k in range(0, len(fields), 24):
+        e = {"color": 0x6b6b70, "fields": fields[k:k + 24]}
+        if k == 0:
+            e["title"] = f"📝 Recruiting ({len(fields)})"
+            e["description"] = "Crimes filling up - jump in if you can take one of the open roles."
+        embeds.append(e)
+    if not fields:
+        embeds.append({"title": "📝 Recruiting", "color": 0x6b6b70,
+                       "description": "No crimes with members waiting on recruits right now."})
+    days = int(ocfg.get("recent_delay_days", OC_RECENT_DELAY_DAYS))
+    rd = oc_recent_delays(now, days)
+    lines = [f"{x['icon']} **{x['name']}** · {'⏳ ' if x['open'] else ''}{x['dur']}{' so far' if x['open'] else ''}"
+             f" · {x['reason'] or 'not ready'}\n-# {x['crime']} · <t:{x['start']}:R>" for x in rd[:OC_RECENT_DELAY_MAX]]
+    desc = "\n".join(lines) if lines else f"Nobody has delayed a crime in the last {days} days. 👏"
+    if len(rd) > OC_RECENT_DELAY_MAX:
+        desc += f"\n-# …and {len(rd) - OC_RECENT_DELAY_MAX} more"
+    embeds.append({"title": f"🕐 Recent Delays (last {days} days)", "color": 0xd08a3a, "description": desc[:4000],
+                   "footer": {"text": "How long each member held a ready crime up, and the original reason"}})
+    head = f"## 📝 Recruiting & Recent Delays\n-# {len(fields)} recruiting · {len(rd)} recent delay{'s' if len(rd) != 1 else ''} · updated <t:{now}:R>"
+    return {"username": ocfg.get("username", "Organized Crimes"), "content": head, "embeds": embeds[:10],
+            "allowed_mentions": {"parse": []}}
+
+
+def oc_fetch_active(key: str) -> list:
+    """Every ACTIVE organized crime (recruiting + planning) in ONE call - Torn's "available" category (Nov 2026;
+    before, only "planning" was read). If Torn ever refuses that category (code 21), it falls back to two calls."""
+    try:
+        return _as_list(fetch_section("crimes", key, {"cat": "available"}).get("crimes"))
+    except SystemExit as e:
+        if "'code': 21" not in str(e) and "Incorrect category" not in str(e):
+            raise
+        print("Crime check: 'available' category refused - reading planning + recruiting")
+        return (_as_list(fetch_section("crimes", key, {"cat": "planning"}).get("crimes"))
+                + _as_list(fetch_section("crimes", key, {"cat": "recruiting"}).get("crimes")))
 
 
 CRIME_DELAY_KEEP_DAYS = 365
@@ -9791,14 +10056,17 @@ def discord_crime_alerts(key: str, cfg: dict):
          After escalate_hours (2): a second ping here + a Leader Alerts post.
       3. CLEAN-UP - once the crime goes through (or nobody's holding it any more) its delay posts are deleted,
          so with no delays only the Overview is in the channel.
-    API: crimes + members (2 calls), item names only for new item ids, 1 Discord-link lookup per ping."""
+      1b. RECRUITING & RECENT DELAYS - a second post, edited every run: crimes still recruiting that already have a
+         member in them, and who held up a crime in the last 7 days (how long, the original reason).
+    API: every active crime (recruiting + planning, one call) + members (2 calls), item names only for new item ids,
+    1 Discord-link lookup per ping."""
     ocfg = cfg.get("crimes_alert", {})
     url = os.environ.get("DISCORD_WEBHOOK_CRIMES", "").strip()
     if not ocfg.get("enabled", False) or not url or not key:
         return
     now = int(datetime.now(timezone.utc).timestamp())
     try:
-        crimes = _as_list(fetch_section("crimes", key, {"cat": ocfg.get("category", "planning")}).get("crimes"))
+        crimes = oc_fetch_active(key)            # recruiting + planning, one call
         members = _as_list(fetch_section("members", key).get("members"))
     except SystemExit as e:
         print(f"Crime check skipped: {e}")
@@ -9846,8 +10114,29 @@ def discord_crime_alerts(key: str, cfg: dict):
                                          "culprits": [{"id": x["id"], "name": x["name"], "position": x["position"],
                                                        "status": x["text"][:1].upper() + x["text"][1:],   # image: plain text (font has no emoji)
                                                        "icon": x["icon"]} for x in iss]}
-    print(f"Crime check: {len(crimes)} planning, {len(delayed)} delayed")
+    print(f"Crime check: {len(crimes)} active, {len(delayed)} delayed")
     log_crime_delays(delayed, now)
+
+    # ---- 1b. second post: Recruiting (crimes with at least one member) + Recent Delays (Nov 2026) ----
+    # edited every run like the Overview; posted once (below the Overview) and re-posted if deleted
+    if ocfg.get("recruiting_post", True):
+        rp = oc_recruit_payload(crimes, mem, now, ocfg)
+        rid = state.get("recruit_id")
+        try:
+            if rid:
+                try:
+                    _discord_request(f"{url}/messages/{rid}", "PATCH", rp)
+                except urllib.error.HTTPError as e:
+                    if e.code != 404:
+                        raise
+                    rid = None
+            if not rid:
+                rid = _discord_request(f"{url}?wait=true", "POST", rp).get("id")
+                discord_msg_save("crime:recruiting", rid)
+                print("Discord: crime recruiting post posted")
+            state["recruit_id"] = rid
+        except Exception as e:      # never print the URL
+            print(f"Discord: crime recruiting post failed: {type(e).__name__}")
     esc = float(cfg.get("leader_alerts", {}).get("crime_escalate_hours", 2)) * 3600
     dl = state.setdefault("delays", {})
     ids_cache = {}
@@ -9957,46 +10246,45 @@ def leader_alerts(raw: dict, summary: dict, cfg: dict):
     import time
     now = int(time.time())
     st = _leader_state()
-    # Private links (members' + leaders' secret folders) posted to the leader channel only - never in the
-    # public repo/logs. config leader_alerts.links_post: bump the number to post them again.
+    # Private links posted to the leader channel only - never in the public repo/logs. Trimmed (Nov 2026): the hubs
+    # (homepage) reach every page now, so the post just has the way in: Home (Leaders Hub for leaders), Members Hub
+    # and the two leader tools used straight from Discord. The post is edited in place whenever its content changes
+    # (or config leader_alerts.links_post is bumped).
     lp = str(lcfg.get("links_post", ""))
-    if lp and st.get("links_posted") != lp:
+    if lp:
+        import hashlib
         mb, lb = member_base(), leader_base()
-        member_links = [("Members Hub", f"{mb}/index.html"), ("War History", f"{mb}/wars.html"),
-                        ("Gym Leaderboards", f"{mb}/gym.html"),
-                        ("Paid wars", f"{mb}/wars.html#paid"), ("Chain History", f"{mb}/chains.html"),
-                        ("Organized Crimes", f"{mb}/crimes.html"), ("Members", f"{mb}/members.html"),
-                        ("Monthly Recap", f"{mb}/newsletter.html"), ("Recap Archive", f"{mb}/recaps.html")]
-        leader_links = ([("Leaders Hub", f"{lb}/index.html"),
-                         ("Payout Calculator", f"{lb}/payout.html"),
-                         ("Announcements", f"{lb}/announcements.html"), ("Faction Description", f"{lb}/description.html"),
-                         ("Newsletter Builder", f"{lb}/builder.html"), ("Armory Monitor", f"{lb}/armory.html"),
-                         ("Newsletter Filler (userscript)", f"{lb}/hb-newsletter-filler.user.js")] if lb else [])
+        g_ = gate_cfg()
+        home = (g_["url"].rstrip("/") + "/") if g_ else f"{mb}/index.html"
+        member_links = [("Home", home), ("Members Hub", f"{mb}/index.html")]
+        leader_links = ([("Leaders Hub", f"{lb}/index.html"), ("Payout Calculator", f"{lb}/payout.html")] if lb else [])
         text = "\n".join(
-            ["## 🔗 Faction Pages", "", "### 👥 Member pages", "-# Safe to share with faction members (never publicly)."]
+            ["## 🔗 Faction Pages", "-# Everything else is reached from the homepage's Explore section and the header menus.",
+             "", "### 👥 Members", "-# Safe to share with faction members (never publicly)."]
             + [f"> **{t}:** <{u}>" for t, u in member_links]
-            + (["", "### 🛡️ Leader pages", "-# Leaders only - do NOT share with members."]
+            + (["", "### 🛡️ Leaders", "-# Leaders only - do NOT share with members."]
                + [f"> **{t}:** <{u}>" for t, u in leader_links] if leader_links else []))
-        btn = lambda pre, ls: [{"type": 1, "components": [{"type": 2, "style": 5, "label": f"{pre} {t}", "url": u}
-                                                          for t, u in ls[k:k + 5]]} for k in range(0, len(ls), 5)]
-        rows = (btn("👥", member_links) + btn("🛡️", leader_links))[:5]     # Discord: max 5 rows of 5
+        rows = [{"type": 1, "components": [{"type": 2, "style": 5, "label": f"{'🛡️' if (t, u) in leader_links else '👥'} {t}", "url": u}
+                                           for t, u in member_links + leader_links][:5]}]
         payload = {"username": lcfg.get("username", "Leader Alerts"), "content": text, "components": rows,
                    "allowed_mentions": {"parse": []}}
-        url_ = os.environ["DISCORD_WEBHOOK_LEADERS"].strip()
-        try:
-            mid = st.get("links_message")
-            if mid:          # edit the earlier links post in place
-                try:
-                    _discord_request(f"{url_}/messages/{mid}?with_components=true", "PATCH", payload)
-                except urllib.error.HTTPError:
-                    mid = None
-            if not mid:
-                mid = _discord_request(f"{url_}?wait=true&with_components=true", "POST", payload).get("id")
-            st["links_posted"], st["links_message"] = lp, mid
-            discord_msg_save("links:pages", mid)
-            print("Discord: posted page links to the leader channel")
-        except Exception as e:      # never print the URL
-            print(f"Discord: leader links failed: {type(e).__name__}")
+        sig = lp + ":" + hashlib.sha1(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:10]
+        if st.get("links_posted") != sig:
+            url_ = os.environ["DISCORD_WEBHOOK_LEADERS"].strip()
+            try:
+                mid = st.get("links_message")
+                if mid:          # edit the earlier links post in place
+                    try:
+                        _discord_request(f"{url_}/messages/{mid}?with_components=true", "PATCH", payload)
+                    except urllib.error.HTTPError:
+                        mid = None
+                if not mid:
+                    mid = _discord_request(f"{url_}?wait=true&with_components=true", "POST", payload).get("id")
+                st["links_posted"], st["links_message"] = sig, mid
+                discord_msg_save("links:pages", mid)
+                print("Discord: page links in the leader channel updated")
+            except Exception as e:      # never print the URL
+                print(f"Discord: leader links failed: {type(e).__name__}")
     sections = []
     # --- vault ---
     try:

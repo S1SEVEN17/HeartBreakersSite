@@ -142,6 +142,9 @@ const SCHEMA = {
       ["groups", "Notice groups", "list", [["title", "Heading"], ["lines", "Lines (one per line)", "lines"]], {add: {title: "New", lines: ["Text"]}}]]},
     {path: "announcements.ranked_wars", title: "Recent Ranked Wars (announcement)", fields: [
       ["title", "Section title"], ["count", "How many wars", "num"]]},
+    {path: "announcements.leaderboard.order", title: "Leaderboard order", type: "order",
+     help: "Order of the leaderboard panels in the announcement - use ▲▼ to move them.",
+     names: {war: "War Leaderboards", chain: "Chain Leaderboards", gym: "Gym Leaderboards"}, all: ["war", "chain", "gym"]},
     {path: "announcements.leaderboard", title: "Leaderboard headings", fields: [
       ["war_group_title", "War leaderboards heading"], ["chain_group_title", "Chain leaderboards heading"],
       ["gym_group_title", "Gym leaderboards heading"], ["gym_subtitle", "Gym note"]]},
@@ -157,6 +160,16 @@ if (CFG.only) {
   $("lead").innerHTML = D_ ? "The banner in the faction <b>description</b> (seen by everyone). Edit below - the preview updates as you type; nothing is saved until <b>Save changes</b>."
     : "The members' <b>announcement</b> panel. Edit below - the preview updates as you type; nothing is saved until <b>Save changes</b>.";
   if (CFG.html) $("code").value = CFG.html;
+}
+// an "order" card's list (config path): section_order, or announcements.leaderboard.order - created on first use
+// with every known name (sec.all), so a list saved before a new name existed still shows it
+function orderList(sec) {
+  const parts = sec.path.split("."), last = parts.pop();
+  const obj = parts.length ? at(parts.join("."), true) : C;
+  let o = obj[last];
+  if (!Array.isArray(o)) o = obj[last] = (sec.all || []).slice();
+  (sec.all || []).forEach(k => { if (!o.includes(k)) o.push(k); });
+  return o;
 }
 const at = (path, make) => path.split(".").reduce((o, k) => (o[k] == null && make ? (o[k] = {}) : o[k]), C);
 
@@ -227,10 +240,10 @@ function render() {
   const secs = SCHEMA[tab];
   $("form").innerHTML = inPageOrder(secs).map(([sec, si]) => {
     if (sec.type === "order") {
-      const order = C[sec.path] || [];
+      const order = orderList(sec);
       return `<div class="card"><h2>${esc(sec.title)}</h2><div class="small">${esc(sec.help)}</div>` + order.map((k, i) =>
-        `<div class="item"><div class="bh"><b>${esc(sec.names[k] || k)}</b><button class="s" data-omv="${i}|-1">▲</button>
-         <button class="s" data-omv="${i}|1">▼</button></div></div>`).join("") + `</div>`;
+        `<div class="item"><div class="bh"><b>${esc(sec.names[k] || k)}</b><button class="s" data-omv="${si}|${i}|-1">▲</button>
+         <button class="s" data-omv="${si}|${i}|1">▼</button></div></div>`).join("") + `</div>`;
     }
     const obj = at(sec.path, true);
     const en = sec.enable ? `<label><input type="checkbox" data-en="${si}"${obj.enabled !== false ? " checked" : ""}> Show</label>` : "";
@@ -260,7 +273,7 @@ $("form").addEventListener("change", e => {
 });
 $("form").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.omv) { const [i, d] = b.dataset.omv.split("|").map(Number), o = C.section_order, j = i + d;
+  if (b.dataset.omv) { const [s, i, d] = b.dataset.omv.split("|").map(Number), o = orderList(SCHEMA[tab][s]), j = i + d;
     if (j < 0 || j >= o.length) return; [o[i], o[j]] = [o[j], o[i]]; }
   else if (b.dataset.mv) { const [s, k, i, d] = b.dataset.mv.split("|"), l = at(SCHEMA[tab][+s].path)[k], j = +i + +d;
     if (j < 0 || j >= l.length) return; [l[+i], l[j]] = [l[j], l[+i]]; }
