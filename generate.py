@@ -106,6 +106,16 @@ def slot_start(name: str, now: int = None) -> int:
     return now - (now - anchor) % per
 
 
+# the config parts the Site Panels editors (description banner, announcements) save - a change means a leader saved
+PANEL_KEYS = ("section_order", "faction_info", "requirements", "perks", "what_we_offer", "achievements", "footer",
+              "announcements")
+
+
+def panels_sig(cfg: dict) -> str:
+    import hashlib
+    return hashlib.sha1(json.dumps({k: cfg.get(k) for k in PANEL_KEYS}, sort_keys=True).encode()).hexdigest()[:12]
+
+
 def due(name: str, last_read) -> bool:
     """True when a dataset hasn't been read yet in its current clock slot."""
     return int(last_read or 0) < slot_start(name)  # on EVERY Torn API call the site makes (here, gatekeeper, pages)
@@ -200,13 +210,21 @@ def core_sections(key: str, cfg: dict) -> dict:
     (default 3), cached in data/core_cache.json in between. Only the fields
     the banner uses are kept (it's a public repo). The ranked war list,
     chains and gym data keep their own schedules."""
-    # clock slots (FIXED CLOCK SCHEDULE): read once per 3-hour slot; hourly war / chain runs reuse the cache
+    # clock slots (FIXED CLOCK SCHEDULE): read once per 3-hour slot; hourly war / chain runs reuse the cache.
+    # LEADER SAVES: when the description / announcement settings changed since the last read (a leader saved them in
+    # Site Panels - panels_sig differs), this update reads the faction fresh (positions + upgrades too) so the new
+    # banner shows current facts. The slots carry on as normal (the next slot still reads everything).
     now = int(datetime.now(timezone.utc).timestamp())
+    sig = panels_sig(cfg)
+    edited = False
     try:
         cache = json.loads(CORE_CACHE_PATH.read_text(encoding="utf-8"))
-        if os.environ.get("RUN_KIND") in ("war", "chain") or not due("core", cache.get("fetched")):
+        edited = cache.get("panels_sig") not in (None, sig) and os.environ.get("RUN_KIND", "full") == "full"
+        if not edited and (os.environ.get("RUN_KIND") in ("war", "chain") or not due("core", cache.get("fetched"))):
             print("Core sections: using cache")
             return {s: cache[s] for s in SECTIONS}
+        if edited:
+            print("Core sections: description / announcements were edited - reading fresh")
     except (OSError, ValueError, KeyError):
         pass
     # basic + members every refresh; positions + upgrades (perks / roles,
@@ -215,7 +233,8 @@ def core_sections(key: str, cfg: dict) -> dict:
         old = json.loads(CORE_CACHE_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
-    slow_ok = (old.get("positions") and old.get("upgrades") and not due("core_slow", old.get("fetched_slow")))
+    slow_ok = (old.get("positions") and old.get("upgrades") and not due("core_slow", old.get("fetched_slow"))
+               and not edited)
     raw = {s: fetch_section(s, key) for s in SECTIONS if not (slow_ok and s in ("positions", "upgrades"))}
     if slow_ok:
         raw["positions"], raw["upgrades"] = old["positions"], old["upgrades"]
@@ -234,7 +253,7 @@ def core_sections(key: str, cfg: dict) -> dict:
         "upgrades": raw["upgrades"],
     }
     CORE_CACHE_PATH.parent.mkdir(exist_ok=True)
-    CORE_CACHE_PATH.write_text(json.dumps(dict(slim, fetched=now,
+    CORE_CACHE_PATH.write_text(json.dumps(dict(slim, fetched=now, panels_sig=sig,
                                                fetched_slow=old.get("fetched_slow") if slow_ok else now),
                                           separators=(",", ":")) + "\n", encoding="utf-8")
     print("Core sections: refreshed")
@@ -5561,10 +5580,19 @@ def optin_update(raw: dict):
     except (OSError, ValueError):
         st = {}
     current = {str(m.get("id")) for m in _as_list((raw.get("members") or {}).get("members"))}
-    if not due("optin", (st.get("_meta") or {}).get("read")):
-        print("Opt-in: read this slot already")
-        return opt, {k: v for k, v in st.items() if k != "_meta"}
-    st.pop("_meta", None)
+    last_read = int((st.get("_meta") or {}).get("read") or 0)
+    # LEADER / MEMBER SAVES: a member who opted in or changed what they share since the last read is read straight
+    # away (only them); everyone else waits for the next 3-hour slot as usual
+    pending = {i for i, e in opt.items() if (e.get("bs", "off") != "off" or e.get("ws", "off") != "off")
+               and int(e.get("updated") or 0) > int((st.get(i) or {}).get("r") or 0)}     # r = when last read
+    only = None
+    if not due("optin", last_read):
+        if not pending:
+            print("Opt-in: read this slot already")
+            return opt, {k: v for k, v in st.items() if k != "_meta"}
+        only = pending
+        print(f"Opt-in: {len(pending)} new / changed member(s) read now")
+    meta = st.pop("_meta", None) or {}
     gone, bad = set(), set()
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     cutoff = (datetime.now(timezone.utc) - timedelta(days=OPTIN_KEEP_DAYS)).strftime("%Y-%m-%d")
@@ -5575,6 +5603,8 @@ def optin_update(raw: dict):
             continue
         if e.get("bs", "off") == "off" and e.get("ws", "off") == "off":
             continue                              # readiness only - nothing to record
+        if only is not None and i not in only:
+            continue                              # not due this time (slot already read)
         try:
             key = _optin_open(e["k"])
         except Exception:
@@ -5595,6 +5625,7 @@ def optin_update(raw: dict):
         if err:
             continue                              # paused, inactive, temporary - try again next time
         rec = st.setdefault(i, {})
+        rec["r"] = int(time.time())               # when this member was last read (new / changed members: see pending)
         if e.get("bs") != "off":
             row = [day] + [int(d.get(k) or 0) for k in ("strength", "defense", "speed", "dexterity")]
             s_ = [x for x in rec.get("bs", []) if x[0] != day and x[0] >= cutoff]
@@ -5614,10 +5645,11 @@ def optin_update(raw: dict):
         for part in ("bs", "ws"):
             if e.get(part, "off") == "off":
                 st[i].pop(part, None)
-        if not st[i]:
+        if not (st[i].get("bs") or st[i].get("ws")):
             del st[i]
-    OPTIN_STATS_PATH.write_text(json.dumps(dict(st, _meta={"read": int(time.time())}), separators=(",", ":")) + "\n",
-                                encoding="utf-8")
+    # "read" = the last full (slot) read; a read of only new / changed members keeps the slot's time
+    meta = {"read": int(time.time())} if only is None else meta
+    OPTIN_STATS_PATH.write_text(json.dumps(dict(st, _meta=meta), separators=(",", ":")) + "\n", encoding="utf-8")
     _optin_remove(gone, "left the faction")
     _optin_remove(bad, "key deleted or no longer theirs")
     for i in gone | bad:
