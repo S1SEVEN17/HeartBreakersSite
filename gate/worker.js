@@ -9,7 +9,6 @@
 //                     A Heart Breakers member gets a signed pass (cookie "hb_s", 30 days, HttpOnly).
 //   /logout           removes the pass
 //   /m/mine.json      the signed-in member's OWN reliability / armory figures (from the leaders' db/private.json)
-//   /m/profile-layout PUT - a member saves THEIR OWN profile layout (data/profiles/<their id>.json in the data repo)
 //   /l/gh/contents/*  leaders' tools save to the private data repo through here (faction token, never on devices)
 //   /m/whoami.json    JSON {id, name, position, leader, since, until} for the signed-in member (My Account, menus, scripts)
 //   /m/...            members' pages  (pass + still in the faction)
@@ -222,8 +221,6 @@ export default {
     if (rest === "whoami.json") return Response.json(who, {headers: {"Cache-Control": "no-store"}});
     // a member's OWN private figures (reliability, Xanax) - picked out of the leaders' db/private.json
     if (area === "m" && rest === "mine.json") return mine(env, who);
-    // a member's own profile layout (Profile Layout editor) - only ever their own file
-    if (area === "m" && rest === "profile-layout") return saveLayout(env, req, who);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
     if (area === "l" && rest.startsWith("gh/contents/")) return ghProxy(env, req, who, rest.slice("gh/contents/".length));
     return proxy(env, dir, rest, req, true);
@@ -292,34 +289,3 @@ async function dispatch(env, wf, inputs) {
 }
 
 
-// ---------- a member's own profile layout (profile-editor.html) ----------
-// PUT {order: [section keys], hidden: [section keys]} or {reset: true}. The file is ALWAYS data/profiles/<the signed-in
-// member's id>.json - nobody can write anyone else's. Only known section keys are kept. Saved with the faction token
-// (GH_DISPATCH) like the leaders' saves; the data repo's notify workflow then rebuilds the site.
-const PROFILE_SECS = ["cmp", "reliability", "armory", "totals", "charts", "gym", "payouts", "wars", "chains", "crimes"];
-async function saveLayout(env, req, who) {
-  if (req.method !== "PUT") return new Response("Method not allowed", {status: 405});
-  if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
-  const tok = env.GH_SAVE || env.GH_DISPATCH;
-  if (!tok) return new Response("Saving isn't set up", {status: 503});
-  const j = await req.json().catch(() => null);
-  if (!j || typeof j !== "object") return new Response("Bad request", {status: 400});
-  const keep = a => (Array.isArray(a) ? a : []).map(String).filter((k, i, all) => PROFILE_SECS.includes(k) && all.indexOf(k) === i);
-  const path = `data/profiles/${Number(who.id)}.json`;
-  const api = `https://api.github.com/repos/${DATA_REPO}/contents/${path}`;
-  const H = {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "User-Agent": "hb-gate", "Content-Type": "application/json"};
-  const cur = await fetch(api + "?ref=main", {headers: H});
-  const sha = cur.ok ? (await cur.json()).sha : undefined;
-  const msg = `Profile layout ${j.reset ? "reset" : "saved"} (by ${who.name} [${who.id}])`;
-  let r;
-  if (j.reset) {
-    if (!sha) return Response.json({ok: true});
-    r = await fetch(api, {method: "DELETE", headers: H, body: JSON.stringify({message: msg, sha, branch: "main"})});
-  } else {
-    const body = JSON.stringify({order: keep(j.order), hidden: keep(j.hidden)}, null, 1) + "\n";
-    r = await fetch(api, {method: "PUT", headers: H, body: JSON.stringify({message: msg, sha, branch: "main",
-      content: btoa(unescape(encodeURIComponent(body)))})});
-  }
-  if (!r.ok) return new Response("Save failed (" + r.status + ")", {status: 502});
-  return Response.json({ok: true}, {headers: {"Cache-Control": "no-store"}});
-}

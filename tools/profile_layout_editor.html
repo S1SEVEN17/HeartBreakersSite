@@ -5,9 +5,9 @@
 <title>Profile Layout - Heart Breakers</title>
 <!--
   PROFILE LAYOUT EDITOR (published twice by generate.py write_profile_editors):
-    MODE "member"   members' folder profile-editor.html - a member lays out THEIR OWN profile (how everyone sees it).
-                    Saved through the gatekeeper: PUT /m/profile-layout {order, hidden} (or {reset: true}) -> the
-                    private data repo's data/profiles/<their id>.json; the site picks it up in a few minutes.
+    MODE "member"   members' folder profile-editor.html - a member lays out how PROFILES LOOK TO THEM: saved only in
+                    their own browser (localStorage hb_profile_layout) and used for every profile they open, theirs
+                    and everyone else's. Nothing is sent to the site; other members never see it.
     MODE "default"  leaders' folder profile-default.html - the faction's DEFAULT layout, used for every member who
                     hasn't made their own. Saved to config.json "profile_layout" through the leaders' save route.
   Layout = {order: [section keys], hidden: [section keys]} - the keys are the <section data-sec> blocks of
@@ -52,10 +52,11 @@ let L = null, me = null, sha = null, dirty = false;
 const member = CFG.mode === "member";
 $("ttl").textContent = member ? "My Profile Layout" : "Default Profile Layout";
 $("lead").textContent = member
-  ? "Choose which sections your profile shows, and in what order. Everyone who opens your profile sees it this way."
+  ? "Choose which sections profiles show, and in what order. Saved in this browser only, and used for every profile you open - nobody else sees your layout."
   : "The layout every member's profile uses until they make their own (members can change theirs from the Me menu).";
 $("reset").textContent = member ? "Use the faction default" : "Back to the built-in order";
-$("hint").textContent = member ? "Live on the site a few minutes after saving." : "Saved to the site settings - live a few minutes after saving.";
+$("ttl").textContent = member ? "My Profile Layout" : "Default Profile Layout";
+$("hint").textContent = member ? "Saved on this device straight away (each phone or computer keeps its own)." : "Saved to the site settings - live a few minutes after saving.";
 const norm = x => ({order: ((x && x.order) || []).filter(k => KEYS.includes(k)).concat(KEYS.filter(k => !((x && x.order) || []).includes(k))),
                     hidden: ((x && x.hidden) || []).filter(k => KEYS.includes(k))});
 
@@ -79,9 +80,10 @@ $("list").addEventListener("change", e => { const k = e.target.dataset.k; if (!k
 // saving
 const b64d = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g, "")), c => c.charCodeAt(0)));
 const b64e = t => { const u = new TextEncoder().encode(t); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
-async function saveMember(body) {
-  const r = await fetch(`${CFG.gate}/m/profile-layout`, {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"}, body: JSON.stringify(body)});
-  if (!r.ok) throw new Error((await r.text().catch(() => "")) || r.status);
+// member: this browser only (null = remove -> back to the faction default)
+async function saveMember(layout) {
+  try { layout ? localStorage.setItem("hb_profile_layout", JSON.stringify(layout)) : localStorage.removeItem("hb_profile_layout"); }
+  catch (e) { throw new Error("this browser won't store it"); }
 }
 async function saveDefault(layout) {
   const g = await fetch(`${CFG.ghproxy}config.json?ref=main`, {cache: "no-store"});
@@ -93,13 +95,13 @@ async function saveDefault(layout) {
   if (!r.ok) throw new Error(r.status === 409 ? "the settings changed meanwhile - try again" : "save failed (" + r.status + ")");
 }
 $("save").onclick = async () => { $("status").textContent = "Saving…";
-  try { member ? await saveMember(L) : await saveDefault(L); dirty = false; $("status").textContent = "Saved ✓ - live in a few minutes"; }
+  try { member ? await saveMember(L) : await saveDefault(L); dirty = false; $("status").textContent = member ? "Saved ✓ - open any profile to see it" : "Saved ✓ - live in a few minutes"; }
   catch (e) { $("status").textContent = "Save failed: " + e.message; } };
 $("reset").onclick = async () => {
-  if (!confirm(member ? "Go back to the faction's default layout? (Your own layout is removed.)" : "Remove the default layout? (Profiles go back to the built-in order.)")) return;
+  if (!confirm(member ? "Go back to the faction's default layout on this device?" : "Remove the default layout? (Profiles go back to the built-in order.)")) return;
   $("status").textContent = "Saving…";
-  try { member ? await saveMember({reset: true}) : await saveDefault(null); L = norm(member ? CFG.layouts.default : null); dirty = false; render();
-    $("status").textContent = "Saved ✓ - live in a few minutes"; }
+  try { member ? await saveMember(null) : await saveDefault(null); L = norm(member ? CFG.layouts.default : null); dirty = false; render();
+    $("status").textContent = member ? "Back to the faction default" : "Saved ✓ - live in a few minutes"; }
   catch (e) { $("status").textContent = "Failed: " + e.message; } };
 addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
 
@@ -107,7 +109,9 @@ fetch(`${CFG.gate}/m/whoami.json`, {cache: "no-store"}).then(r => r.ok ? r.json(
   me = w;
   if (member && !w) { $("list").textContent = "Sign in to edit your profile layout."; return; }
   const LY = CFG.layouts || {};
-  L = norm(member ? ((LY.members || {})[String(w.id)] || LY.default) : LY.default);
+  let own = null;
+  try { own = JSON.parse(localStorage.getItem("hb_profile_layout") || "null"); } catch (e) {}
+  L = norm(member ? (own || LY.default) : LY.default);
   render();
 });
 </script>

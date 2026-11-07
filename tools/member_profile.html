@@ -20,13 +20,15 @@
   their own profile it adds the account bar (leader badge, sign-in info, Torn profile, Leaders Hub, Sign out).
   Section ids #payouts #wars #chains #crimes are what the account menu's My Payouts / My Wars / ... jump to.
   LAYOUT (Nov 2026): every block below the profile card is a <section data-sec="...">; the order and which are
-  hidden come from db/profile_layouts.json {"default": {order, hidden}, "members": {id: {order, hidden}}}:
-    the PROFILE OWNER's own layout (they edit it: profile-editor.html, saved through the gatekeeper's
-    /m/profile-layout -> data/profiles/<id>.json) > the leaders' default (profile-default.html -> config.json
-    "profile_layout") > the order in this file. ?layout=<json> previews a layout (the editors' preview).
+  hidden come from (first that exists):
+    ?layout=<json>              a preview (the layout editors)
+    localStorage hb_profile_layout   THIS VIEWER's own layout - set on profile-editor.html, kept only in their
+                                browser, and used for EVERY profile they open (it's how profiles look to them)
+    db/profile_layouts.json "default"   the leaders' default (profile-default.html -> config.json "profile_layout")
+    the order in this file
     Section keys: cmp, reliability, armory, totals, charts, gym, payouts, wars, chains, crimes.
   AVERAGES ("Compared with the faction average") cover each member's WHOLE time in the faction - the same totals as
-  the all-time leaderboards (db/members.json t): hits per war, chain hits per chain, gym energy per month on record,
+  the all-time leaderboards (db/members.json t): hits per war, chain hits per chain (chains of 250+ hits only), gym energy per month on record,
   crimes done and crime success. Termed wars with no hits are left out (see TERMED WARS in generate.py).
   ARMORY: the member's own armory usage (reliability + armory are private: their own via /m/mine.json, anyone's for
   leaders via the leaders' db/private.json).
@@ -166,7 +168,9 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   if (!id && me) id = me.id;                     // no ?id= -> my own profile
   let prev = null;
   try { prev = JSON.parse(new URLSearchParams(location.search).get("layout") || "null"); } catch (e) {}
-  applyLayout(prev || ((LY.members || {})[String(id)]) || LY.default || null);
+  let mine_ = null;
+  try { mine_ = JSON.parse(localStorage.getItem("hb_profile_layout") || "null"); } catch (e) {}
+  applyLayout(prev || mine_ || LY.default || null);
   const m = M.members.find(x => x.id === id);
   if (!m) { $("err").innerHTML = id ? 'Member not found - see <a href="members.html">Members</a>.' : 'Pick a member on the <a href="members.html">Members</a> page.'; return; }
   const own = !!(me && me.id === id);
@@ -202,7 +206,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   $("av").textContent = (m.name || "?").charAt(0).toUpperCase();
   $("chips").innerHTML = [["#cmp", "📈 vs average"], ["#payouts", "💰 Payouts"], ["#wars", "⚔️ Wars"], ["#chains", "⛓️ Chains"],
     ["#crimes", "🕵️ Crimes"], ["#gymh", "🏋️ Gym"], ["gym-history.html", "🏋️ Gym history"], ["wars.html", "📜 War reports"],
-    ["chains.html", "📜 Chain reports"]].concat(own ? [["profile-editor.html", "🧩 Edit my layout"]] : [])
+    ["chains.html", "📜 Chain reports"]].concat(me ? [["profile-editor.html", "🧩 My profile layout"]] : [])
     .map(([h, l]) => `<a href="${h}">${l}</a>`).join("");
   // ---- compared with the faction average: each member's WHOLE time in the faction (the all-time leaderboard
   //      totals in db/members.json), every current member counted for the average ----
@@ -212,7 +216,8 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   const T_ = uid => (byId[uid] || {}).t || {};
   const perWar = uid => { const t = T_(uid); return t.wars ? t.war_hits / t.wars : null; };
   const tookPart = uid => { const t = T_(uid); return t.wars ? (t.wars - t.wars_zero) / t.wars : null; };
-  const perChain = uid => { const t = T_(uid); return t.chains ? t.chain_hits / t.chains : null; };
+  // hits per chain: chains of 250+ hits only (chains250 / chain_hits250 in db/members.json)
+  const perChain = uid => { const t = T_(uid); return t.chains250 ? t.chain_hits250 / t.chains250 : null; };
   // gym: months on record (saved from Nov 2026) since they joined
   const nowS = Date.now() / 1000;
   const gymPer = uid => { const d = (byId[uid] || {}).days, j = d != null ? new Date((nowS - d * 86400) * 1000).toISOString().slice(0, 7) : "";
@@ -231,7 +236,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   const cmp = [
     card("⚔️ Hits per war", perWar(id), favg(perWar), n1, `${t.wars} war${t.wars !== 1 ? "s" : ""}`),
     card("✅ Wars hit in", tookPart(id), favg(tookPart), pctF, `${t.wars - t.wars_zero} of ${t.wars}`),
-    card("⛓️ Hits per chain", perChain(id), favg(perChain), n1, `${t.chains} chain${t.chains !== 1 ? "s" : ""}`),
+    card("⛓️ Hits per chain", perChain(id), favg(perChain), n1, `${t.chains250 || 0} chain${t.chains250 !== 1 ? "s" : ""} of 250+ hits`),
     card("🏋️ Gym energy / month", gymPer(id), favg(gymPer), num, "months on record (from Nov 2026)"),
     card("🕵️ Crimes done", crimesDone(id), favg(crimesDone), num),
     card("🕵️ Crime success", crimeRate(id), favg(crimeRate), pctF)];

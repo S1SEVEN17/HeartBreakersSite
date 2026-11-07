@@ -3923,7 +3923,7 @@ def _menu_js(root: str) -> str:
 # Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
 # The name is filled in the browser from whoami.json, which also reveals the leader-only groups.
 # My Profile = their own member.html (the gatekeeper's /m/me sends them there; #sections jump to a part).
-ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🧩 Edit my profile layout", "profile-editor.html"), ("💰 My Payouts", "me#payouts"),
+ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🧩 My profile layout", "profile-editor.html"), ("💰 My Payouts", "me#payouts"),
                  ("⚔️ My Wars", "me#wars"), ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
 
 
@@ -4560,7 +4560,8 @@ def _hub_latest_items(mb: str, per_kind: int = 3) -> list:
             when = datetime.fromtimestamp(m.get("end", 0), timezone.utc).strftime("%b %d, %Y")
             if kind == "war":
                 recent = m.get("end", 0) > datetime.now(timezone.utc).timestamp() - ATTN_PAYOUT_DAYS * 86400
-                sub = (f"{_short_money(m.get('paid', 0))} paid · " if m.get("pay") else "Payout pending · " if recent else "") + when
+                sub = ("🤝 Termed · " if str(m.get("id", slug.split("-", 1)[-1])) in termed_wars() else "") + \
+                      (f"{_short_money(m.get('paid', 0))} paid · " if m.get("pay") else "Payout pending · " if recent else "") + when
             else:
                 sub = f"{m.get('respect', 0):,.0f} respect · {m.get('attackers', 0)} members · {when}"
             items.append({"t": int(m.get("end", 0)), "url": f"{mb}reports/{slug}.html", "img": f"{mb}reports/{slug}.png",
@@ -4789,7 +4790,7 @@ def write_homepages(out: Path, cfg: dict = None):
              ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html"), ("Members", "M:members.html"),
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
              ("Leaders Hub", "L:index.html"), ("Leader Monitor", "L:monitor.html"), ("Armory Monitor", "L:armory.html"),
-             ("Profile layout (default)", "L:profile-default.html"), ("Edit my profile layout", "M:profile-editor.html"),
+             ("Profile layout (default)", "L:profile-default.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html")]]
@@ -4966,6 +4967,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
     def T(i):
         return tot.setdefault(str(i), {"wars": 0, "war_hits": 0, "war_resp": 0.0, "assists": 0, "hosps": 0,
                                         "wars_zero": 0, "chains": 0, "chain_hits": 0, "chain_resp": 0.0, "rets": 0,
+                                        "chains250": 0, "chain_hits250": 0,     # chains of CHAIN_AVG_MIN+ (hits per chain)
                                         "crimes": 0, "crimes_ok": 0, "crime_money": 0, "paid": 0, "payouts": 0})
     for w in wars:
         for i, h, r_, a, ho, _o in w["m"]:
@@ -4974,8 +4976,11 @@ def build_databases(raw: dict, cfg: dict) -> dict:
             t = T(i); t["wars"] += 1; t["war_hits"] += h; t["war_resp"] += r_; t["assists"] += a; t["hosps"] += ho
             t["wars_zero"] += h == 0
     for c in chains:
+        big = c["length"] >= CHAIN_AVG_MIN
         for i, h, r_, rt in c["m"]:
             t = T(i); t["chains"] += 1; t["chain_hits"] += h; t["chain_resp"] += r_; t["rets"] += rt
+            if big:
+                t["chains250"] += 1; t["chain_hits250"] += h
     for c in crimes:
         share = int(c.get("share") or 0)          # this crime's members' cut (see crime_shares)
         for i in c["m"]:
@@ -5134,9 +5139,8 @@ def _spark(vals: list) -> str:
 # Refills (points), Other.
 # Log: data/armory_log.json {"items": [item names], "last": newest news time read, "oldest": oldest time read,
 #   "done": the whole history is read, "events": [[time, member id, item index, count, kind]]} (kind u/l/g/r)
-# Every full update reads FORWARD first (everything new), then BACKFILLS older news a few pages at a time,
-# newest first - so the current month fills first, then each earlier month - until the faction's whole armory
-# history is read. Page budgets (Torn caps history reads per key per day - "Daily read limit", code 14):
+# Every full update reads FORWARD first (everything new), then BACKFILLS older news in month windows, newest month
+# first - this month fills first, then each earlier month - until the faction's founding month is reached. Page budgets (Torn caps history reads per key per day - "Daily read limit", code 14):
 # ARMORY_PAGES_NEW forward + ARMORY_PAGES_BACK backfill (100 news rows a page).
 # ==========================================================================
 ARMORY_LOG_PATH = ROOT / "data" / "armory_log.json"
@@ -5199,19 +5203,36 @@ def _armory_parse(text: str):
     return None
 
 
-def update_armory_log(key: str):
-    """Full runs: new armory news (forward), then older news (backfill, newest first) -> data/armory_log.json."""
+def _utc_month_start(t: int) -> int:
+    """Start (UTC) of the month time t is in."""
+    d = datetime.fromtimestamp(t, timezone.utc)
+    return int(datetime(d.year, d.month, 1, tzinfo=timezone.utc).timestamp())
+
+
+ARMORY_LOG_V = 2        # 2: history read in explicit month windows (v1 marked it "complete" after the newest pages)
+
+
+def update_armory_log(key: str, founded: int = 0):
+    """Full runs -> data/armory_log.json:
+      1) forward: everything since the newest news read (a new log starts at the 1st of this month)
+      2) backfill: month by month, newest month first - [month start, oldest read) - each window read newest first;
+         a finished window moves on to the month before. Done when the window reaches the faction's founding
+         month (founded = its creation time, from basic days_old)."""
     import time
     if not key:
         return
+    now = int(time.time())
     try:
         log = json.loads(ARMORY_LOG_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        log = {"items": [], "last": 0, "oldest": 0, "done": False, "events": []}
+        log = {}
+    if log.get("v") != ARMORY_LOG_V:            # new / old-format log: start again from this month
+        ms = _utc_month_start(now)
+        log = {"v": ARMORY_LOG_V, "items": [], "last": ms - 1, "oldest": ms, "done": False, "events": []}
     idx = {n: k for k, n in enumerate(log["items"])}
     seen = {(e[0], e[1], e[2]) for e in log["events"]}
-    now = int(time.time())
     stats = {"new": 0, "back": 0, "pages": 0}
+    budget = {"n": ARMORY_PAGES_NEW + ARMORY_PAGES_BACK}
 
     def take(items, which):
         for n in items:
@@ -5227,51 +5248,57 @@ def update_armory_log(key: str):
                 continue
             seen.add(k_); log["events"].append([t, mid, idx[item], cnt, kind]); stats[which] += 1
 
-    def walk(params, pages, which):
-        """Read up to `pages` pages; returns (oldest, newest) news time seen, and whether the list ran out."""
-        lo, hi, ended = None, None, False
+    def walk(t0, t1, sort, pages, which):
+        """Read news in [t0, t1] (up to `pages` pages). Returns (oldest, newest) time seen, and whether the
+        window was read to its end (no more pages) - False if the page budget or an error stopped it."""
+        lo = hi = None
         try:
-            data = fetch_section("news", key, dict(params, cat="armoryAction", limit=100))
+            data = fetch_section("news", key, {"cat": "armoryAction", "from": t0, "to": t1, "sort": sort, "limit": 100})
         except SystemExit as e:
             print(f"Armory log ({which}) stopped: {e}")
             return lo, hi, False
         for _ in range(pages):
+            if budget["n"] <= 0:
+                return lo, hi, False
+            budget["n"] -= 1
             items = _as_list(data.get("news"))
             stats["pages"] += 1
             take(items, which)
             ts = [int(n.get("timestamp") or 0) for n in items if n.get("timestamp")]
             if ts:
-                lo, hi = min(ts + [lo] if lo else ts), max(ts + [hi] if hi else ts)
+                lo = min(ts + ([lo] if lo else [])); hi = max(ts + ([hi] if hi else []))
             nxt = ((data.get("_metadata") or {}).get("links") or {}).get("next")
             if not nxt or not items:
-                ended = True
-                break
+                return lo, hi, True
             time.sleep(API_PAGE_DELAY)
             try:
                 data = fetch_url(nxt, key)
             except SystemExit as e:
                 print(f"Armory log ({which}) continues next run: {e}")
-                break
-        return lo, hi, ended
+                return lo, hi, False
+        return lo, hi, False
 
-    # 1) forward: everything since the newest read (first run: the newest pages, newest first)
-    if log["last"]:
-        _lo, hi, _e = walk({"from": log["last"] + 1, "to": now, "sort": "ASC"}, ARMORY_PAGES_NEW, "new")
-        if hi:
-            log["last"] = max(log["last"], hi)
-    else:
-        lo, hi, ended = walk({"to": now, "sort": "DESC"}, ARMORY_PAGES_NEW, "new")
-        log["last"], log["oldest"], log["done"] = hi or now, lo or now, bool(ended)
-    # 2) backfill: older than the oldest read, newest first (this month -> last month -> ...) until the start
-    if not log.get("done") and log.get("oldest"):
-        lo, _hi, ended = walk({"to": log["oldest"] - 1, "sort": "DESC"}, ARMORY_PAGES_BACK, "back")
-        if lo:
-            log["oldest"] = min(log["oldest"], lo)
-        if ended:
+    # 1) forward (oldest first, so an unfinished read carries on from where it stopped)
+    _lo, hi, _end = walk(log["last"] + 1, now, "ASC", ARMORY_PAGES_NEW, "new")
+    if hi:
+        log["last"] = max(log["last"], hi)
+    # 2) backfill, newest month first, while the page budget lasts
+    stop = _utc_month_start(founded) if founded else 0
+    while not log["done"] and budget["n"] > 0:
+        w0 = _utc_month_start(log["oldest"] - 1)            # the month just before what's read
+        if w0 < stop:
             log["done"] = True
+            break
+        lo, _hi, ended = walk(w0, log["oldest"] - 1, "DESC", ARMORY_PAGES_BACK, "back")
+        if ended:
+            log["oldest"] = w0                             # that whole month is read
+        else:
+            if lo:
+                log["oldest"] = min(log["oldest"], lo)
+            break
     log["events"].sort()
     ARMORY_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
-    since = datetime.fromtimestamp(log["oldest"], timezone.utc).strftime("%b %d, %Y") if log.get("oldest") else "-"
+    since = datetime.fromtimestamp(log["oldest"], timezone.utc).strftime("%b %d, %Y")
     print(f"Armory log: {stats['new']} new + {stats['back']} older uses ({stats['pages']} pages) · "
           f"{len(log['events'])} kept · read back to {since}{' (complete)' if log.get('done') else ''}")
 
@@ -5562,12 +5589,11 @@ def write_profiles(out: Path, db: dict):
     _hub_page(mout / "members.html", "Members", "Tap a name for their profile · tap a column to sort", body)
 
 
-# PROFILE LAYOUTS: which sections a profile shows and in what order (tools/member_profile.html <section data-sec>).
-#   the member's own: data/profiles/<id>.json {order, hidden} - saved by profile-editor.html through the gatekeeper's
-#                     /m/profile-layout (a member can only save their own)
-#   the default:      config.json "profile_layout" {order, hidden} - leaders' profile-default.html
-# Published together as the members' db/profile_layouts.json {"default", "members": {id: layout}}.
-PROFILES_DIR = ROOT / "data" / "profiles"
+# PROFILE LAYOUTS: which sections profiles show and in what order (tools/member_profile.html <section data-sec>).
+#   a member's own:  kept ONLY in their browser (localStorage hb_profile_layout, set on profile-editor.html) and
+#                    used for every profile THEY open - nothing is saved on the site, nobody else sees it
+#   the default:     config.json "profile_layout" {order, hidden} - leaders' profile-default.html - for everyone
+#                    without their own. Published as the members' db/profile_layouts.json {"default"}.
 PROFILE_SECTIONS = [("cmp", "📈 Compared with the faction average", "Their whole time in the faction vs everyone"),
                     ("reliability", "🛡️ Reliability breakdown", "Private - only the member and leaders see it"),
                     ("armory", "🗄️ Armory usage", "Private - only the member and leaders see it"),
@@ -5590,17 +5616,9 @@ def _clean_layout(x) -> dict:
 
 
 def write_profile_layouts(out: Path, cfg: dict):
-    """db/profile_layouts.json (members) + the two layout editors: profile-editor.html (members - their own) and
-    profile-default.html (leaders - the default)."""
-    mem = {}
-    for f in sorted(PROFILES_DIR.glob("*.json")) if PROFILES_DIR.exists() else []:
-        try:
-            lay = _clean_layout(json.loads(f.read_text(encoding="utf-8")))
-        except ValueError:
-            lay = None
-        if lay and f.stem.isdigit():
-            mem[f.stem] = lay
-    ly = {"default": _clean_layout(cfg.get("profile_layout")), "members": mem}
+    """db/profile_layouts.json (members: the leaders' default) + the two layout editors: profile-editor.html
+    (members - their own, this browser only) and profile-default.html (leaders - the default)."""
+    ly = {"default": _clean_layout(cfg.get("profile_layout"))}
     mout = member_out(out)
     _jdump(mout / "db" / "profile_layouts.json", ly)
     g_ = gate_cfg()
@@ -6326,18 +6344,20 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
                                                "resp": 0.0, "rets": 0, "best": 0})
             a["chains"] += 1; a["hits"] += a_.get("hits", 0); a["resp"] += a_.get("respect", 0)
             a["rets"] += a_.get("rets", 0) or 0; a["best"] = max(a["best"], a_.get("hits", 0))
+            if c.get("length", 0) >= CHAIN_AVG_MIN:            # hits per chain: 250+ chains only
+                a["big"] = a.get("big", 0) + 1; a["bigh"] = a.get("bigh", 0) + a_.get("hits", 0)
     for i, n in CURRENT_MEMBERS.items():
         agg.setdefault(i, {"id": int(i), "name": n, "chains": 0, "hits": 0, "resp": 0.0, "rets": 0, "best": 0})
     rows_ = []
     for i, a in agg.items():
         a["current"] = i in CURRENT_MEMBERS if CURRENT_MEMBERS else True
         a["name"] = CURRENT_MEMBERS.get(i, a["name"])
-        a["per"] = round(a["hits"] / a["chains"], 1) if a["chains"] else None
+        a["per"] = round(a.get("bigh", 0) / a["big"], 1) if a.get("big") else None
         a["rph"] = round(a["resp"] / a["hits"], 2) if a["hits"] else None
         rows_.append(a)
     rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
     msum = _member_summary(rows_, [("Chains", "chains", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
-                                   ("Hits / chain", "per", lambda v: f"{v:,.1f}"), ("Respect / hit", "rph", lambda v: f"{v:,.2f}"),
+                                   (f"Hits / chain ({CHAIN_AVG_MIN}+)", "per", lambda v: f"{v:,.1f}"), ("Respect / hit", "rph", lambda v: f"{v:,.2f}"),
                                    ("Best chain", "best", fmt_int), ("Retals", "rets", fmt_int)], "csumT")
     body = (site_menu("") + "<h2>⛓️ Chain Summary</h2>" + HIST_STATS_CSS + _stat_strip([
                 (fmt_int(len(chains)), f"Chains ({min_len}+)"), (fmt_int(best), "Longest"), (fmt_int(tot_hits), "Chain hits"),
@@ -6781,6 +6801,7 @@ table.msum td{white-space:nowrap}.trm{background:#3a2d12;color:#e8be5a;border-ra
 
 
 CURRENT_MEMBERS = {}       # member id (str) -> name, current members - set in main() (history summaries)
+CHAIN_AVG_MIN = 250        # "hits per chain" (profiles, Chain History summary) counts only chains this long or longer
 
 
 def _member_summary(rows: list, cols: list, tid: str) -> str:
@@ -6940,6 +6961,7 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     latest = war_card_png(w0, wars[lk]) if w0 else (REPORTS_DIR / f"war-{lk}.png").read_bytes()
     meta = war_meta(raw, my_id)
     rec = _latest_receipts()
+    tw_ = termed_wars(cfg)                     # termed wars are marked in the directory
     lines = []
     for k in order[1:WAR_HUB_DIRECTORY + 1]:
         mt = meta.get(k, {})
@@ -6949,7 +6971,7 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
         links = ([f"[Report{' & Payout' if k in rec else ''}]({base}/reports/war-{k}.html)"]
                  if (REPORTS_DIR / f"war-{k}.json").exists() else
                  ([f"[Payout]({base}/payouts/war-{k}.html)"] if k in rec else []))
-        lines.append(f"`{when}` {res}" + (" · " + " · ".join(links) if links else ""))
+        lines.append(f"`{when}` {res}" + (" · 🤝 termed" if str(k) in tw_ else "") + (" · " + " · ".join(links) if links else ""))
     more = len(order) - 1 - len(lines)
     won = sum(1 for k in order if meta.get(k, {}).get("won"))
     desc = ""
@@ -9816,7 +9838,10 @@ def main():
     write_homepages(out, cfg)
     if not args.mock and os.environ.get("RUN_KIND", "full") == "full":
         item_types(api_key)                       # item categories for the Armory Monitor (weekly, 1 call)
-        update_armory_log(api_key)                # armory usage: new news + a few pages of older history
+        _b = raw["basic"].get("basic", raw["basic"])
+        update_armory_log(api_key, int(datetime.now(timezone.utc).timestamp()) - int(_b.get("days_old") or 0) * 86400
+                          if _b.get("days_old") else 0)
+        #   ^ armory usage: everything new, then older months a few pages at a time back to the faction's founding
     db_ = write_databases(out, raw, cfg)          # shared data layer (db/*.json)
     write_profiles(out, db_)
     write_profile_layouts(out, cfg)               # profile layouts (members' own + the leaders' default) + editors
