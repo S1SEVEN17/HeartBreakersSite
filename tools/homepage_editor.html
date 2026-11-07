@@ -8,7 +8,7 @@
   Leaders lay out the Members Hub and the Leaders Hub themselves - sections and tiles - instead of asking for UI changes.
   Saves config.json "homepage" (see the HOMEPAGES note in generate.py) through the gatekeeper (CFG.ghproxy - no
   GitHub token on the device); the data repo's notify workflow then rebuilds the site (a few minutes).
-    section: {type: "welcome"} | {type: "attention", title} (Leaders Hub only)
+    section: {type: "welcome"} | {type: "now", title} | {type: "attention", title} (Leaders Hub only)
            | {type: "actions", tiles: [{icon, title, link}]} | {type: "latest", title}
            | {type: "groups", title, groups: [{title, links: [{icon, title, link}]}]}
            | {type: "tiles", title, tiles: [{icon, title, desc, link}]} | {type: "text", title, text}
@@ -57,10 +57,10 @@ nothing is saved until <b>Save changes</b> (live on the site a few minutes later
     <div class="small" style="margin-top:6px">Links: pick a page from the list or type a full https:// address.</div></div>
   <div id="form"><div class="small">Loading…</div></div>
   <div class="card"><h2>Add a section</h2><div class="row" style="flex-wrap:wrap">
-    <button data-add="welcome">+ Welcome</button><button data-add="attention">+ Needs attention</button>
+    <button data-add="welcome">+ Welcome</button><button data-add="now">+ Right now</button><button data-add="attention">+ Needs attention</button>
     <button data-add="actions">+ Quick actions</button><button data-add="latest">+ Latest</button><button data-add="groups">+ Link groups</button>
     <button data-add="tiles">+ Tiles</button><button data-add="text">+ Text note</button></div>
-    <div class="small" style="margin-top:6px">Welcome = greeting + the member's own numbers ·
+    <div class="small" style="margin-top:6px">Welcome = greeting + the member's own numbers · Right now = live war and chain timers (each member's own key, in their browser) ·
       Needs attention = unpaid payouts, idle recruits (Leaders Hub only) · Quick actions = big icon buttons ·
       Latest = newest post big, the rest as a list · Link groups = pages in labelled groups · Tiles = link cards · Text note = a message.</div></div>
 </div>
@@ -79,9 +79,10 @@ const pageName = u => (CFG.pages.find(p => p[1] === u) || [])[0] || "";
 const HP = () => { C.homepage = C.homepage || JSON.parse(JSON.stringify(CFG.default)); return C.homepage; };
 const secs = () => { const h = HP(); h[hub] = h[hub] || {sections: []}; return h[hub].sections; };
 
-const KIND = {welcome: "👋 Welcome", attention: "🔔 Needs attention", actions: "🔘 Quick actions",
+const KIND = {welcome: "👋 Welcome", now: "⚡ Right now", attention: "🔔 Needs attention", actions: "🔘 Quick actions",
               latest: "📰 Latest", groups: "🗂️ Link groups", tiles: "🔗 Tiles", text: "📝 Text note"};
 const AUTO = {welcome: "Filled in automatically: a greeting with the member's name and position, and their last war hits, gym this month and crime success against the faction average.",
+              now: "Live from Torn in each member's browser with their own Public key (asked for once, kept only on their device): the ranked war countdown then score, and the chain timer every 15 seconds.",
               attention: "Filled in automatically: wars with no payout receipt yet and inactive recruits. Leaders Hub only - hidden when it's all clear.",
               latest: "Filled in automatically on every update."};
 // one link row (quick action / group link / tile). path = data-s / data-g / data-t, desc = show a description field
@@ -126,7 +127,7 @@ function preview() {
   const body = secs().map(sec => {
     const ty = sec.type || "tiles", h = sec.title ? `<h2>${esc(sec.title)}</h2>` : "";
     if (ty === "welcome") { live = true; return `<div class="hbsec" id="hbWel"><div class="wel"><div class="av">HB</div><div class="wt"><b>Welcome to Heart Breakers</b><span>Loading…</span></div></div><div class="stats"></div></div>`; }
-    if (ty === "now") return "";    // live war / chain section - removed
+    if (ty === "now") { live = true; return `<div class="hbsec" id="hbNow" hidden>${h}<div class="nowc"></div></div>`; }
     if (ty === "attention") { if (hub !== "leaders") return ""; live = true;
       return `<div class="hbsec" id="hbAtt" hidden><div class="attn"><div class="ah"><b>🔔 ${esc(sec.title || "Needs attention")}</b><span class="cnt"></span></div><div class="rows"></div></div></div><div class="tag" style="font-size:11px">[ Needs attention - shows when something needs a leader ]</div>`; }
     if (ty === "actions") return h + `<div class="qa">${(sec.tiles || []).map(t => `<a href="#"><i>${esc(t.icon)}</i>${esc(t.title)}</a>`).join("")}</div>`;
@@ -170,7 +171,7 @@ $("form").addEventListener("click", e => {
   mark(); render();
 });
 // + section buttons
-const NEW = {welcome: () => ({type: "welcome", title: ""}),
+const NEW = {welcome: () => ({type: "welcome", title: ""}), now: () => ({type: "now", title: "Right now"}),
              attention: () => ({type: "attention", title: "Needs attention"}),
              actions: () => ({type: "actions", title: "", tiles: [{icon: "🔗", title: "New link", link: ""}]}),
              latest: () => ({type: "latest", title: "Latest"}),
@@ -192,8 +193,6 @@ async function load() {
     const j = await r.json(); sha = j.sha; C = JSON.parse(b64d(j.content));
     // a layout saved before the redesign (no "v") isn't used by the site any more - start from the built-in one
     if (C.homepage && !(C.homepage.v >= CFG.layout_v)) { C.homepage = JSON.parse(JSON.stringify(CFG.default)); }
-    // the live war / chain section ("now") was removed - drop it from a saved layout
-    for (const k of ["members", "leaders"]) if (C.homepage && C.homepage[k]) C.homepage[k].sections = (C.homepage[k].sections || []).filter(x => x.type !== "now");
     render();
   } catch (e) { $("form").innerHTML = `<div class="card">Couldn't load the settings: ${esc(e.message)}</div>`; }
 }

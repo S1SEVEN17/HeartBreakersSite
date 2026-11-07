@@ -19,6 +19,17 @@
   member.html with no ?id= (or the gatekeeper's /m/me) shows THEM - whoami.json says who that is - and on
   their own profile it adds the account bar (leader badge, sign-in info, Torn profile, Leaders Hub, Sign out).
   Section ids #payouts #wars #chains #crimes are what the account menu's My Payouts / My Wars / ... jump to.
+  LAYOUT (Nov 2026): every block below the profile card is a <section data-sec="...">; the order and which are
+  hidden come from db/profile_layouts.json {"default": {order, hidden}, "members": {id: {order, hidden}}}:
+    the PROFILE OWNER's own layout (they edit it: profile-editor.html, saved through the gatekeeper's
+    /m/profile-layout -> data/profiles/<id>.json) > the leaders' default (profile-default.html -> config.json
+    "profile_layout") > the order in this file. ?layout=<json> previews a layout (the editors' preview).
+    Section keys: cmp, reliability, armory, totals, charts, gym, payouts, wars, chains, crimes.
+  AVERAGES ("Compared with the faction average") cover each member's WHOLE time in the faction - the same totals as
+  the all-time leaderboards (db/members.json t): hits per war, chain hits per chain, gym energy per month on record,
+  crimes done and crime success. Termed wars with no hits are left out (see TERMED WARS in generate.py).
+  ARMORY: the member's own armory usage (reliability + armory are private: their own via /m/mine.json, anyone's for
+  leaders via the leaders' db/private.json).
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -73,27 +84,31 @@ __MENU__
     <div class="rel" id="rel"><b id="relv"></b><span>Reliability</span><div class="pv" id="relp"></div></div></div>
   <div class="chips" id="chips"></div>
   <div class="acts" id="acts" style="display:none"></div><div class="pass" id="pass"></div>
-  <h2>📈 Compared with the faction average <span class="tag">(last 3 months · 100% = average · bar marker = average)</span></h2>
-  <div class="cmp" id="cmp"></div>
-  <h2 id="relh" style="display:none">🛡️ Reliability breakdown <span class="tag" id="relt"></span></h2>
-  <div class="cmp" id="relb" style="display:none"></div>
-  <h2>📊 Totals <span class="tag">(while in the faction)</span></h2>
-  <div class="tiles" id="tiles"></div>
-  <div class="rng" id="rng"><span>Range</span><button data-r="30">1 Month</button><button data-r="91">3 Months</button>
+  <div id="secs">
+  <section data-sec="cmp"><h2 id="cmp">📈 Compared with the faction average <span class="tag">(their whole time in the faction · 100% = average · bar marker = average)</span></h2>
+  <div class="cmp" id="cmpc"></div></section>
+  <section data-sec="reliability" id="relsec" style="display:none"><h2 id="relh">🛡️ Reliability breakdown <span class="tag" id="relt"></span></h2>
+  <div class="cmp" id="relb"></div></section>
+  <section data-sec="armory" id="armsec" style="display:none"><h2 id="armory">🗄️ Armory usage <span class="tag" id="armt"></span></h2>
+  <div class="tiles" id="armc"></div><div class="legend" id="arml" style="text-align:center;margin-top:6px"></div></section>
+  <section data-sec="totals"><h2>📊 Totals <span class="tag">(while in the faction)</span></h2>
+  <div class="tiles" id="tiles"></div></section>
+  <section data-sec="charts"><div class="rng" id="rng"><span>Range</span><button data-r="30">1 Month</button><button data-r="91">3 Months</button>
     <button data-r="182">6 Months</button><button data-r="365" class="on">1 Year</button><button data-r="0">All Time</button></div>
   <h2>⚔️ Hits per war <span class="tag" id="cwt"></span></h2>
   <div class="chart" id="cw"></div>
   <h2>⛓️ Chain hits <span class="tag" id="cct"></span></h2>
-  <div class="chart" id="cc"></div>
-  <h2 id="gymh">🏋️ Gym energy <span class="tag">(trained while in the faction)</span></h2>
+  <div class="chart" id="cc"></div></section>
+  <section data-sec="gym"><h2 id="gymh">🏋️ Gym energy <span class="tag">(trained while in the faction)</span></h2>
   <div class="tiles" id="gym"></div>
   <h2>🏋️ Gym energy by month <span class="tag" id="cgt"></span></h2>
   <div class="chart" id="cg"></div>
-  <div class="scroll" style="margin-top:8px"><table id="tg"></table></div>
-  <h2 id="payouts">💰 War payouts <span class="tag" id="payt"></span></h2><div class="scroll"><table id="tp"></table></div>
-  <h2 id="wars">⚔️ Wars</h2><div class="scroll"><table id="tw"></table></div>
-  <h2 id="chains">⛓️ Recent chains</h2><div class="scroll"><table id="tc"></table></div>
-  <h2 id="crimes">🕵️ Organized crimes</h2><div class="scroll"><table id="to"></table></div>
+  <div class="scroll" style="margin-top:8px"><table id="tg"></table></div></section>
+  <section data-sec="payouts"><h2 id="payouts">💰 War payouts <span class="tag" id="payt"></span></h2><div class="scroll"><table id="tp"></table></div></section>
+  <section data-sec="wars"><h2 id="wars">⚔️ Wars</h2><div class="scroll"><table id="tw"></table></div></section>
+  <section data-sec="chains"><h2 id="chains">⛓️ Recent chains</h2><div class="scroll"><table id="tc"></table></div></section>
+  <section data-sec="crimes"><h2 id="crimes">🕵️ Organized crimes</h2><div class="scroll"><table id="to"></table></div></section>
+  </div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -119,7 +134,7 @@ function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e", avgCol = "
   let s = `<svg width="${W}" height="${H + 30}" viewBox="0 0 ${W} ${H + 30}" style="margin:0 auto">`;
   vals.forEach((x, k) => {
     const w = Math.min(bw * 0.7, 64), h = (H - 20) * (x.v || 0) / mx, X = pad + k * bw + (bw - w) / 2;   // bars at most 64 px wide
-    if (x.v === null) s += `<circle cx="${X + w / 2}" cy="${H - 4}" r="3" fill="#555"><title>${esc(x.label)}: not in the faction</title></circle>`;
+    if (x.v === null) s += `<circle cx="${X + w / 2}" cy="${H - 4}" r="3" fill="#555"><title>${esc(x.label)}${/termed$/.test(x.label) ? "" : ": not in the faction"}</title></circle>`;
     else s += `<rect x="${X}" y="${H - h}" width="${w}" height="${Math.max(h, x.v === 0 ? 3 : 0)}" rx="3" fill="${x.v === 0 ? zeroCol : colour}"><title>${esc(x.label)}: ${num(x.v)}</title></rect>`
       + (x.v && showNum ? `<text x="${X + w / 2}" y="${H - h - 4}" fill="#ccc" font-size="11" text-anchor="middle">${num(x.v)}</text>` : "");
     if (k % every === 0 || k === vals.length - 1 && every === 1)
@@ -133,9 +148,25 @@ function bars(el, vals, avg, colour = "#e8be5a", zeroCol = "#e4382e", avgCol = "
 let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() =>
   document.querySelectorAll(".chart").forEach(el => el._args && bars(el, ...el._args)), 150); });
 
+// ---- layout: order + hidden sections (owner's own > leaders' default > this file's order; ?layout= = preview) ----
+const SECS = ["cmp", "reliability", "armory", "totals", "charts", "gym", "payouts", "wars", "chains", "crimes"];
+function applyLayout(L) {
+  if (!L) return;
+  const box = $("secs"), byKey = {};
+  box.querySelectorAll("section[data-sec]").forEach(el => byKey[el.dataset.sec] = el);
+  const order = (L.order || []).filter(k => byKey[k]).concat(SECS.filter(k => !(L.order || []).includes(k)));
+  order.forEach(k => byKey[k] && box.appendChild(byKey[k]));
+  (L.hidden || []).forEach(k => { if (byKey[k]) byKey[k].dataset.off = "1"; });
+  box.querySelectorAll("section[data-off]").forEach(el => el.style.display = "none");
+}
+const layouts = fetch("db/profile_layouts.json", {cache: "no-store"}).then(r => r.ok ? r.json() : {}).catch(() => ({}));
+
 Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
-  .concat([get("gym").catch(() => ({history: {}})), whoami])).then(([M, W, C, O, P, GY, me]) => {
+  .concat([get("gym").catch(() => ({history: {}})), whoami, layouts])).then(([M, W, C, O, P, GY, me, LY]) => {
   if (!id && me) id = me.id;                     // no ?id= -> my own profile
+  let prev = null;
+  try { prev = JSON.parse(new URLSearchParams(location.search).get("layout") || "null"); } catch (e) {}
+  applyLayout(prev || ((LY.members || {})[String(id)]) || LY.default || null);
   const m = M.members.find(x => x.id === id);
   if (!m) { $("err").innerHTML = id ? 'Member not found - see <a href="members.html">Members</a>.' : 'Pick a member on the <a href="members.html">Members</a> page.'; return; }
   const own = !!(me && me.id === id);
@@ -171,18 +202,24 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   $("av").textContent = (m.name || "?").charAt(0).toUpperCase();
   $("chips").innerHTML = [["#cmp", "📈 vs average"], ["#payouts", "💰 Payouts"], ["#wars", "⚔️ Wars"], ["#chains", "⛓️ Chains"],
     ["#crimes", "🕵️ Crimes"], ["#gymh", "🏋️ Gym"], ["gym-history.html", "🏋️ Gym history"], ["wars.html", "📜 War reports"],
-    ["chains.html", "📜 Chain reports"]].map(([h, l]) => `<a href="${h}">${l}</a>`).join("");
-  // ---- compared with the faction average: last 3 months, every current member counted (0s included) ----
-  const since = Date.now() / 1000 - 91 * 86400, CUR = M.members.filter(x => x.current);
+    ["chains.html", "📜 Chain reports"]].concat(own ? [["profile-editor.html", "🧩 Edit my layout"]] : [])
+    .map(([h, l]) => `<a href="${h}">${l}</a>`).join("");
+  // ---- compared with the faction average: each member's WHOLE time in the faction (the all-time leaderboard
+  //      totals in db/members.json), every current member counted for the average ----
+  const CUR = M.members.filter(x => x.current);
   const mean = a => a.length ? a.reduce((p, q) => p + q, 0) / a.length : 0;
-  const recentW = W.wars.filter(w => w.end >= since);
-  const warStats = uid => { const rows = recentW.map(w => w.m.find(x => x[0] === uid)).filter(Boolean);
-    return {per: rows.length ? mean(rows.map(r => r[1])) : null, part: rows.length ? rows.filter(r => r[1] > 0).length / rows.length : null}; };
-  const chainHits = uid => C.chains.filter(c => c.end >= since).reduce((a, c) => a + ((c.m.find(x => x[0] === uid) || [0, 0])[1]), 0);
-  const gymMonths3 = Object.keys(GY.history || {}).sort().slice(-3);
-  const gymPer = uid => gymMonths3.length ? mean(gymMonths3.map(mo => ((GY.history[mo] || {})[String(uid)] || [0, 0, 0, 0]).reduce((p, q) => p + q, 0))) : null;
-  const ocOf = uid => { const l = O.crimes.filter(c => (c.t || 0) >= since && (c.m || []).includes(uid));
-    return {n: l.length, rate: l.length ? l.filter(c => String(c.status).toLowerCase() === "successful").length / l.length : null}; };
+  const byId = {}; M.members.forEach(x => byId[x.id] = x);
+  const T_ = uid => (byId[uid] || {}).t || {};
+  const perWar = uid => { const t = T_(uid); return t.wars ? t.war_hits / t.wars : null; };
+  const tookPart = uid => { const t = T_(uid); return t.wars ? (t.wars - t.wars_zero) / t.wars : null; };
+  const perChain = uid => { const t = T_(uid); return t.chains ? t.chain_hits / t.chains : null; };
+  // gym: months on record (saved from Nov 2026) since they joined
+  const nowS = Date.now() / 1000;
+  const gymPer = uid => { const d = (byId[uid] || {}).days, j = d != null ? new Date((nowS - d * 86400) * 1000).toISOString().slice(0, 7) : "";
+    const ms = Object.keys(GY.history || {}).filter(mo => mo >= j);
+    return ms.length ? mean(ms.map(mo => ((GY.history[mo] || {})[String(uid)] || [0, 0, 0, 0]).reduce((p, q) => p + q, 0))) : null; };
+  const crimesDone = uid => T_(uid).crimes || 0;
+  const crimeRate = uid => { const t = T_(uid); return t.crimes ? t.crimes_ok / t.crimes : null; };
   const favg = f => mean(CUR.map(x => f(x.id)).filter(v => v !== null && v !== undefined));
   const card = (label, v, a, fmt, note) => {
     if (v === null || v === undefined) return `<div class="cm"><div class="l">${label}</div><div class="v">-</div><div class="a">${note || "nothing to compare yet"}</div></div>`;
@@ -191,43 +228,48 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       + `<div class="a">faction average ${fmt(a)}${note ? " · " + note : ""}</div>`
       + `<div class="bar2"><i style="width:${Math.min(100, r * 50)}%;background:${col}"></i><u></u></div></div>`; };
   const pctF = v => Math.round(v * 100) + "%", n1 = v => (Math.round(v * 10) / 10).toLocaleString("en-US");
-  const ws_ = warStats(id), oc_ = ocOf(id);
   const cmp = [
-    card("⚔️ Hits per war", ws_.per, favg(u => warStats(u).per), n1, `${recentW.length} war${recentW.length !== 1 ? "s" : ""}`),
-    card("⛓️ Chain hits", chainHits(id), favg(chainHits), num),
-    card("🏋️ Gym energy / month", gymPer(id), favg(gymPer), num, gymMonths3.length ? gymMonths3.length + " month" + (gymMonths3.length > 1 ? "s" : "") : "saved from Nov 2026"),
-    card("🕵️ Crimes done", oc_.n, favg(u => ocOf(u).n), num),
-    card("🕵️ Crime success", oc_.rate, favg(u => ocOf(u).rate), pctF)];
-  $("cmp").innerHTML = cmp.join("");
-  // ---- private figures (reliability, Xanax): your own (the gatekeeper's mine.json) or anyone's for leaders ----
+    card("⚔️ Hits per war", perWar(id), favg(perWar), n1, `${t.wars} war${t.wars !== 1 ? "s" : ""}`),
+    card("✅ Wars hit in", tookPart(id), favg(tookPart), pctF, `${t.wars - t.wars_zero} of ${t.wars}`),
+    card("⛓️ Hits per chain", perChain(id), favg(perChain), n1, `${t.chains} chain${t.chains !== 1 ? "s" : ""}`),
+    card("🏋️ Gym energy / month", gymPer(id), favg(gymPer), num, "months on record (from Nov 2026)"),
+    card("🕵️ Crimes done", crimesDone(id), favg(crimesDone), num),
+    card("🕵️ Crime success", crimeRate(id), favg(crimeRate), pctF)];
+  $("cmpc").innerHTML = cmp.join("");
+  // ---- private figures (reliability, armory usage): your own (the gatekeeper's mine.json) or anyone's for leaders ----
   const priv = !me ? Promise.resolve(null) : own ? fetch("mine.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
     : me.leader ? fetch(GATE + "/l/db/private.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
         .then(P => P ? Object.assign({}, (P.members || {})[String(id)] || {}, {averages: P.averages || {}}) : null) : Promise.resolve(null);
   priv.catch(() => null).then(pv => {
-    if (!pv || !pv.reliability) return;
-    const R = pv.reliability, A = pv.averages || {}, sc = R.score, col = sc >= 80 ? "#78c878" : sc >= 60 ? "#e8be5a" : "#e4382e";
-    $("rel").style.display = "block"; $("relv").textContent = sc; $("relv").style.color = col;
-    $("relp").textContent = `faction avg ${A.reliability ?? "-"}` + (own ? " · only you and leaders see this" : " · leaders only");
-    const D = R.detail || {}, AP = A.parts || {};
-    const part = (label, k, max, note) => card(`${label} (out of ${max})`, R.parts[k], AP[k], v => n1(v), note);
-    $("relh").style.display = ""; $("relb").style.display = "";
-    $("relt").textContent = "(war 40 · chains 20 · crimes 25 · activity 15)";
-    let h = part("⚔️ War", "war", 40, `hit in ${D.wars_hit}/${D.wars_in} wars`)
-      + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
-      + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
-      + part("🕐 Activity", "activity", 15, `idle ${D.idle_days} days`);
-    // energy (since the recording start, Nov 1): armory Xanax energy vs energy used (gym + every attack x 25)
-    const X = pv.xanax;
-    if (X && (X.xanax || X.gym || X.attacks)) {
-      const since = A.xanax_from ? new Date(A.xanax_from * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", timeZone: "UTC"}) : "Nov 1";
-      const xc = (l_, v_, b_) => `<div class="cm"><div class="l">${l_}</div><div class="v">${v_}</div><div class="a">${b_}</div></div>`;
-      h += xc("💊 Xanax energy", num(X.xanax_energy), `${num(X.xanax)} armory Xanax × 250 · since ${since}`)
-        + xc("🏋️ Gym energy", num(X.gym), `since ${since}`)
-        + xc("⚔️ Attack energy", num(X.attack_energy), `${num(X.attacks)} attacks (all kinds) × 25`)
-        + xc("⚖️ Net energy", `<span style="color:${X.net >= 0 ? "#78c878" : "#e4382e"}">${X.net >= 0 ? "+" : ""}${num(X.net)}</span>`,
-             "energy used (gym + attacks) − Xanax energy");
+    if (!pv) return;
+    const who_ = own ? "only you and leaders see this" : "leaders only";
+    if (pv.reliability) {
+      const R = pv.reliability, A = pv.averages || {}, sc = R.score, col = sc >= 80 ? "#78c878" : sc >= 60 ? "#e8be5a" : "#e4382e";
+      $("rel").style.display = "block"; $("relv").textContent = sc; $("relv").style.color = col;
+      $("relp").textContent = `faction avg ${A.reliability ?? "-"} · ${who_}`;
+      const D = R.detail || {}, AP = A.parts || {};
+      const part = (label, k, max, note) => card(`${label} (out of ${max})`, R.parts[k], AP[k], v => n1(v), note);
+      $("relsec").style.display = $("relsec").dataset.off ? "none" : "";
+      $("relt").textContent = "(war 40 · chains 20 · crimes 25 · activity 15)";
+      $("relb").innerHTML = part("⚔️ War", "war", 40, `hit in ${D.wars_hit}/${D.wars_in} wars`)
+        + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
+        + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
+        + part("🕐 Activity", "activity", 15, `idle ${D.idle_days} days`);
     }
-    $("relb").innerHTML = h;
+    // armory usage (Armory Monitor): this month, with last month and all time on record underneath
+    const AR = pv.armory;
+    if (AR) {
+      const IC = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", Other: "📦"};
+      const cats = Object.keys(IC).filter(c => (AR.all || {})[c]);
+      const sum = o => Object.values(o || {}).reduce((a, b) => a + b, 0);
+      $("armsec").style.display = $("armsec").dataset.off ? "none" : "";
+      $("armt").textContent = `(items taken from the faction armory · ${who_})`;
+      $("armc").innerHTML = `<div class="tile"><b>${num(sum(AR.month))}</b><span>This month</span><i>${num(sum(AR.last_month))} last month · ${num(sum(AR.all))} all time</i></div>`
+        + cats.map(c => `<div class="tile"><b>${num((AR.month || {})[c] || 0)}</b><span>${IC[c]} ${c}</span><i>${num((AR.last_month || {})[c] || 0)} last month · ${num(AR.all[c])} all time</i></div>`).join("");
+      const since = AR.oldest ? new Date(AR.oldest * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"}) : "";
+      $("arml").innerHTML = (AR.top && AR.top.length ? "Most taken: " + AR.top.map(([n, v]) => `${esc(n)} ×${num(v)}`).join(" · ") + "<br>" : "")
+        + (since ? `On record since ${since}${AR.done ? "" : " (older history still filling in)"}` : "");
+    }
   });
   // charts - redrawn for the chosen range (1M / 3M / 6M / 1Y / All). Remembered on this device.
   const DAY = 86400, nowT = Date.now() / 1000;
@@ -236,8 +278,9 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     const from = days ? nowT - days * DAY : 0;
     // hits per war: every war in the range
     const ws = W.wars.filter(w => w.end >= from);
-    const wv = ws.map(w => { const r = w.m.find(x => x[0] === id); return {label: `vs ${w.opponent} (${day(w.end)})`,
-      short: fmtD(w.end, {month: "short", day: "numeric"}), v: r ? r[1] : null}; });
+    // termed wars with no hits show as a dot (not a red "missed" bar) and stay out of their average
+    const wv = ws.map(w => { const r = w.m.find(x => x[0] === id); return {label: `vs ${w.opponent} (${day(w.end)})${w.termed ? " - termed" : ""}`,
+      short: fmtD(w.end, {month: "short", day: "numeric"}), v: r && !(w.termed && r[1] === 0) ? r[1] : null}; });
     const avgs = ws.map(w => { const h = w.m.filter(x => x[1] > 0); return h.length ? h.reduce((a, x) => a + x[1], 0) / h.length : 0; });
     const fa = avgs.reduce((a, b) => a + b, 0) / (avgs.length || 1);
     $("cwt").textContent = `(${ws.length} war${ws.length !== 1 ? "s" : ""} - gold = their hits, line = faction average)`;
@@ -315,7 +358,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   const mine = W.wars.filter(w => w.m.some(x => x[0] === id)).reverse();
   $("tw").innerHTML = `<tr><th>Date</th><th>War</th><th class="n">Hits</th><th class="n">Respect</th><th class="n">Assists</th><th class="n">Hosps</th><th class="n">Outside</th><th class="n">Payout</th></tr>`
     + (mine.map(w => { const r = w.m.find(x => x[0] === id);
-      return `<tr><td>${day(w.end)}</td><td><span class="${w.won ? "w" : "d"}">${w.won ? "Victory" : "Defeat"}</span> vs ${esc(w.opponent)}</td>
+      return `<tr><td>${day(w.end)}</td><td><span class="${w.won ? "w" : "d"}">${w.won ? "Victory" : "Defeat"}</span> vs ${esc(w.opponent)}${w.termed ? ' <span class="badge">termed</span>' : ""}</td>
         <td class="n">${num(r[1])}</td><td class="n">${num(r[2])}</td><td class="n">${num(r[3])}</td><td class="n">${num(r[4])}</td><td class="n">${num(r[5])}</td>
         <td class="n">${pay[w.id] ? money(pay[w.id]) : "-"}</td></tr>`; }).join("") || `<tr><td colspan="8" class="tag">No ranked wars yet.</td></tr>`);
   // payouts (newest first) with their receipts
@@ -323,7 +366,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   $("payt").textContent = pc.length ? `(${pc.length} · ${money(pc.reduce((a, x) => a + x.r[1], 0))} total)` : "";
   $("tp").innerHTML = `<tr><th>Date</th><th>War</th><th class="n">War hits</th><th class="n">Paid</th><th></th></tr>`
     + (pc.map(({p, r}) => `<tr><td>${day(p.end)}</td><td>vs ${esc(p.opponent || "?")}</td><td class="n">${num(r[2])}</td>
-        <td class="n w">${money(r[1])}</td><td><a href="payouts/war-${p.war}.html" style="color:#e8be5a">Receipt</a></td></tr>`).join("")
+        <td class="n w">${money(r[1])}</td><td><a href="reports/war-${p.war}.html" style="color:#e8be5a">Report &amp; payout</a></td></tr>`).join("")
       || `<tr><td colspan="5" class="tag">No war payouts yet.</td></tr>`);
   // chains table (last 25 they hit in)
   const ch = C.chains.filter(c => c.m.some(x => x[0] === id)).reverse().slice(0, 25);

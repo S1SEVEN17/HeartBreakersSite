@@ -8,7 +8,8 @@
 //                     Torn who the person is and which faction they're in, then thrown away - never stored.
 //                     A Heart Breakers member gets a signed pass (cookie "hb_s", 30 days, HttpOnly).
 //   /logout           removes the pass
-//   /m/mine.json      the signed-in member's OWN reliability / Xanax figures (from the leaders' db/private.json)
+//   /m/mine.json      the signed-in member's OWN reliability / armory figures (from the leaders' db/private.json)
+//   /m/profile-layout PUT - a member saves THEIR OWN profile layout (data/profiles/<their id>.json in the data repo)
 //   /l/gh/contents/*  leaders' tools save to the private data repo through here (faction token, never on devices)
 //   /m/whoami.json    JSON {id, name, position, leader, since, until} for the signed-in member (My Account, menus, scripts)
 //   /m/...            members' pages  (pass + still in the faction)
@@ -39,6 +40,7 @@
 // =====================================================================================================
 
 const COOKIE = "hb_s";
+const API_COMMENT = "Heart Breakers Hub";        // on every Torn API call the site makes
 const PASS_DAYS = 30;
 const PUBLIC_EXT = /\.(png|webp|jpe?g|gif|ttf|ico)$/i;
 const enc = new TextEncoder();
@@ -122,11 +124,21 @@ function loginPage(next, err) {
   return page("Heart Breakers - Sign in", `<h1>Heart Breakers</h1><p class="sub">Members only - sign in with your Torn API key</p>
 ${err ? `<div class="err">${esc(err)}</div>` : ""}
 <form method="post" action="/login"><input type="hidden" name="next" value="${esc(next)}">
-<label>Torn API key (a <b>Public</b> key is enough)</label><input name="key" type="password" autocomplete="off" required minlength="16" maxlength="16" placeholder="16 characters">
+<label>Torn API key (a <b>Public</b> key is enough)</label><input name="key" id="k" type="password" autocomplete="off" required minlength="16" maxlength="16" placeholder="16 characters">
+<label style="display:flex;gap:8px;align-items:flex-start;color:#ddd;font-size:13px;margin-top:12px"><input type="checkbox" id="keep" checked style="width:auto;margin-top:2px">
+<span>Keep my key in this browser for the live war and chain timers<br><span style="color:#9a9a9c;font-size:12px">Stored only on this device, used only for
+your own requests to Torn (comment "Heart Breakers Hub"). Remove it any time from the Me menu, or by signing out.</span></span></label>
 <button type="submit">Sign in</button></form>
+<script>
+// "keep my key": saved in THIS browser only (localStorage hb_pub_key) before the form is sent - the hubs' live war and
+// chain timers call Torn from the browser with it. The gatekeeper still uses the key once and throws it away.
+(function(){var K="hb_pub_key";try{if(/[?&]out=1/.test(location.search))localStorage.removeItem(K);}catch(e){}
+document.querySelector("form").addEventListener("submit",function(){try{var v=document.getElementById("k").value.trim();
+if(document.getElementById("keep").checked&&/^[A-Za-z0-9]{16}$/.test(v))localStorage.setItem(K,v);else localStorage.removeItem(K);}catch(e){}});})();
+</script>
 <div class="tos">Need a key? Torn → <a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Settings → API Keys</a> → create one with <b>Public</b> access.
 <table><tr><td>Used for</td><td>Checking once that you're in Heart Breakers (your Torn ID, name and faction)</td></tr>
-<tr><td>Key stored</td><td>No - it's used for that one check and thrown away</td></tr>
+<tr><td>Key stored</td><td>Not by the site - it's used for that one check and thrown away. If you tick "keep my key", your own browser keeps it for the live timers</td></tr>
 <tr><td>Data kept</td><td>A signed pass in your browser (30 days) with your Torn ID and name</td></tr>
 <tr><td>Shared with</td><td>Nobody</td></tr><tr><td>Access level</td><td>Public</td></tr></table></div>`);
 }
@@ -138,7 +150,7 @@ async function doLogin(env, req) {
   if (!/^[A-Za-z0-9]{16}$/.test(key)) return loginPage(next, "That doesn't look like a Torn API key (16 letters/numbers).");
   let d;
   try {
-    const r = await fetch(`https://api.torn.com/user/?selections=profile&key=${encodeURIComponent(key)}&comment=HBGate`);
+    const r = await fetch(`https://api.torn.com/user/?selections=profile&key=${encodeURIComponent(key)}&comment=${encodeURIComponent(API_COMMENT)}`);
     d = await r.json();
   } catch (e) { return loginPage(next, "Couldn't reach Torn just now - try again in a minute."); }
   if (d.error) return loginPage(next, `Torn said: ${d.error.error || "error " + d.error.code}`);
@@ -185,7 +197,8 @@ export default {
       return Response.redirect(url.origin + (who.leader ? "/l/" : "/m/"), 302);
     }
     if (p === "/login") return req.method === "POST" ? doLogin(env, req) : loginPage(safeNext(url.searchParams.get("next")));
-    if (p === "/logout") return new Response(null, {status: 302, headers: {Location: "/login", "Set-Cookie": cookie("", 0)}});
+    // signing out also tells the login page to forget a key kept in this browser (?out=1)
+    if (p === "/logout") return new Response(null, {status: 302, headers: {Location: "/login?out=1", "Set-Cookie": cookie("", 0)}});
     if (p === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n");
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
@@ -209,6 +222,8 @@ export default {
     if (rest === "whoami.json") return Response.json(who, {headers: {"Cache-Control": "no-store"}});
     // a member's OWN private figures (reliability, Xanax) - picked out of the leaders' db/private.json
     if (area === "m" && rest === "mine.json") return mine(env, who);
+    // a member's own profile layout (Profile Layout editor) - only ever their own file
+    if (area === "m" && rest === "profile-layout") return saveLayout(env, req, who);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
     if (area === "l" && rest.startsWith("gh/contents/")) return ghProxy(env, req, who, rest.slice("gh/contents/".length));
     return proxy(env, dir, rest, req, true);
@@ -276,3 +291,35 @@ async function dispatch(env, wf, inputs) {
   console.log(`dispatch ${wf}: ${r.status}`);
 }
 
+
+// ---------- a member's own profile layout (profile-editor.html) ----------
+// PUT {order: [section keys], hidden: [section keys]} or {reset: true}. The file is ALWAYS data/profiles/<the signed-in
+// member's id>.json - nobody can write anyone else's. Only known section keys are kept. Saved with the faction token
+// (GH_DISPATCH) like the leaders' saves; the data repo's notify workflow then rebuilds the site.
+const PROFILE_SECS = ["cmp", "reliability", "armory", "totals", "charts", "gym", "payouts", "wars", "chains", "crimes"];
+async function saveLayout(env, req, who) {
+  if (req.method !== "PUT") return new Response("Method not allowed", {status: 405});
+  if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+  const tok = env.GH_SAVE || env.GH_DISPATCH;
+  if (!tok) return new Response("Saving isn't set up", {status: 503});
+  const j = await req.json().catch(() => null);
+  if (!j || typeof j !== "object") return new Response("Bad request", {status: 400});
+  const keep = a => (Array.isArray(a) ? a : []).map(String).filter((k, i, all) => PROFILE_SECS.includes(k) && all.indexOf(k) === i);
+  const path = `data/profiles/${Number(who.id)}.json`;
+  const api = `https://api.github.com/repos/${DATA_REPO}/contents/${path}`;
+  const H = {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "User-Agent": "hb-gate", "Content-Type": "application/json"};
+  const cur = await fetch(api + "?ref=main", {headers: H});
+  const sha = cur.ok ? (await cur.json()).sha : undefined;
+  const msg = `Profile layout ${j.reset ? "reset" : "saved"} (by ${who.name} [${who.id}])`;
+  let r;
+  if (j.reset) {
+    if (!sha) return Response.json({ok: true});
+    r = await fetch(api, {method: "DELETE", headers: H, body: JSON.stringify({message: msg, sha, branch: "main"})});
+  } else {
+    const body = JSON.stringify({order: keep(j.order), hidden: keep(j.hidden)}, null, 1) + "\n";
+    r = await fetch(api, {method: "PUT", headers: H, body: JSON.stringify({message: msg, sha, branch: "main",
+      content: btoa(unescape(encodeURIComponent(body)))})});
+  }
+  if (!r.ok) return new Response("Save failed (" + r.status + ")", {status: 502});
+  return Response.json({ok: true}, {headers: {"Cache-Control": "no-store"}});
+}

@@ -11,7 +11,8 @@
   Sections (ids for links): #war  #chain  #oc  #gym - top 10 per board, drawn in the browser from db/:
     war   - war hits, war respect, wars hit             (db/wars.json, by the war's end date)
     chain - chain hits, chain respect, retaliations     (db/chains.json, by the chain's end date)
-    oc    - crimes passed, crime earnings (each member's share - 80% split incl. prerequisite crimes), level points
+    oc    - crimes passed, crime earnings (each member's share - 80% split incl. prerequisite crimes)
+            ("Level points" was removed Nov 2026)
             (difficulty of successful crimes)            (db/crimes.json)
     gym   - energy trained: total + each stat            (db/gym.json: month_gain / all / history)
   Current mode shows current members only; history includes members who've since left (marked "left").
@@ -87,10 +88,10 @@ function draw(period) {
   D.chains.chains.filter(c => inP(c.end)).forEach(c => c.m.forEach(x => { add(ch, x[0], x[1]); add(cr, x[0], x[2]); add(crt, x[0], x[3]); }));
   $("bchain").innerHTML = board("Chain hits", ch, num, cur) + board("Chain respect", cr, num, cur) + board("Retaliations", crt, num, cur);
   // organized crimes
-  const op = {}, oe = {}, ol = {};
+  const op = {}, oe = {};
   D.crimes.crimes.filter(c => inP(c.t) && String(c.status).toLowerCase() === "successful").forEach(c => (c.m || []).forEach(id => {
-    add(op, id, 1); add(oe, id, c.share || 0); add(ol, id, c.diff || 0); }));
-  $("boc").innerHTML = board("Crimes passed", op, num, cur) + board("Crime earnings", oe, short, cur) + board("Level points", ol, num, cur);
+    add(op, id, 1); add(oe, id, c.share || 0); }));
+  $("boc").innerHTML = board("Crimes passed", op, num, cur) + board("Crime earnings", oe, short, cur);
   // gym
   let g = {};
   if (period.all) g = D.gym.all || {};

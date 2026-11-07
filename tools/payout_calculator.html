@@ -358,7 +358,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 function apiKey() { return $("key").value.trim(); }
 async function tget(url) {
   const full = url.startsWith("http") ? url : API + url;
-  const u = new URL(full); u.searchParams.delete("key"); u.searchParams.set("comment", "HBPayout");
+  const u = new URL(full); u.searchParams.delete("key"); u.searchParams.set("comment", "Heart Breakers Hub");
   const r = await fetch(u, {headers: {Authorization: "ApiKey " + apiKey()}});
   const j = await r.json();
   if (j.error) throw new Error(`Torn API error ${j.error.code}: ${j.error.error}`);

@@ -13,6 +13,9 @@
   and db/members.json for names (members who left are kept in history months, marked "left").
   Energy = gym energy trained while in the faction (Torn's faction contributors), refreshed every few hours.
   History starts in November 2026 (when monthly gym data began being saved).
+  gym-history.html also opens with a SUMMARY of every member: all-time energy (since joining, while in the faction),
+  this month, months on record, average per month (months on record) and best month - current members, plus
+  former members with "Show former members".
   Placeholders: __MENU__ (site header), __MODE__ ("current" / "history").
 -->
 <style>
@@ -36,11 +39,18 @@ th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}td.n,th.n{text-align:ri
 .rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
 .rng button,.rng select{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
 .rng button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+.hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin:0 0 10px}
+.hst div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px;text-align:center}
+.hst b{display:block;color:#fff;font-size:19px}.hst span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.fm{color:var(--sub);font-size:13px;margin:6px 0;display:flex;gap:6px;align-items:center}
 #err{text-align:center;color:var(--sub);margin:30px}
 </style></head><body>
 __MENU__
 <h1 id="ttl">Gym Leaderboards</h1>
 <div class="sub" id="meta">Loading…</div>
+<div id="sum" style="display:none"><h2>📊 Summary <span class="tag">(every member · tap a column to sort)</span></h2>
+<div class="hst" id="sumS"></div><label class="fm"><input type="checkbox" id="sumF"> Show former members</label>
+<div class="scroll"><table id="sumT"></table></div><h2>🗓️ Month by month</h2></div>
 <div class="rng" id="ctl"></div>
 <div id="err" style="display:none"></div>
 <h2 id="podh">🏆 Top 3</h2>
@@ -98,12 +108,38 @@ function viewMonth(mon) {
   show(rows, monthName(mon));
 }
 
+// SUMMARY (gym-history.html): every member, all their gym data on record
+function summary() {
+  const months = Object.keys(G.history).sort();
+  const tot = a => (a || [0, 0, 0, 0]).reduce((x, y) => x + y, 0);
+  const allE = id => ST.slice(0, 4).reduce((a, [k]) => a + (((G.all[id] || {})[k]) || 0), 0);
+  const ids = new Set(Object.keys(current).concat(...months.map(mo => Object.keys(G.history[mo] || {}))));
+  const rows = [...ids].map(id => { const per = months.map(mo => tot((G.history[mo] || {})[id]));
+    const on = per.filter(v => v > 0);
+    return {id: +id, name: names[id] || "?", left: !current[id], all: allE(id), month: tot((G.history[G.month] || {})[id]),
+            months: on.length, avg: on.length ? on.reduce((a, b) => a + b, 0) / on.length : 0, best: Math.max(0, ...per)}; });
+  const cur = rows.filter(r => !r.left), tr = cur.filter(r => r.all > 0);
+  $("sumS").innerHTML = [[num(cur.reduce((a, r) => a + r.all, 0)), "All-time energy"], [num(cur.reduce((a, r) => a + r.month, 0)), "This month"],
+    [`${tr.length}/${cur.length}`, "Members who trained"], [num(tr.length ? tr.reduce((a, r) => a + r.all, 0) / tr.length : 0), "Avg per trainer"],
+    [String(months.length), "Months on record"]].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
+  const cols = [["Member", "name"], ["All time", "all"], ["This month", "month"], ["Avg / month", "avg"], ["Best month", "best"], ["Months", "months"]];
+  let key = "all", dsc = true;
+  const draw = () => { const show_ = rows.filter(r => $("sumF").checked || !r.left);
+    show_.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : x - y; return dsc ? -r : r; });
+    $("sumT").innerHTML = `<tr><th>#</th>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (dsc ? "" : " up") : ""}" data-k="${k}">${l}</th>`).join("")}</tr>`
+      + show_.map((r, i) => `<tr class="${r.all ? "" : "zero"}"><td class="tag">${i + 1}</td><td><a href="member.html?id=${r.id}">${esc(r.name)}</a>${r.left ? ' <span class="tag">former</span>' : ""}</td>`
+        + `<td class="n">${num(r.all)}</td><td class="n">${num(r.month)}</td><td class="n">${num(r.avg)}</td><td class="n">${num(r.best)}</td><td class="n">${r.months}</td></tr>`).join("");
+    $("sumT").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === key) dsc = !dsc; else { key = th.dataset.k; dsc = key !== "name"; } draw(); }); };
+  $("sumF").onchange = draw; draw(); $("sum").style.display = "";
+}
+
 Promise.all(["db/gym.json", "db/members.json"].map(f => fetch(f).then(r => { if (!r.ok) throw new Error(f); return r.json(); })))
 .then(([g, m]) => {
   G = g; G.history = G.history || {}; M = m.members;
   M.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; });
   if (MODE === "history") {
-    $("ttl").textContent = "Gym Leaderboard History";
+    $("ttl").textContent = "Gym History";
+    summary();
     const months = Object.keys(G.history).sort().reverse();
     if (!months.length) { $("meta").textContent = "No monthly gym data saved yet."; return; }
     $("ctl").innerHTML = `<span>Month</span><select id="mon">${months.map(mo => `<option value="${mo}">${monthName(mo)}${mo === G.month ? " (this month)" : ""}</option>`).join("")}</select>`;

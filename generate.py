@@ -35,8 +35,8 @@ API notes
 * Uses the key in the TORN_API_KEY environment variable (a GitHub Actions
   secret - never committed to the repo). The key owner's own faction is used.
 * `upgrades` and `positions` need a key whose owner has faction API access.
-* Every request carries `comment=FactionBanner` (suite-wide standard: every
-  api.torn.com call includes &comment=ScriptName).
+* Every request carries `comment=Heart Breakers Hub` (every api.torn.com call the site makes - the updates here,
+  the gatekeeper's sign-in, the hubs' live timers and the payout calculator - uses this same comment).
 * v2 response shapes used here:
     /v2/faction/basic     -> {"basic": {id, name, tag, leader_id, co_leader_id,
                                         respect, days_old, capacity, members,
@@ -63,7 +63,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import math
@@ -77,7 +77,7 @@ ICON_DIR = ROOT / "art" / "icons"
 CONFIG_PATH = ROOT / "config.json"
 
 API_BASE = "https://api.torn.com/v2/faction"
-API_COMMENT = "FactionBanner"  # suite standard: &comment=ScriptName on every call
+API_COMMENT = "Heart Breakers Hub"  # on EVERY Torn API call the site makes (here, gatekeeper, pages)
 # pause between paged API calls (war attack log, vault log): 2 s = at most ~30 calls a minute, so even
 # while a war's attack log is read the account stays far below Torn's 100/minute (shared with the key
 # owner's other tools - PDA, userscripts, Torn Stats)
@@ -301,9 +301,9 @@ def fetch_url(url: str, key: str) -> dict:
     """GET a full API URL (a _metadata.links next/prev link). Any key in the
     link is dropped - the key always travels in the Authorization header."""
     parts = urllib.parse.urlsplit(url)
-    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query) if k.lower() != "key"]
-    if not any(k == "comment" for k, _ in q):
-        q.append(("comment", API_COMMENT))
+    # Torn's next/prev links repeat the old comment - always ours
+    q = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query) if k.lower() not in ("key", "comment")]
+    q.append(("comment", API_COMMENT))
     url = urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
     req = urllib.request.Request(url, headers={"Accept": "application/json",
                                                "Authorization": f"ApiKey {key}",
@@ -1167,7 +1167,8 @@ def slacker_watch(hist: dict, members: list, scfg: dict) -> dict:
     rev_m, warn_m = int(scfg.get("review_missed", 3)), int(scfg.get("warning_missed", 2))
     watch_tok = int(scfg.get("watch_token_wars", 2))
     now = int(datetime.now(timezone.utc).timestamp())
-    all_wars = sorted(hist.get("wars", {}).values(), key=lambda w: w["end"])
+    tw = termed_wars()                       # termed wars never count as missed / low hits
+    all_wars = sorted((w for k, w in hist.get("wars", {}).items() if str(k) not in tw), key=lambda w: w["end"])
     wars = all_wars[-n_recent:]
     stats = {}
     for w in wars:
@@ -3884,19 +3885,12 @@ def member_out(out: Path) -> Path:
 # "who is signed in") says leader. Dropdowns are <details>, so they work by tap on phones.
 #   (label, link, items)  link = direct button; items = dropdown. "M:" = members' folder, "L:" = leaders' folder,
 #   "G:" = gatekeeper address ("/" = the dashboard: Leaders Hub for leaders, Members Hub for everyone else)
+# Kept small (Nov 2026): the hubs' Explore section is the site's main navigation; the header just gets you home,
+# to the most-used pages and (leaders) the Leaders Hub. Every page is still linked from the hubs.
 NAV = [("🏠 Home", "G:/", None, False),
-       ("🛡️ Leaders", None, [("Leaders Hub", "L:index.html"), ("Members Hub", "M:index.html"),
-                              ("Leader Monitor", "L:monitor.html"), ("Xanax Monitor", "L:xanax.html"),
-                              ("Payout Calculator", "L:payout.html")], True),
-       ("🖼️ Site Panels", None, [("Announcements", "L:announcements.html"), ("Faction Description", "L:description.html"),
-                                  ("Newsletter Builder", "L:builder.html"), ("Homepage", "L:homepage.html")], True),
-       ("📊 Leaderboards", None, [("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
-                                  ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html")], False),
-       ("⚔️ Wars & Chains", None, [("War History", "M:wars.html"), ("War Payouts", "M:payouts.html"),
-                                   ("Chain History", "M:chains.html")], False),
-       ("🕵️ Organized Crimes", "M:crimes.html", None, False),
-       ("👥 Members", None, [("Members", "M:members.html"), ("My Profile", "M:me")], False),
-       ("📰 Recaps", None, [("Latest Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html")], False)]
+       ("📊 Leaderboards", "M:leaderboards.html", None, False),
+       ("👥 Members", "M:members.html", None, False),
+       ("🛡️ Leaders", "L:index.html", None, True)]
 
 MENU_CSS = """<style>.hbm{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:0 0 12px;
 font:14px system-ui,sans-serif;position:relative;z-index:50}.hbm>a,.hbm summary{color:#e8be5a;background:#1a1012;
@@ -3929,15 +3923,20 @@ def _menu_js(root: str) -> str:
 # Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
 # The name is filled in the browser from whoami.json, which also reveals the leader-only groups.
 # My Profile = their own member.html (the gatekeeper's /m/me sends them there; #sections jump to a part).
-ACCOUNT_LINKS = [("👤 My Profile", "me"), ("💰 My Payouts", "me#payouts"), ("⚔️ My Wars", "me#wars"),
-                 ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
+ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🧩 Edit my profile layout", "profile-editor.html"), ("💰 My Payouts", "me#payouts"),
+                 ("⚔️ My Wars", "me#wars"), ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
 
 
 def account_menu(mroot: str) -> str:
     g_ = gate_cfg()["url"].rstrip("/")
     links = "".join(f'<a href="{mroot}{u}">{t}</a>' for t, u in ACCOUNT_LINKS)
     return (f'<details class="hbacc"><summary id="hbaccn">👤 Me</summary><div>{links}'
+            f'<a href="#" id="hbKeyClr" style="display:none">🔑 Remove my API key</a>'
             f'<a href="{g_}/logout" style="color:#ff8a80">🚪 Sign out</a></div></details>'
+            # "Remove my API key": shown when this browser keeps the member's Public key (live timers, hb_pub_key)
+            "<script>(function(){var K='hb_pub_key',b=document.getElementById('hbKeyClr');try{if(localStorage.getItem(K))b.style.display='';}catch(e){}"
+            "b.onclick=function(e){e.preventDefault();if(confirm('Remove your Torn API key from this browser? (The live war and chain timers stop until you add it again.)'))"
+            "{try{localStorage.removeItem(K);}catch(x){}b.style.display='none';location.reload();}};})();</script>"
             "<script>(function(){fetch(" + json.dumps(mroot + "whoami.json") + ",{cache:'no-store'})"
             ".then(function(r){return r.ok?r.json():null;}).then(function(w){if(!w)return;"
             "document.getElementById('hbaccn').textContent='👤 '+w.name;"
@@ -3986,7 +3985,7 @@ def leader_menu(root: str = "") -> str:
     return nav_menu(member_base() + "/", root or "./")
 
 
-def image_page(path: Path, title: str, img_src: str, markup: str, root: str = "", menu: bool = True):
+def image_page(path: Path, title: str, img_src: str, markup: str, root: str = "", menu: bool = True, extra: str = ""):
     """One PDA-friendly page per image: the image full width (tap to open the
     raw file), its copy-ready HTML markup with a Copy button, and links to
     the other pages. `root` = relative path back to the site root."""
@@ -4001,7 +4000,7 @@ h1{{color:#e4382e;font-size:20px;text-align:center;margin:6px 0 10px}}nav{{text-
 nav a{{color:#e8be5a;text-decoration:none}}img{{width:100%;height:auto;display:block}}
 textarea{{width:100%;height:110px;box-sizing:border-box;background:#1a1012;color:#ddd;border:1px solid #5c1c1a;font:12px monospace}}
 button{{background:#e4382e;color:#fff;border:0;padding:10px 16px;border-radius:6px;font-weight:600;margin:8px 0 24px}}</style></head>
-<body>{nav}<h1>{_html.escape(title)}</h1>
+<body>{nav}<h1>{_html.escape(title)}</h1>{extra}
 <a href="{img_src}"><img src="{img_src}" alt="{_html.escape(title)}"></a>
 <p>HTML for Torn (source / HTML view, paste):</p>
 <textarea id="s" readonly onclick="this.select()">{_html.escape(markup)}</textarea>
@@ -4089,6 +4088,50 @@ def report_links(slug: str) -> list:
         {"type": 2, "style": 5, "label": "Report", "url": f"{base_url}/reports/{slug}.html"}]}]
 
 
+# TERMED WARS: config.json "termed_wars": [war id, ...] - wars agreed with the enemy (e.g. a set result). Leaders
+# toggle it on each war's report page (war_termed_box -> saved to config.json through the gatekeeper). A termed war
+# is left out of reliability, the participation trend, Slacker Watch and "took part" figures, and a member who
+# didn't hit in it isn't counted as having missed it (their hits in it still count everywhere).
+def termed_wars(cfg: dict = None) -> set:
+    try:
+        cfg = cfg if cfg is not None else load_config()
+    except (OSError, ValueError):
+        return set()
+    return {str(x) for x in cfg.get("termed_wars", []) or []}
+
+
+def war_termed_box(meta: dict) -> str:
+    """The Termed badge on a war report page + the leaders' on/off toggle with Save (shown only to leaders -
+    whoami). Saves config.json "termed_wars" through the gatekeeper (GET for the sha, PUT the change)."""
+    wid = str(meta.get("id", ""))
+    on = wid in termed_wars()
+    proxy, g_ = gh_proxy_url(), gate_cfg()
+    who = (g_["url"].rstrip("/") + "/m/whoami.json") if g_ else ""
+    badge = ('<div id="tmB" style="text-align:center;margin:0 0 10px;' + ("" if on else "display:none;") +
+             '"><span style="background:#3a2d12;color:#e8be5a;border:1px solid #6b4a18;border-radius:8px;padding:4px 12px;'
+             'font-size:13px">🤝 Termed war - not counted against anyone\'s participation or reliability</span></div>')
+    if not proxy:
+        return badge
+    return badge + f"""<div id="tmL" style="display:none;background:#170d0e;border:1px dashed #6b4a18;border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:14px">
+<label style="display:flex;gap:8px;align-items:center;cursor:pointer"><input type="checkbox" id="tmC"{" checked" if on else ""} style="width:18px;height:18px">
+<span><b style="color:#e8be5a">Termed war</b> <span style="color:#9a9a9c;font-size:12px">(leaders) - leave this war out of reliability and participation</span></span></label>
+<button id="tmS" style="margin:8px 0 0;padding:7px 14px">Save</button> <span id="tmM" style="color:#e8be5a;font-size:13px"></span></div>
+<script>
+// Termed toggle (leaders only): config.json "termed_wars" through the gatekeeper's save route
+(function(){{var W={json.dumps(wid)},P={json.dumps(proxy)},$=function(i){{return document.getElementById(i)}};
+fetch({json.dumps(who)},{{cache:"no-store"}}).then(function(r){{return r.ok?r.json():null}}).then(function(w){{if(w&&w.leader)$("tmL").style.display=""}}).catch(function(){{}});
+var d=function(b){{return new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\\n/g,"")),function(c){{return c.charCodeAt(0)}}))}};
+var e=function(t){{var u=new TextEncoder().encode(t),s="";for(var i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)}};
+$("tmS").onclick=function(){{var on=$("tmC").checked;$("tmM").textContent="Saving…";
+  fetch(P+"config.json?ref=main",{{cache:"no-store"}}).then(function(r){{if(!r.ok)throw new Error("couldn't read the settings ("+r.status+")");return r.json()}})
+  .then(function(j){{var c=JSON.parse(d(j.content)),l=(c.termed_wars||[]).map(String).filter(function(x){{return x!==W}});if(on)l.push(W);c.termed_wars=l;
+    return fetch(P+"config.json",{{method:"PUT",headers:{{"Content-Type":"application/json","X-HB-Save":"1"}},
+      body:JSON.stringify({{message:"War "+W+(on?" marked termed":" no longer termed"),sha:j.sha,branch:"main",content:e(JSON.stringify(c,null,2)+"\\n")}})}})}})
+  .then(function(r){{if(!r.ok)throw new Error("save failed ("+r.status+")");$("tmM").textContent="Saved ✓ - reliability and the pages update in a few minutes";
+    $("tmB").style.display=on?"":"none"}}).catch(function(x){{$("tmM").textContent=x.message}})}};}})();
+</script>"""
+
+
 def report_newsletter(meta: dict, slug: str) -> tuple:
     """(title, body HTML) for a saved war / chain report."""
     base_url = member_base()
@@ -4102,14 +4145,17 @@ def report_newsletter(meta: dict, slug: str) -> tuple:
         if meta.get("rank_before") and meta.get("rank_after"):
             rank = (f" · Rank {meta['rank_after']}" if meta["rank_before"] == meta["rank_after"]
                     else f" · Rank {meta['rank_before']} → {meta['rank_after']}")
-        title = f"War Report - {'Victory' if won else 'Defeat'} vs {meta.get('opponent', '?')}"
+        title = (f"War Report{' & Payout' if meta.get('pay') else ''} - {'Victory' if won else 'Defeat'} "
+                 f"vs {meta.get('opponent', '?')}")
         body = nl_join([
-            nl_p('<strong><span style="font-size:20px;color:#c0261d">WAR REPORT</span></strong>'),
+            nl_p(f'<strong><span style="font-size:20px;color:#c0261d">WAR REPORT{" &amp; PAYOUT" if meta.get("pay") else ""}</span></strong>'),
             nl_p(f'<strong><span style="font-size:16px;color:{col}">{"Victory" if won else "Defeat"} vs '
                  f'{meta.get("opponent", "?")}</span></strong><br>{when} · Score {fmt_int(meta.get("our", 0))} - '
                  f'{fmt_int(meta.get("their", 0))}{rank}'),
             nl_p(f'<strong>{fmt_int(meta.get("hits", 0))}</strong> war hits · <strong>{meta.get("hit", 0)}</strong> of '
-                 f'{meta.get("present", 0)} members took part'),
+                 f'{meta.get("present", 0)} members took part'
+                 + (f' · <strong>{_short_money(meta.get("paid", 0))}</strong> paid to {meta.get("paid_n", 0)} members'
+                    if meta.get("pay") else "")),
             img])
     else:
         title = f"Chain Report - {fmt_int(meta.get('length', 0))} hits"
@@ -4140,7 +4186,22 @@ def write_report_pages(out: Path):
         title, body = report_newsletter(meta, slug)
         image_page(mout / "reports" / f"{slug}.html", title, png.name,
                    f'<p style="text-align:center;"><a href="{base_url}/reports/{slug}.html"><img src="{base_url}/reports/'
-                   f'{png.name}" alt="{title}" width="600"></a></p>', "../")
+                   f'{png.name}" alt="{title}" width="600"></a></p>', "../",
+                   extra=war_termed_box(meta) if meta.get("kind") == "war" else "")
+        # a paid war: its payout pages ARE the combined War Report & Payout (old receipt links keep working)
+        if meta.get("kind") == "war" and meta.get("pay"):
+            wid = str(meta.get("id"))
+            (mout / "payouts").mkdir(parents=True, exist_ok=True)
+            stems = [f"war-{wid}"] + [g.stem for g in (PAYOUT_DIR.glob("*.json") if PAYOUT_DIR.exists() else [])
+                                       if g.stem.split("-")[0] == wid]
+            for st in stems:
+                (mout / "payouts" / f"{st}.png").write_bytes(png.read_bytes())
+                (mout / "payouts" / f"{st}.html").write_text(
+                    f'<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow">'
+                    f'<meta http-equiv="refresh" content="0;url=../reports/{slug}.html"><title>War Report &amp; Payout</title></head>'
+                    f'<body style="background:#100a0b;color:#ddd;font-family:sans-serif;text-align:center">'
+                    f'<p><a href="../reports/{slug}.html" style="color:#e8be5a">Open the War Report &amp; Payout</a></p></body></html>',
+                    encoding="utf-8")
 
 
 PANELS_DIR = ROOT / "data" / "panels"     # images published from the Message Builder
@@ -4258,6 +4319,21 @@ HUB_CSS += """
 .stats>div{background:var(--card);border:1px solid #2e1719;border-radius:10px;padding:10px}
 .stats .l{color:var(--sub);font-size:12px}.stats .v{color:#fff;font-size:22px;font-weight:700;line-height:1.25}
 .stats .s{font-size:12px;color:var(--sub)}.up{color:var(--green)!important}.dn{color:#ff6b61!important}
+.nowc{display:flex;flex-direction:column;gap:8px}
+.nowc a{display:flex;align-items:center;gap:12px;border-radius:10px;padding:11px 13px;border:1px solid}
+.nowc .war{background:#3b1513;border-color:#6b2420}.nowc .chain{background:#2e2410;border-color:#5c4716}
+.nowc i{font-style:normal;font-size:22px}.nowc .x{flex:1;min-width:0}.nowc b{display:block;color:#fff}
+.nowc .x span{color:var(--sub);font-size:13px}.nowc .war em{color:#ff6b61;font-style:normal;font-weight:700}
+.nowc .chain em{color:var(--gold);font-style:normal;font-weight:700}
+.nowc .go{font-size:12px;padding:3px 10px;border-radius:8px;background:#6b2420;color:#ffd6d2}
+.nowc .chain .go{background:#5c4716;color:#ffe9b8}
+.pbar{height:5px;background:#3a2d12;border-radius:3px;margin:6px 0 4px}.pbar u{display:block;height:5px;background:var(--gold);border-radius:3px}
+.keyc{background:var(--card);border:1px dashed var(--edge);border-radius:10px;padding:11px 13px;font-size:13px;color:var(--sub)}
+.keyc b{color:#fff;font-size:14px}.keyc form{display:flex;gap:6px;margin:8px 0 6px}
+.keyc input{flex:1;min-width:0;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:8px;padding:9px;font:14px system-ui}
+.keyc button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}
+.keyc small{display:block;font-size:11px}.keyc .err{color:#ff6b61;margin-top:4px}.keyc a{color:var(--gold)}
+.nowf{text-align:right;font-size:11px;color:var(--sub);margin-top:4px}.nowf a{color:var(--sub);text-decoration:underline;cursor:pointer}
 .attn{background:var(--card);border:1px solid #6b4a18;border-radius:12px;padding:10px 14px;margin:18px 0 6px}
 .attn .ah{display:flex;align-items:center;gap:8px;margin-bottom:4px}.attn .ah b{flex:1;color:#fff;font-size:15px}
 .attn .cnt{background:#3a2d12;color:var(--gold);font-size:12px;padding:2px 9px;border-radius:8px}
@@ -4271,6 +4347,13 @@ HUB_CSS += """
 .feat:hover{border-color:var(--red)}.feat img{width:100%;max-height:260px;object-fit:cover;object-position:top;display:block;background:#000}
 .feat div{padding:10px 13px}.feat b{display:block;color:#fff;font-size:16px;margin:6px 0 1px}.feat .sub{color:var(--sub);font-size:12px}
 .badge{display:inline-block;background:#3b1513;color:#ff6b61;font-size:11px;padding:2px 9px;border-radius:8px}
+.ltiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+.ltile{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:8px 13px 4px}
+.ltile p{display:flex;justify-content:space-between;align-items:center;margin:2px 0 4px;color:var(--gold);font-size:12px;letter-spacing:1px;text-transform:uppercase}
+.ltile p a{color:var(--sub);font-size:12px;text-transform:none;letter-spacing:0}
+.ltile>a{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid #2e1719}
+.ltile .t{flex:1;min-width:0;color:#eee;font-size:14px}.ltile .t small{display:block;color:var(--sub);font-size:12px}
+.ltile .ago{color:var(--sub);font-size:12px;white-space:nowrap}.ltile>a:hover .t{color:var(--gold)}
 .list{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:0 13px}
 .list a{display:flex;align-items:center;gap:11px;padding:10px 0;border-top:1px solid #2e1719}.list a:first-child{border-top:0}
 .list a i{font-style:normal;font-size:18px;width:24px;text-align:center}.list .t{flex:1;min-width:0;color:#eee;font-size:14px}
@@ -4287,8 +4370,11 @@ HUB_CSS += """
 #   who   /m/whoami.json  - name, position, leader      mine  /m/mine.json - own reliability (leaders' badge)
 #   home  db/home.json    - own numbers vs average
 #   att   leaders' db/attention.json - unpaid payouts, idle recruits ("Needs attention" hides when empty)
-# Nothing is read from Torn here - only the site's own files and the sign-in, so a member's Public key is all the
-# site ever needs (no faction key on the gatekeeper).
+# "Right now" (live ranked war + chain) is read from Torn IN THE MEMBER'S BROWSER with THEIR OWN Public key, which
+# they paste once into the section; it's kept only in that browser (localStorage "hb_pub_key") and never sent to
+# the gatekeeper or GitHub. Torn v2, both Public access: /faction/chain every CHAIN_EVERY s, /faction/wars every
+# WAR_EVERY s (timestamp= skips Torn's short cache), only while the page is visible; Torn's limit is 100 calls a
+# minute per key, so this uses ~6. Too-many-requests (code 5) backs off to a minute. Timers tick every second.
 HOME_JS = r"""
 (function(){
 const H=window.HBH||{},$=id=>document.getElementById(id),now=()=>Date.now()/1e3;
@@ -4297,8 +4383,11 @@ const get=u=>u?fetch(u,{cache:"no-store",credentials:"same-origin"}).then(r=>r.o
 const k=v=>v>=1e6?(v/1e6).toFixed(1).replace(/\.0$/,"")+"m":v>=1e4?Math.round(v/1e3)+"k":v>=1e3?(v/1e3).toFixed(1).replace(/\.0$/,"")+"k":String(Math.round(v));
 const ago=t=>{const s=now()-t;return s<3600?Math.max(1,Math.round(s/60))+"m":s<86400?Math.round(s/3600)+"h":Math.round(s/86400)+"d"};
 const agoL=t=>{const s=now()-t;return s<3600?"posted "+Math.max(1,Math.round(s/60))+" min ago":s<86400?"posted "+Math.round(s/3600)+" h ago":s<172800?"posted yesterday":"posted "+Math.round(s/86400)+" days ago"};
+const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),x=s%60;
+  return d?`${d}d ${h}h ${String(m).padStart(2,"0")}m`:h?`${h}h ${String(m).padStart(2,"0")}m ${String(x).padStart(2,"0")}s`:`${m}:${String(x).padStart(2,"0")}`};
+const BONUS=[10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000];
 document.querySelectorAll(".ago[data-t]").forEach(e=>{const t=+e.dataset.t;if(t)e.textContent=e.dataset.long?agoL(t):ago(t)});
-let WHO=null,HOME=null,ATT=null;
+let WHO=null,HOME=null,ATT=null,WAR,CHAIN,NOWERR="";
 
 function welcome(){const el=$("hbWel");if(!el)return;
   const hr=new Date().getHours(),hi=hr<5?"Good evening":hr<12?"Good morning":hr<18?"Good afternoon":"Good evening";
@@ -4327,7 +4416,61 @@ function attention(){const el=$("hbAtt");if(!el)return;const L=H.links||{},rows=
   el.querySelector(".rows").innerHTML=rows.join("");el.querySelector(".cnt").textContent=rows.length;el.hidden=!rows.length;
 }
 
+
+// ---------- Right now: live war + chain from Torn with the member's own Public key (this browser only) ----------
+// The key comes from the sign-in page ("keep my key in this browser") or the box shown here; both store it in
+// localStorage hb_pub_key. Chain every 15 s (Torn allows 100 calls a minute per key - this uses ~6).
+const KEYK="hb_pub_key",CHAIN_EVERY=15,WAR_EVERY=30;
+const store={get:()=>{try{return localStorage.getItem(KEYK)||""}catch(e){return ""}},
+  set:v=>{try{v?localStorage.setItem(KEYK,v):localStorage.removeItem(KEYK)}catch(e){}}};
+let back=0;                                   // too many requests -> wait until this time
+async function torn(path){const r=await fetch(`https://api.torn.com/v2/faction/${H.faction}/${path}?timestamp=${Math.floor(now())}&comment=${encodeURIComponent(H.comment||"Heart Breakers Hub")}`,
+    {headers:{Authorization:"ApiKey "+store.get(),Accept:"application/json"},cache:"no-store"});
+  const j=await r.json();if(j.error){const e=new Error(j.error.error||"Torn error");e.code=j.error.code;throw e}return j}
+const BADKEY=[1,2,10,13,16,18];               // key missing / wrong / paused / not allowed -> ask again
+function fail(e){if(e.code===5){back=now()+60;return}
+  if(BADKEY.includes(e.code)){store.set("");NOWERR="Torn didn't accept that key ("+e.message+"). Try another Public key."}
+  else NOWERR="Couldn't reach Torn just now - retrying."}
+async function getChain(){if(!store.get()||now()<back)return;try{const t=now(),c=((await torn("chain")).chain)||{};
+    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR=""}
+  catch(e){fail(e)}nowCards()}
+async function getWar(){if(!store.get()||now()<back)return;try{let w=((await torn("wars")).wars||{}).ranked;if(Array.isArray(w))w=w[0];
+    const t=now();WAR=null;
+    if(w&&w.factions&&!(w.end&&w.end<=t)){const F=Array.isArray(w.factions)?w.factions:Object.entries(w.factions).map(([id,f])=>Object.assign({id},f));
+      const me=F.find(f=>String(f.id)===String(H.faction))||{},them=F.find(f=>String(f.id)!==String(H.faction))||{};
+      WAR={kind:w.start&&w.start<=t?"ongoing":"upcoming",opponent:them.name||"?",start:w.start||0,end:w.end||0,our:me.score||0,their:them.score||0}}
+    NOWERR=""}catch(e){fail(e)}nowCards()}
+function keyForm(){return `<div class="keyc"><b>⚡ Live war and chain</b><br>Add your Torn <b>Public</b> API key to see the ranked war countdown and the chain timer here.`
+  +`<form id="hbKeyF"><input id="hbKey" type="password" autocomplete="off" maxlength="16" placeholder="16-character Public key"><button>Save</button></form>`
+  +`<small>Stored locally in this browser only - never sent to the site - and used only for your own requests to Torn (faction chain and wars, Public access, comment "Heart Breakers Hub"). Shared with: nobody. Remove it any time from the Me menu or by signing out. `
+  +`<a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Get a key</a></small>${NOWERR?`<small class="err">${esc(NOWERR)}</small>`:""}</div>`}
+// the war + chain cards (redrawn every second for the timers)
+function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;
+  if(!store.get()){if(!$("hbKeyF")){el.querySelector(".nowc").innerHTML=keyForm();
+      $("hbKeyF").onsubmit=e=>{e.preventDefault();const v=$("hbKey").value.trim();
+        if(!/^[A-Za-z0-9]{16}$/.test(v)){NOWERR="That doesn't look like a Torn API key (16 letters/numbers).";el.querySelector(".nowc").innerHTML="";nowCards();return}
+        store.set(v);NOWERR="";el.querySelector(".nowc").innerHTML="";getWar();getChain()}}return}
+  const t=now(),L=H.links||{};let h="";
+  if(WAR){const live_=WAR.kind==="ongoing"||(WAR.start&&WAR.start<=t);
+    h+=`<a class="war" href="${L.torn_war}" target="_blank" rel="noopener"><i>⚔️</i><div class="x"><b>Ranked war vs ${esc(WAR.opponent)}</b>`
+      +(live_?`<span>Live · <em>${WAR.our.toLocaleString("en-US")} - ${WAR.their.toLocaleString("en-US")}</em></span>`
+             :`<span>Starts in <em>${dur(WAR.start-t)}</em></span>`)+`</div><span class="go">${live_?"Fight":"Plan"}</span></a>`}
+  const c=CHAIN;
+  if(c&&c.current>0&&c.timeout_at>t-20){const nx=BONUS.find(b=>b>c.current)||c.max||c.current,pv=[0].concat(BONUS).filter(b=>b<=c.current).pop()||0;
+    const pc=Math.max(3,Math.min(100,Math.round(100*(c.current-pv)/Math.max(1,nx-pv))));
+    h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>⛓️</i><div class="x"><b>Chain ${c.current.toLocaleString("en-US")} / ${nx.toLocaleString("en-US")}</b>`
+      +`<div class="pbar"><u style="width:${pc}%"></u></div><span>${c.timeout_at>t?`Timeout <em>${dur(c.timeout_at-t)}</em>`:"Checking…"} · ${(nx-c.current).toLocaleString("en-US")} to the next bonus</span></div><span class="go">Hit</span></a>`}
+  else if(c&&c.cooldown_at>t)h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>❄️</i><div class="x"><b>Chain on cooldown</b><span>A new chain can start in <em>${dur(c.cooldown_at-t)}</em></span></div></a>`;
+  if(!h&&(WAR!==undefined||CHAIN!==undefined))h=`<div class="keyc">No ranked war or chain running right now.</div>`;
+  if(NOWERR)h+=`<div class="nowf" style="color:#ff6b61">${esc(NOWERR)}</div>`;
+  h+=`<div class="nowf">Live from Torn with your key · <a id="hbKeyX">remove key</a></div>`;
+  el.querySelector(".nowc").innerHTML=h;
+  $("hbKeyX").onclick=()=>{if(confirm("Remove your API key from this browser?")){store.set("");WAR=CHAIN=undefined;el.querySelector(".nowc").innerHTML="";nowCards()}}}
+let lastC=0,lastW=0;
+function tick(){if($("hbNow")&&store.get()&&document.visibilityState==="visible"){const t=now();
+    if(t-lastC>=CHAIN_EVERY){lastC=t;getChain()}if(t-lastW>=WAR_EVERY){lastW=t;getWar()}}nowCards()}
 Promise.all([get(H.who),get(H.home),$("hbAtt")?get(H.att):null]).then(([w,h,a])=>{WHO=w;HOME=h;ATT=a;welcome();attention()});
+if($("hbNow")){tick();setInterval(tick,1e3);document.addEventListener("visibilitychange",tick)}
 })();
 """
 
@@ -4385,13 +4528,14 @@ def latest_newsletters(n: int = 2, with_time: bool = False) -> list:
     return [(nm, ti, su) for _t, nm, ti, su in sorted(items, reverse=True)[:n]]
 
 
-def _hub_latest_items(mb: str) -> list:
-    """Everything the "Latest" section can show, newest first:
-    [{"t": time, "url", "img", "title", "sub", "kind": newsletter|recap|payout|war|chain}] (mb = link prefix)."""
+def _hub_latest_items(mb: str, per_kind: int = 3) -> list:
+    """Everything the "Latest" section can show, newest first (up to per_kind of each kind):
+    [{"t": time, "url", "img", "title", "sub", "kind": newsletter|recap|war|chain}] (mb = link prefix).
+    War reports include their payout once paid (War Report & Payout) - payouts aren't a separate kind any more."""
     items = []
     months = sorted(RECAP_DIR.glob("*.png"), reverse=True) if RECAP_DIR.exists() else []
-    if months:
-        m = months[0].stem
+    for f in months[:per_kind]:
+        m = f.stem
         lab = datetime.strptime(m, "%Y-%m").strftime("%B %Y")
         first = f"recaps/{m}/recap-1.png" if (RECAP_DIR / m / "recap-1.png").exists() else f"recaps/{m}.png"
         # a recap is posted at the start of the NEXT month - use that, not the file time (checkouts reset it)
@@ -4400,24 +4544,9 @@ def _hub_latest_items(mb: str) -> list:
         items.append({"t": t_, "url": f"{mb}newsletter.html#{m}", "img": f"{mb}{first}",
                       "title": f"{lab} recap", "sub": "Monthly recap", "kind": "recap"})
     # newest newsletters (Newsletter Builder -> data/panels/<name>.png; copied to the members' panels/ folder)
-    for nm, title, sub, t_ in latest_newsletters(3, with_time=True):
+    for nm, title, sub, t_ in latest_newsletters(per_kind, with_time=True):
         items.append({"t": t_, "url": f"{mb}panels/{nm}.png", "img": f"{mb}panels/{nm}.png",
                       "title": title, "sub": sub, "kind": "newsletter"})
-    rec = _latest_receipts()
-    if rec:
-        def end_of(w):
-            try:
-                return json.loads((PAYOUT_DIR / f"{rec[w]}.json").read_text(encoding="utf-8"))["war"].get("end", 0)
-            except (OSError, ValueError, KeyError):
-                return 0
-        wid = max(rec, key=end_of)
-        try:
-            r = json.loads((PAYOUT_DIR / f"{rec[wid]}.json").read_text(encoding="utf-8"))
-            items.append({"t": int(r.get("created") or r["war"].get("end") or 0), "url": f"{mb}payouts/war-{wid}.html",
-                          "img": f"{mb}payouts/war-{wid}.png", "title": f"Payout vs {r['war'].get('opponent', '?')}",
-                          "sub": f"${r.get('paid', 0):,} paid", "kind": "payout"})
-        except (OSError, ValueError):
-            pass
     metas = []
     for f in REPORTS_DIR.glob("*.json") if REPORTS_DIR.exists() else []:
         try:
@@ -4426,39 +4555,50 @@ def _hub_latest_items(mb: str) -> list:
             pass
     for kind in ("war", "chain"):
         mk = sorted((x for x in metas if x[1].get("kind") == kind), key=lambda x: -x[1].get("end", 0))
-        if mk:
-            slug, m = mk[0]
+        for slug, m in mk[:per_kind]:
             title, _ = report_newsletter(m, slug)
             when = datetime.fromtimestamp(m.get("end", 0), timezone.utc).strftime("%b %d, %Y")
+            if kind == "war":
+                recent = m.get("end", 0) > datetime.now(timezone.utc).timestamp() - ATTN_PAYOUT_DAYS * 86400
+                sub = (f"{_short_money(m.get('paid', 0))} paid · " if m.get("pay") else "Payout pending · " if recent else "") + when
+            else:
+                sub = f"{m.get('respect', 0):,.0f} respect · {m.get('attackers', 0)} members · {when}"
             items.append({"t": int(m.get("end", 0)), "url": f"{mb}reports/{slug}.html", "img": f"{mb}reports/{slug}.png",
-                          "title": title, "sub": ("War report · " if kind == "war" else "Chain report · ") + when, "kind": kind})
+                          "title": title, "sub": sub, "kind": kind})
     items.sort(key=lambda x: -x["t"])
     return items
 
 
-LATEST_ICON = {"newsletter": "📰", "recap": "🗓️", "payout": "💰", "war": "🏆", "chain": "⛓️"}
-LATEST_LABEL = {"newsletter": "Newsletter", "recap": "Recap", "payout": "Payout", "war": "War report", "chain": "Chain report"}
+LATEST_ICON = {"newsletter": "📰", "recap": "🗓️", "war": "⚔️", "chain": "⛓️"}
+LATEST_LABEL = {"newsletter": "Newsletter", "recap": "Recap", "war": "War report", "chain": "Chain report"}
+# the sub-tiles under the featured post: (kind, heading, "see all" page)
+LATEST_GROUPS = [("war", "⚔️ Wars", "wars.html"), ("chain", "⛓️ Chains", "chains.html"),
+                 ("newsletter", "📰 Newsletters", ""), ("recap", "🗓️ Recaps", "recaps.html")]
 
 
 def _hub_latest(mb: str) -> str:
-    """The "Latest" section: the NEWEST post as one big picture card (type badge, name, how long ago), then the
-    next few as a compact list. Times are shown as "2h" / "3d" by HOME_JS (data-t), dates otherwise."""
+    """The "Latest" section: the NEWEST post as one big picture card (type badge, name, how long ago), then a
+    sub-tile per kind (Wars, Chains, Newsletters, Recaps) listing its last few - so a busy week of wars or chains
+    shows every entry. Times are shown as "2h" / "3d" by HOME_JS (data-t), dates otherwise."""
     import html as _html
     items = _hub_latest_items(mb)
     if not items:
         return '<p class="tag">Nothing posted yet.</p>'
-    f, rest = items[0], items[1:6]
+    f = items[0]
     when = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%b %d") if t else ""
     h = (f'<a class="feat" href="{f["url"]}"><img src="{f["img"]}" alt="" loading="lazy"><div>'
          f'<span class="badge">{LATEST_LABEL.get(f["kind"], "")}</span><b>{_html.escape(f["title"])}</b>'
          f'<span class="sub">{_html.escape(f["sub"])} · <span class="ago" data-t="{f["t"]}" data-long="1">{when(f["t"])}</span></span>'
          f'</div></a>')
-    if rest:
-        h += '<div class="list">' + "".join(
-            f'<a href="{x["url"]}"><i>{LATEST_ICON.get(x["kind"], "•")}</i><span class="t">{_html.escape(x["title"])}'
-            f'<small>{_html.escape(x["sub"])}</small></span><span class="ago" data-t="{x["t"]}">{when(x["t"])}</span></a>'
-            for x in rest) + "</div>"
-    return h
+    tiles = []
+    for kind, head, allp in LATEST_GROUPS:
+        rows = [x for x in items if x["kind"] == kind]
+        if not rows:
+            continue
+        tiles.append(f'<div class="ltile"><p>{head}' + (f'<a href="{mb}{allp}">All →</a>' if allp else "") + "</p>" + "".join(
+            f'<a href="{x["url"]}"><span class="t">{_html.escape(x["title"])}<small>{_html.escape(x["sub"])}</small></span>'
+            f'<span class="ago" data-t="{x["t"]}">{when(x["t"])}</span></a>' for x in rows) + "</div>")
+    return h + '<div class="ltiles">' + "".join(tiles) + "</div>"
 
 
 def _reports_page(mout: Path):
@@ -4496,10 +4636,12 @@ def _reports_page(mout: Path):
 #     {"type": "welcome"}                       greeting with the signed-in member's name, position, days in faction
 #                                               + 3 of their own numbers vs the faction average (db/home.json);
 #                                               leaders also see their reliability badge (/m/mine.json)
-#     ("now" - a live war / chain section - was removed Nov 2026; a saved layout that still has one skips it)
 #     {"type": "attention", "title": "Needs attention"}   LEADERS HUB ONLY: unpaid war payouts and inactive
 #                                               recruits (leaders' db/attention.json); hides itself when all is clear
-#   Nothing on the hubs reads Torn live - the site runs on each member's Public key at sign-in alone.
+#     {"type": "now", "title": "Right now"}     live ranked war (countdown, then the score) and the chain timer, read
+#                                               from Torn in the member's browser with their OWN Public key (they
+#                                               paste it once; kept only in that browser) - chain every 15 s, war 30 s
+#   The site itself holds no Torn key: members' Public keys (sign-in, and Right now) are all it uses.
 #     {"type": "actions", "tiles": [{"icon", "title", "link"}]}   big icon buttons (quick actions)
 #     {"type": "latest", "title": "Latest"}     newest post as a big card + the next few as a list (automatic)
 #     {"type": "groups", "title": "Explore", "groups": [{"title", "links": [{"icon", "title", "link"}]}]}
@@ -4516,23 +4658,29 @@ def homepage_default() -> dict:
     actions = {"type": "actions", "title": "", "tiles": link([
         ("🙋", "Profile", "M:me"), ("💰", "Payouts", "M:payouts.html"),
         ("🕵️", "Crimes", "M:crimes.html"), ("🏋️", "Gym", "M:gym.html")])}
-    compete = {"title": "Compete", "links": link([("⚔️", "Wars", "M:wars.html"), ("⛓️", "Chains", "M:chains.html"),
-                                                  ("🏆", "Boards", "M:leaderboards.html")])}
-    grow = {"title": "Grow", "links": link([("🏋️", "Gym", "M:gym.html"), ("🕵️", "Crimes", "M:crimes.html"),
-                                            ("📜", "History", "M:leaderboard-history.html")])}
-    faction = {"title": "Faction", "links": link([("👥", "Members", "M:members.html"), ("📰", "Recaps", "M:recaps.html"),
-                                                  ("💰", "Payouts", "M:payouts.html")])}
+    # Explore = the site's main navigation (the header is kept small) - every members' page is in here
+    compete = {"title": "Compete", "links": link([("⚔️", "War history", "M:wars.html"), ("⛓️", "Chain history", "M:chains.html"),
+                                                  ("🏆", "Leaderboards", "M:leaderboards.html"),
+                                                  ("📜", "Board history", "M:leaderboard-history.html")])}
+    grow = {"title": "Grow", "links": link([("🏋️", "Gym", "M:gym.html"), ("📈", "Gym history", "M:gym-history.html"),
+                                            ("🕵️", "Organized crimes", "M:crimes.html")])}
+    faction = {"title": "Faction", "links": link([("👥", "Members", "M:members.html"), ("💰", "War payouts", "M:payouts.html"),
+                                                  ("📰", "Latest recap", "M:newsletter.html"), ("🗂️", "Recap archive", "M:recaps.html")])}
     leaders = {"title": "Leaders", "links": link([
         ("🧮", "Payout calculator", "L:payout.html"), ("📊", "Leader monitor", "L:monitor.html"),
+        ("🗄️", "Armory monitor", "L:armory.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
-        ("🧩", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
+        ("🧩", "Profile layout", "L:profile-default.html"),
+        ("🧷", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
     return {"v": HOME_LAYOUT_V,
             "members": {"sections": [{"type": "welcome", "title": ""},
+                                     {"type": "now", "title": "Right now"},
                                      actions,
                                      {"type": "latest", "title": "Latest"},
                                      {"type": "groups", "title": "Explore", "groups": [compete, grow, faction]}]},
             "leaders": {"sections": [{"type": "welcome", "title": ""},
+                                     {"type": "now", "title": "Right now"},
                                      {"type": "attention", "title": "Needs attention"},
                                      actions,
                                      {"type": "latest", "title": "Latest"},
@@ -4559,8 +4707,11 @@ def home_js_cfg(hub: str) -> dict:
     return {"hub": hub, "home": member_base() + "/db/home.json",
             "att": (leader_base() + "/db/attention.json") if leader_dir() else "",
             "who": gate + "/m/whoami.json" if gate else "", "mine": gate + "/m/mine.json" if gate else "",
+            "faction": int(os.environ.get("FACTION_ID", "51384")), "comment": API_COMMENT,
             "links": {"payout": _hub_link("L:payout.html", hub), "members": _hub_link("M:members.html", hub),
-                      "profile": _hub_link("M:member.html", hub)}}
+                      "profile": _hub_link("M:member.html", hub),
+                      "torn_war": "https://www.torn.com/factions.php?step=your#/war/rank",
+                      "torn_chain": "https://www.torn.com/factions.php?step=your#/war/chain"}}
 
 
 def _hub_sections(sections: list, hub: str) -> str:
@@ -4576,7 +4727,8 @@ def _hub_sections(sections: list, hub: str) -> str:
                  '<span>Loading your numbers…</span></div></div><div class="stats"></div></div>'
             live = True
         elif t_ == "now":
-            continue                         # live war / chain section - removed (Nov 2026)
+            h += f'<div class="hbsec" id="hbNow" hidden>{head}<div class="nowc"></div></div>'
+            live = True
         elif t_ == "attention":
             if hub != "leaders":
                 continue                     # leaders only - never on the Members Hub
@@ -4636,7 +4788,8 @@ def write_homepages(out: Path, cfg: dict = None):
              ("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
              ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html"), ("Members", "M:members.html"),
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
-             ("Leaders Hub", "L:index.html"), ("Leader Monitor", "L:monitor.html"), ("Xanax Monitor", "L:xanax.html"),
+             ("Leaders Hub", "L:index.html"), ("Leader Monitor", "L:monitor.html"), ("Armory Monitor", "L:armory.html"),
+             ("Profile layout (default)", "L:profile-default.html"), ("Edit my profile layout", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html")]]
@@ -4733,6 +4886,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
     names = {i: m.get("name", "?") for i, m in cur.items()}
     # --- wars ---
     wars = []
+    tw = termed_wars(cfg)                      # termed wars: flagged "termed" (see TERMED WARS)
     for k, w in sorted(wh.items(), key=lambda kv: kv[1]["end"]):
         mt = meta.get(k, {})
         for m in w.get("members", []):
@@ -4740,6 +4894,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
         wars.append({"id": k, "start": w.get("start"), "end": w["end"], "opponent": mt.get("opponent", "?"),
                      "won": mt.get("won"), "our": mt.get("our"), "their": mt.get("their"),
                      "rank": (w.get("rank") or {}).get("after", ""), "reward": w.get("reward"),
+                     "termed": str(k) in tw,
                      "m": [[m["id"], m.get("attacks", 0), round(m.get("score", 0), 2), m.get("assists", 0),
                             m.get("hosps", 0), m.get("out", 0)] for m in w.get("members", [])]})
     # --- chains ---
@@ -4814,6 +4969,8 @@ def build_databases(raw: dict, cfg: dict) -> dict:
                                         "crimes": 0, "crimes_ok": 0, "crime_money": 0, "paid": 0, "payouts": 0})
     for w in wars:
         for i, h, r_, a, ho, _o in w["m"]:
+            if w.get("termed") and h == 0:
+                continue                       # a termed war with no hits doesn't count against them
             t = T(i); t["wars"] += 1; t["war_hits"] += h; t["war_resp"] += r_; t["assists"] += a; t["hosps"] += ho
             t["wars_zero"] += h == 0
     for c in chains:
@@ -4886,7 +5043,7 @@ def monitor_data(db: dict) -> dict:
       ledger      every member ever paid: total, wars paid, average, last payout"""
     now = db["generated"]
     members = [m for m in db["members"]["members"] if m["current"]]
-    wars = db["wars"]["wars"]
+    wars = [w for w in db["wars"]["wars"] if not w.get("termed")]   # termed wars: never judged (TERMED WARS)
     try:
         delays = json.loads(CRIME_DELAYS_PATH.read_text(encoding="utf-8")).get("delays", [])
     except (OSError, ValueError):
@@ -4965,134 +5122,215 @@ def _spark(vals: list) -> str:
 
 
 # ==========================================================================
-# XANAX MONITOR (leaders) - over the last `days` (90), per current member, side by side:
-#   - Xanax used: taken from the FACTION ARMORY (faction news, cat=armoryAction - "<a ...XID=1>Name</a> used one
-#     of the faction's Xanax items"; Xanax from members' own inventories isn't visible)
-#   - gym energy trained (data/gym_history.json, by month - the months overlapping the period; saved from Nov 2026)
-#   - energy spent attacking: EVERY attack a member made (faction attack log - wars, chains and everything else,
-#     losses included; defends don't cost energy) x energy_per_hit (25). data/attack_log.json, read forward each run
-#   - gym energy: daily snapshots of the faction contributors (data/gym_daily.json; Nov 1 = the month's baseline)
-#   - Xanax energy = Xanax used x energy_per_xanax (250); NET ENERGY = energy used (gym + attacking) - Xanax energy
-#     (positive = they used more than their armory Xanax gave - natural regen, refills, own Xanax; negative = armory
-#     Xanax energy that didn't show up as gym training or attacks)
-# Log: data/xanax_log.json {"last": newest news time read, "events": [[time, member id, count], ...]} - read
-# incrementally every full update (the first run reads back `days`).
+# ARMORY MONITOR (leaders: armory.html - each member also sees their OWN usage on their profile)
+# Replaces the Xanax monitor (Nov 2026): faction ARMORY usage only - what each member took from the armory -
+# nothing about gym, attacks or energy. Read from the faction news, cat=armoryAction:
+#   used       "<Name> used one of the faction's <Item> items" (drugs, medical, boosters, energy drinks...)
+#   refill     "<Name> used 25 of the faction's points to refill their energy / nerve"
+#   loaned     "<Name> loaned 1x <Item> to <Name2>"   (counted for Name2 - the member who got the item)
+#   gave       "<Name> gave 1x <Item> to <Name2>"     (counted for Name2)
+# Items are put in categories by Torn's item type (data/item_types.json, from /torn/items - read once, refreshed
+# weekly): Drugs, Medical, Boosters (alcohol, candy, energy drinks, boosters), Temporary, Weapons, Armor,
+# Refills (points), Other.
+# Log: data/armory_log.json {"items": [item names], "last": newest news time read, "oldest": oldest time read,
+#   "done": the whole history is read, "events": [[time, member id, item index, count, kind]]} (kind u/l/g/r)
+# Every full update reads FORWARD first (everything new), then BACKFILLS older news a few pages at a time,
+# newest first - so the current month fills first, then each earlier month - until the faction's whole armory
+# history is read. Page budgets (Torn caps history reads per key per day - "Daily read limit", code 14):
+# ARMORY_PAGES_NEW forward + ARMORY_PAGES_BACK backfill (100 news rows a page).
 # ==========================================================================
-XANAX_LOG_PATH = ROOT / "data" / "xanax_log.json"
-XANAX_DEFAULTS = {"days": 90, "energy_per_hit": 25, "energy_per_xanax": 250,
-                  # recording starts here (UTC date) - nothing older is read; the gym baseline was set this day, so
-                  # Xanax, attacks and gym all cover exactly the same period. Rolling `days` window once it's older.
-                  "start": "2026-11-01"}
-ATTACK_LOG_PATH = ROOT / "data" / "attack_log.json"     # {"last": newest attack time read, "events": [[time, member id]]}
+ARMORY_LOG_PATH = ROOT / "data" / "armory_log.json"
+ITEM_TYPES_PATH = ROOT / "data" / "item_types.json"     # {"fetched": time, "types": {item name: Torn item type}}
+ARMORY_PAGES_NEW = 20
+ARMORY_PAGES_BACK = 10
+ARMORY_CATS = ["Drugs", "Medical", "Boosters", "Refills", "Temporary", "Weapons", "Armor", "Other"]
+ARMORY_TYPE_CAT = {"drug": "Drugs", "medical": "Medical", "alcohol": "Boosters", "candy": "Boosters",
+                   "energy drink": "Boosters", "booster": "Boosters", "temporary": "Temporary",
+                   "primary": "Weapons", "secondary": "Weapons", "melee": "Weapons", "defensive": "Armor"}
+ATTACK_LOG_PATH = ROOT / "data" / "attack_log.json"     # (old Xanax monitor - no longer read or updated)
 GYM_DAILY_PATH = ROOT / "data" / "gym_daily.json"       # {"snaps": {"YYYY-MM-DD": {member id: total gym energy}}}
 
 
-def energy_window(xc: dict, now: int):
-    """(start, end) of the Xanax Monitor period: from the recording start date, at most the last `days`."""
-    rec = int(datetime.strptime(xc["start"], "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp())
-    return max(rec, now - int(xc["days"]) * 86400), now
-
-
-def xanax_cfg(cfg: dict) -> dict:
-    return dict(XANAX_DEFAULTS, **{k: v for k, v in (cfg.get("xanax") or {}).items() if not k.startswith("_")})
-
-
-def update_xanax_log(key: str, cfg: dict):
-    """New faction-armory Xanax uses since the last read -> data/xanax_log.json."""
-    import html as _h, re, time
-    xc = xanax_cfg(cfg)
+def item_types(key: str) -> dict:
+    """{item name: Torn item type} - data/item_types.json, refreshed from /torn/items once a week (1 call)."""
+    import time
     try:
-        log = json.loads(XANAX_LOG_PATH.read_text(encoding="utf-8"))
+        c = json.loads(ITEM_TYPES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        log = {"last": 0, "events": []}
-    now = int(time.time())
-    w0, _ = energy_window(xc, now)
-    log["events"] = [e for e in log["events"] if e[0] >= w0]          # nothing before the recording start
-    start = max(int(log.get("last") or 0) + 1, w0)
-    pat = re.compile(r"XID=(\d+)[^>]*>[^<]*</a>\s*used\s+(one|an?|\d+)\s+of the faction's\s+Xanax", re.I)
-    seen = {(e[0], e[1]) for e in log["events"]}
-    added, newest = 0, int(log.get("last") or 0)
-    try:
-        data = fetch_section("news", key, {"cat": "armoryAction", "from": start, "to": now, "limit": 100, "sort": "ASC"})
-    except SystemExit as e:
-        print(f"Xanax log skipped: {e}")
+        c = {"fetched": 0, "types": {}}
+    if key and time.time() - c.get("fetched", 0) > 7 * 86400:
+        try:
+            data = fetch_url("https://api.torn.com/v2/torn/items", key)
+            items = data.get("items")
+            for it in (items.values() if isinstance(items, dict) else _as_list(items)):
+                if isinstance(it, dict) and it.get("name"):
+                    c["types"][it["name"]] = it.get("type") or ""
+            c["fetched"] = int(time.time())
+            ITEM_TYPES_PATH.write_text(json.dumps(c, indent=0, sort_keys=True) + "\n", encoding="utf-8")
+        except SystemExit as e:
+            print(f"Item types skipped: {e}")
+    return c.get("types", {})
+
+
+def armory_cat(item: str, types: dict) -> str:
+    if item.endswith(" refill (points)"):
+        return "Refills"
+    return ARMORY_TYPE_CAT.get(str(types.get(item, "")).lower(), "Other")
+
+
+def _armory_parse(text: str):
+    """One armory news line -> (member id, item, count, kind) or None (deposits, fills, returns... aren't usage)."""
+    import html as _h, re
+    raw_ = _h.unescape(str(text))
+    plain = re.sub(r"<[^>]+>", "", raw_)
+    ids = re.findall(r"XID=(\d+)", raw_)
+    if not ids:
+        return None
+    n_ = lambda v: 1 if str(v).lower() in ("one", "a", "an") else int(v)
+    m = re.search(r"\bused\s+(\d+)\s+of the faction'?s\s+points\s+to\s+refill\s+(?:their|his|her)\s+(energy|nerve)", plain, re.I)
+    if m:
+        return int(ids[0]), f"{m.group(2).capitalize()} refill (points)", 1, "r"
+    m = re.search(r"\bused\s+(one|an?|\d+)\s+of the faction'?s\s+(.+?)\s+items?\b", plain, re.I)
+    if m:
+        return int(ids[0]), m.group(2).strip(), n_(m.group(1)), "u"
+    m = re.search(r"\b(loaned|gave)\s+(\d+)\s*x\s*(.+?)\s+to\s+", plain, re.I)
+    if m and len(ids) >= 2:
+        return int(ids[1]), m.group(3).strip(), int(m.group(2)), "l" if m.group(1).lower() == "loaned" else "g"
+    return None
+
+
+def update_armory_log(key: str):
+    """Full runs: new armory news (forward), then older news (backfill, newest first) -> data/armory_log.json."""
+    import time
+    if not key:
         return
-    # at most 30 pages (3,000 news rows) a run - Torn caps the history records one key may pull per day ("Daily read
-    # limit reached", code 14), shared with the vault check and attack logs. A backlog just finishes over a few runs.
-    for _ in range(30):
-        items = _as_list(data.get("news"))
+    try:
+        log = json.loads(ARMORY_LOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        log = {"items": [], "last": 0, "oldest": 0, "done": False, "events": []}
+    idx = {n: k for k, n in enumerate(log["items"])}
+    seen = {(e[0], e[1], e[2]) for e in log["events"]}
+    now = int(time.time())
+    stats = {"new": 0, "back": 0, "pages": 0}
+
+    def take(items, which):
         for n in items:
             t = int(n.get("timestamp") or 0)
-            newest = max(newest, t)
-            m = pat.search(_h.unescape(str(n.get("text", ""))))
-            if m and (t, int(m.group(1))) not in seen:
-                k = m.group(2).lower()
-                log["events"].append([t, int(m.group(1)), 1 if k in ("one", "a", "an") else int(k)])
-                seen.add((t, int(m.group(1))))
-                added += 1
-        nxt = ((data.get("_metadata") or {}).get("links") or {}).get("next")
-        if not nxt or not items:
-            break
-        time.sleep(API_PAGE_DELAY)
+            p = _armory_parse(n.get("text", ""))
+            if not p:
+                continue
+            mid, item, cnt, kind = p
+            if item not in idx:
+                idx[item] = len(log["items"]); log["items"].append(item)
+            k_ = (t, mid, idx[item])
+            if k_ in seen:
+                continue
+            seen.add(k_); log["events"].append([t, mid, idx[item], cnt, kind]); stats[which] += 1
+
+    def walk(params, pages, which):
+        """Read up to `pages` pages; returns (oldest, newest) news time seen, and whether the list ran out."""
+        lo, hi, ended = None, None, False
         try:
-            data = fetch_url(nxt, key)
+            data = fetch_section("news", key, dict(params, cat="armoryAction", limit=100))
         except SystemExit as e:
-            print(f"Xanax log incomplete, continues next run: {e}")
-            break
-    log["last"] = newest
-    log["events"] = sorted(e for e in log["events"] if e[0] >= w0)
-    XANAX_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
-    print(f"Xanax log: {added} new armory Xanax uses ({len(log['events'])} kept)")
+            print(f"Armory log ({which}) stopped: {e}")
+            return lo, hi, False
+        for _ in range(pages):
+            items = _as_list(data.get("news"))
+            stats["pages"] += 1
+            take(items, which)
+            ts = [int(n.get("timestamp") or 0) for n in items if n.get("timestamp")]
+            if ts:
+                lo, hi = min(ts + [lo] if lo else ts), max(ts + [hi] if hi else ts)
+            nxt = ((data.get("_metadata") or {}).get("links") or {}).get("next")
+            if not nxt or not items:
+                ended = True
+                break
+            time.sleep(API_PAGE_DELAY)
+            try:
+                data = fetch_url(nxt, key)
+            except SystemExit as e:
+                print(f"Armory log ({which}) continues next run: {e}")
+                break
+        return lo, hi, ended
+
+    # 1) forward: everything since the newest read (first run: the newest pages, newest first)
+    if log["last"]:
+        _lo, hi, _e = walk({"from": log["last"] + 1, "to": now, "sort": "ASC"}, ARMORY_PAGES_NEW, "new")
+        if hi:
+            log["last"] = max(log["last"], hi)
+    else:
+        lo, hi, ended = walk({"to": now, "sort": "DESC"}, ARMORY_PAGES_NEW, "new")
+        log["last"], log["oldest"], log["done"] = hi or now, lo or now, bool(ended)
+    # 2) backfill: older than the oldest read, newest first (this month -> last month -> ...) until the start
+    if not log.get("done") and log.get("oldest"):
+        lo, _hi, ended = walk({"to": log["oldest"] - 1, "sort": "DESC"}, ARMORY_PAGES_BACK, "back")
+        if lo:
+            log["oldest"] = min(log["oldest"], lo)
+        if ended:
+            log["done"] = True
+    log["events"].sort()
+    ARMORY_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
+    since = datetime.fromtimestamp(log["oldest"], timezone.utc).strftime("%b %d, %Y") if log.get("oldest") else "-"
+    print(f"Armory log: {stats['new']} new + {stats['back']} older uses ({stats['pages']} pages) · "
+          f"{len(log['events'])} kept · read back to {since}{' (complete)' if log.get('done') else ''}")
 
 
-def update_attack_log(key: str, cfg: dict, my_id):
-    """Every attack our members made since the last read (faction attack log; incoming defends skipped)
-    -> data/attack_log.json. At most 30 pages (3,000 attacks) a run - Torn's daily read limit - a backlog
-    finishes over the next runs."""
-    import time
-    xc = xanax_cfg(cfg)
+def armory_data(db: dict) -> dict:
+    """Usage per member from data/armory_log.json: by month and all time, by category and by item.
+      {"cats", "items": [names], "item_cat": [category per item], "oldest", "done", "months": [YYYY-MM newest first],
+       "members": {id: {"m": {month: {item index: count}}}}} - the page sums whatever period is picked."""
     try:
-        log = json.loads(ATTACK_LOG_PATH.read_text(encoding="utf-8"))
+        log = json.loads(ARMORY_LOG_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        log = {"last": 0, "events": []}
-    now = int(time.time())
-    w0, _ = energy_window(xc, now)
-    log["events"] = [e for e in log["events"] if e[0] >= w0]
-    start = max(int(log.get("last") or 0) + 1, w0)
-    seen = {(e[0], e[1]) for e in log["events"]}
-    added, newest = 0, int(log.get("last") or 0)
-    try:
-        data = fetch_section("attacks", key, {"from": start, "to": now, "limit": 100, "sort": "ASC"})
-    except SystemExit as e:
-        print(f"Attack log skipped: {e}")
-        return
-    for _ in range(30):
-        items = _as_list(data.get("attacks"))
-        for a in items:
-            t = int(a.get("started") or a.get("ended") or 0)
-            newest = max(newest, t)
-            att = a.get("attacker") or {}
-            if str((att.get("faction") or {}).get("id")) != str(my_id) or not att.get("id"):
-                continue                                   # incoming attack (a defend) - costs our member nothing
-            k_ = (t, int(att["id"]))
-            if k_ not in seen:
-                seen.add(k_)
-                log["events"].append([t, int(att["id"])])
-                added += 1
-        nxt = ((data.get("_metadata") or {}).get("links") or {}).get("next")
-        if not nxt or not items:
-            break
-        time.sleep(API_PAGE_DELAY)
-        try:
-            data = fetch_url(nxt, key)
-        except SystemExit as e:
-            print(f"Attack log incomplete, continues next run: {e}")
-            break
-    log["last"] = newest
-    log["events"] = sorted(log["events"])
-    ATTACK_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
-    print(f"Attack log: {added} new attacks by members ({len(log['events'])} kept, read up to "
-          f"{datetime.fromtimestamp(newest, timezone.utc):%b %d %H:%M} TCT)" if newest else "Attack log: nothing yet")
+        log = {"items": [], "events": []}
+    types = item_types("")
+    per, months = {}, set()
+    for t, mid, it, cnt, _kind in log.get("events", []):
+        mon = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m")
+        months.add(mon)
+        d_ = per.setdefault(str(mid), {}).setdefault(mon, {})
+        d_[str(it)] = d_.get(str(it), 0) + cnt
+    return {"cats": ARMORY_CATS, "items": log.get("items", []),
+            "item_cat": [armory_cat(n, types) for n in log.get("items", [])],
+            "oldest": log.get("oldest"), "done": bool(log.get("done")), "months": sorted(months, reverse=True),
+            "members": {i: {"m": m} for i, m in per.items()}}
+
+
+def write_armory_page(out: Path, db: dict, ad: dict):
+    """armory.html (leaders): pick a month (or all time / last 30 days) -> per member: items by category, top items,
+    total; faction totals per category on top. Drawn in the browser from the embedded data (armory_data)."""
+    lout = out / leader_dir()
+    names = {str(m["id"]): (m["name"], m["current"]) for m in db["members"]["members"]}
+    conf = dict(ad, names=names, member_base=member_base())
+    tpl = (ROOT / "tools" / "armory_monitor.html").read_text(encoding="utf-8")
+    (lout / "armory.html").write_text(tpl.replace("__CONFIG__", json.dumps(conf, separators=(",", ":")).replace("</", "<\\/"))
+                                      .replace("__MENU__", leader_menu("")), encoding="utf-8")
+    # the old address keeps working
+    (lout / "xanax.html").write_text('<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=armory.html">'
+                                     '<title>Armory Monitor</title>', encoding="utf-8")
+
+
+def armory_own(ad: dict, mid: str) -> dict:
+    """One member's own usage for their profile (via the gatekeeper's /m/mine.json): this month, last month and
+    all time on record, by category, plus their top items all time."""
+    m = (ad["members"].get(str(mid)) or {}).get("m", {})
+    now_ = datetime.now(timezone.utc)
+    this_m = now_.strftime("%Y-%m")
+    last_m = (now_.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    def cats(months):
+        c = {}
+        for mon in months:
+            for it, n in (m.get(mon) or {}).items():
+                k = ad["item_cat"][int(it)]
+                c[k] = c.get(k, 0) + n
+        return c
+    items = {}
+    for d_ in m.values():
+        for it, n in d_.items():
+            items[ad["items"][int(it)]] = items.get(ad["items"][int(it)], 0) + n
+    return {"month": cats([this_m]), "last_month": cats([last_m]), "all": cats(list(m)),
+            "top": sorted(items.items(), key=lambda kv: -kv[1])[:8], "oldest": ad.get("oldest"), "done": ad.get("done")}
 
 
 def save_gym_daily(gym: dict):
@@ -5133,80 +5371,9 @@ def gym_energy_between(t0: int):
     return {i: max(0, v - a.get(i, 0)) for i, v in b.items()}, first
 
 
-def xanax_data(db: dict, cfg: dict) -> dict:
-    """Per current member over the monitor period (energy_window): Xanax used (armory) and its energy, gym
-    energy (daily snapshots), every attack x energy_per_hit, energy used and NET = used - Xanax energy."""
-    xc = xanax_cfg(cfg)
-    now = db["generated"]
-    t0, _ = energy_window(xc, now)
-    def load(p_):
-        try:
-            return json.loads(p_.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-    xl, al = load(XANAX_LOG_PATH), load(ATTACK_LOG_PATH)
-    xev = [e for e in xl.get("events", []) if e[0] >= t0]
-    aev = [e for e in al.get("events", []) if e[0] >= t0]
-    g_ = gym_energy_between(t0)
-    gym_by, gym_from = g_ if g_ else ({}, None)
-    out = {}
-    for m in (m for m in db["members"]["members"] if m["current"]):
-        i = m["id"]
-        xan = sum(n for _t, mid, n in xev if mid == i)
-        att = sum(1 for _t, mid in aev if mid == i)
-        gym = int(gym_by.get(str(i), 0))
-        ae, xe = att * int(xc["energy_per_hit"]), xan * int(xc["energy_per_xanax"])
-        out[str(i)] = {"name": m["name"], "xanax": xan, "xanax_energy": xe, "gym": gym, "attacks": att,
-                       "attack_energy": ae, "used": gym + ae, "net": gym + ae - xe}
-    return {"generated": now, "days": xc["days"], "settings": xc, "members": out, "from": t0, "gym_from": gym_from,
-            "logged": len(xev), "xanax_to": xl.get("last"), "attacks_to": al.get("last"), "gym_data": bool(g_)}
-
-
-def write_xanax_page(out: Path, db: dict, cfg: dict, xd: dict):
-    """xanax.html (leaders): per member over the monitor period - Xanax used / energy, gym energy, attacks /
-    energy, energy used and NET energy (used - Xanax energy)."""
-    import html as _html
-    lout = out / leader_dir()
-    mb = member_base()
-    xc = xd["settings"]
-    rows = sorted(xd["members"].items(), key=lambda kv: kv[1]["net"])
-    D = lambda t: datetime.fromtimestamp(t, timezone.utc).strftime("%b %d") if t else "-"
-    since = D(xd["from"])
-    body = leader_menu("") + HIST_STATS_CSS + (
-        f'<div class="note">🛡️ Leaders only. Since <b>{since}</b> (recording started Nov 1 - a rolling {xd["days"]} days '
-        f'once older): <b>Xanax used</b> from the faction armory (× {xc["energy_per_xanax"]} energy), <b>gym energy</b> '
-        f'trained, and <b>every attack</b> members made (wars, chains and everything else, losses included - '
-        f'× {xc["energy_per_hit"]} energy; defends cost nothing). <b>Net energy</b> = energy used − Xanax energy. '
-        'Negative (red) = armory Xanax energy that didn\'t show up as gym training or attacks. Natural regen, refills '
-        'and their own Xanax add energy too, so most members should be above zero. Members see their own figures '
-        'on their profile.</div>')
-    behind = [f"Xanax up to {D(xd['xanax_to'])}" for _ in [0] if not xd["xanax_to"] or xd["xanax_to"] < xd["generated"] - 6 * 3600] \
-        + [f"attacks up to {D(xd['attacks_to'])}" for _ in [0] if not xd["attacks_to"] or xd["attacks_to"] < xd["generated"] - 6 * 3600]
-    if behind:
-        body += (f'<div class="note">⏳ Still catching up: {" · ".join(behind)} - the rest is read over the next updates '
-                 '(Torn limits how many log records can be read a day).</div>')
-    T = lambda k: sum(v[k] for _k, v in rows)
-    netc = lambda n: "#78c878" if n >= 0 else "#e4382e"
-    body += _stat_strip([(fmt_int(T("xanax")), "Xanax used"), (fmt_int(T("xanax_energy")), "Total Xanax energy"),
-                         (fmt_int(T("gym")), "Gym energy"), (fmt_int(T("attack_energy")), "Attack energy"),
-                         (fmt_int(T("used")), "Energy used"),
-                         (f'<span style="color:{netc(T("net"))}">{T("net"):+,}</span>', "Net energy")])
-    body += ('<h2>All members <span class="tag">(lowest net energy first · tap a column to sort)</span></h2>'
-             '<table class="srt"><tr><th>Member</th><th>Xanax used</th><th>Xanax energy</th><th>Gym energy</th>'
-             '<th>Attacks</th><th>Attack energy</th><th>Energy used</th><th>Net energy</th></tr>')
-    for i, v in rows:
-        body += (f'<tr><td><a href="{mb}/member.html?id={i}">{_html.escape(v["name"])}</a></td>'
-                 f'<td data-v="{v["xanax"]}">{fmt_int(v["xanax"])}</td><td data-v="{v["xanax_energy"]}">{fmt_int(v["xanax_energy"])}</td>'
-                 f'<td data-v="{v["gym"]}">{fmt_int(v["gym"])}</td><td data-v="{v["attacks"]}">{fmt_int(v["attacks"])}</td>'
-                 f'<td data-v="{v["attack_energy"]}">{fmt_int(v["attack_energy"])}</td><td data-v="{v["used"]}">{fmt_int(v["used"])}</td>'
-                 f'<td data-v="{v["net"]}"><b style="color:{netc(v["net"])}">{v["net"]:+,}</b></td></tr>')
-    body += "</table>" + SORT_JS
-    _hub_page(lout / "xanax.html", "Xanax Monitor", f"Energy in vs energy used - since {since}", body)
-
-
 def write_monitor(out: Path, db: dict, cfg: dict = None):
     """monitor.html (leaders) - Participation Trend, Reliability Score, Payout Ledger, recent crime delays.
-    Also the Xanax monitor (xanax.html) and db/private.json: per member {reliability, xanax} + faction averages -
+    Also the Armory Monitor (armory.html) and db/private.json: per member {reliability, armory} + faction averages -
     leaders read it whole (Members list column); the gatekeeper's /m/mine.json gives a member ONLY their own entry."""
     import html as _html
     if not leader_dir():
@@ -5214,22 +5381,17 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     md = monitor_data(db)
     lout = out / leader_dir()
     _jdump(lout / "db" / "monitor.json", md)
-    xd = xanax_data(db, cfg or {})
-    write_xanax_page(out, db, cfg or {}, xd)
+    ad = armory_data(db)
+    write_armory_page(out, db, ad)
     priv, sc = {}, [r["score"] for r in md["members"]]
     for r in md["members"]:
-        x_ = xd["members"].get(str(r["id"])) or {}
         priv[str(r["id"])] = {"reliability": {"score": r["score"], "parts": r["parts"], "detail": r["detail"]},
-                              "xanax": {k: x_.get(k) for k in ("xanax", "xanax_energy", "gym", "attacks",
-                                                               "attack_energy", "used", "net")}
-                                       if x_ else None}
+                              "armory": armory_own(ad, r["id"])}
     avg_parts = {k: round(sum(r["parts"][k] for r in md["members"]) / len(md["members"]), 1) if md["members"] else 0
                  for k in ("war", "chains", "crimes", "activity")}
     _jdump(lout / "db" / "private.json", {"generated": md["generated"], "members": priv,
                                           "averages": {"reliability": round(sum(sc) / len(sc), 1) if sc else 0,
-                                                       "parts": avg_parts, "xanax_days": xd["days"],
-                                                       "xanax_from": xd["from"],
-                                                       "xanax_settings": xd["settings"]}})
+                                                       "parts": avg_parts}})
     mb = member_base()
     prof = lambda i, n: f'<a href="{mb}/member.html?id={i}">{_html.escape(str(n))}</a>'
     col = lambda sc: "#78c878" if sc >= 80 else "#e8be5a" if sc >= 60 else "#e4382e"
@@ -5293,14 +5455,18 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
 
 
 # click a table header to sort by that column (numbers use data-v when present)
-SORT_JS = """<script>document.querySelectorAll("table.srt").forEach(function(t){var hs=t.rows[0].cells;
-for(let c=0;c<hs.length;c++){hs[c].style.cursor="pointer";hs[c].title="Sort";hs[c].onclick=function(){
+# Tap a header to sort (table.srt): data-v = the value to sort by (else the text). Delegated, so columns added
+# later by script (e.g. the leaders' Reliability column on members.html) sort too. Rows whose first cell says
+# "Total" stay at the bottom. Safe to include more than once on a page.
+SORT_JS = """<style>table.srt tr:first-child th{cursor:pointer}</style><script>if(!window.__hbSort){window.__hbSort=1;
+document.addEventListener("click",function(e){var th=e.target.closest&&e.target.closest("table.srt th");if(!th)return;
+var t=th.closest("table");if(th.parentNode!==t.rows[0])return;var c=th.cellIndex;
 var rows=[].slice.call(t.rows,1).filter(function(r){return !/Total/.test(r.cells[0].textContent)||r.cells.length<2});
 var tot=[].slice.call(t.rows,1).filter(function(r){return rows.indexOf(r)<0});
-var dir=hs[c].dataset.d=hs[c].dataset.d=="1"?"-1":"1";
-rows.sort(function(a,b){var x=a.cells[c],y=b.cells[c];var vx=x.dataset.v!=null?+x.dataset.v:x.textContent.toLowerCase(),
+var dir=th.dataset.d=th.dataset.d=="1"?"-1":"1";
+rows.sort(function(a,b){var x=a.cells[c],y=b.cells[c];if(!x||!y)return 0;var vx=x.dataset.v!=null?+x.dataset.v:x.textContent.toLowerCase(),
 vy=y.dataset.v!=null?+y.dataset.v:y.textContent.toLowerCase();return (vx>vy?1:vx<vy?-1:0)*dir;});
-rows.concat(tot).forEach(function(r){t.tBodies[0].appendChild(r);});};}});</script>"""
+rows.concat(tot).forEach(function(r){r.parentNode.appendChild(r);});});}</script>"""
 
 
 # Faction positions from lowest to highest - the Members list sorts its Position column by this
@@ -5384,16 +5550,70 @@ def write_profiles(out: Path, db: dict):
         rel_js = ("<script>(function(){fetch('whoami.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null;})"
                   ".then(function(w){if(!w||!w.leader)return;return fetch(" + json.dumps(leader_base() + "/db/private.json")
                   + ",{cache:'no-store'}).then(function(r){return r.json();}).then(function(P){"
-                  "var t=document.querySelector('table.srt');if(!t)return;var hd=t.rows[0];var th=document.createElement('th');"
-                  "th.textContent='Reliability';hd.insertBefore(th,hd.cells[2]);"
+                  "document.querySelectorAll('table.srt').forEach(function(t){var hd=t.rows[0];var th=document.createElement('th');"
+                  "th.textContent='Reliability';th.title='Tap to sort';hd.insertBefore(th,hd.cells[2]);"
                   "for(var k=1;k<t.rows.length;k++){var tr=t.rows[k],e=(P.members||{})[tr.dataset.id],sc=e?e.reliability.score:null;"
                   "var td=document.createElement('td');td.dataset.v=sc==null?-1:sc;"
                   "td.innerHTML=sc==null?'-':'<b style=\"color:'+(sc>=80?'#78c878':sc>=60?'#e8be5a':'#e4382e')+'\">'+sc+'</b>';"
-                  "tr.insertBefore(td,tr.cells[2]);}});}).catch(function(){});})();</script>")
+                  "tr.insertBefore(td,tr.cells[2]);}});});}).catch(function(){});})();</script>")
     body = (site_menu("") + f"<h2>👥 Current members ({len(cur)})</h2>" + table(cur)
             + f'<details style="margin-top:20px"><summary style="color:#e8be5a;cursor:pointer">Past members ({len(past)})</summary>'
             + table(sorted(past, key=lambda m: -m["t"]["war_hits"])) + "</details>" + SORT_JS + rel_js)
     _hub_page(mout / "members.html", "Members", "Tap a name for their profile · tap a column to sort", body)
+
+
+# PROFILE LAYOUTS: which sections a profile shows and in what order (tools/member_profile.html <section data-sec>).
+#   the member's own: data/profiles/<id>.json {order, hidden} - saved by profile-editor.html through the gatekeeper's
+#                     /m/profile-layout (a member can only save their own)
+#   the default:      config.json "profile_layout" {order, hidden} - leaders' profile-default.html
+# Published together as the members' db/profile_layouts.json {"default", "members": {id: layout}}.
+PROFILES_DIR = ROOT / "data" / "profiles"
+PROFILE_SECTIONS = [("cmp", "📈 Compared with the faction average", "Their whole time in the faction vs everyone"),
+                    ("reliability", "🛡️ Reliability breakdown", "Private - only the member and leaders see it"),
+                    ("armory", "🗄️ Armory usage", "Private - only the member and leaders see it"),
+                    ("totals", "📊 Totals", "Wars, chains, crimes, payouts"),
+                    ("charts", "📉 War and chain charts", "Hits per war, chain hits over time"),
+                    ("gym", "🏋️ Gym", "Gym energy and month by month"),
+                    ("payouts", "💰 War payouts", "Every war payout"),
+                    ("wars", "⚔️ Wars", "Every ranked war they were in"),
+                    ("chains", "⛓️ Recent chains", "Their last 25 chains"),
+                    ("crimes", "🕵️ Organized crimes", "Their organized crimes")]
+
+
+def _clean_layout(x) -> dict:
+    keys = [k for k, _l, _d in PROFILE_SECTIONS]
+    if not isinstance(x, dict):
+        return None
+    order = [k for k in x.get("order") or [] if k in keys]
+    return {"order": order + [k for k in keys if k not in order],
+            "hidden": [k for k in x.get("hidden") or [] if k in keys]}
+
+
+def write_profile_layouts(out: Path, cfg: dict):
+    """db/profile_layouts.json (members) + the two layout editors: profile-editor.html (members - their own) and
+    profile-default.html (leaders - the default)."""
+    mem = {}
+    for f in sorted(PROFILES_DIR.glob("*.json")) if PROFILES_DIR.exists() else []:
+        try:
+            lay = _clean_layout(json.loads(f.read_text(encoding="utf-8")))
+        except ValueError:
+            lay = None
+        if lay and f.stem.isdigit():
+            mem[f.stem] = lay
+    ly = {"default": _clean_layout(cfg.get("profile_layout")), "members": mem}
+    mout = member_out(out)
+    _jdump(mout / "db" / "profile_layouts.json", ly)
+    g_ = gate_cfg()
+    if not g_:
+        return
+    tpl = (ROOT / "tools" / "profile_layout_editor.html").read_text(encoding="utf-8")
+    base = {"sections": PROFILE_SECTIONS, "gate": g_["url"].rstrip("/"), "ghproxy": gh_proxy_url(),
+            "member_base": member_base(), "layouts": ly}
+    put = lambda path, mode, menu: path.write_text(
+        tpl.replace("__CONFIG__", json.dumps(dict(base, mode=mode)).replace("</", "<\\/")).replace("__MENU__", menu), encoding="utf-8")
+    put(mout / "profile-editor.html", "member", site_menu(""))
+    if leader_dir():
+        put(out / leader_dir() / "profile-default.html", "default", leader_menu(""))
 
 
 def write_panel_preview_kit(out: Path, summary: dict):
@@ -6098,9 +6318,31 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
     best = max((c["length"] for _k, c in chains), default=0)
     tot_hits = sum(c.get("length", 0) for _k, c in chains)
     tot_resp = sum(a.get("respect", 0) for _k, c in chains for a in c.get("attackers", []))
-    body = (site_menu("") + HIST_STATS_CSS + _stat_strip([
+    # every member's chains, all time - EVERY chain on record (same counting as the all-time chain leaderboard)
+    agg = {}
+    for _k, c in chist.get("chains", {}).items():
+        for a_ in c.get("attackers", []):
+            a = agg.setdefault(str(a_["id"]), {"id": a_["id"], "name": a_.get("name", "?"), "chains": 0, "hits": 0,
+                                               "resp": 0.0, "rets": 0, "best": 0})
+            a["chains"] += 1; a["hits"] += a_.get("hits", 0); a["resp"] += a_.get("respect", 0)
+            a["rets"] += a_.get("rets", 0) or 0; a["best"] = max(a["best"], a_.get("hits", 0))
+    for i, n in CURRENT_MEMBERS.items():
+        agg.setdefault(i, {"id": int(i), "name": n, "chains": 0, "hits": 0, "resp": 0.0, "rets": 0, "best": 0})
+    rows_ = []
+    for i, a in agg.items():
+        a["current"] = i in CURRENT_MEMBERS if CURRENT_MEMBERS else True
+        a["name"] = CURRENT_MEMBERS.get(i, a["name"])
+        a["per"] = round(a["hits"] / a["chains"], 1) if a["chains"] else None
+        a["rph"] = round(a["resp"] / a["hits"], 2) if a["hits"] else None
+        rows_.append(a)
+    rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
+    msum = _member_summary(rows_, [("Chains", "chains", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
+                                   ("Hits / chain", "per", lambda v: f"{v:,.1f}"), ("Respect / hit", "rph", lambda v: f"{v:,.2f}"),
+                                   ("Best chain", "best", fmt_int), ("Retals", "rets", fmt_int)], "csumT")
+    body = (site_menu("") + "<h2>⛓️ Chain Summary</h2>" + HIST_STATS_CSS + _stat_strip([
                 (fmt_int(len(chains)), f"Chains ({min_len}+)"), (fmt_int(best), "Longest"), (fmt_int(tot_hits), "Chain hits"),
                 (f"{tot_resp:,.0f}", "Chain respect")])
+            + '<h2>👥 Every member <span class="tag">(every chain on record · tap a column to sort)</span></h2>' + msum
             + f'<h2>All chains <span class="tag">(tap a column to sort)</span></h2>'
             '<table class="srt"><tr><th>Date</th><th>Hits</th><th>Respect</th><th>Members</th><th>Report</th></tr>')
     for k, c in chains:
@@ -6438,14 +6680,21 @@ def _one_war(raw: dict, wid: str, my_id, cfg: dict):
     return one[0] if one else None
 
 
-WAR_REPORT_V = 3      # saved war reports older than this are redrawn in the current (full members list) format
+WAR_REPORT_V = 4      # saved war reports older than this are redrawn in the current format
+                      # (3: full members list · 4: the war's payout merged in - War Report & Payout)
 
 
-def war_report_full_png(w0: dict, wh_: dict) -> bytes:
-    """A past war's report page image: the War Summary card, then EVERY member who was in the war -
-    hits · respect, most hits first, members with no hits at the end. Drawn from the saved war history
-    (no API calls) - used to bring reports saved before the full list existed up to date."""
+def war_report_full_png(w0: dict, wh_: dict, pay_layer=None) -> bytes:
+    """A war's report image: the War Summary card, then - when the war was paid out - its payout (summary,
+    metrics, vault check, member payouts: payout_receipt_image(layer=True)), then EVERY member who was in the
+    war - hits · respect, most hits first, members with no hits at the end. Drawn from saved data (no API calls).
+    With a payout this is the war's ONE combined image (War Report & Payout) - the payout pages and posts use it."""
     top = war_summary_card(w0)
+    if pay_layer is not None:
+        both_ = Image.new("RGBA", (top.width, top.height + pay_layer.height - PAD_TOP), (0, 0, 0, 0))
+        both_.alpha_composite(top, (0, 0))
+        both_.alpha_composite(pay_layer.crop((0, PAD_TOP, pay_layer.width, pay_layer.height)), (0, top.height))
+        top = both_
     ms_ = sorted(wh_.get("members", []), key=lambda m: (-m.get("attacks", 0), -m.get("score", 0), str(m.get("name", ""))))
     people = [(m.get("name", "?"), fmt_int(m.get("attacks", 0)), fmt_int(round(m.get("score", 0)))) for m in ms_]
     hit = sum(1 for m in ms_ if m.get("attacks", 0) > 0)
@@ -6456,7 +6705,61 @@ def war_report_full_png(w0: dict, wh_: dict) -> bytes:
     both = Image.new("RGBA", (top.width, top.height + card.height - PAD_TOP), (0, 0, 0, 0))
     both.alpha_composite(top, (0, 0))
     both.alpha_composite(card.crop((0, PAD_TOP, card.width, card.height)), (0, top.height))
-    return frame_png(both, bar="War Report")
+    return frame_png(both, bar="War Report & Payout" if pay_layer is not None else "War Report")
+
+
+def war_payout_sig(wid: str):
+    """(receipt, vault check, signature) of a war's CURRENT payout receipt, or (None, None, "") when it has none.
+    The signature changes when the receipt is corrected or its vault check result changes -> the combined
+    War Report & Payout image is redrawn."""
+    import hashlib
+    stem = _latest_receipts().get(str(wid))
+    if not stem:
+        return None, None, ""
+    try:
+        f = PAYOUT_DIR / f"{stem}.json"
+        r = json.loads(f.read_text(encoding="utf-8"))
+        vs = json.loads(PAYOUT_VAULT_PATH.read_text(encoding="utf-8")) if PAYOUT_VAULT_PATH.exists() else {}
+    except (OSError, ValueError):
+        return None, None, ""
+    v = vs.get(stem)
+    sig = hashlib.sha1(f.read_bytes() + json.dumps((v or {}).get("members", {}), sort_keys=True).encode()).hexdigest()[:12]
+    return r, v, f"{stem}:{sig}"
+
+
+def refresh_war_reports(raw: dict, cfg: dict, only_new: set = None) -> int:
+    """(Re)draw saved war reports that are missing, in an older format (rv < WAR_REPORT_V) or whose payout changed
+    (a receipt saved / corrected / vault-checked since -> meta "pay" differs). With a payout the image is the
+    combined War Report & Payout. Drawn from saved data only - no API calls. Returns how many were drawn."""
+    wars = (raw.get("_war_history") or {}).get("wars", {})
+    if not wars or "rankedwars" not in raw:
+        return 0
+    my_id = raw["basic"].get("basic", raw["basic"]).get("id")
+    n = 0
+    for wid in sorted(wars, key=lambda k: -wars[k]["end"]):
+        f_ = REPORTS_DIR / f"war-{wid}.json"
+        try:
+            meta_ = json.loads(f_.read_text(encoding="utf-8")) if f_.exists() else {}
+        except ValueError:
+            meta_ = {}
+        r, v, sig = war_payout_sig(wid)
+        if f_.exists() and meta_.get("rv", 0) >= WAR_REPORT_V and meta_.get("pay", "") == sig and \
+                not (only_new and wid in only_new):
+            continue
+        try:
+            w0 = _one_war(raw, wid, my_id, cfg)
+            if w0:
+                layer = payout_receipt_image(r, v, layer=True) if r else None
+                meta = dict(_war_report_meta(w0, wars[wid]), pay=sig)
+                if r:
+                    meta.update(paid=r.get("paid", 0), paid_n=sum(1 for m in r.get("members", []) if m.get("pay")))
+                save_report("war", wid, war_report_full_png(w0, wars[wid], layer), meta)
+                n += 1
+        except Exception as e:                 # one bad war never stops the run
+            print(f"War report {wid} not drawn ({type(e).__name__})")
+    if n:
+        print(f"War reports drawn: {n}")
+    return n
 
 
 def _war_report_meta(w0: dict, wh_: dict) -> dict:
@@ -6472,7 +6775,30 @@ HIST_STATS_CSS = """<style>.hst{display:grid;grid-template-columns:repeat(auto-f
 .hst div{background:#170d0e;border:1px solid #5c1c1a;border-radius:10px;padding:9px;text-align:center}
 .hst b{display:block;color:#fff;font-size:19px}.hst span{color:#9a9a9c;font-size:11px;text-transform:uppercase;letter-spacing:1px}
 .wsum{text-align:center;margin:0 0 6px}.wsum img{max-width:100%;height:auto;border-radius:8px}
-table.srt th{white-space:nowrap}table.srt th:after{content:" ⇅";color:#5c4a4a;font-size:11px}</style>"""
+table.srt th{white-space:nowrap}table.srt th:after{content:" ⇅";color:#5c4a4a;font-size:11px}
+table.msum tr.fmr{display:none}table.msum.shf tr.fmr{display:table-row}table.msum tr.fmr td{color:#8a7f80}
+table.msum td{white-space:nowrap}.trm{background:#3a2d12;color:#e8be5a;border-radius:6px;padding:1px 6px;font-size:11px;margin-left:4px}</style>"""
+
+
+CURRENT_MEMBERS = {}       # member id (str) -> name, current members - set in main() (history summaries)
+
+
+def _member_summary(rows: list, cols: list, tid: str) -> str:
+    """A sortable all-member summary table (War / Chain History): rows = [{"id", "name", "current", <key>: value}],
+    cols = [(label, key, fmt)] (fmt(value) -> text; the raw value sorts). Current members show; former members
+    appear with "Show former members". Sorts with SORT_JS (table.srt)."""
+    import html as _html
+    h = (f'<label style="color:#9a9a9c;font-size:13px;display:flex;gap:6px;align-items:center;margin:4px 0 8px">'
+         f'<input type="checkbox" onchange="document.getElementById(\'{tid}\').classList.toggle(\'shf\',this.checked)"> Show former members</label>'
+         f'<div style="overflow-x:auto"><table class="srt msum" id="{tid}"><tr><th>Member</th>'
+         + "".join(f"<th>{_html.escape(l)}</th>" for l, _k, _f in cols) + "</tr>")
+    for r in rows:
+        h += (f'<tr{"" if r["current"] else " class=fmr"}><td>'
+              f'<a href="member.html?id={r["id"]}">{_html.escape(str(r["name"]))}</a>'
+              + ("" if r["current"] else ' <span class="tag">former</span>') + "</td>"
+              + "".join(f'<td data-v="{r.get(k) or 0}">{f(r.get(k)) if r.get(k) is not None else "-"}</td>' for _l, k, f in cols)
+              + "</tr>")
+    return h + "</table></div>"
 
 
 def _stat_strip(items) -> str:
@@ -6494,7 +6820,10 @@ def war_history_page(out: Path, raw: dict, cfg: dict):
     won = sum(1 for k, _w in wars if meta.get(k, {}).get("won"))
     tot_hits = sum(m["attacks"] for _k, w in wars for m in w.get("members", []))
     tot_resp = sum(m.get("score", 0) for _k, w in wars for m in w.get("members", []))
-    part = [sum(1 for m in w.get("members", []) if m["attacks"] > 0) / len(w["members"]) for _k, w in wars if w.get("members")]
+    tw = termed_wars(cfg)
+    # took part: termed wars left out (TERMED WARS)
+    part = [sum(1 for m in w.get("members", []) if m["attacks"] > 0) / len(w["members"]) for k, w in wars
+            if w.get("members") and str(k) not in tw]
     summary_html = HIST_STATS_CSS + _stat_strip([
         (f"{won}-{len(wars) - won}", "Record (W-L)"), (f"{round(100 * won / len(wars)) if wars else 0}%", "Win rate"),
         (fmt_int(len(wars)), "Ranked wars"), (fmt_int(tot_hits), "War hits"), (f"{tot_resp:,.0f}", "War respect"),
@@ -6511,7 +6840,32 @@ def war_history_page(out: Path, raw: dict, cfg: dict):
                                  f'alt="War Summary - latest war" loading="lazy"></a></div>')
         except Exception as e:
             print(f"War History: war summary skipped ({type(e).__name__})")
+    # every member's wars, all time (same counting as the all-time war leaderboard; a termed war with no hits
+    # isn't counted against anyone)
+    agg = {}
+    for k, w in wars:
+        for m in w.get("members", []):
+            if str(k) in tw and m["attacks"] == 0:
+                continue
+            a = agg.setdefault(str(m["id"]), {"id": m["id"], "name": m.get("name", "?"), "wars": 0, "hits": 0, "resp": 0.0,
+                                              "took": 0, "assists": 0, "best": 0})
+            a["wars"] += 1; a["hits"] += m["attacks"]; a["resp"] += m.get("score", 0); a["took"] += m["attacks"] > 0
+            a["assists"] += m.get("assists", 0) or 0; a["best"] = max(a["best"], m["attacks"])
+    for i, n in CURRENT_MEMBERS.items():
+        agg.setdefault(i, {"id": int(i), "name": n, "wars": 0, "hits": 0, "resp": 0.0, "took": 0, "assists": 0, "best": 0})
+    rows_ = []
+    for i, a in agg.items():
+        a["current"] = i in CURRENT_MEMBERS if CURRENT_MEMBERS else True
+        a["name"] = CURRENT_MEMBERS.get(i, a["name"])
+        a["per"] = round(a["hits"] / a["wars"], 1) if a["wars"] else None
+        a["rate"] = round(100 * a["took"] / a["wars"]) if a["wars"] else None
+        rows_.append(a)
+    rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
+    msum = _member_summary(rows_, [("Wars", "wars", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
+                                   ("Hits / war", "per", lambda v: f"{v:,.1f}"), ("Took part", "rate", lambda v: f"{v}%"),
+                                   ("Best war", "best", fmt_int), ("Assists", "assists", fmt_int)], "wsumT")
     body = (site_menu("") + "<h2>⚔️ War Summary</h2>" + summary_html
+            + '<h2>👥 Every member <span class="tag">(all wars on record · tap a column to sort)</span></h2>' + msum
             + f'<h2>All ranked wars <span class="tag">(tap a column to sort)</span></h2>'
             '<table class="srt"><tr><th>Date</th><th>Result</th><th>Score</th><th>Hits</th><th>Respect</th>'
             "<th>Took part</th><th>Links</th></tr>")
@@ -6520,12 +6874,14 @@ def war_history_page(out: Path, raw: dict, cfg: dict):
         mt = meta.get(k, {})
         when = datetime.fromtimestamp(w["end"], timezone.utc).strftime("%b %d, %Y")
         ms_ = w.get("members", [])
-        res = (f'<span class="{"w" if mt.get("won") else "d"}">{"Victory" if mt.get("won") else "Defeat"}</span> '
-               f'vs {_html.escape(str(mt.get("opponent", "?")))}') if mt else "?"
+        res = ((f'<span class="{"w" if mt.get("won") else "d"}">{"Victory" if mt.get("won") else "Defeat"}</span> '
+                f'vs {_html.escape(str(mt.get("opponent", "?")))}') if mt else "?") + \
+              ('<span class="trm" title="Termed - not counted against participation or reliability">Termed</span>'
+               if str(k) in tw else "")
         links = []
         if (REPORTS_DIR / f"war-{k}.json").exists():
-            links.append(f'<a href="reports/war-{k}.html">Report</a>')
-        if k in rec:
+            links.append(f'<a href="reports/war-{k}.html">{"Report &amp; Payout" if k in rec else "Report"}</a>')
+        elif k in rec:
             links.append(f'<a href="payouts/war-{k}.html">Payout</a>')
         hits, resp = sum(m["attacks"] for m in ms_), sum(m.get("score", 0) for m in ms_)
         took = sum(1 for m in ms_ if m["attacks"] > 0)
@@ -6562,33 +6918,14 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     todo = sorted((k for k in wars if k not in posted), key=lambda k: wars[k]["end"])
     my_id = raw["basic"].get("basic", raw["basic"]).get("id")
     scfg = cfg.get("announcements", {}).get("slacker_watch", {})
-    # EVERY war in the history has a report page in the current format (war_report_full_png: the War Summary +
-    # every member who was in the war with hits / respect). New wars, wars that never had a report, and reports
-    # drawn in an older format (no / lower "rv" - e.g. the old summary + slackers layout) are (re)drawn here.
-    # Drawn from saved data - no API calls.
-    order = sorted(wars, key=lambda k: -wars[k]["end"])
-    redrawn = 0
-    for wid in order:
-        f_ = REPORTS_DIR / f"war-{wid}.json"
-        try:
-            meta_ = json.loads(f_.read_text(encoding="utf-8")) if f_.exists() else {}
-        except ValueError:
-            meta_ = {}
-        if f_.exists() and meta_.get("rv", 0) >= WAR_REPORT_V and wid in posted:
-            continue
-        try:
-            w0 = _one_war(raw, wid, my_id, cfg)
-            if w0:
-                save_report("war", wid, war_report_full_png(w0, wars[wid]), _war_report_meta(w0, wars[wid]))
-                redrawn += 1
-        except Exception as e:                 # one bad war never stops the run
-            print(f"War report {wid} not drawn ({type(e).__name__})")
-        if wid in todo:
-            print(f"War report saved: {wid}")
-        posted.add(wid)
-    if redrawn:
-        print(f"War reports drawn (full members list): {redrawn}")
+    # EVERY war in the history has a report page in the current format (refresh_war_reports: the War Summary,
+    # the payout when the war was paid, every member who was in the war) - drawn from saved data, no API calls.
+    refresh_war_reports(raw, cfg, set(todo))
+    for wid in todo:
+        print(f"War report saved: {wid}")
+    posted |= set(wars)
     state["posted"] = sorted(posted)
+    order = sorted(wars, key=lambda k: -wars[k]["end"])
     # ---- hub ----
     base = member_base()
     lk = order[0]
@@ -6609,8 +6946,9 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
         when = datetime.fromtimestamp(wars[k]["end"], timezone.utc).strftime("%b %d")
         res = (("✅ " if mt.get("won") else "❌ ") + f"vs **{mt.get('opponent', '?')}** · "
                f"{fmt_int(mt.get('our', 0))}-{fmt_int(mt.get('their', 0))}") if mt else "?"
-        links = ([f"[Report]({base}/reports/war-{k}.html)"] if (REPORTS_DIR / f"war-{k}.json").exists() else []) + \
-                ([f"[Payout]({base}/payouts/war-{k}.html)"] if k in rec else [])
+        links = ([f"[Report{' & Payout' if k in rec else ''}]({base}/reports/war-{k}.html)"]
+                 if (REPORTS_DIR / f"war-{k}.json").exists() else
+                 ([f"[Payout]({base}/payouts/war-{k}.html)"] if k in rec else []))
         lines.append(f"`{when}` {res}" + (" · " + " · ".join(links) if links else ""))
     more = len(order) - 1 - len(lines)
     won = sum(1 for k in order if meta.get(k, {}).get("won"))
@@ -6629,10 +6967,10 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
          "description": ("\n".join(lines) or "No earlier wars yet.")
                         + (f"\n-# …and {more} older - see the full War History" if more > 0 else ""),
          "footer": {"text": f"{len(order)} ranked wars on record · {won} won · {len(order) - won} lost"}}]
-    btns = [{"type": 2, "style": 5, "label": "Latest Report", "url": f"{base}/reports/war-{lk}.html"},
+    # the latest war's report page includes its payout once paid (War Report & Payout)
+    btns = [{"type": 2, "style": 5, "label": "Latest Report & Payout" if lk in rec else "Latest Report",
+             "url": f"{base}/reports/war-{lk}.html"},
             {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"}]
-    if lk in rec:
-        btns.append({"type": 2, "style": 5, "label": "Payout", "url": f"{base}/payouts/war-{lk}.html"})
     payload = {"username": dcfg.get("username", "War Reports"),
                "content": f"## ⚔️ War Reports\n-# updated <t:{int(datetime.now(timezone.utc).timestamp())}:R>",
                "embeds": embeds,
@@ -8508,9 +8846,12 @@ def payout_war_card(wid: str):
         return None
 
 
-def payout_receipt_image(r: dict, vault: dict = None, war_card=None) -> bytes:
+def payout_receipt_image(r: dict, vault: dict = None, war_card=None, layer: bool = False):
     """Framed receipt: war result, budget / expenses / paid tiles, then every
-    member's payout (two columns of the table when long) and a total."""
+    member's payout (two columns of the table when long) and a total.
+    layer=True: the unframed content layer (PAYOUT SUMMARY heading) for the combined War Report & Payout."""
+    if layer and war_card is None:
+        war_card = True                        # -> the "PAYOUT SUMMARY" heading (result/score are in the war summary)
     w = r["war"]
     mem = [m for m in r["members"] if m.get("pay", 0) > 0]
     unpaid = [m for m in r["members"] if not m.get("pay")]
@@ -8609,6 +8950,8 @@ def payout_receipt_image(r: dict, vault: dict = None, war_card=None) -> bytes:
     cv = _Canvas(_height_of(draw))
     draw(cv)
     img = cv.img
+    if layer:
+        return img
     if war_card is not None:      # the war's summary printout (same card as the war report) on top
         both = Image.new("RGBA", (img.width, war_card.height + img.height - PAD_TOP), (0, 0, 0, 0))
         both.alpha_composite(war_card, (0, 0))
@@ -8617,7 +8960,7 @@ def payout_receipt_image(r: dict, vault: dict = None, war_card=None) -> bytes:
     return frame_png(img, bar="War Payout Receipt")
 
 
-PAYOUT_POST_V = b"8"
+PAYOUT_POST_V = b"9"       # 9: one combined War Report & Payout image
 
 
 def payout_newsletter(r: dict, wid: str) -> tuple:
@@ -8721,6 +9064,9 @@ def update_payouts(cfg: dict, out: Path):
     # vault log check (full runs only - a few news calls per unchecked receipt)
     key_ = os.environ.get("TORN_API_KEY", "").strip() if os.environ.get("RUN_KIND", "full") == "full" else ""
     vault = update_vault_checks(latest, key_)
+    # the combined War Report & Payout images (saved data only) - drawn now so the post below uses them
+    if (_PAYOUT_RAW.get("raw") or {}).get("_war_history"):
+        refresh_war_reports(_PAYOUT_RAW["raw"], load_config())
     # Stable link per war: payouts/war-<war id>.html/.png always shows the CURRENT (corrected) receipt.
     # Every receipt version's own name (<war>-<stamp>.html/.png) is also kept: its page forwards to the
     # war's link and its image is the current one - so links already in Discord / newsletters never break.
@@ -8735,6 +9081,13 @@ def update_payouts(cfg: dict, out: Path):
         war_rep = rep_png.read_bytes() if rep_png.exists() else (frame_png(card, bar="War Report") if card is not None else None)
         discord_imgs[wid] = ([(f"war-report-{wid}.png", war_rep)] if war_rep else []) + \
                             [(f"war-payout-{wid}.png", payout_receipt_image(r, vault.get(f.stem)) if war_rep else png)]
+        # the war's combined War Report & Payout (when it's up to date with this receipt) = ONE image
+        try:
+            _m = json.loads((REPORTS_DIR / f"war-{wid}.json").read_text(encoding="utf-8"))
+            if rep_png.exists() and _m.get("pay") and _m.get("pay") == war_payout_sig(wid)[2]:
+                discord_imgs[wid] = [(f"war-report-payout-{wid}.png", rep_png.read_bytes())]
+        except (OSError, ValueError):
+            pass
         slug = f"war-{wid}"
         (mout / "payouts" / f"{slug}.png").write_bytes(png)
         markup = (f'<p style="text-align:center;"><a href="{base_url}/payouts/{slug}.html">'
@@ -8782,7 +9135,7 @@ def update_payouts(cfg: dict, out: Path):
         payload = {"username": cfg.get("payouts", {}).get("username", "War Payouts"), "content": text,
                    "attachments": [{"id": k, "filename": n} for k, (n, _b) in enumerate(discord_imgs[wid])],
                    "components": [{"type": 1, "components": [
-                       {"type": 2, "style": 5, "label": "Receipt", "url": f"{base_url}/payouts/war-{wid}.html"},
+                       {"type": 2, "style": 5, "label": "Report & Payout", "url": f"{base_url}/reports/war-{wid}.html"},
                        {"type": 2, "style": 5, "label": "All payouts", "url": f"{base_url}/payouts.html"}]}],
                    "allowed_mentions": {"parse": []}}
         files_ = discord_imgs[wid]
@@ -8819,7 +9172,7 @@ def update_payouts(cfg: dict, out: Path):
         when = datetime.fromtimestamp(w.get("end", 0), timezone.utc).strftime("%b %d, %Y")
         cards.append(f"""<section><h2>{'Victory' if w.get('won') else 'Defeat'} vs {_html.escape(str(w.get('opponent', '?')))}</h2>
 <div class="m">{when} · {_short_money(r.get('paid', 0))} paid to {sum(1 for m in r['members'] if m.get('pay'))} members</div>
-<a href="payouts/war-{wid}.html"><img src="payouts/war-{wid}.png" alt="receipt" loading="lazy"></a>
+<a href="{'reports' if (REPORTS_DIR / f'war-{wid}.json').exists() else 'payouts'}/war-{wid}.html"><img src="payouts/war-{wid}.png" alt="War Report &amp; Payout" loading="lazy"></a>
 </section>""")
     nav = site_menu("")
     (mout / "payouts.html").write_text(f"""<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -9277,7 +9630,7 @@ def leader_alerts(raw: dict, summary: dict, cfg: dict):
         leader_links = ([("Leaders Hub", f"{lb}/index.html"), ("Leader Monitor", f"{lb}/monitor.html"),
                          ("Payout Calculator", f"{lb}/payout.html"),
                          ("Announcements", f"{lb}/announcements.html"), ("Faction Description", f"{lb}/description.html"),
-                         ("Newsletter Builder", f"{lb}/builder.html"), ("Xanax Monitor", f"{lb}/xanax.html"),
+                         ("Newsletter Builder", f"{lb}/builder.html"), ("Armory Monitor", f"{lb}/armory.html"),
                          ("Newsletter Filler (userscript)", f"{lb}/hb-newsletter-filler.user.js")] if lb else [])
         text = "\n".join(
             ["## 🔗 Faction Pages", "", "### 👥 Member pages", "-# Safe to share with faction members (never publicly)."]
@@ -9441,6 +9794,7 @@ def main():
         if cfg["announcements"]["leaderboard"].get("gym", True):
             raw["_gym"] = update_gym(raw, cfg, api_key)
     summary = normalize(raw, cfg)
+    CURRENT_MEMBERS.update({str(m.get("id")): m.get("name", "?") for m in _as_list((raw.get("members") or {}).get("members"))})
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     prepare_stamps(summary, cfg, persist=not args.mock)
@@ -9451,6 +9805,8 @@ def main():
     _PAYOUT_RAW["raw"] = raw
     write_payout_calculator(cfg, out)
     update_payouts(cfg, out)
+    if raw.get("_war_history"):
+        refresh_war_reports(raw, cfg)             # war reports (+ their payouts merged in) - saved data only
     write_report_pages(out)
     if raw.get("_chain_history"):
         chain_history_page(out, raw["_chain_history"], cfg.get("chain_report", {}))
@@ -9459,10 +9815,11 @@ def main():
     write_message_builder(out)
     write_homepages(out, cfg)
     if not args.mock and os.environ.get("RUN_KIND", "full") == "full":
-        update_xanax_log(api_key, cfg)            # armory Xanax since the last update (Xanax Monitor)
-        update_attack_log(api_key, cfg, raw["basic"].get("basic", raw["basic"]).get("id"))   # every member attack
+        item_types(api_key)                       # item categories for the Armory Monitor (weekly, 1 call)
+        update_armory_log(api_key)                # armory usage: new news + a few pages of older history
     db_ = write_databases(out, raw, cfg)          # shared data layer (db/*.json)
     write_profiles(out, db_)
+    write_profile_layouts(out, cfg)               # profile layouts (members' own + the leaders' default) + editors
     write_monitor(out, db_, cfg)
     write_home_data(out, db_, raw)               # hubs: welcome numbers, war snapshot, needs attention
     # (write_legacy_images: only for the GitHub Pages days - the site is now on Cloudflare, so the old
