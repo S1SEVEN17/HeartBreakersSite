@@ -18,6 +18,8 @@
 //   /<image>          public images at the site root (the faction description banner: banner-animated.webp ...)
 //   /oc/cpr           OC Payout Optimizer pass-rate sharing (D1 "OC_DB") - its own auth: the member's Torn key
 //                     on every call (not the pass cookie). See OC OPTIMIZER below.
+//   /oc/plan          OC Optimizer: the crimes leaders turned off + the caller's OWN assigned role (key-checked)
+//   /l/oc/*           leaders' OC Management page: settings, deployed plan, shared rates (pass cookie, leaders)
 //
 // Nothing from GitHub shows through: GitHub's response headers are dropped (only type / caching headers are
 // passed on) and GitHub's own error pages are replaced by ours, so visitors only ever see this address.
@@ -203,6 +205,7 @@ export default {
     if (p === "/robots.txt") return new Response("User-agent: *\nDisallow: /\n");
     // OC Payout Optimizer script (runs on torn.com, authenticates with the member's own Torn key)
     if (p === "/oc/cpr" || p === "/oc/cpr/read" || p === "/oc/cpr/delete") return ocRoute(env, ctx, req, url, p);
+    if (p === "/oc/plan") return ocPlanRoute(env, ctx, req);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -227,6 +230,8 @@ export default {
     if (area === "m" && rest === "mine.json") return mine(env, who);
     // opt-in stats (own Limited key): settings / save / delete - always the signed-in member's own entry
     if (area === "m" && (rest === "optin" || rest === "optin.json")) return optinRoute(env, req, who);
+    // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
+    if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
     if (area === "l" && rest === "readiness.json") return readiness(env, ctx);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
@@ -581,4 +586,91 @@ async function ocIdentify(env, ctx, key) {
   if (!who.player_id) return {status: 401, err: "Torn didn't return a player for that key"};
   if (String(who.faction_id) !== String(env.FACTION_ID)) return {status: 403, err: "Heart Breakers members only"};
   return who;
+}
+
+
+// =====================================================================================================
+// OC MANAGEMENT (Nov 2026) - leaders turn crimes off for the OC Optimizer's suggestions and deploy Team Builder
+// teams; the script asks POST /oc/plan for what applies to the CALLER.
+//   D1 oc_config (env, k, v JSON, ts, by):  k = 'disabled' ["Crime", ...]   k = 'plan' {teams: [...], ...}
+//   POST /oc/plan {key, env}   (script; key in the body, checked like /oc/cpr)
+//        -> {ok:true, disabled:[...], assignment: null | {crime, position, team, rate, difficulty, deployed}, plan_ts}
+//        Only the caller's OWN assignment is returned - nobody else's.
+//   Leaders (pass cookie, /l/oc/...):
+//     GET  /l/oc/config.json?env=   -> {disabled, plan, disabled_ts, plan_ts, disabled_by, plan_by}
+//     PUT  /l/oc/config  (X-HB-Save: 1) {env, k: "disabled"|"plan", v}   -> saved (by = the signed-in leader)
+//     GET  /l/oc/rates.json?env=    -> the OC Optimizer's shared rates for that env (same shape as /oc/cpr/read)
+// =====================================================================================================
+async function ocConfig(env, envName) {
+  const {results} = await env.OC_DB.prepare("SELECT k, v, ts, by FROM oc_config WHERE env = ?").bind(envName).all();
+  const out = {disabled: [], plan: null};
+  for (const r of results || []) {
+    let v = null;
+    try { v = JSON.parse(r.v); } catch (e) {}
+    out[r.k] = v; out[r.k + "_ts"] = r.ts; out[r.k + "_by"] = r.by;
+  }
+  if (!Array.isArray(out.disabled)) out.disabled = [];
+  return out;
+}
+
+async function ocPlanRoute(env, ctx, req) {
+  if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
+  if (!env.OC_DB) return ocErr(503, "OC sharing isn't set up yet");
+  if (req.method !== "POST") return ocErr(405, "method not allowed");
+  let body;
+  try { body = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
+  if (!body || !OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
+  const id = await ocIdentify(env, ctx, ocKey(req, body.key));
+  if (id.err) return ocErr(id.status, id.err);
+  const cfg = await ocConfig(env, body.env);
+  let assignment = null;
+  for (const t of ((cfg.plan || {}).teams || [])) {
+    for (const r of (t.roles || [])) {
+      if (Number(r.pid) === Number(id.player_id)) {
+        assignment = {crime: t.crime, position: r.position, team: t.id, rate: r.rate ?? null,
+                      difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null};
+      }
+    }
+  }
+  return ocJson({ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null});
+}
+
+async function ocLeaderRoute(env, req, url, who, sub) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (!env.OC_DB) return Response.json({ok: false, error: "OC storage isn't set up yet"}, {status: 503});
+  if (req.method === "GET" && (sub === "config.json" || sub === "rates.json")) {
+    const envName = url.searchParams.get("env");
+    if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
+    if (sub === "config.json") return Response.json(await ocConfig(env, envName), H);
+    const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
+      .bind(envName, Number(env.FACTION_ID)).all();
+    const out = {};
+    for (const r of results || []) { let roles = {}; try { roles = JSON.parse(r.roles); } catch (e) {} out[String(r.player_id)] = {name: r.name, ts: r.ts, roles}; }
+    return Response.json(out, H);
+  }
+  if (req.method === "PUT" && sub === "config") {
+    if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+    let b;
+    try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    let v = b.v;
+    if (b.k === "disabled") {
+      if (!Array.isArray(v)) return Response.json({ok: false, error: "disabled must be a list"}, {status: 400});
+      v = [...new Set(v.map(x => String(x).slice(0, 80)))].slice(0, 200);
+    } else {
+      if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
+      v = {teams: v.teams.slice(0, 100).map(t => ({id: String(t.id || "").slice(0, 40), crime: String(t.crime || "").slice(0, 80),
+        difficulty: Number(t.difficulty) || null, avg: Number(t.avg) || null,
+        roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 8).map(r => ({position: String(r.position || "").slice(0, 40),
+          pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
+          rate: r.rate == null ? null : Math.round(Number(r.rate)) || 0}))}))};
+    }
+    const text = JSON.stringify(v);
+    if (text.length > 200000) return Response.json({ok: false, error: "too large"}, {status: 413});
+    await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES (?, ?, ?, ?, ?) " +
+      "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
+      .bind(b.env, b.k, text, Date.now(), `${who.name} [${who.id}]`).run();
+    return Response.json({ok: true}, H);
+  }
+  return new Response("Not found", {status: 404});
 }

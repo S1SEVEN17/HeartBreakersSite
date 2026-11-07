@@ -4011,7 +4011,7 @@ def member_out(out: Path) -> Path:
     d_.mkdir(parents=True, exist_ok=True)
     return d_
 # ONE header for every page (members' and leaders'), the same everywhere. Two parts, both set by leaders in the
-# Header editor (leaders' header-editor.html -> config.json "header", Nov 2026):
+# Header editor (leaders' header-editor.html -> config.json "site_header", Nov 2026; "header" is the banner's):
 #   "members"  what EVERYONE sees (members and leaders)
 #   "leaders"  extra items only leaders see, after the members' items (class "hbl": hidden until the gatekeeper's
 #              whoami.json says leader) - by default one "🛡️ Leaders" dropdown with the leadership tools in folders
@@ -4028,6 +4028,7 @@ def header_default() -> dict:
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
                                                         L("⚔️ War readiness", "L:readiness.html"),
                                                         L("💰 Paid wars", "M:wars.html#paid")]},
+                {"label": "🕵️ Organized crimes", "items": [L("🕵️ OC Management", "L:oc.html")]},
                 {"label": "👥 Members", "items": [L("🗄️ Armory monitor", "L:armory.html"), L("💪 Member stats", "L:stats.html"),
                                                  L("👥 Members list", "M:members.html")]},
                 {"label": "📢 Torn panels", "items": [L("📢 Announcements", "L:announcements.html"),
@@ -4044,10 +4045,10 @@ _HEADER = {}
 
 
 def header_cfg() -> dict:
-    """config.json "header" (read once per build), else header_default()."""
+    """config.json "site_header" (read once per build), else header_default()."""
     if "v" not in _HEADER:
         try:
-            h = load_config().get("header")
+            h = load_config().get("site_header")       # NOT "header" - that's the banner's own settings
         except (OSError, ValueError):
             h = None
         ok = isinstance(h, dict) and isinstance(h.get("members"), list) and isinstance(h.get("leaders"), list)
@@ -4873,7 +4874,7 @@ def homepage_default() -> dict:
                                                   ("📰", "Latest recap", "M:newsletter.html"), ("🗂️", "Recap archive", "M:recaps.html")])}
     leaders = {"title": "Leaders", "links": link([
         ("🧮", "Payout calculator", "L:payout.html"),
-        ("🗄️", "Armory monitor", "L:armory.html"), ("💪", "Member stats", "L:stats.html"),
+        ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
         ("⚔️", "War readiness", "L:readiness.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
@@ -4998,7 +4999,7 @@ def write_homepages(out: Path, cfg: dict = None):
     (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
                                         .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
                                         .replace("__MENU__", leader_menu("")), encoding="utf-8")
-    # the Header editor (leaders, Nov 2026) - config.json "header": the members' header + the leaders' extra items
+    # the Header editor (leaders, Nov 2026) - config.json "site_header": the members' header + the leaders' extra items
     hconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": SITE_PAGES, "default": header_default(),
              "css": MENU_CSS}
     (lout / "header-editor.html").write_text((ROOT / "tools" / "header_editor.html").read_text(encoding="utf-8")
@@ -5018,6 +5019,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
+             ("OC Management", "L:oc.html"),
              ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
@@ -5695,6 +5697,43 @@ def write_armory_page(out: Path, db: dict, ad: dict):
                                      '<title>Armory Monitor</title>', encoding="utf-8")
 
 
+def write_oc_management(out: Path, db: dict):
+    """oc.html (leaders) - OC MANAGEMENT (Nov 2026): turn crimes on/off for the OC Optimizer script's suggestions,
+    build teams (Team Builder, ported from the script's simulator + an automatic multi-team builder) and deploy them -
+    members running the script are then pointed at their assigned role. Embedded here (rebuilt every full update):
+      catalog   every OC scenario {name: {difficulty, roles, prereq}} (data/oc_catalog.json, weekly)
+      hist      history pass rates {"Crime|Role": {member id: [rate %, when]}} - each CURRENT member's latest rate per
+                crime + role from completed crimes (data/crime_history.json slots)
+      members   current members {id: name}
+    Read live by the page through the gatekeeper (leaders' pass): the OC Optimizer's shared rates (D1, /l/oc/rates),
+    the deployed settings + plan (D1, /l/oc/config) and the active crimes (data/oc_active.json, every crime check)."""
+    lout = out / leader_dir()
+    try:
+        catalog = json.loads(OC_CATALOG_PATH.read_text(encoding="utf-8")).get("crimes", {})
+    except (OSError, ValueError):
+        catalog = {}
+    cur = {str(m["id"]): m["name"] for m in db["members"]["members"] if m["current"]}
+    hist = {}
+    try:
+        ch = json.loads(CRIME_HIST_PATH.read_text(encoding="utf-8")).get("crimes", {})
+    except (OSError, ValueError):
+        ch = {}
+    for c in ch.values():
+        t = int(c.get("executed_at") or 0)
+        for pid, label, rate in c.get("slots") or []:
+            if not pid or rate is None or str(pid) not in cur:
+                continue
+            k = f"{c.get('name')}|{oc_role(label)}"
+            b = hist.setdefault(k, {})
+            if str(pid) not in b or t > b[str(pid)][1]:
+                b[str(pid)] = [int(rate), t]
+    conf = {"catalog": catalog, "hist": hist, "members": cur, "member_base": member_base(), "repo": REPO,
+            "branch": "main", "ghproxy": gh_proxy_url()}
+    tpl = (ROOT / "tools" / "oc_management.html").read_text(encoding="utf-8")
+    (lout / "oc.html").write_text(tpl.replace("__CONFIG__", json.dumps(conf, separators=(",", ":")).replace("</", "<\\/"))
+                                  .replace("__MENU__", leader_menu("")), encoding="utf-8")
+
+
 def armory_own(ad: dict, mid: str) -> dict:
     """One member's own usage for their profile (via the gatekeeper's /m/mine.json): this month, last month and
     all time on record, by category, plus their top items all time."""
@@ -5942,6 +5981,7 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     lout = out / leader_dir()
     ad = armory_data(db)
     write_armory_page(out, db, ad)
+    write_oc_management(out, db)
     oi = optin_publish(out, *(OPTIN_DATA.get("v") or optin_saved()))   # opt-in stats (no keys)
     write_optin_pages(out)
     priv, sc = {}, [r["score"] for r in md["members"]]
@@ -8757,6 +8797,58 @@ CRIME_TAX = 0.20      # faction's cut of every crime payout (rest split evenly b
 RESPECT_LOG_PATH = ROOT / "data" / "respect_log.json"
 
 
+def oc_role(label) -> str:
+    """'Muscle #2' -> 'Muscle' (numbered copies of a role share one pass rate) - the same rule as the OC Optimizer
+    script's baseRole, so the Hub's rates and the script's shared rates use the same "Crime|Role" keys."""
+    import re
+    return re.sub(r"\s+", " ", re.sub(r"#\s*\d+", "", str(label or ""))).strip()
+
+
+def oc_slot_label(sl: dict) -> str:
+    pi = sl.get("position_info") if isinstance(sl.get("position_info"), dict) else {}
+    return str(pi.get("label") or sl.get("position") or "")
+
+
+def oc_slots(c: dict) -> list:
+    """[[member id or 0, role label, pass rate % or null], ...] for one crime's slots."""
+    out = []
+    for sl in _as_list(c.get("slots")):
+        r = sl.get("checkpoint_pass_rate")
+        out.append([int(_slot_user(sl) or 0), oc_slot_label(sl), round(float(r)) if isinstance(r, (int, float)) else None])
+    return out
+
+
+OC_CATALOG_PATH = ROOT / "data" / "oc_catalog.json"
+OC_ACTIVE_PATH = ROOT / "data" / "oc_active.json"
+
+
+def oc_catalog(key: str) -> dict:
+    """Every OC scenario (torn/organizedcrimes): {name: {difficulty, roles: [slot labels], prereq}} - refreshed once a
+    week (1 call, weekly slot like item_types) into data/oc_catalog.json. Structure only (Torn gives no rewards here)."""
+    import time
+    try:
+        c = json.loads(OC_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        c = {"fetched": 0, "crimes": {}}
+    if key and (due("item_types", c.get("fetched")) or not c.get("crimes")):
+        try:
+            data = fetch_url("https://api.torn.com/v2/torn/organizedcrimes", key)
+            cr = {}
+            for x in _as_list(data.get("organizedcrimes")):
+                if isinstance(x, dict) and x.get("name"):
+                    cr[x["name"]] = {"difficulty": x.get("difficulty"),
+                                     "roles": [oc_slot_label(sl) or f"Role {i + 1}" for i, sl in enumerate(_as_list(x.get("slots")))],
+                                     "prereq": (x.get("prerequisite") or {}).get("name") if isinstance(x.get("prerequisite"), dict)
+                                               else x.get("prerequisite")}
+            if cr:
+                c = {"fetched": int(time.time()), "crimes": cr}
+                OC_CATALOG_PATH.write_text(json.dumps(c, indent=0, sort_keys=True) + "\n", encoding="utf-8")
+                print(f"OC catalog: {len(cr)} crimes")
+        except SystemExit as e:
+            print(f"OC catalog skipped: {e}")
+    return c.get("crimes", {})
+
+
 def update_crime_history(key: str) -> dict:
     """Completed Organized Crimes (OC leaderboard / recap). Saved slim in
     data/crime_history.json: {id: {name, difficulty, status, executed_at,
@@ -8767,8 +8859,9 @@ def update_crime_history(key: str) -> dict:
     except (OSError, ValueError):
         hist = {"crimes": {}}
     saved = hist.setdefault("crimes", {})
-    # saved before item rewards / prerequisite links were recorded -> read the whole history once more
-    refill = any("items" not in c or "prev" not in c for c in saved.values())
+    # saved before item rewards / prerequisite links / slot roles + pass rates were recorded -> read the whole
+    # history once more (slots added Nov 2026 for the OC Management Team Builder)
+    refill = any("items" not in c or "prev" not in c or "slots" not in c for c in saved.values())
     now_ = int(datetime.now(timezone.utc).timestamp())
     if saved and not refill and not due("crimes", hist.get("fetched")):
         return hist                         # read once per 3-hour clock slot (FIXED CLOCK SCHEDULE)
@@ -8786,9 +8879,10 @@ def update_crime_history(key: str) -> dict:
         cid = str(c.get("id"))
         rw = c.get("rewards") or {}
         n_items = sum(int(x.get("quantity") or 1) for x in _as_list(rw.get("items"))) if isinstance(rw, dict) else 0
-        if cid in saved and ("items" not in saved[cid] or "prev" not in saved[cid]):
+        if cid in saved and ("items" not in saved[cid] or "prev" not in saved[cid] or "slots" not in saved[cid]):
             saved[cid]["items"] = n_items
             saved[cid]["prev"] = c.get("previous_crime_id")
+            saved[cid]["slots"] = oc_slots(c)
             added += 1
             continue
         if cid in saved or not c.get("executed_at"):
@@ -8801,7 +8895,9 @@ def update_crime_history(key: str) -> dict:
                       # number of items rewarded (crimes that pay in items, not cash)
                       "items": n_items,
                       # prerequisite crime (e.g. No Reserve before Bidding War): its members share this payout
-                      "prev": c.get("previous_crime_id")}
+                      "prev": c.get("previous_crime_id"),
+                      # [member id, role, checkpoint pass rate %] per slot - the Team Builder's history rates
+                      "slots": oc_slots(c)}
         added += 1
     if True:                                # always save (records the fetch time)
         CRIME_HIST_PATH.parent.mkdir(exist_ok=True)
@@ -10180,6 +10276,18 @@ def discord_crime_alerts(key: str, cfg: dict):
                                                        "status": x["text"][:1].upper() + x["text"][1:],   # image: plain text (font has no emoji)
                                                        "icon": x["icon"]} for x in iss]}
     print(f"Crime check: {len(crimes)} active, {len(delayed)} delayed")
+    # the active crimes (who's in which role, their pass rate) for the leaders' OC Management page - read live from
+    # the data repo through the gatekeeper, so it's never more than one crime check (15 min) old
+    try:
+        act = [{"id": c.get("id"), "name": c.get("name"), "difficulty": c.get("difficulty"), "status": c.get("status"),
+                "ready_at": c.get("ready_at"), "slots": oc_slots(c)} for c in crimes]
+        old = OC_ACTIVE_PATH.read_text(encoding="utf-8") if OC_ACTIVE_PATH.exists() else ""
+        body = json.dumps({"crimes": act}, separators=(",", ":"), sort_keys=True)
+        if not old.startswith(body[:-1]):           # only rewrite when something changed (fewer data commits)
+            OC_ACTIVE_PATH.write_text(json.dumps({"crimes": act, "t": now}, separators=(",", ":"), sort_keys=True) + "\n",
+                                      encoding="utf-8")
+    except Exception as e:
+        print(f"OC active crimes not saved: {type(e).__name__}")
     log_crime_delays(delayed, now)
 
     # ---- 1b. second post: Recruiting (crimes with at least one member) + Recent Delays (Nov 2026) ----
@@ -10538,6 +10646,7 @@ def main():
         if os.environ.get("RUN_KIND", "full") == "full":
             log_respect(raw)
             raw["_crime_history"] = update_crime_history(api_key)
+            oc_catalog(api_key)                  # weekly: OC structure for the OC Management page
         monthly_recap(raw, cfg, out)
     if not args.mock:
         write_run_state(summary, cfg)

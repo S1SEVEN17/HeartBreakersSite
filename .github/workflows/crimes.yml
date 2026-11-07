@@ -53,4 +53,4 @@ jobs:
         run: >
           tools/store.sh save "Update crime alert state"
           data/discord_crime_state.json data/leader_alerts.json data/discord_messages_crimes.json
-          data/item_names.json data/crime_delays.json
+          data/item_names.json data/crime_delays.json data/oc_active.json

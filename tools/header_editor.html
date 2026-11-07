@@ -9,7 +9,7 @@
     Members header  - what EVERYONE sees (members and leaders)
     Leaders header  - extra items only leaders see, after the members' items (default: one "🛡️ Leaders" dropdown
                       with the leadership tools sorted into folders)
-  Saves config.json "header" {members: [item], leaders: [item]} (see header_default / nav_menu in generate.py) through
+  Saves config.json "site_header" {members: [item], leaders: [item]} ("header" is the banner's own settings - never touched) (see header_default / nav_menu in generate.py) through
   the gatekeeper (CFG.ghproxy - no GitHub token on the device); the data repo's notify workflow rebuilds the site.
     item:   {label, link}                      a button
             {label, items: [entry, ...]}       a dropdown; entry = {label, link} or a folder {label, items: [{label, link}]}
@@ -58,7 +58,7 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp
 const GHC = CFG.ghproxy || `https://api.github.com/repos/${CFG.repo}/contents/`;
 const tok = CFG.ghproxy ? "gate" : (() => { try { return JSON.parse(localStorage.getItem("hb_gh_token")); } catch (e) { return null; } })();
 let C = null, sha = null, side = "members", dirty = false;
-const H = () => (C.header = (C.header && Array.isArray(C.header.members) && Array.isArray(C.header.leaders)) ? C.header : JSON.parse(JSON.stringify(CFG.default)));
+const H = () => (C.site_header = (C.site_header && Array.isArray(C.site_header.members) && Array.isArray(C.site_header.leaders)) ? C.site_header : JSON.parse(JSON.stringify(CFG.default)));
 const changed = () => { dirty = true; $("status").textContent = "Unsaved changes"; preview(); };
 
 // a page picker (known pages) + a custom address box
@@ -118,7 +118,7 @@ $("addB").onclick = () => { H()[side].push({label: "New button", link: CFG.pages
 $("addD").onclick = () => { H()[side].push({label: "New dropdown ▾", items: [{label: "New link", link: CFG.pages[0][1]}]}); render(); changed(); };
 $("tM").onclick = () => { side = "members"; $("tM").classList.add("on"); $("tL").classList.remove("on"); render(); };
 $("tL").onclick = () => { side = "leaders"; $("tL").classList.add("on"); $("tM").classList.remove("on"); render(); };
-$("reset").onclick = () => { if (!C || !confirm("Put both headers back to the default?")) return; C.header = JSON.parse(JSON.stringify(CFG.default)); render(); changed(); };
+$("reset").onclick = () => { if (!C || !confirm("Put both headers back to the default?")) return; C.site_header = JSON.parse(JSON.stringify(CFG.default)); render(); changed(); };
 
 // ---- preview: the header's own markup + CSS (links don't open here) ----
 function preview() {
@@ -150,7 +150,7 @@ $("save").onclick = async () => {
   const clean = row => row.filter(it => it && it.label).map(it => Array.isArray(it.items)
     ? {label: it.label, items: it.items.filter(e => e && e.label).map(e => Array.isArray(e.items) ? {label: e.label, items: e.items.filter(x => x && x.label && x.link)} : {label: e.label, link: e.link}).filter(e => e.link || (e.items && e.items.length))}
     : {label: it.label, link: it.link}).filter(it => it.link || (it.items && it.items.length));
-  C.header = {members: clean(H().members), leaders: clean(H().leaders)};
+  C.site_header = {members: clean(H().members), leaders: clean(H().leaders)};
   $("status").textContent = "Saving…";
   try {
     const r = await fetch(`${GHC}config.json`, {method: "PUT",

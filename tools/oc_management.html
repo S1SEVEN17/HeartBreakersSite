@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>OC Management - Heart Breakers</title>
+<!--
+  OC MANAGEMENT (leaders' folder: oc.html, published by generate.py write_oc_management). Nov 2026.
+  Three tabs:
+    CRIMES       turn each Organized Crime on/off for the OC Optimizer script's suggestions (saved as the 'disabled'
+                 list - the script reads it from the gatekeeper's POST /oc/plan and stops suggesting those crimes)
+    TEAM BUILDER build teams here, then DEPLOY them: every member on a deployed team is told by the script which crime
+                 and role leadership assigned them (POST /oc/plan returns ONLY the caller's own assignment).
+                 Ported from the OC Optimizer's Team Builder simulator (exact crime+role rates only, each member used
+                 once across the board) plus an automatic multi-team builder:
+                   for each crime that's switched on, HARDEST first: build the best possible team from the members
+                   still free (maximise the team's average pass rate, every role at or above "Lowest role %"); keep it
+                   if the team's average reaches the target (default 75%), then try another team of the same crime;
+                   when it can't, move to the next-hardest crime. So the hardest crimes get the strongest members, and
+                   as many teams as the faction can staff at 75%+ are built.
+                 Crimes with a prerequisite (e.g. Bidding War after No Reserve) are only auto-built when "Include chain
+                 finals" is on - they can only start after their prerequisite. Locked teams (🔒) are kept by Auto-build.
+    DEPLOYED     the plan that's live for the script, with each member's progress from the active crimes
+                 (✅ in their assigned role · ⏳ not joined yet · ⚠️ in a different crime).
+  PASS RATES (a member's checkpoint pass rate for one crime + role - the same "Crime|Role" keys as the script):
+    live      the OC Optimizer's shared rates (D1, /l/oc/rates.json) + members' rates in the active crimes right now
+    history   their latest rate for that crime + role from completed crimes (CFG.hist, rebuilt every full update)
+    Live wins when it's newer than "Shared rates max age"; otherwise history. Members with no rate for a crime + role
+    are never placed in it (a rate from an easier crime would overstate what they'd manage).
+  BUSY: members already in an active crime are left out unless "Include members already in a crime" is on.
+  ENV: test / live (prod) - separate settings, plans and shared rates. The OC Optimizer test fork uses test.
+  Data: CFG (__CONFIG__: catalog, hist, members, ghproxy) + live reads through the gatekeeper (leaders' pass):
+    oc/config.json?env=  oc/rates.json?env=  (D1)   and   data/oc_active.json (via the leaders' gh/contents proxy).
+  The working board (draft) is kept in this browser only until it's deployed. __MENU__ = the site menu.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1150px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:10px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:18px 0 8px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:6px 0 10px}
+.bar .lab{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px}
+button,select,input{font:14px system-ui}
+button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:8px;padding:8px 13px;cursor:pointer}
+button:hover{border-color:var(--gold)}button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+button.gold{background:#3a2d12;border-color:#6b4a18;color:var(--gold);font-weight:700}
+button.go{background:var(--red);border-color:var(--red);color:#fff;font-weight:700}
+button.s{padding:4px 9px;font-size:12px}button:disabled{opacity:.45;cursor:not-allowed}
+select,input[type=number]{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:8px;padding:7px 9px}
+input[type=number]{width:70px;text-align:center}
+.tabs{display:flex;gap:6px;justify-content:center;margin:10px 0 4px;flex-wrap:wrap}
+.panel{background:#130b0c;border:1px solid #3a1416;border-radius:14px;padding:12px 14px;margin-top:10px}
+.hn{color:var(--sub);font-size:13px;line-height:1.45;margin:0 0 10px}
+.status{color:var(--gold);font-size:13px;text-align:center;min-height:18px;margin:4px 0}
+.status.err{color:#ff7a70}
+.stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}
+.stat div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px 10px;text-align:center}
+.stat b{display:block;color:#fff;font-size:20px}.stat span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:.8px}
+/* crimes list */
+.crl{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
+.cr{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px 11px}
+.cr.off{opacity:.55;border-style:dashed}
+.cr .nm{flex:1;min-width:0}.cr .nm b{display:block;color:#fff}.cr .nm i{font-style:normal;color:var(--sub);font-size:12px}
+.dif{display:inline-block;min-width:32px;text-align:center;border-radius:8px;padding:2px 6px;font-weight:700;font-size:12px;background:#2a1416;color:var(--gold)}
+.sw{position:relative;width:46px;height:26px;flex:0 0 auto}
+.sw input{opacity:0;width:0;height:0}.sw span{position:absolute;inset:0;background:#3a2a2c;border-radius:13px;transition:.15s;cursor:pointer}
+.sw span:before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#bbb;border-radius:50%;transition:.15s}
+.sw input:checked+span{background:#2f6b32}.sw input:checked+span:before{transform:translateX(20px);background:#fff}
+/* team builder */
+.opts{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+.opts label{display:flex;align-items:center;gap:6px;font-size:13px;color:#ccc}
+.teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;margin-top:10px}
+.team{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:10px 12px}
+.team.lock{border-color:#6b4a18}
+.th{display:flex;align-items:center;gap:8px;margin-bottom:6px}.th b{flex:1;color:#fff;min-width:0}
+.sr{font-weight:800;font-size:15px;white-space:nowrap}
+.rr{display:grid;grid-template-columns:minmax(80px,auto) 1fr auto;gap:6px;align-items:center;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
+.rr .pos{color:var(--sub);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rr select{width:100%;padding:5px 6px;font-size:13px}
+.rr .rt{min-width:46px;text-align:right;font-weight:700}
+.tag{color:var(--sub);font-size:12px}.src{font-size:10px;color:var(--sub);margin-left:3px}
+.bench{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.bench span{background:#1a1012;border:1px solid var(--edge);border-radius:12px;padding:3px 9px;font-size:12px}
+.note{background:#1f1608;border:1px solid #6b4a18;color:#e8d6a8;border-radius:8px;padding:8px 12px;font-size:13px;margin:8px 0}
+.ok{color:var(--green)}.mid{color:var(--gold)}.bad{color:#ff7a70}
+table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid #2a1416;text-align:left;font-size:13px}
+th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+@media (max-width:560px){body{padding:8px}.teams,.crl{grid-template-columns:1fr}.panel{padding:10px}}
+</style></head><body>
+__MENU__
+<h1>OC Management</h1>
+<div class="sub">Choose which crimes the OC Optimizer suggests, build teams and deploy them to members using the script</div>
+<div class="bar"><span class="lab">Data set</span><button data-env="test">🧪 Test</button><button data-env="prod">✅ Live</button></div>
+<div class="status" id="st">Loading…</div>
+<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button></div>
+<div id="view"></div>
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const LS = {get: (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+            set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }};
+// "Muscle #2" -> "Muscle" (the script's baseRole - one rate per role)
+const baseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();
+const rkey = (crime, pos) => crime + "|" + baseRole(pos);
+const nameOf = pid => CFG.members[String(pid)] || ("[" + pid + "]");
+const col = r => r == null ? "" : r >= 75 ? "ok" : r >= 65 ? "mid" : "bad";
+const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
+
+let ENV = LS.get("hb_oc_env", "test"), TAB = LS.get("hb_oc_tab", "builder");
+let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
+const OPT = Object.assign({target: 75, minRole: 65, includeBusy: false, chains: false, maxAge: 24}, LS.get("hb_oc_opts", {}));
+const saveOpts = () => LS.set("hb_oc_opts", OPT);
+const boardKey = () => "hb_oc_board_" + ENV;
+let BOARD = LS.get(boardKey(), {teams: []});
+const saveBoard = () => LS.set(boardKey(), BOARD);
+const st = (m, err) => { $("st").textContent = m; $("st").classList.toggle("err", !!err); };
+
+// ---------- data ----------
+async function getJSON(u) { const r = await fetch(u, {cache: "no-store"}); if (!r.ok) throw new Error(u.split("?")[0] + " " + r.status); return r.json(); }
+async function load() {
+  st("Loading…");
+  try {
+    const [cfg, rates, act] = await Promise.all([
+      getJSON("oc/config.json?env=" + ENV), getJSON("oc/rates.json?env=" + ENV),
+      // active crimes (who's in what, right now) - the crime check saves it every 15 minutes
+      fetch(CFG.ghproxy + "data/oc_active.json?ref=" + CFG.branch, {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null)]);
+    D.config = cfg; D.rates = rates || {};
+    D.active = []; D.activeT = null;
+    if (act && act.content) {
+      try { const j = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(act.content.replace(/\n/g, "")), c => c.charCodeAt(0))));
+        D.active = j.crimes || []; D.activeT = j.t || null; } catch (e) {}
+    }
+    const shared = Object.keys(D.rates).length;
+    st(`${ENV === "prod" ? "Live" : "Test"} data · ${shared} member${shared === 1 ? "" : "s"} sharing rates · ${D.active.length} active crime${D.active.length === 1 ? "" : "s"}`
+      + (D.activeT ? ` (checked ${ago(D.activeT * 1000)})` : ""));
+  } catch (e) { st("Couldn't load: " + e.message, true); }
+  draw();
+}
+async function saveConfig(k, v) {
+  const r = await fetch("oc/config", {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"}, body: JSON.stringify({env: ENV, k, v})});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok) throw new Error(j.error || ("save failed " + r.status));
+}
+
+// ---------- pass rates ----------
+// busy = in an active crime right now; activeRate = their rate in that crime (live)
+function busyMap() { const b = {}; D.active.forEach(c => (c.slots || []).forEach(([pid, pos, rate]) => { if (pid) b[pid] = {crime: c.name, pos, rate, status: c.status}; })); return b; }
+// the best known rate for member pid in crime + role: live (shared / active crime) when fresh, else history
+function rateOf(pid, crime, pos) {
+  const k = rkey(crime, pos), maxAge = OPT.maxAge * 3600e3;
+  const sh = D.rates[String(pid)];
+  if (sh && sh.roles && sh.roles[k] != null && Date.now() - sh.ts <= maxAge) return {rate: sh.roles[k], src: "live"};
+  for (const c of D.active) if (c.name === crime) for (const [p, ps, r] of c.slots || []) if (String(p) === String(pid) && baseRole(ps) === baseRole(pos) && r != null) return {rate: r, src: "live"};
+  const h = (CFG.hist[k] || {})[String(pid)];
+  if (h) return {rate: h[0], src: "history", t: h[1]};
+  if (sh && sh.roles && sh.roles[k] != null) return {rate: sh.roles[k], src: "shared (old)"};
+  return null;
+}
+// everyone (current members) with a rate for this crime + role, best first
+function candidates(crime, pos) {
+  const out = [];
+  Object.keys(CFG.members).forEach(pid => { const r = rateOf(pid, crime, pos); if (r) out.push(Object.assign({pid: +pid, name: nameOf(pid)}, r)); });
+  return out.sort((a, b) => b.rate - a.rate);
+}
+const rolesOf = crime => ((CFG.catalog[crime] || {}).roles || []);
+const diffOf = crime => (CFG.catalog[crime] || {}).difficulty;
+const teamAvg = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); return r.length ? r.reduce((a, x) => a + x.rate, 0) / r.length : null; };
+const teamMin = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); return r.length ? Math.min(...r.map(x => x.rate)) : null; };
+const usedIds = (except) => { const s = new Set(); BOARD.teams.forEach(t => { if (t === except) return; t.roles.forEach(r => { if (r.pid != null) s.add(+r.pid); }); }); return s; };
+const uid = () => "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+
+// Best team for one crime from the free members: every role filled with a member at or above minRole, highest
+// AVERAGE pass rate (branch and bound over the roles, fewest-candidates role first; top 10 candidates per role).
+function bestTeam(crime, blocked) {
+  const roles = rolesOf(crime);
+  if (!roles.length) return null;
+  const busy = busyMap();
+  const cands = roles.map(pos => candidates(crime, pos)
+    .filter(c => c.rate >= OPT.minRole && !blocked.has(c.pid) && (OPT.includeBusy || !busy[c.pid])).slice(0, 10));
+  if (cands.some(c => !c.length)) return null;
+  const order = roles.map((_, i) => i).sort((a, b) => cands[a].length - cands[b].length);
+  const maxRest = order.map((_, k) => order.slice(k).reduce((s, i) => s + cands[i][0].rate, 0));
+  let best = null, bestSum = -1;
+  const pick = new Array(roles.length), used = new Set();
+  (function dfs(k, sum) {
+    if (sum + (maxRest[k] || 0) <= bestSum) return;           // can't beat the best team found so far
+    if (k === order.length) { bestSum = sum; best = pick.slice(); return; }
+    const i = order[k];
+    for (const c of cands[i]) {
+      if (used.has(c.pid)) continue;
+      used.add(c.pid); pick[i] = c;
+      dfs(k + 1, sum + c.rate);
+      used.delete(c.pid);
+    }
+  })(0, 0);
+  if (!best) return null;
+  return {id: uid(), crime, difficulty: diffOf(crime), lock: false,
+          roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: best[i].name, rate: best[i].rate, src: best[i].src}))};
+}
+// Auto-build: hardest switched-on crime first, as many teams per crime as reach the target average; locked teams kept
+function autoBuild() {
+  const keep = BOARD.teams.filter(t => t.lock);
+  BOARD.teams = keep.slice();                        // a copy - keep.length stays the number of locked teams
+  const blocked = usedIds();
+  const off = new Set(D.config.disabled || []);
+  const crimes = Object.keys(CFG.catalog).filter(n => !off.has(n) && rolesOf(n).length && (OPT.chains || !(CFG.catalog[n] || {}).prereq))
+    .sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || rolesOf(b).length - rolesOf(a).length);
+  let made = 0;
+  for (const crime of crimes) {
+    for (let guard = 0; guard < 20; guard++) {
+      const t = bestTeam(crime, blocked);
+      if (!t || teamAvg(t) < OPT.target) break;
+      t.roles.forEach(r => blocked.add(r.pid));
+      BOARD.teams.push(t); made++;
+    }
+  }
+  BOARD.teams.sort((a, b) => (b.difficulty || 0) - (a.difficulty || 0) || (teamAvg(b) || 0) - (teamAvg(a) || 0));
+  saveBoard();
+  st(made ? `Built ${made} team${made === 1 ? "" : "s"} at ${OPT.target}%+ average${keep.length ? ` (+${keep.length} locked kept)` : ""}.`
+          : `No team reaches ${OPT.target}% with the members and rates available - lower the target or the lowest role %, or add members' rates.`, !made);
+}
+// a team for one chosen crime: best available (even below the target), empty roles where nobody fits
+function addTeam(crime) {
+  const blocked = usedIds();
+  const t = bestTeam(crime, blocked) || {id: uid(), crime, difficulty: diffOf(crime), lock: false,
+    roles: rolesOf(crime).map(pos => ({position: pos, pid: null, name: "", rate: null}))};
+  if (t.roles.every(r => r.pid != null) === false) {     // partial fill: best member per role, one each
+    const busy = busyMap();
+    t.roles.forEach(r => { if (r.pid != null) return;
+      const c = candidates(crime, r.position).find(c => !blocked.has(c.pid) && (OPT.includeBusy || !busy[c.pid]));
+      if (c) { Object.assign(r, {pid: c.pid, name: c.name, rate: c.rate, src: c.src}); blocked.add(c.pid); } });
+  }
+  BOARD.teams.push(t); saveBoard();
+}
+
+// ---------- views ----------
+function draw() {
+  document.querySelectorAll("[data-env]").forEach(b => b.classList.toggle("on", b.dataset.env === ENV));
+  document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
+  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else drawBuilder();
+}
+
+function drawCrimes() {
+  const off = new Set(D.config.disabled || []);
+  const names = Object.keys(CFG.catalog).sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
+  $("view").innerHTML = `<div class="panel"><div class="hn">Switch a crime <b>off</b> and the OC Optimizer stops suggesting it to members (and Auto-build skips it).
+    ${D.config.disabled_by ? `Last saved by ${esc(D.config.disabled_by)} ${ago(D.config.disabled_ts)}.` : ""}</div>
+    <div class="bar" style="justify-content:flex-start"><button class="go" id="savecr">Save</button><button id="allon">All on</button>
+      <span class="tag" id="crn">${names.length - off.size} of ${names.length} on</span></div>
+    <div class="crl">${names.length ? names.map(n => { const c = CFG.catalog[n];
+      return `<label class="cr${off.has(n) ? " off" : ""}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
+        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}</i></span>
+        <span class="sw"><input type="checkbox" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
+      : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;
+  const count = () => { const n = document.querySelectorAll("[data-cr]:not(:checked)").length; $("crn").textContent = `${names.length - n} of ${names.length} on`; };
+  document.querySelectorAll("[data-cr]").forEach(x => x.onchange = () => { x.closest(".cr").classList.toggle("off", !x.checked); count(); });
+  $("allon").onclick = () => { document.querySelectorAll("[data-cr]").forEach(x => { x.checked = true; x.closest(".cr").classList.remove("off"); }); count(); };
+  $("savecr").onclick = async () => {
+    const v = [...document.querySelectorAll("[data-cr]:not(:checked)")].map(x => x.dataset.cr);
+    try { st("Saving…"); await saveConfig("disabled", v); D.config.disabled = v; D.config.disabled_ts = Date.now(); st(`Saved - ${v.length} crime${v.length === 1 ? "" : "s"} off for the script (${ENV === "prod" ? "Live" : "Test"}).`); }
+    catch (e) { st("Save failed: " + e.message, true); }
+  };
+}
+
+function drawBuilder() {
+  const busy = busyMap(), off = new Set(D.config.disabled || []);
+  const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length).sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
+  const used = usedIds();
+  const placed = used.size, free = Object.keys(CFG.members).filter(p => !busy[p]).length;
+  const avgAll = BOARD.teams.length ? BOARD.teams.reduce((a, t) => a + (teamAvg(t) || 0), 0) / BOARD.teams.length : null;
+  // free members not on the board who have at least one rate
+  const benched = Object.keys(CFG.members).filter(p => !used.has(+p) && (OPT.includeBusy || !busy[p]))
+    .filter(p => Object.keys(CFG.hist).some(k => CFG.hist[k][p]) || D.rates[p]);
+  $("view").innerHTML = `<div class="panel">
+    <div class="hn">Auto-build fills the <b>hardest</b> crimes first with the members who pass them best, building as many teams as reach the target average.
+      Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
+    <div class="opts">
+      <label>Target team success <input type="number" id="o_t" min="1" max="100" value="${OPT.target}">%</label>
+      <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>
+      <label>Shared rates max age <input type="number" id="o_a" min="1" max="720" value="${OPT.maxAge}">h</label>
+      <label><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime</label>
+      <label><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
+    </div>
+    <div class="bar" style="justify-content:flex-start;margin-top:10px">
+      <button class="gold" id="auto">⚡ Auto-build teams</button>
+      <select id="addc">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)}${off.has(n) ? " (off)" : ""}</option>`).join("")}</select>
+      <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
+      <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to ${ENV === "prod" ? "Live" : "Test"}</button>
+    </div>
+    <div class="stat"><div><b>${BOARD.teams.length}</b><span>Teams</span></div><div><b>${placed}</b><span>Members placed</span></div>
+      <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average success</span></div>
+      <div><b>${free}</b><span>Not in a crime now</span></div></div>
+    <div class="teams">${BOARD.teams.map(teamCard).join("") || '<div class="tag">No teams yet - press Auto-build, or pick a crime and Add team.</div>'}</div>
+    ${benched.length ? `<h2>Not placed (${benched.length})</h2><div class="bench">${benched.map(p => `<span>${esc(nameOf(p))}</span>`).join("")}</div>` : ""}
+  </div>`;
+  const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
+  num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_a", "maxAge", 1, 720);
+  $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
+  $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
+  $("auto").onclick = () => { autoBuild(); draw(); };
+  $("add").onclick = () => { addTeam($("addc").value); draw(); };
+  $("clr").onclick = () => { if (!confirm("Remove every unlocked team from the board?")) return; BOARD.teams = BOARD.teams.filter(t => t.lock); saveBoard(); draw(); };
+  $("deploy").onclick = deploy;
+  wireTeams();
+}
+function teamCard(t) {
+  const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
+  const rows = t.roles.map((r, i) => {
+    const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid));
+    const opts = `<option value="">— empty —</option>` + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
+    return `<div class="rr"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>
+      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span></div>`;
+  }).join("");
+  return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
+      <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
+      <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
+      <button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>
+      <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
+    <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
+    ${rows}</div>`;
+}
+function wireTeams() {
+  document.querySelectorAll("select[data-t]").forEach(s => s.onchange = () => {
+    const t = BOARD.teams.find(x => x.id === s.dataset.t), r = t.roles[+s.dataset.r];
+    if (!s.value) Object.assign(r, {pid: null, name: "", rate: null, src: null});
+    else { const pid = +s.value, rt = rateOf(pid, t.crime, r.position) || {};
+      Object.assign(r, {pid, name: nameOf(pid), rate: rt.rate ?? null, src: rt.src || null}); }
+    saveBoard(); draw();
+  });
+  document.querySelectorAll("[data-lock]").forEach(b => b.onclick = () => { const t = BOARD.teams.find(x => x.id === b.dataset.lock); t.lock = !t.lock; saveBoard(); draw(); });
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { BOARD.teams = BOARD.teams.filter(x => x.id !== b.dataset.del); saveBoard(); draw(); });
+  document.querySelectorAll("[data-fill]").forEach(b => b.onclick = () => {
+    const i = BOARD.teams.findIndex(x => x.id === b.dataset.fill), t = BOARD.teams[i];
+    BOARD.teams.splice(i, 1); addTeam(t.crime);
+    const nt = BOARD.teams.pop(); nt.lock = t.lock; nt.id = t.id; BOARD.teams.splice(i, 0, nt); saveBoard(); draw(); });
+}
+async function deploy() {
+  const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
+  if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to ${ENV === "prod" ? "LIVE" : "Test"}?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
+  const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, avg: Math.round(teamAvg(t) || 0),
+    roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate}))}))};
+  try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (${ENV === "prod" ? "Live" : "Test"}).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
+  catch (e) { st("Deploy failed: " + e.message, true); }
+}
+
+function drawDeployed() {
+  const plan = D.config.plan, busy = busyMap();
+  if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel"><div class="hn">Nothing deployed to ${ENV === "prod" ? "Live" : "Test"} yet - build teams in the Team Builder and press Deploy.</div></div>`; return; }
+  let joined = 0, total = 0;
+  const cards = plan.teams.map(t => {
+    const rows = t.roles.map(r => {
+      if (r.pid == null) return `<tr><td>${esc(r.position)}</td><td class="tag">empty</td><td></td><td></td></tr>`;
+      total++;
+      const b = busy[r.pid];
+      const ok = b && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position);
+      if (ok) joined++;
+      const stt = ok ? '<span class="ok">✅ joined</span>' : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>';
+      return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
+    }).join("");
+    return `<div class="team"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b><span class="sr ${col(t.avg)}">${t.avg ? t.avg + "%" : "-"}</span></div>
+      <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
+  }).join("");
+  $("view").innerHTML = `<div class="panel"><div class="hn">Deployed ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
+    <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${joined}</b><span>Joined</span></div><div><b>${total - joined}</b><span>Not yet</span></div></div>
+    <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
+    <div class="teams">${cards}</div></div>`;
+  $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
+    BOARD = {teams: plan.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, lock: false,
+      roles: t.roles.map(r => Object.assign({}, r, rateOf(r.pid, t.crime, r.position) || {}))}))}; saveBoard(); TAB = "builder"; LS.set("hb_oc_tab", TAB); draw(); };
+  $("undeploy").onclick = async () => { if (!confirm("Withdraw the deployed plan? Members stop seeing their assigned roles.")) return;
+    try { await saveConfig("plan", {teams: []}); D.config.plan = {teams: []}; st("Plan withdrawn."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
+}
+
+document.querySelectorAll("[data-env]").forEach(b => b.onclick = () => { ENV = b.dataset.env; LS.set("hb_oc_env", ENV); BOARD = LS.get(boardKey(), {teams: []}); load(); });
+document.querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { TAB = b.dataset.tab; LS.set("hb_oc_tab", TAB); draw(); });
+load();
+</script>
+</body></html>

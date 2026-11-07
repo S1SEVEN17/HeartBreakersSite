@@ -11,3 +11,15 @@ CREATE TABLE IF NOT EXISTS oc_cpr (
   PRIMARY KEY (env, faction_id, player_id)
 );
 CREATE INDEX IF NOT EXISTS idx_oc_cpr_lookup ON oc_cpr (env, faction_id);
+
+-- OC Management (leaders' oc.html, Nov 2026): per env, key -> JSON value.
+--   'disabled'  ["Crime name", ...]  crimes the OC Optimizer script should NOT suggest
+--   'plan'      {teams: [{id, crime, difficulty, roles: [{position, pid, name, rate}]}], deployed, by}
+CREATE TABLE IF NOT EXISTS oc_config (
+  env   TEXT    NOT NULL,          -- 'test' | 'prod'
+  k     TEXT    NOT NULL,          -- 'disabled' | 'plan'
+  v     TEXT    NOT NULL,          -- JSON
+  ts    INTEGER NOT NULL,          -- epoch ms of last save
+  by    TEXT,                      -- leader who saved it ("Name [id]")
+  PRIMARY KEY (env, k)
+);
