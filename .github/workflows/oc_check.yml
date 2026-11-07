@@ -1,0 +1,40 @@
+# OC Payout Optimizer storage check (manual, Nov 2026): how many members have shared pass rates in the D1
+# database hb-oc, per env (test / prod), and how long ago the newest / oldest write was.
+# PUBLIC LOG: counts and ages only - never names, player ids or rates.
+name: OC storage check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Count shared rows
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          mkdir w && cd w && npm init -y >/dev/null && npm install --silent wrangler@4 >/dev/null 2>&1
+          printf 'name = "oc-check"\ncompatibility_date = "2025-06-01"\n' > wrangler.toml
+          if ! npx wrangler d1 execute hb-oc --remote --json --command \
+              "SELECT env, COUNT(*) AS members, MAX(ts) AS newest, MIN(ts) AS oldest FROM oc_cpr GROUP BY env" > out.json 2> err.log; then
+            echo "::error::couldn't query the database"; grep -iE "error|auth|not found" err.log | head -5; exit 1
+          fi
+          python3 - <<'PY'
+          import json, time
+          d = json.load(open("out.json"))
+          rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
+          now = time.time() * 1000
+          def ago(t):
+              if not t: return "-"
+              m = (now - t) / 60000
+              return f"{m:.0f} min ago" if m < 120 else f"{m / 60:.1f} h ago"
+          print("Table oc_cpr exists.")
+          if not rows: print("No pass rates stored yet (0 rows in test and prod).")
+          for r in rows:
+              print(f"env={r['env']}: {r['members']} member(s) sharing - newest write {ago(r['newest'])}, oldest {ago(r['oldest'])}")
+          PY
