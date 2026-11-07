@@ -424,9 +424,26 @@ function drawCrimes() {
   };
 }
 
+// Add-team suggestions: for every switched-on crime, the best FULL team the members not on the board can make at the
+// target average (teamFor, α 0 = most pay per day). Crimes with one are listed first in the dropdown, best pay per day
+// first, marked ⭐ - and "+ Add team" adds exactly that team. Cached until the board, options or data change.
+let SUGG = {sig: null, list: []};
+function suggestions() {
+  const busy = busyMap(), blocked = usedIds();
+  const sig = JSON.stringify([BOARD.teams.map(t => t.roles.map(r => r.pid)), OPT, D.config.disabled, D.activeT, Object.keys(D.rates).length, CFG.built, ENV]);
+  if (SUGG.sig === sig) return SUGG.list;
+  const pool = new Set(Object.keys(CFG.members).map(Number).filter(p => !blocked.has(p) && (OPT.includeBusy || !busy[p])));
+  const list = [];
+  Object.keys(CFG.catalog).filter(crimeOk).forEach(c => { const t = teamFor(c, pool, 0, {}); if (t) list.push({crime: c, team: t, pay: teamPay(t) || 0}); });
+  list.sort((a, b) => b.pay - a.pay || (diffOf(b.crime) || 0) - (diffOf(a.crime) || 0));
+  SUGG = {sig, list};
+  return list;
+}
+
 function drawBuilder() {
   const busy = busyMap(), off = new Set(D.config.disabled || []);
-  const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length).sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
+  const sugg = suggestions(), suggBy = new Map(sugg.map(x => [x.crime, x]));
+  const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length && !suggBy.has(n)).sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
   const used = usedIds();
   const placed = used.size, free = Object.keys(CFG.members).filter(p => !busy[p]).length;
   const avgAll = BOARD.teams.length ? BOARD.teams.reduce((a, t) => a + (teamAvg(t) || 0), 0) / BOARD.teams.length : null;
@@ -448,7 +465,10 @@ function drawBuilder() {
     </div>
     <div class="bar" style="justify-content:flex-start;margin-top:10px">
       <button class="gold" id="auto">⚡ Auto-build teams</button>
-      <select id="addc">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(valueOf(n).pot / valueOf(n).days / (rolesOf(n).length || 1))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</select>
+      <select id="addc">
+        ${sugg.length ? `<optgroup label="⭐ Full team ready at ${OPT.target}%+ - best pay first">${sugg.map(x =>
+          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${fmt$(x.pay)}/day · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
+        <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(valueOf(n).pot / valueOf(n).days / (rolesOf(n).length || 1))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
       <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to ${ENV === "prod" ? "Live" : "Test"}</button>
     </div>
@@ -464,7 +484,11 @@ function drawBuilder() {
   $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
   $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
   $("auto").onclick = () => { autoBuild(); draw(); };
-  $("add").onclick = () => { addTeam($("addc").value); draw(); };
+  // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
+  $("add").onclick = () => { const x = suggBy.get($("addc").value);
+    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${fmt$(x.pay)}/day at ${Math.round(teamAvg(x.team))}%.`); }
+    else addTeam($("addc").value);
+    draw(); };
   $("clr").onclick = () => { if (!confirm("Remove every unlocked team from the board?")) return; BOARD.teams = BOARD.teams.filter(t => t.lock); saveBoard(); draw(); };
   $("deploy").onclick = deploy;
   wireTeams();
