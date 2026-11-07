@@ -85,6 +85,8 @@ jobs:
           LEADER_DIR: ${{ secrets.LEADER_DIR }}
           DISCORD_WEBHOOK_PAYOUTS: ${{ secrets.DISCORD_WEBHOOK_PAYOUTS }}
           DISCORD_WEBHOOK_LEADERS: ${{ secrets.DISCORD_WEBHOOK_LEADERS }}
+          # opt-in stats: deletes keys of members who left / whose key is gone (data/optin.json, via GitHub's API)
+          DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: python generate.py --out site
 
       # a chain run that posted a new report asks for a full run so its page/newsletter go live now

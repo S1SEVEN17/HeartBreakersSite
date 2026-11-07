@@ -3923,7 +3923,8 @@ def _menu_js(root: str) -> str:
 # Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
 # The name is filled in the browser from whoami.json, which also reveals the leader-only groups.
 # My Profile = their own member.html (the gatekeeper's /m/me sends them there; #sections jump to a part).
-ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🧩 My profile layout", "profile-editor.html"), ("💰 My Payouts", "me#payouts"),
+ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🔐 My data & sharing", "my-data.html"), ("🧩 My profile layout", "profile-editor.html"),
+                 ("💰 My Payouts", "me#payouts"),
                  ("⚔️ My Wars", "me#wars"), ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
 
 
@@ -4320,9 +4321,9 @@ HUB_CSS += """
 .stats .l{color:var(--sub);font-size:12px}.stats .v{color:#fff;font-size:22px;font-weight:700;line-height:1.25}
 .stats .s{font-size:12px;color:var(--sub)}.up{color:var(--green)!important}.dn{color:#ff6b61!important}
 .nowc{display:flex;flex-direction:column;gap:8px}
-.nowc a{display:flex;align-items:center;gap:12px;border-radius:10px;padding:11px 13px;border:1px solid}
+.nowc>a{display:flex;align-items:center;gap:12px;border-radius:10px;padding:11px 13px;border:1px solid}
 .nowc .war{background:#3b1513;border-color:#6b2420}.nowc .chain{background:#2e2410;border-color:#5c4716}
-.nowc i{font-style:normal;font-size:22px}.nowc .x{flex:1;min-width:0}.nowc b{display:block;color:#fff}
+.nowc>a>i{font-style:normal;font-size:22px}.nowc .x{flex:1;min-width:0}.nowc b{display:block;color:#fff}
 .nowc .x span{color:var(--sub);font-size:13px}.nowc .war em{color:#ff6b61;font-style:normal;font-weight:700}
 .nowc .chain em{color:var(--gold);font-style:normal;font-weight:700}
 .nowc .go{font-size:12px;padding:3px 10px;border-radius:8px;background:#6b2420;color:#ffd6d2}
@@ -4333,7 +4334,12 @@ HUB_CSS += """
 .keyc input{flex:1;min-width:0;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:8px;padding:9px;font:14px system-ui}
 .keyc button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}
 .keyc small{display:block;font-size:11px}.keyc .err{color:#ff6b61;margin-top:4px}.keyc a{color:var(--gold)}
-.nowf{text-align:right;font-size:11px;color:var(--sub);margin-top:4px}.nowf a{color:var(--sub);text-decoration:underline;cursor:pointer}
+.nowf{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12px;color:var(--sub);margin-top:2px;padding:0 2px}
+.nowf .lv{display:flex;align-items:center;gap:6px;min-width:0}.nowf .lv i{width:7px;height:7px;border-radius:50%;background:var(--green);flex:none}
+.nowf .lv i.off{background:#ff6b61}
+.keyx{background:transparent;color:var(--sub);border:1px solid #3a2729;border-radius:14px;padding:4px 11px;font:12px system-ui;cursor:pointer;white-space:nowrap}
+.keyx:hover{color:#ff8a80;border-color:#6b2420}.nowe{color:#ff6b61;font-size:12px;padding:0 2px}
+.nowq{background:var(--card);border:1px solid #2e1719;border-radius:10px;padding:11px 13px;font-size:14px;color:var(--sub);display:flex;align-items:center;gap:10px}
 .attn{background:var(--card);border:1px solid #6b4a18;border-radius:12px;padding:10px 14px;margin:18px 0 6px}
 .attn .ah{display:flex;align-items:center;gap:8px;margin-bottom:4px}.attn .ah b{flex:1;color:#fff;font-size:15px}
 .attn .cnt{background:#3a2d12;color:var(--gold);font-size:12px;padding:2px 9px;border-radius:8px}
@@ -4387,7 +4393,7 @@ const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.flo
   return d?`${d}d ${h}h ${String(m).padStart(2,"0")}m`:h?`${h}h ${String(m).padStart(2,"0")}m ${String(x).padStart(2,"0")}s`:`${m}:${String(x).padStart(2,"0")}`};
 const BONUS=[10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000];
 document.querySelectorAll(".ago[data-t]").forEach(e=>{const t=+e.dataset.t;if(t)e.textContent=e.dataset.long?agoL(t):ago(t)});
-let WHO=null,HOME=null,ATT=null,WAR,CHAIN,NOWERR="";
+let WHO=null,HOME=null,ATT=null,WAR,CHAIN,NOWERR="",lastOk=0;
 
 function welcome(){const el=$("hbWel");if(!el)return;
   const hr=new Date().getHours(),hi=hr<5?"Good evening":hr<12?"Good morning":hr<18?"Good afternoon":"Good evening";
@@ -4432,7 +4438,7 @@ function fail(e){if(e.code===5){back=now()+60;return}
   if(BADKEY.includes(e.code)){store.set("");NOWERR="Torn didn't accept that key ("+e.message+"). Try another Public key."}
   else NOWERR="Couldn't reach Torn just now - retrying."}
 async function getChain(){if(!store.get()||now()<back)return;try{const t=now(),c=((await torn("chain")).chain)||{};
-    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR=""}
+    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR="";lastOk=now()}
   catch(e){fail(e)}nowCards()}
 async function getWar(){if(!store.get()||now()<back)return;try{let w=((await torn("wars")).wars||{}).ranked;if(Array.isArray(w))w=w[0];
     const t=now();WAR=null;
@@ -4461,9 +4467,12 @@ function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;
     h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>⛓️</i><div class="x"><b>Chain ${c.current.toLocaleString("en-US")} / ${nx.toLocaleString("en-US")}</b>`
       +`<div class="pbar"><u style="width:${pc}%"></u></div><span>${c.timeout_at>t?`Timeout <em>${dur(c.timeout_at-t)}</em>`:"Checking…"} · ${(nx-c.current).toLocaleString("en-US")} to the next bonus</span></div><span class="go">Hit</span></a>`}
   else if(c&&c.cooldown_at>t)h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>❄️</i><div class="x"><b>Chain on cooldown</b><span>A new chain can start in <em>${dur(c.cooldown_at-t)}</em></span></div></a>`;
-  if(!h&&(WAR!==undefined||CHAIN!==undefined))h=`<div class="keyc">No ranked war or chain running right now.</div>`;
-  if(NOWERR)h+=`<div class="nowf" style="color:#ff6b61">${esc(NOWERR)}</div>`;
-  h+=`<div class="nowf">Live from Torn with your key · <a id="hbKeyX">remove key</a></div>`;
+  if(!h&&(WAR!==undefined||CHAIN!==undefined))h=`<div class="nowq">😴 No ranked war or chain running right now.</div>`;
+  else if(!h)h=`<div class="nowq">Checking Torn…</div>`;
+  if(NOWERR)h+=`<div class="nowe">${esc(NOWERR)}</div>`;
+  // footer: live status on the left, a small "Remove key" button on the right
+  h+=`<div class="nowf"><span class="lv"><i class="${NOWERR?"off":""}"></i>Live from Torn with your key${lastOk?` · ${Math.max(0,Math.round(t-lastOk))}s ago`:""}</span>`
+    +`<button class="keyx" id="hbKeyX" type="button">🔑 Remove key</button></div>`;
   el.querySelector(".nowc").innerHTML=h;
   $("hbKeyX").onclick=()=>{if(confirm("Remove your API key from this browser?")){store.set("");WAR=CHAIN=undefined;el.querySelector(".nowc").innerHTML="";nowCards()}}}
 let lastC=0,lastW=0;
@@ -4669,7 +4678,8 @@ def homepage_default() -> dict:
                                                   ("📰", "Latest recap", "M:newsletter.html"), ("🗂️", "Recap archive", "M:recaps.html")])}
     leaders = {"title": "Leaders", "links": link([
         ("🧮", "Payout calculator", "L:payout.html"), ("📊", "Leader monitor", "L:monitor.html"),
-        ("🗄️", "Armory monitor", "L:armory.html"),
+        ("🗄️", "Armory monitor", "L:armory.html"), ("💪", "Member stats", "L:stats.html"),
+        ("⚔️", "War readiness", "L:readiness.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
         ("🧩", "Profile layout", "L:profile-default.html"),
@@ -4790,7 +4800,8 @@ def write_homepages(out: Path, cfg: dict = None):
              ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html"), ("Members", "M:members.html"),
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
              ("Leaders Hub", "L:index.html"), ("Leader Monitor", "L:monitor.html"), ("Armory Monitor", "L:armory.html"),
-             ("Profile layout (default)", "L:profile-default.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
+             ("Profile layout (default)", "L:profile-default.html"),
+             ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html")]]
@@ -5147,6 +5158,7 @@ ARMORY_LOG_PATH = ROOT / "data" / "armory_log.json"
 ITEM_TYPES_PATH = ROOT / "data" / "item_types.json"     # {"fetched": time, "types": {item name: Torn item type}}
 ARMORY_PAGES_NEW = 20
 ARMORY_PAGES_BACK = 10
+ARMORY_RECENT = 40        # latest uses kept per member for the Armory Monitor's member view
 ARMORY_CATS = ["Drugs", "Medical", "Boosters", "Refills", "Temporary", "Weapons", "Armor", "Other"]
 ARMORY_TYPE_CAT = {"drug": "Drugs", "medical": "Medical", "alcohol": "Boosters", "candy": "Boosters",
                    "energy drink": "Boosters", "booster": "Boosters", "temporary": "Temporary",
@@ -5321,16 +5333,18 @@ def armory_data(db: dict) -> dict:
     except (OSError, ValueError):
         log = {"items": [], "events": []}
     types = item_types("")
-    per, months = {}, set()
-    for t, mid, it, cnt, _kind in log.get("events", []):
+    per, months, recent = {}, set(), {}
+    for t, mid, it, cnt, kind in log.get("events", []):
         mon = datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m")
         months.add(mon)
         d_ = per.setdefault(str(mid), {}).setdefault(mon, {})
         d_[str(it)] = d_.get(str(it), 0) + cnt
+        recent.setdefault(str(mid), []).append([t, it, cnt, kind])     # events are in time order
+    recent = {i: r[-ARMORY_RECENT:][::-1] for i, r in recent.items()}
     return {"cats": ARMORY_CATS, "items": log.get("items", []),
             "item_cat": [armory_cat(n, types) for n in log.get("items", [])],
             "oldest": log.get("oldest"), "done": bool(log.get("done")), "months": sorted(months, reverse=True),
-            "members": {i: {"m": m} for i, m in per.items()}}
+            "members": {i: {"m": m, "r": recent.get(i, [])} for i, m in per.items()}}
 
 
 def write_armory_page(out: Path, db: dict, ad: dict):
@@ -5361,12 +5375,19 @@ def armory_own(ad: dict, mid: str) -> dict:
                 k = ad["item_cat"][int(it)]
                 c[k] = c.get(k, 0) + n
         return c
-    items = {}
-    for d_ in m.values():
+    items, by_cat = {}, {}
+    for mon, d_ in m.items():
         for it, n in d_.items():
-            items[ad["items"][int(it)]] = items.get(ad["items"][int(it)], 0) + n
+            nm, cat = ad["items"][int(it)], ad["item_cat"][int(it)]
+            items[nm] = items.get(nm, 0) + n
+            row = by_cat.setdefault(cat, {}).setdefault(nm, [0, 0])     # [this month, all time]
+            row[1] += n
+            if mon == this_m:
+                row[0] += n
     return {"month": cats([this_m]), "last_month": cats([last_m]), "all": cats(list(m)),
-            "top": sorted(items.items(), key=lambda kv: -kv[1])[:8], "oldest": ad.get("oldest"), "done": ad.get("done")}
+            "top": sorted(items.items(), key=lambda kv: -kv[1])[:8],
+            "items": {c: sorted(([nm, a, b] for nm, (a, b) in d_.items()), key=lambda x: -x[2]) for c, d_ in by_cat.items()},
+            "oldest": ad.get("oldest"), "done": ad.get("done")}
 
 
 def save_gym_daily(gym: dict):
@@ -5407,6 +5428,193 @@ def gym_energy_between(t0: int):
     return {i: max(0, v - a.get(i, 0)) for i, v in b.items()}, first
 
 
+# ==========================================================================
+# OPT-IN STATS (members' own Limited API key - see the OPT-IN block in gate/worker.js)
+#   data/optin.json        {members: {id: {k: encrypted key, bs, ws: "off"|"leaders"|"faction", ready, since}}}
+#                          written by the gatekeeper (members' "My data & sharing" page); the key is AES-256-GCM
+#                          encrypted with sha256(MEMBER_DIR|LEADER_DIR|hb-optin) - never stored or shown in plain
+#   data/optin_stats.json  {id: {"bs": [[day, str, def, spd, dex], ...], "ws": [[day, man, int, end], ...]}}
+#                          one point per day (the day's latest reading), the last OPTIN_KEEP_DAYS days
+# Every full update (optin_update): one Torn call per opted-in member with THEIR key (battlestats, workstats).
+# Automatic deletion (Torn ToS - data kept only while it's allowed):
+#   - left the faction                -> key + settings + all their stats deleted
+#   - Torn says the key is gone (code 2: incorrect key - deleted key / deleted account) or now belongs to someone
+#     else -> deleted
+#   - a part switched off (bs / ws "off") -> that part's history deleted; whole entry deleted -> all stats deleted
+#   (key paused / owner inactive / temporary errors: kept, skipped this time)
+# The key list is changed through GitHub's API with the file's sha (never by the git save), so a member saving
+# at the same moment is never overwritten.
+# ==========================================================================
+OPTIN_PATH = ROOT / "data" / "optin.json"
+OPTIN_STATS_PATH = ROOT / "data" / "optin_stats.json"
+OPTIN_KEEP_DAYS = 400
+
+
+def _optin_cipher():
+    import hashlib
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    sec = f'{os.environ.get("MEMBER_DIR", "")}|{os.environ.get("LEADER_DIR", "")}|hb-optin'.encode()
+    return AESGCM(hashlib.sha256(sec).digest())
+
+
+def _optin_open(sealed: str) -> str:
+    import base64
+    raw = base64.urlsafe_b64decode(sealed + "=" * (-len(sealed) % 4))
+    return _optin_cipher().decrypt(raw[:12], raw[12:], None).decode()
+
+
+def _optin_remove(ids: set, why: str):
+    """Delete members' entries from data/optin.json through GitHub's contents API (sha-checked, retried)."""
+    import base64
+    tok = os.environ.get("DATA_TOKEN", "").strip()
+    if not ids or not tok:
+        if ids:
+            print("Opt-in: DATA_TOKEN not set - couldn't delete keys")
+        return
+    api = f"https://api.github.com/repos/{REPO}/contents/data/optin.json"
+    H = {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json", "User-Agent": "hb-update"}
+    for _ in range(3):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(api + "?ref=main", headers=H), timeout=30) as r:
+                j = json.loads(r.read().decode())
+            data = json.loads(base64.b64decode(j["content"]).decode())
+            for i in ids:
+                data.get("members", {}).pop(str(i), None)
+            body = json.dumps({"message": f"Opt-in: {len(ids)} deleted ({why}) [bot]", "sha": j["sha"], "branch": "main",
+                               "content": base64.b64encode((json.dumps(data, indent=1) + "\n").encode()).decode()}).encode()
+            urllib.request.urlopen(urllib.request.Request(api, data=body, method="PUT",
+                                                          headers=dict(H, **{"Content-Type": "application/json"})), timeout=30)
+            print(f"Opt-in: deleted {len(ids)} member key(s) - {why}")
+            return
+        except urllib.error.HTTPError as e:
+            if e.code not in (409, 422):
+                print(f"Opt-in: delete failed ({e.code})")
+                return
+        except Exception as e:
+            print(f"Opt-in: delete failed ({type(e).__name__})")
+            return
+
+
+def optin_update(raw: dict):
+    """Full runs: delete what has to go, then today's battle / work stats for everyone who opted in."""
+    import time
+    try:
+        opt = json.loads(OPTIN_PATH.read_text(encoding="utf-8")).get("members", {})
+    except (OSError, ValueError):
+        opt = {}
+    try:
+        st = json.loads(OPTIN_STATS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    current = {str(m.get("id")) for m in _as_list((raw.get("members") or {}).get("members"))}
+    gone, bad = set(), set()
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=OPTIN_KEEP_DAYS)).strftime("%Y-%m-%d")
+    n = 0
+    for i, e in opt.items():
+        if current and i not in current:
+            gone.add(i)
+            continue
+        if e.get("bs", "off") == "off" and e.get("ws", "off") == "off":
+            continue                              # readiness only - nothing to record
+        try:
+            key = _optin_open(e["k"])
+        except Exception:
+            print("Opt-in: a stored key couldn't be read - skipped")
+            continue
+        try:
+            url = (f"https://api.torn.com/user/?selections=basic,battlestats,workstats&key={urllib.parse.quote(key)}"
+                   f"&comment={urllib.parse.quote(API_COMMENT)}")
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "HB Hub"}), timeout=30) as r:
+                d = json.loads(r.read().decode())
+        except Exception as ex:                  # never print the URL (it has the key)
+            print(f"Opt-in: a member's stats couldn't be read ({type(ex).__name__})")
+            continue
+        err = (d.get("error") or {}).get("code")
+        if err == 2 or (not err and str(d.get("player_id")) != i):
+            bad.add(i)                            # key deleted / account gone / not theirs any more
+            continue
+        if err:
+            continue                              # paused, inactive, temporary - try again next time
+        rec = st.setdefault(i, {})
+        if e.get("bs") != "off":
+            row = [day] + [int(d.get(k) or 0) for k in ("strength", "defense", "speed", "dexterity")]
+            s_ = [x for x in rec.get("bs", []) if x[0] != day and x[0] >= cutoff]
+            rec["bs"] = s_ + [row]
+        if e.get("ws") != "off":
+            row = [day] + [int(d.get(k) or 0) for k in ("manual_labor", "intelligence", "endurance")]
+            s_ = [x for x in rec.get("ws", []) if x[0] != day and x[0] >= cutoff]
+            rec["ws"] = s_ + [row]
+        n += 1
+        time.sleep(0.3)
+    # stats only for members still opted in, and only the parts they still share
+    for i in list(st):
+        e = opt.get(i)
+        if not e or i in gone or i in bad:
+            del st[i]
+            continue
+        for part in ("bs", "ws"):
+            if e.get(part, "off") == "off":
+                st[i].pop(part, None)
+        if not st[i]:
+            del st[i]
+    OPTIN_STATS_PATH.write_text(json.dumps(st, separators=(",", ":")) + "\n", encoding="utf-8")
+    _optin_remove(gone, "left the faction")
+    _optin_remove(bad, "key deleted or no longer theirs")
+    for i in gone | bad:
+        opt.pop(i, None)
+    print(f"Opt-in: {len(opt)} member(s) opted in · stats read for {n}")
+    return opt, st
+
+
+def write_optin_pages(out: Path):
+    """my-data.html (members - opt in / out, the Torn ToS disclosure) + stats.html and readiness.html (leaders)."""
+    g_ = gate_cfg()
+    if not g_:
+        return
+    gate = g_["url"].rstrip("/")
+    page = lambda tpl, conf, menu: (ROOT / "tools" / tpl).read_text(encoding="utf-8") \
+        .replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", menu)
+    (member_out(out) / "my-data.html").write_text(page("optin_settings.html", {"gate": gate}, site_menu("")), encoding="utf-8")
+    if leader_dir():
+        lout = out / leader_dir()
+        conf = {"member_base": member_base(), "gate": gate}
+        (lout / "stats.html").write_text(page("member_stats.html", conf, leader_menu("")), encoding="utf-8")
+        (lout / "readiness.html").write_text(page("war_readiness.html", conf, leader_menu("")), encoding="utf-8")
+
+
+def optin_saved():
+    """(settings, stats) as saved - for runs that don't read Torn (no keys used)."""
+    try:
+        opt = json.loads(OPTIN_PATH.read_text(encoding="utf-8")).get("members", {})
+    except (OSError, ValueError):
+        opt = {}
+    try:
+        st = json.loads(OPTIN_STATS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    return opt, st
+
+
+def optin_publish(out: Path, opt: dict, st: dict) -> dict:
+    """What the site shows (no keys): per opted-in member {bs: {share, s: series}, ws: {...}, ready}.
+    Returned for the leaders' db/private.json (leaders see all; a member gets their own via /m/mine.json);
+    the parts a member shares with the FACTION also go to the members' db/optin_shared.json (profiles)."""
+    full, shared = {}, {}
+    for i, e in opt.items():
+        rec = st.get(i, {})
+        x = {"ready": bool(e.get("ready")), "since": e.get("since")}
+        for part in ("bs", "ws"):
+            if e.get(part, "off") != "off":
+                x[part] = {"share": e[part], "s": rec.get(part, [])}
+        full[i] = x
+        sh = {p: x[p] for p in ("bs", "ws") if p in x and x[p]["share"] == "faction"}
+        if sh:
+            shared[i] = sh
+    _jdump(member_out(out) / "db" / "optin_shared.json", {"members": shared})
+    return full
+
+
 def write_monitor(out: Path, db: dict, cfg: dict = None):
     """monitor.html (leaders) - Participation Trend, Reliability Score, Payout Ledger, recent crime delays.
     Also the Armory Monitor (armory.html) and db/private.json: per member {reliability, armory} + faction averages -
@@ -5419,10 +5627,12 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     _jdump(lout / "db" / "monitor.json", md)
     ad = armory_data(db)
     write_armory_page(out, db, ad)
+    oi = optin_publish(out, *(OPTIN_DATA.get("v") or optin_saved()))   # opt-in stats (no keys)
+    write_optin_pages(out)
     priv, sc = {}, [r["score"] for r in md["members"]]
     for r in md["members"]:
         priv[str(r["id"])] = {"reliability": {"score": r["score"], "parts": r["parts"], "detail": r["detail"]},
-                              "armory": armory_own(ad, r["id"])}
+                              "armory": armory_own(ad, r["id"]), "optin": oi.get(str(r["id"]))}
     avg_parts = {k: round(sum(r["parts"][k] for r in md["members"]) / len(md["members"]), 1) if md["members"] else 0
                  for k in ("war", "chains", "crimes", "activity")}
     _jdump(lout / "db" / "private.json", {"generated": md["generated"], "members": priv,
@@ -5606,6 +5816,7 @@ def write_profiles(out: Path, db: dict):
 PROFILE_SECTIONS = [("cmp", "📈 Compared with the faction average", "Their whole time in the faction vs everyone"),
                     ("reliability", "🛡️ Reliability breakdown", "Private - only the member and leaders see it"),
                     ("armory", "🗄️ Armory usage", "Private - only the member and leaders see it"),
+                    ("stats", "💪 Battle and work stats", "Opt-in - only when the member shares them"),
                     ("totals", "📊 Totals", "Wars, chains, crimes, payouts"),
                     ("charts", "📉 War and chain charts", "Hits per war, chain hits over time"),
                     ("gym", "🏋️ Gym", "Gym energy and month by month"),
@@ -6810,6 +7021,7 @@ table.msum td{white-space:nowrap}.trm{background:#3a2d12;color:#e8be5a;border-ra
 
 
 CURRENT_MEMBERS = {}       # member id (str) -> name, current members - set in main() (history summaries)
+OPTIN_DATA = {}            # "v": (opt-in settings, stats) from optin_update - full runs only
 CHAIN_AVG_MIN = 250        # "hits per chain" (profiles, Chain History summary) counts only chains this long or longer
 
 
@@ -9846,6 +10058,7 @@ def main():
     write_message_builder(out)
     write_homepages(out, cfg)
     if not args.mock and os.environ.get("RUN_KIND", "full") == "full":
+        OPTIN_DATA["v"] = optin_update(raw)       # opted-in members' battle / work stats (their own keys)
         item_types(api_key)                       # item categories for the Armory Monitor (weekly, 1 call)
         _b = raw["basic"].get("basic", raw["basic"])
         update_armory_log(api_key, int(datetime.now(timezone.utc).timestamp()) - int(_b.get("days_old") or 0) * 86400

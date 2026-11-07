@@ -26,7 +26,9 @@
                                 browser, and used for EVERY profile they open (it's how profiles look to them)
     db/profile_layouts.json "default"   the leaders' default (profile-default.html -> config.json "profile_layout")
     the order in this file
-    Section keys: cmp, reliability, armory, totals, charts, gym, payouts, wars, chains, crimes.
+    Section keys: cmp, reliability, armory, stats, totals, charts, gym, payouts, wars, chains, crimes.
+  BATTLE / WORK STATS (section "stats"): OPT-IN only - shown when the member shares them (My data & sharing): their own
+  via /m/mine.json, leaders via the leaders' db/private.json, everyone else via db/optin_shared.json ("faction" share).
   AVERAGES ("Compared with the faction average") cover each member's WHOLE time in the faction - the same totals as
   the all-time leaderboards (db/members.json t): hits per war, chain hits per chain (chains of 250+ hits only), gym energy per month on record,
   crimes done and crime success. Termed wars with no hits are left out (see TERMED WARS in generate.py).
@@ -78,6 +80,10 @@ h2{scroll-margin-top:10px}
 .cm .bar2 u{position:absolute;top:-2px;bottom:-2px;width:2px;background:#ddd;left:50%}
 .cm .pc{float:right;font-size:13px;font-weight:600}.cm .pv{font-size:10px;color:var(--sub)}
 .cm.pv{border-style:dashed}
+.bsg{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:8px}
+.armi{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:8px}
+.ai{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.ai b{color:#fff;white-space:nowrap}.ai i{color:var(--sub);font-style:normal;font-weight:400;font-size:11px}
+.spark{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px;margin-bottom:12px}
 </style></head><body>
 __MENU__
 <div id="err">Loading…</div>
@@ -93,6 +99,8 @@ __MENU__
   <div class="cmp" id="relb"></div></section>
   <section data-sec="armory" id="armsec" style="display:none"><h2 id="armory">🗄️ Armory usage <span class="tag" id="armt"></span></h2>
   <div class="tiles" id="armc"></div><div class="legend" id="arml" style="text-align:center;margin-top:6px"></div></section>
+  <section data-sec="stats" id="bssec" style="display:none"><h2 id="bstats">💪 Battle and work stats <span class="tag" id="bst"></span></h2>
+  <div id="bsc"></div></section>
   <section data-sec="totals"><h2>📊 Totals <span class="tag">(while in the faction)</span></h2>
   <div class="tiles" id="tiles"></div></section>
   <section data-sec="charts"><div class="rng" id="rng"><span>Range</span><button data-r="30">1 Month</button><button data-r="91">3 Months</button>
@@ -151,7 +159,7 @@ let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() 
   document.querySelectorAll(".chart").forEach(el => el._args && bars(el, ...el._args)), 150); });
 
 // ---- layout: order + hidden sections (owner's own > leaders' default > this file's order; ?layout= = preview) ----
-const SECS = ["cmp", "reliability", "armory", "totals", "charts", "gym", "payouts", "wars", "chains", "crimes"];
+const SECS = ["cmp", "reliability", "armory", "stats", "totals", "charts", "gym", "payouts", "wars", "chains", "crimes"];
 function applyLayout(L) {
   if (!L) return;
   const box = $("secs"), byKey = {};
@@ -245,6 +253,37 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   const priv = !me ? Promise.resolve(null) : own ? fetch("mine.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
     : me.leader ? fetch(GATE + "/l/db/private.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
         .then(P => P ? Object.assign({}, (P.members || {})[String(id)] || {}, {averages: P.averages || {}}) : null) : Promise.resolve(null);
+  // ---- battle / work stats (opt-in): own or leaders -> private figures; everyone else -> what's shared with the faction ----
+  const shared = fetch("db/optin_shared.json", {cache: "no-store"}).then(r => r.ok ? r.json() : {}).catch(() => ({}));
+  Promise.all([priv.catch(() => null), shared]).then(([pv, SH]) => {
+    const O = (pv && pv.optin) || ((SH.members || {})[String(id)]) || null;
+    if (!O || !(O.bs || O.ws)) return;
+    const big = n => n >= 1e9 ? (n / 1e9).toFixed(2) + "b" : n >= 1e6 ? (n / 1e6).toFixed(2) + "m" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
+    const gain = (ser, days, k) => { if (!ser || ser.length < 2) return null; const last = ser[ser.length - 1];
+      const want = new Date(Date.parse(last[0]) - days * 864e5).toISOString().slice(0, 10);
+      const base = ser.filter(x => x[0] <= want).pop() || ser[0]; return base === last ? null : k(last) - k(base); };
+    const gtxt = (ser, k) => { const a = gain(ser, 7, k), b = gain(ser, 30, k);
+      return a == null && b == null ? "gains show after a few days" : `+${big(a || 0)} 7 days · +${big(b || 0)} 30 days`; };
+    const tile = (l, v, i) => `<div class="tile"><b>${v}</b><span>${l}</span>${i ? `<i>${i}</i>` : ""}</div>`;
+    let h = "";
+    const spark = (ser, k, col) => { if (ser.length < 2) return "";
+      const vals = ser.map(k), mn = Math.min(...vals), mx = Math.max(...vals), W = 600, H = 60;
+      const pts = vals.map((v, j) => `${(j / (vals.length - 1) * W).toFixed(1)},${(H - 4 - (mx > mn ? (v - mn) / (mx - mn) : 0.5) * (H - 8)).toFixed(1)}`).join(" ");
+      return `<div class="spark"><svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none"><polyline fill="none" stroke="${col}" stroke-width="2" points="${pts}"/></svg>`
+        + `<div class="legend" style="text-align:center">${ser[0][0]} → ${ser[ser.length - 1][0]} · ${ser.length} day${ser.length > 1 ? "s" : ""} on record</div></div>`; };
+    if (O.bs && O.bs.s && O.bs.s.length) { const S = O.bs.s, L = S[S.length - 1], tot = r => r[1] + r[2] + r[3] + r[4];
+      const one = j => r => r[j];
+      h += `<div class="bsg">${tile("Total battle stats", big(tot(L)), gtxt(S, tot))}${[["Strength", 1], ["Defense", 2], ["Speed", 3], ["Dexterity", 4]]
+        .map(([l, j]) => tile(l, big(L[j]), gtxt(S, one(j)))).join("")}</div>` + spark(S, tot, "#e8be5a"); }
+    if (O.ws && O.ws.s && O.ws.s.length) { const S = O.ws.s, L = S[S.length - 1], tot = r => r[1] + r[2] + r[3];
+      h += `<div class="bsg">${tile("Total work stats", big(tot(L)), gtxt(S, tot))}${[["Manual labor", 1], ["Intelligence", 2], ["Endurance", 3]]
+        .map(([l, j]) => tile(l, big(L[j]), gtxt(S, r => r[j]))).join("")}</div>`; }
+    if (!h) return;
+    const shareTxt = x => x && x.share === "faction" ? "shared with the faction" : "shared with leaders";
+    $("bst").textContent = `(opt-in · ${O.bs ? "battle " + shareTxt(O.bs) : ""}${O.bs && O.ws ? " · " : ""}${O.ws ? "work " + shareTxt(O.ws) : ""}${own ? " · change it in My data & sharing" : ""})`;
+    $("bsc").innerHTML = h;
+    $("bssec").style.display = $("bssec").dataset.off ? "none" : "";
+  });
   priv.catch(() => null).then(pv => {
     if (!pv) return;
     const who_ = own ? "only you and leaders see this" : "leaders only";
@@ -272,8 +311,11 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       $("armc").innerHTML = `<div class="tile"><b>${num(sum(AR.month))}</b><span>This month</span><i>${num(sum(AR.last_month))} last month · ${num(sum(AR.all))} all time</i></div>`
         + cats.map(c => `<div class="tile"><b>${num((AR.month || {})[c] || 0)}</b><span>${IC[c]} ${c}</span><i>${num((AR.last_month || {})[c] || 0)} last month · ${num(AR.all[c])} all time</i></div>`).join("");
       const since = AR.oldest ? new Date(AR.oldest * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"}) : "";
-      $("arml").innerHTML = (AR.top && AR.top.length ? "Most taken: " + AR.top.map(([n, v]) => `${esc(n)} ×${num(v)}`).join(" · ") + "<br>" : "")
-        + (since ? `On record since ${since}${AR.done ? "" : " (older history still filling in)"}` : "");
+      // every item they took, listed under its category (this month · all time on record)
+      $("armc").insertAdjacentHTML("afterend", `<div class="armi">${cats.map(c => `<div class="cm"><div class="l">${IC[c]} ${c}</div>`
+        + ((AR.items || {})[c] || []).map(([nm, mo, al]) => `<div class="ai"><span>${esc(nm)}</span><b>${num(al)}${mo ? ` <i>(${num(mo)} this month)</i>` : ""}</b></div>`).join("")
+        + "</div>").join("")}</div>`);
+      $("arml").innerHTML = since ? `On record since ${since}${AR.done ? "" : " (older history still filling in)"} · totals are all time, this month in brackets` : "";
     }
   });
   // charts - redrawn for the chosen range (1M / 3M / 6M / 1Y / All). Remembered on this device.

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>My Data &amp; Sharing - Heart Breakers</title>
+<!--
+  MY DATA & SHARING (members' folder: my-data.html, published by generate.py write_optin_pages - Me menu).
+  OPT-IN ONLY: a member adds their own Limited API key and picks what to share:
+    Battle stats  off / leaders / faction   - tracked daily (gains), shown on their profile + leaders' Member Stats
+    Work stats    off / leaders / faction   - tracked daily, same places
+    War readiness on / off                  - leaders' War Readiness page reads their energy, happy, cooldowns,
+                                              refill and status live from Torn with their key
+  Saved through the gatekeeper (/m/optin: GET own settings, PUT {key?, bs, ws, ready}, DELETE everything) - the key
+  is checked with Torn (Limited or higher, and theirs), stored ENCRYPTED, and never shown again.
+  Torn ToS: the table below is the required disclosure (storage, sharing, purpose, key storage, access level).
+  Deleted automatically when they leave the faction or their key stops existing (deleted key / deleted account) -
+  see OPT-IN STATS in generate.py. Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:760px}
+h1{color:var(--red);font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:22px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.st{display:flex;align-items:center;gap:10px}.st b{font-size:16px;color:#fff}.dot{width:10px;height:10px;border-radius:50%;background:#555;flex:none}
+.dot.on{background:var(--green)}.muted{color:var(--sub);font-size:13px}
+label.k{display:block;color:var(--sub);font-size:12px;margin:2px 0 4px}
+input[type=password]{width:100%;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:8px;padding:11px;font:15px system-ui}
+.opt{display:flex;align-items:center;gap:10px;padding:11px 0;border-top:1px solid #2a1416}.opt:first-of-type{border-top:0}
+.opt .t{flex:1;min-width:0}.opt .t b{display:block;color:#fff}.opt .t span{color:var(--sub);font-size:12px}
+.seg{display:flex;border:1px solid var(--edge);border-radius:8px;overflow:hidden;flex:none}
+.seg button{background:#1a1012;color:#ddd;border:0;padding:7px 10px;font:13px system-ui;cursor:pointer;border-left:1px solid var(--edge)}
+.seg button:first-child{border-left:0}.seg button.on{background:var(--red);color:#fff;font-weight:600}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.btns button{border-radius:8px;padding:10px 16px;font:600 14px system-ui;cursor:pointer;border:1px solid var(--edge);background:#1a1012;color:#ddd}
+.btns .go{background:var(--red);border-color:var(--red);color:#fff}.btns .del{color:#ff8a80;border-color:#6b2420}
+#msg{margin-top:10px;font-size:14px}#msg.ok{color:var(--green)}#msg.err{color:#ff8a80}
+table{width:100%;border-collapse:collapse;font-size:13px}td{border-top:1px solid #2a1416;padding:7px 4px;vertical-align:top}
+td:first-child{color:var(--gold);white-space:nowrap;padding-right:10px}a{color:var(--gold)}
+ul{margin:6px 0 0;padding-left:18px;color:#cfc6c6;font-size:13px}li{margin:3px 0}
+</style></head><body>
+__MENU__
+<h1>My Data &amp; Sharing</h1>
+<div class="sub">Optional extras with your own <b>Limited</b> API key - nothing here is on unless you turn it on</div>
+
+<div class="card st"><span class="dot" id="dot"></span><div><b id="stt">Loading…</b><div class="muted" id="std"></div></div></div>
+
+<h2>🔑 Your Limited API key</h2>
+<div class="card">
+  <label class="k" for="key" id="keyl">Torn API key with <b>Limited Access</b></label>
+  <input id="key" type="password" autocomplete="off" maxlength="16" placeholder="16-character Limited key">
+  <div class="muted" style="margin-top:6px">Make one in Torn → <a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Settings → API Keys</a>
+    → Create key → <b>Limited Access</b>, named e.g. "Heart Breakers Hub". It's checked with Torn (it must be yours), then stored encrypted - nobody, leaders included, can ever see it.</div>
+</div>
+
+<h2>📤 What to share</h2>
+<div class="card" id="opts">
+  <div class="opt"><div class="t"><b>💪 Battle stats</b><span>Strength, defense, speed, dexterity - saved daily so your gains are tracked</span></div>
+    <div class="seg" data-k="bs"><button data-v="off">Off</button><button data-v="leaders">Leaders</button><button data-v="faction">Faction</button></div></div>
+  <div class="opt"><div class="t"><b>🧰 Work stats</b><span>Manual labor, intelligence, endurance - saved daily</span></div>
+    <div class="seg" data-k="ws"><button data-v="off">Off</button><button data-v="leaders">Leaders</button><button data-v="faction">Faction</button></div></div>
+  <div class="opt"><div class="t"><b>⚔️ War readiness</b><span>Leaders see your energy, happy, drug / booster / medical cooldowns, refill and status - live, for war planning</span></div>
+    <div class="seg" data-k="ready"><button data-v="false">Off</button><button data-v="true">Leaders</button></div></div>
+  <div class="btns"><button class="go" id="save">Save</button><button class="del" id="del">Delete my key and all my data</button></div>
+  <div id="msg"></div>
+</div>
+
+<h2>📜 How your key and data are used</h2>
+<div class="card"><table>
+  <tr><td>Data storage</td><td>Persistent - until you delete it here, turn everything off, leave Heart Breakers, or your key stops existing</td></tr>
+  <tr><td>Data sharing</td><td>Your choice per item: <b>faction leaders</b> only, or <b>faction members</b>. War readiness: leaders only. Never outside the faction</td></tr>
+  <tr><td>Purpose of use</td><td>Tracking your battle and work stat gains, and war readiness for faction leaders' war planning</td></tr>
+  <tr><td>Key storage &amp; sharing</td><td>Stored remotely, encrypted · used only for automation (a daily stats reading, and live readiness when a leader opens it) · never shared or shown</td></tr>
+  <tr><td>Key access level</td><td>Limited Access</td></tr>
+</table>
+<ul>
+  <li><b>Delete any time:</b> "Delete my key and all my data" removes your key at once and your saved stats with the next update.</li>
+  <li><b>Leaving the faction:</b> your key and all your saved stats are deleted automatically.</li>
+  <li><b>Deleting your key or Torn account:</b> when Torn reports the key no longer exists, everything is deleted automatically.</li>
+  <li>Turning one item off deletes that item's saved history. Every request is made with the comment "Heart Breakers Hub", so you can see it in Torn's API key log.</li>
+</ul></div>
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+let S = {bs: "off", ws: "off", ready: "false"}, opted = false;
+const day = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric"}) : "";
+function seg() { document.querySelectorAll(".seg").forEach(g => g.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(S[g.dataset.k])))); }
+document.querySelectorAll(".seg").forEach(g => g.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; S[g.dataset.k] = b.dataset.v; seg(); }));
+function status(o) {
+  opted = !!o.opted;
+  $("dot").classList.toggle("on", opted);
+  $("stt").textContent = opted ? "Opted in" : "Not opted in";
+  $("std").textContent = opted ? `Since ${day(o.since)} · last changed ${day(o.updated)} · your key is stored (encrypted) - add a new one only to replace it`
+                               : "Add a Limited key and choose what to share.";
+  $("keyl").innerHTML = opted ? "Replace your key (optional)" : "Torn API key with <b>Limited Access</b>";
+  $("del").style.display = opted ? "" : "none";
+  if (opted) S = {bs: o.bs || "off", ws: o.ws || "off", ready: String(!!o.ready)};
+  seg();
+}
+const say = (t, ok) => { $("msg").textContent = t; $("msg").className = ok ? "ok" : "err"; };
+async function call(method, body) {
+  const r = await fetch(`${CFG.gate}/m/optin`, {method, cache: "no-store",
+    headers: Object.assign({"Content-Type": "application/json"}, method === "GET" ? {} : {"X-HB-Save": "1"}), body: body ? JSON.stringify(body) : undefined});
+  const t = await r.text();
+  if (!r.ok) throw new Error(t && !/^\s*</.test(t) ? t : (r.status === 401 ? "Sign in again, then retry." : "The site couldn't do that right now (" + r.status + ")."));
+  return JSON.parse(t);
+}
+$("save").onclick = async () => {
+  const key = $("key").value.trim();
+  if (!opted && !key && (S.bs !== "off" || S.ws !== "off" || S.ready === "true")) return say("Add your Limited API key first.");
+  if (key && !/^[A-Za-z0-9]{16}$/.test(key)) return say("That doesn't look like a Torn API key (16 letters/numbers).");
+  say("Checking with Torn and saving…", true);
+  try { const o = await call("PUT", {key: key || undefined, bs: S.bs, ws: S.ws, ready: S.ready === "true"}); $("key").value = "";
+    status(o); say(o.opted ? "Saved ✓ - your stats show up after the next update (within the hour)." : "Turned off - your key and data were deleted.", true); }
+  catch (e) { say(e.message); }
+};
+$("del").onclick = async () => {
+  if (!confirm("Delete your key and all your saved stats? This can't be undone.")) return;
+  try { status(await call("DELETE")); S = {bs: "off", ws: "off", ready: "false"}; seg(); say("Deleted ✓ - your key is gone now; saved stats go with the next update.", true); }
+  catch (e) { say(e.message); }
+};
+call("GET").then(status).catch(e => { $("stt").textContent = "Couldn't load your settings"; $("std").textContent = e.message; });
+</script>
+</body></html>

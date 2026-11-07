@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Member Stats - Heart Breakers</title>
+<!--
+  MEMBER STATS (leaders' folder: stats.html, published by generate.py write_optin_pages). OPT-IN data only - members
+  who added their own Limited key on "My Data & Sharing" and chose to share battle and/or work stats (with leaders or
+  the whole faction). Reads db/private.json (leaders' folder): members[id].optin = {bs: {share, s: [[day, str, def,
+  spd, dex], ...]}, ws: {share, s: [[day, man, int, end], ...]}, ready} and the members' db/members.json for names.
+  Gains = latest reading minus the reading on/just before 7 / 30 days ago (only days since they opted in count).
+  Placeholders: __CONFIG__ ({member_base}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1250px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:12px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px}
+.hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin:0 0 10px}
+.hst div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px;text-align:center}
+.hst b{display:block;color:#fff;font-size:19px}.hst span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+td,th{padding:8px 10px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
+th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;cursor:pointer;user-select:none}
+th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}td.n,th.n{text-align:right}td a{color:var(--gold);text-decoration:none}
+.tag{color:var(--sub);font-size:12px}.scroll{overflow-x:auto}.up{color:var(--green)}
+.note{background:#1f1608;border:1px solid #6b4a18;color:#e8d6a8;border-radius:8px;padding:8px 12px;font-size:13px;margin:8px 0}
+</style></head><body>
+__MENU__
+<h1>Member Stats</h1>
+<div class="sub">Battle and work stats members chose to share (opt-in, their own Limited key) · read once a day</div>
+<div class="note">Only members who opted in are listed. Members opt in from the Me menu → My data &amp; sharing; turning it off, leaving the faction or deleting their key removes their data.</div>
+<div class="hst" id="tot"></div>
+<h2>💪 Battle stats <span class="tag">(tap a column to sort)</span></h2>
+<div class="scroll"><table id="tb"></table></div>
+<h2>🧰 Work stats</h2>
+<div class="scroll"><table id="tw"></table></div>
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const big = n => n == null ? "-" : n >= 1e9 ? (n / 1e9).toFixed(2) + "b" : n >= 1e6 ? (n / 1e6).toFixed(2) + "m" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(Math.round(n));
+const gain = (s, days, f) => { if (!s || s.length < 2) return null; const last = s[s.length - 1];
+  const want = new Date(Date.parse(last[0]) - days * 864e5).toISOString().slice(0, 10);
+  const base = s.filter(x => x[0] <= want).pop() || s[0]; return base === last ? null : f(last) - f(base); };
+function sortable(el, cols, rows, key0) {
+  let key = key0, desc = true;
+  const draw = () => { rows.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x ?? -1) - (y ?? -1); return desc ? -r : r; });
+    el.innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" || k === "share" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${l}</th>`).join("")}</tr>`
+      + (rows.map(r => `<tr>${cols.map(([_l, k, f]) => k === "name" ? `<td><a href="${CFG.member_base}/member.html?id=${r.id}">${esc(r.name)}</a></td>`
+        : `<td class="${k === "share" ? "tag" : "n"}">${f ? f(r[k]) : esc(r[k])}</td>`).join("")}</tr>`).join("")
+        || `<tr><td class="tag" colspan="${cols.length}">Nobody shares these yet.</td></tr>`);
+    el.querySelectorAll("th").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } draw(); }); };
+  draw();
+}
+Promise.all([fetch("db/private.json", {cache: "no-store"}).then(r => r.json()),
+             fetch(CFG.member_base + "/db/members.json", {cache: "no-store"}).then(r => r.json())]).then(([P, M]) => {
+  const names = {}; M.members.forEach(m => names[m.id] = m.name);
+  const bs = [], ws = [];
+  Object.entries(P.members || {}).forEach(([id, x]) => { const o = x.optin; if (!o) return;
+    const tot = r => r[1] + r[2] + r[3] + r[4];
+    if (o.bs && o.bs.s.length) { const l = o.bs.s[o.bs.s.length - 1];
+      bs.push({id, name: names[id] || id, total: tot(l), str: l[1], def: l[2], spd: l[3], dex: l[4], g7: gain(o.bs.s, 7, tot), g30: gain(o.bs.s, 30, tot),
+               share: o.bs.share === "faction" ? "faction" : "leaders", on: l[0]}); }
+    if (o.ws && o.ws.s.length) { const l = o.ws.s[o.ws.s.length - 1], wt = r => r[1] + r[2] + r[3];
+      ws.push({id, name: names[id] || id, total: wt(l), man: l[1], int: l[2], end: l[3], g30: gain(o.ws.s, 30, wt), share: o.ws.share === "faction" ? "faction" : "leaders"}); } });
+  const opted = Object.values(P.members || {}).filter(x => x.optin).length;
+  $("tot").innerHTML = [[opted, "Opted in"], [bs.length, "Share battle stats"], [ws.length, "Share work stats"],
+    [Object.values(P.members || {}).filter(x => x.optin && x.optin.ready).length, "War readiness on"]]
+    .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
+  const g = v => v == null ? '<span class="tag">-</span>' : `<span class="up">+${big(v)}</span>`;
+  sortable($("tb"), [["Member", "name"], ["Total", "total", big], ["Strength", "str", big], ["Defense", "def", big], ["Speed", "spd", big],
+    ["Dexterity", "dex", big], ["Gain 7 days", "g7", g], ["Gain 30 days", "g30", g], ["Shared with", "share"], ["Read", "on"]], bs, "total");
+  sortable($("tw"), [["Member", "name"], ["Total", "total", big], ["Manual labor", "man", big], ["Intelligence", "int", big],
+    ["Endurance", "end", big], ["Gain 30 days", "g30", g], ["Shared with", "share"]], ws, "total");
+}).catch(e => { $("tot").innerHTML = `<div style="grid-column:1/-1"><b>-</b><span>Couldn't load (${esc(e.message)})</span></div>`; });
+</script>
+</body></html>

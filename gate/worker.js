@@ -221,6 +221,10 @@ export default {
     if (rest === "whoami.json") return Response.json(who, {headers: {"Cache-Control": "no-store"}});
     // a member's OWN private figures (reliability, Xanax) - picked out of the leaders' db/private.json
     if (area === "m" && rest === "mine.json") return mine(env, who);
+    // opt-in stats (own Limited key): settings / save / delete - always the signed-in member's own entry
+    if (area === "m" && (rest === "optin" || rest === "optin.json")) return optinRoute(env, req, who);
+    // leaders: live war readiness of members who opted in
+    if (area === "l" && rest === "readiness.json") return readiness(env, ctx);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
     if (area === "l" && rest.startsWith("gh/contents/")) return ghProxy(env, req, who, rest.slice("gh/contents/".length));
     return proxy(env, dir, rest, req, true);
@@ -289,3 +293,144 @@ async function dispatch(env, wf, inputs) {
 }
 
 
+
+// =====================================================================================================
+// OPT-IN STATS (members' own Limited key) - battle stats, work stats, war readiness. Everything is opt-in.
+//   GET    /m/optin.json      the signed-in member's own settings (never the key)
+//   PUT    /m/optin           {key?, bs, ws, ready} - bs / ws: "off" | "leaders" | "faction"; ready: true / false.
+//                             A new key is checked with Torn first: it must be a Limited (or higher) key and
+//                             belong to the signed-in member. Everything off = the same as DELETE.
+//   DELETE /m/optin           delete my key and settings (their stats are removed by the next update)
+//   GET    /l/readiness.json  leaders: live war readiness (energy, happy, cooldowns, refill, status) for every
+//                             member who turned "war readiness" on - read from Torn with THEIR key, ~1 min cache
+// Storage: data/optin.json in the private data repo {v, members: {id: {k, bs, ws, ready, since, updated}}}.
+//   k = the key encrypted with AES-256-GCM (base64url of iv + ciphertext): the encryption key is
+//   sha256(MEMBER_DIR|LEADER_DIR|hb-optin) - the same secrets the update workflow has, so it can read the stats.
+//   The plain key is never stored, logged or sent to a browser.
+// Deleted automatically (generate.py optin_update): when the member leaves the faction or Torn says the key is
+// gone (deleted / account deleted) - and whenever the member deletes it here.
+// =====================================================================================================
+const OPTIN_PATH = "data/optin.json";
+const SHARE = ["off", "leaders", "faction"];
+async function optinKey(env) {
+  const raw = await crypto.subtle.digest("SHA-256", enc.encode(`${env.MEMBER_DIR}|${env.LEADER_DIR}|hb-optin`));
+  return crypto.subtle.importKey("raw", raw, {name: "AES-GCM"}, false, ["encrypt", "decrypt"]);
+}
+async function sealKey(env, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name: "AES-GCM", iv}, await optinKey(env), enc.encode(key));
+  const all = new Uint8Array(12 + ct.byteLength); all.set(iv, 0); all.set(new Uint8Array(ct), 12);
+  return b64u(all);
+}
+async function openKey(env, sealed) {
+  const all = unb64u(sealed);
+  const pt = await crypto.subtle.decrypt({name: "AES-GCM", iv: all.slice(0, 12)}, await optinKey(env), all.slice(12));
+  return new TextDecoder().decode(pt);
+}
+function ghHeaders(env) {
+  return {Authorization: "Bearer " + (env.GH_SAVE || env.GH_DISPATCH), Accept: "application/vnd.github+json",
+          "User-Agent": "hb-gate", "Content-Type": "application/json"};
+}
+// read data/optin.json -> {data, sha}; cached in memory a short while for the readiness page
+let OPTIN_CACHE = {t: 0, v: null};
+async function readOptin(env, fresh) {
+  if (!fresh && OPTIN_CACHE.v && Date.now() - OPTIN_CACHE.t < 60e3) return OPTIN_CACHE.v;
+  const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/${OPTIN_PATH}?ref=main`, {headers: ghHeaders(env)});
+  let v = {data: {v: 1, members: {}}, sha: undefined};
+  if (r.ok) {
+    const j = await r.json();
+    try { v = {data: JSON.parse(new TextDecoder().decode(unb64u(j.content.replace(/\n/g, "").replace(/\+/g, "-").replace(/\//g, "_")))), sha: j.sha}; }
+    catch (e) { v = {data: {v: 1, members: {}}, sha: j.sha}; }
+  } else if (r.status !== 404) throw new Error("couldn't read the opt-in list (" + r.status + ")");
+  v.data.members = v.data.members || {};
+  OPTIN_CACHE = {t: Date.now(), v};
+  return v;
+}
+// change one member's entry (fn(entry) -> new entry or null = delete) - retried when the file changed meanwhile
+async function writeOptin(env, id, fn, msg) {
+  for (let i = 0; i < 3; i++) {
+    const {data, sha} = await readOptin(env, true);
+    const nv = fn(data.members[id] || null);
+    if (nv) data.members[id] = nv; else delete data.members[id];
+    const body = JSON.stringify(data, null, 1) + "\n";
+    const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/${OPTIN_PATH}`, {method: "PUT", headers: ghHeaders(env),
+      body: JSON.stringify({message: msg, sha, branch: "main", content: btoa(unescape(encodeURIComponent(body)))})});
+    if (r.ok) { OPTIN_CACHE = {t: 0, v: null}; return true; }
+    if (r.status !== 409 && r.status !== 422) throw new Error("save failed (" + r.status + ")");
+  }
+  throw new Error("save failed - try again");
+}
+// Torn v1 user call with a member's key (the key goes in the URL for v1 - never logged)
+async function tornUser(key, selections) {
+  const r = await fetch(`https://api.torn.com/user/?selections=${selections}&key=${encodeURIComponent(key)}&comment=${encodeURIComponent(API_COMMENT)}`);
+  return r.json();
+}
+const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready, since: e.since, updated: e.updated} : {opted: false};
+async function optinRoute(env, req, who) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (!env.GH_DISPATCH && !env.GH_SAVE) return new Response("Saving isn't set up", {status: 503});
+  const id = String(Number(who.id));
+  try {
+    if (req.method === "GET") {
+      const {data} = await readOptin(env, true);
+      return Response.json(publicEntry(data.members[id]), H);
+    }
+    if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+    const tag = `(by ${who.name} [${who.id}])`;
+    if (req.method === "DELETE") {
+      await writeOptin(env, id, () => null, `Opt-in data deleted ${tag}`);
+      return Response.json({opted: false}, H);
+    }
+    if (req.method !== "PUT") return new Response("Method not allowed", {status: 405});
+    const j = await req.json().catch(() => null);
+    if (!j) return new Response("Bad request", {status: 400});
+    const bs = SHARE.includes(j.bs) ? j.bs : "off", ws = SHARE.includes(j.ws) ? j.ws : "off", ready = !!j.ready;
+    if (bs === "off" && ws === "off" && !ready) {
+      await writeOptin(env, id, () => null, `Opt-in turned off ${tag}`);
+      return Response.json({opted: false}, H);
+    }
+    let sealed = null;
+    if (j.key) {
+      const key = String(j.key).trim();
+      if (!/^[A-Za-z0-9]{16}$/.test(key)) return new Response("That doesn't look like a Torn API key (16 letters/numbers).", {status: 400});
+      const d = await tornUser(key, "basic,battlestats,workstats,bars,cooldowns,refills");
+      if (d.error) return new Response(d.error.code === 16 ? "That key's access is too low - create a Limited Access key."
+                                        : `Torn said: ${d.error.error || "error " + d.error.code}`, {status: 400});
+      if (String(d.player_id) !== id) return new Response("That key belongs to someone else - use your own key.", {status: 400});
+      sealed = await sealKey(env, key);
+    }
+    const now = Math.floor(Date.now() / 1000);
+    let missing = false;
+    await writeOptin(env, id, cur => {
+      if (!cur && !sealed) { missing = true; return null; }
+      return {k: sealed || cur.k, bs, ws, ready, since: cur ? cur.since : now, updated: now};
+    }, `Opt-in settings saved ${tag}`);
+    if (missing) return new Response("Add your Limited API key first.", {status: 400});
+    return Response.json(publicEntry({bs, ws, ready, since: now, updated: now}), H);
+  } catch (e) {
+    return new Response(e.message || "Something went wrong", {status: 502});
+  }
+}
+// live war readiness for leaders: every opted-in member with "ready" on, read with their own key
+let READY_CACHE = {t: 0, v: null};
+async function readiness(env, ctx) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (READY_CACHE.v && Date.now() - READY_CACHE.t < 60e3) return Response.json(READY_CACHE.v, H);
+  const {data} = await readOptin(env, false);
+  const members = await currentMembers(env, ctx) || new Map();
+  const ids = Object.keys(data.members).filter(i => data.members[i].ready && members.has(Number(i)));
+  const rows = await Promise.all(ids.map(async i => {
+    const m = members.get(Number(i)) || {};
+    try {
+      const d = await tornUser(await openKey(env, data.members[i].k), "bars,cooldowns,profile,refills");
+      if (d.error) return {id: +i, name: m.name, err: d.error.error || "Torn error " + d.error.code};
+      const bar = b => b ? {cur: b.current, max: b.maximum, full: b.fulltime || 0} : null;
+      return {id: +i, name: m.name, position: m.position, energy: bar(d.energy), nerve: bar(d.nerve), happy: bar(d.happy), life: bar(d.life),
+              cd: d.cooldowns || {}, refill: (d.refills || {}).energy_refill_used ?? null,
+              status: d.status ? {state: d.status.state, desc: d.status.description, until: d.status.until} : null,
+              last: (d.last_action || {}).timestamp || null};
+    } catch (e) { return {id: +i, name: m.name, err: "couldn't read"}; }
+  }));
+  READY_CACHE = {t: Date.now(), v: {at: Math.floor(Date.now() / 1000), members: rows}};
+  return Response.json(READY_CACHE.v, H);
+}

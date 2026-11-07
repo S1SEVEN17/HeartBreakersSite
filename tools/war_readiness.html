@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>War Readiness - Heart Breakers</title>
+<!--
+  WAR READINESS (leaders' folder: readiness.html, published by generate.py write_optin_pages). OPT-IN: only members
+  who turned "War readiness" on in My Data & Sharing. Live from the gatekeeper's /l/readiness.json, which reads Torn
+  with EACH MEMBER'S OWN key (bars, cooldowns, profile status, refills) - cached ~1 minute; this page refreshes every
+  minute while open and the timers count down in between.
+  Ready = Okay (not in hospital / jail / travelling) · Stacked = energy at or above its max (stacking for war).
+  Placeholders: __CONFIG__ ({member_base, gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1250px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:12px}
+.hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin:0 0 12px}
+.hst div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px;text-align:center}
+.hst b{display:block;color:#fff;font-size:20px}.hst span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.ctl{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:0 0 12px;color:var(--sub);font-size:13px}
+.ctl button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
+.ctl button.on{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px}
+.c{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:11px 13px}
+.c.ok{border-color:#2f5a2f}.c.bad{border-color:#6b2420}
+.c .h{display:flex;align-items:center;gap:8px;margin-bottom:8px}.c .h a{color:#fff;font-weight:600;text-decoration:none;flex:1;min-width:0}
+.pill{font-size:11px;padding:2px 8px;border-radius:8px;background:#2a1416;color:var(--sub);white-space:nowrap}
+.pill.g{background:#173117;color:#9be29b}.pill.r{background:#3b1513;color:#ff8a80}.pill.y{background:#3a2d12;color:var(--gold)}
+.bar{margin:5px 0}.bar .l{display:flex;justify-content:space-between;font-size:12px;color:var(--sub)}.bar .l b{color:#eee;font-weight:600}
+.bar .t{height:6px;background:#2a1416;border-radius:3px;overflow:hidden;margin-top:2px}.bar .t i{display:block;height:6px;border-radius:3px}
+.cds{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+.cds div{background:#120a0b;border:1px solid #2a1416;border-radius:8px;padding:5px;text-align:center;font-size:11px;color:var(--sub)}
+.cds b{display:block;color:#eee;font-size:13px}.cds b.z{color:var(--green)}
+.foot{display:flex;justify-content:space-between;font-size:12px;color:var(--sub);margin-top:8px}
+.note{background:#1f1608;border:1px solid #6b4a18;color:#e8d6a8;border-radius:8px;padding:8px 12px;font-size:13px;margin:8px 0}
+#err{color:#ff8a80;text-align:center}
+</style></head><body>
+__MENU__
+<h1>War Readiness</h1>
+<div class="sub" id="meta">Live from Torn with each member's own key · members who opted in</div>
+<div class="hst" id="tot"></div>
+<div class="ctl"><span>Sort</span><button data-s="energy" class="on">Energy</button><button data-s="ready">Ready first</button><button data-s="name">Name</button></div>
+<div id="err"></div>
+<div class="cards" id="cards"></div>
+<div class="note">Only members who turned on "War readiness" in My data &amp; sharing are shown. It stops the moment they turn it off, delete their key or leave the faction.</div>
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const now = () => Date.now() / 1000;
+const dur = s => { s = Math.max(0, Math.floor(s)); if (!s) return "0"; const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : m ? `${m}m` : `${s}s`; };
+let D = null, sortBy = "energy";
+const okState = r => r.status && String(r.status.state).toLowerCase() === "okay";
+function bar(lab, b, col) {
+  if (!b) return "";
+  const pc = Math.min(100, Math.round(100 * b.cur / Math.max(1, b.max)));
+  return `<div class="bar"><div class="l"><span>${lab}</span><b>${b.cur.toLocaleString("en-US")} / ${b.max.toLocaleString("en-US")}</b></div>`
+    + `<div class="t"><i style="width:${pc}%;background:${col}"></i></div></div>`;
+}
+function draw() {
+  if (!D) return;
+  const el = now() - D.at;                       // seconds since the readings - cooldowns count down
+  const rows = D.members.slice();
+  const en = r => r.energy ? r.energy.cur : -1;
+  rows.sort((a, b) => sortBy === "name" ? String(a.name).localeCompare(String(b.name))
+    : sortBy === "ready" ? (okState(b) - okState(a)) || en(b) - en(a) : en(b) - en(a));
+  const ok = rows.filter(r => !r.err && okState(r)), stacked = rows.filter(r => r.energy && r.energy.cur >= r.energy.max);
+  const noDrug = rows.filter(r => r.cd && (r.cd.drug || 0) - el <= 0 && !r.err);
+  $("tot").innerHTML = [[rows.length, "Opted in"], [ok.length, "Ready (okay)"], [stacked.length, "Energy stacked"],
+    [noDrug.length, "No drug cooldown"], [rows.reduce((a, r) => a + (r.energy ? r.energy.cur : 0), 0).toLocaleString("en-US"), "Total energy"]]
+    .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
+  $("cards").innerHTML = rows.map(r => {
+    if (r.err) return `<div class="c bad"><div class="h"><a href="${CFG.member_base}/member.html?id=${r.id}">${esc(r.name)}</a><span class="pill r">${esc(r.err)}</span></div></div>`;
+    const st = r.status || {}, s = String(st.state || "").toLowerCase();
+    const pill = s === "okay" ? '<span class="pill g">Okay</span>' : `<span class="pill ${s === "traveling" || s === "abroad" ? "y" : "r"}" title="${esc(st.desc)}">${esc(st.state || "?")}${st.until && st.until > now() ? " · " + dur(st.until - now()) : ""}</span>`;
+    const cd = k => { const v = Math.max(0, (r.cd[k] || 0) - el); return `<div><b class="${v ? "" : "z"}">${v ? dur(v) : "Ready"}</b>${k}</div>`; };
+    const stack = r.energy && r.energy.cur >= r.energy.max ? ' <span class="pill y">stacked</span>' : "";
+    return `<div class="c ${s === "okay" ? "ok" : "bad"}"><div class="h"><a href="${CFG.member_base}/member.html?id=${r.id}">${esc(r.name)}</a>${pill}</div>`
+      + bar("Energy" + stack, r.energy, "#78c878") + bar("Happy", r.happy, "#e8be5a") + bar("Nerve", r.nerve, "#e4382e")
+      + `<div class="cds">${cd("drug")}${cd("booster")}${cd("medical")}</div>`
+      + `<div class="foot"><span>Energy refill: ${r.refill == null ? "-" : r.refill ? "used today" : "<b style='color:#78c878'>available</b>"}</span>`
+      + `<span>${r.last ? "active " + dur(now() - r.last) + " ago" : ""}</span></div></div>`;
+  }).join("") || '<div class="note" style="grid-column:1/-1">Nobody has turned war readiness on yet.</div>';
+  $("meta").textContent = `Live from Torn with each member's own key · read ${dur(now() - D.at)} ago · refreshes every minute`;
+}
+function load() {
+  fetch("readiness.json", {cache: "no-store"}).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(d => { D = d; $("err").textContent = ""; draw(); }).catch(e => { $("err").textContent = "Couldn't load readiness (" + e.message + ") - retrying."; });
+}
+document.querySelectorAll(".ctl button").forEach(b => b.onclick = () => { sortBy = b.dataset.s;
+  document.querySelectorAll(".ctl button").forEach(x => x.classList.toggle("on", x === b)); draw(); });
+load(); setInterval(load, 60e3); setInterval(draw, 1e3);
+</script>
+</body></html>

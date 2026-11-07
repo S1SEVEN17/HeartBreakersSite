@@ -11,16 +11,22 @@
     cats       category order (Drugs, Medical, Boosters, Refills, Temporary, Weapons, Armor, Other)
     items      item names; item_cat = each item's category (Torn item type)
     months     "YYYY-MM" with any usage, newest first; oldest = earliest news read; done = whole history read
-    members    {id: {m: {"YYYY-MM": {item index: count}}}}      names {id: [name, current member?]}
-  Pick a period (this month, any month on record, or all time on record - usage is kept by month) -> faction totals by category, every member (sortable, tap a row for their items),
-  and the most used items. Placeholders: __CONFIG__, __MENU__.
+    members    {id: {m: {"YYYY-MM": {item index: count}}, r: [[time, item index, count, kind], ...] newest first}}
+    names      {id: [name, current member?]}
+  Layout (Nov 2026):
+    1. period (this month / any month on record / all time) + faction totals per category
+    2. BY CATEGORY - a card per category listing every item taken from it in the period (count, members)
+    3. MEMBER - pick a member (search box, or tap a row below): their totals per category with every item under
+       its category, a 6-month trend by category, and their latest armory uses with dates
+    4. EVERY MEMBER - sortable table (tap a row -> section 3)
+  Placeholders: __CONFIG__, __MENU__.
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
 *{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1200px}
 h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
 .sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:12px}
-h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px}
+h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercase;margin:24px 0 10px;border-bottom:1px solid var(--edge);padding-bottom:6px;scroll-margin-top:8px}
 .rng{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;margin:4px 0 10px}
 .rng span{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-right:4px}
 .rng button,.rng select{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 12px;font:13px system-ui;cursor:pointer}
@@ -28,15 +34,32 @@ h2{color:var(--gold);font-size:14px;letter-spacing:1.5px;text-transform:uppercas
 .hst{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin:0 0 10px}
 .hst div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px;text-align:center}
 .hst b{display:block;color:#fff;font-size:19px}.hst span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.cats{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.cat{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:10px 12px}
+.cat .h{display:flex;align-items:center;gap:8px;margin-bottom:6px}.cat .h b{flex:1;color:#fff}
+.cat .h span{color:var(--gold);font-weight:700}
+.it{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
+.it span{color:#ddd;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.it b{color:#fff;white-space:nowrap}
+.it i{color:var(--sub);font-style:normal;font-size:12px;margin-left:6px}
+.more{color:var(--sub);font-size:12px;cursor:pointer;margin-top:4px;display:inline-block}
+.pick{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.pick input{flex:1;min-width:200px;background:#1f1214;color:#eee;border:1px solid #4a1d1b;border-radius:8px;padding:10px;font:15px system-ui}
+.pick button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:8px;padding:9px 12px;cursor:pointer}
+#mp{background:#130b0c;border:1px solid var(--edge);border-radius:14px;padding:12px}
+.mh{display:flex;align-items:center;gap:12px;margin-bottom:10px}.mh .av{width:44px;height:44px;border-radius:50%;background:#3b1513;color:#ff6b61;display:flex;align-items:center;justify-content:center;font-weight:700}
+.mh b{font-size:18px;color:#fff}.mh a{color:var(--gold);font-size:13px}
+.trend{display:flex;gap:6px;align-items:flex-end;height:110px;margin:8px 0 2px;padding:0 4px}
+.trend .col{flex:1;display:flex;flex-direction:column-reverse;gap:1px;min-width:0}.trend .col i{display:block;border-radius:2px}
+.tl{display:flex;gap:6px;padding:0 4px}.tl span{flex:1;text-align:center;color:var(--sub);font-size:11px}
+.leg{display:flex;flex-wrap:wrap;gap:10px;color:var(--sub);font-size:12px;margin:6px 0}.leg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
 td,th{padding:8px 10px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
 th{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;cursor:pointer;user-select:none}
 th.on:after{content:" ▾"}th.on.up:after{content:" ▴"}td.n,th.n{text-align:right}td a{color:var(--gold);text-decoration:none}
-tr.mr{cursor:pointer}tr.mr:hover td{background:#1f1214}tr.det td{background:#120a0b;white-space:normal;color:#cfc6c6;font-size:13px}
+tr.mr{cursor:pointer}tr.mr:hover td,tr.mr.sel td{background:#1f1214}
 .tag{color:var(--sub);font-size:12px}.scroll{overflow-x:auto}tr.zero td{color:#6d6264}
 .fm{color:var(--sub);font-size:13px;margin:6px 0;display:flex;gap:6px;align-items:center}
 .note{background:#1f1608;border:1px solid #6b4a18;color:#e8d6a8;border-radius:8px;padding:8px 12px;font-size:13px;margin:8px 0}
-.chip{display:inline-block;background:#1f1214;border:1px solid #3a1c1c;border-radius:6px;padding:2px 7px;margin:2px 3px 2px 0}
 </style></head><body>
 __MENU__
 <h1>Armory Monitor</h1>
@@ -44,80 +67,125 @@ __MENU__
 <div class="note" id="cov"></div>
 <div class="rng" id="ctl"></div>
 <div class="hst" id="tot"></div>
-<h2>👥 Members <span class="tag">(tap a column to sort · tap a member for their items)</span></h2>
+<h2>🗂️ By category <span class="tag">(every item taken in this period)</span></h2>
+<div class="cats" id="cats"></div>
+<h2 id="mh2">👤 Member <span class="tag">(pick a member, or tap one in the table below)</span></h2>
+<div class="pick"><input id="who" list="wl" placeholder="Type a member's name"><datalist id="wl"></datalist><button id="clr">Clear</button></div>
+<div id="mp"><div class="tag">Pick a member to see everything they took, by category, with dates.</div></div>
+<h2>👥 Every member <span class="tag">(tap a column to sort · tap a row to open the member)</span></h2>
 <label class="fm"><input type="checkbox" id="fmr"> Show former members</label>
 <div class="scroll"><table id="tb"></table></div>
-<h2>📦 Most used items</h2>
-<div class="scroll"><table id="ti"></table></div>
 <script>
 const CFG = __CONFIG__;
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const num = n => Math.round(n || 0).toLocaleString("en-US");
-const monthName = m => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
+const monthName = (m, short) => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", short ? {month: "short", timeZone: "UTC"} : {month: "long", year: "numeric", timeZone: "UTC"});
+const when = t => new Date(t * 1000).toLocaleString("en-US", {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC"});
 const thisMonth = new Date().toISOString().slice(0, 7);
 const ICON = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", Other: "📦"};
-let period = "month", key = "total", desc = true, open = {};
+const COL = {Drugs: "#e4382e", Medical: "#ff8a80", Boosters: "#e8be5a", Refills: "#78c878", Temporary: "#d08a3a", Weapons: "#8ab4f8", Armor: "#9a9a9c", Other: "#6d6264"};
+const KIND = {u: "used", r: "refill", l: "loaned", g: "given"};
+let period = "month", key = "total", desc = true, sel = "", openCats = {};
+const nameOf = id => (CFG.names[id] || ["[" + id + "]"])[0];
 
-// coverage: how far back the armory history has been read (it fills a few pages each update, newest first)
 $("cov").innerHTML = CFG.oldest
   ? `History read back to <b>${new Date(CFG.oldest * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"})}</b>`
-    + (CFG.done ? " - the faction's whole armory history." : " - older months are still being filled in, a little more every update (newest months first).")
+    + (CFG.done ? " - the faction's whole armory history." : " - older months are still being filled in, about a month every update (newest first).")
   : "No armory history read yet - it starts on the next full update.";
 
-// period -> the months it covers
 const monthsOf = p => p === "all" ? CFG.months : [p === "month" ? thisMonth : p];
-function usage(id, months) {           // {category: n, items: {name: n}, total}
-  const m = (CFG.members[id] || {}).m || {}, r = {items: {}, total: 0};
+const label = () => period === "all" ? "all time on record" : period === "month" ? monthName(thisMonth) : monthName(period);
+function usage(id, months) {           // {category: n, items: {name: n}, byCat: {cat: {name: n}}, total}
+  const m = (CFG.members[id] || {}).m || {}, r = {items: {}, byCat: {}, total: 0};
   CFG.cats.forEach(c => r[c] = 0);
   months.forEach(mo => Object.entries(m[mo] || {}).forEach(([it, n]) => {
     const c = CFG.item_cat[+it] || "Other", nm = CFG.items[+it];
-    r[c] += n; r.total += n; r.items[nm] = (r.items[nm] || 0) + n; }));
+    r[c] += n; r.total += n; r.items[nm] = (r.items[nm] || 0) + n;
+    (r.byCat[c] = r.byCat[c] || {})[nm] = (r.byCat[c][nm] || 0) + n; }));
   return r;
+}
+const allIds = () => [...new Set(Object.keys(CFG.members).concat(Object.keys(CFG.names).filter(i => CFG.names[i][1])))];
+
+// ---- 2. by category: every item, how many, by how many members ----
+function drawCats(rows) {
+  const cat = {};
+  rows.forEach(r => Object.entries(r.byCat).forEach(([c, its]) => Object.entries(its).forEach(([nm, n]) => {
+    const x = ((cat[c] = cat[c] || {})[nm] = cat[c][nm] || {n: 0, who: 0}); x.n += n; x.who++; })));
+  $("cats").innerHTML = CFG.cats.filter(c => cat[c]).map(c => {
+    const list = Object.entries(cat[c]).sort((a, b) => b[1].n - a[1].n), tot = list.reduce((a, [, x]) => a + x.n, 0);
+    const show = openCats[c] ? list : list.slice(0, 8);
+    return `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${c}</b><span>${num(tot)}</span></div>`
+      + show.map(([nm, x]) => `<div class="it"><span>${esc(nm)}</span><b>${num(x.n)}<i>${x.who} member${x.who > 1 ? "s" : ""}</i></b></div>`).join("")
+      + (list.length > 8 ? `<span class="more" data-c="${c}">${openCats[c] ? "Show less" : `Show all ${list.length} items`}</span>` : "") + "</div>";
+  }).join("") || '<div class="tag">Nothing taken from the armory in this period.</div>';
+  $("cats").querySelectorAll(".more").forEach(m => m.onclick = () => { openCats[m.dataset.c] = !openCats[m.dataset.c]; drawCats(rows); });
+}
+
+// ---- 3. one member: categories with their items, 6-month trend, latest uses ----
+function drawMember() {
+  if (!sel) { $("mp").innerHTML = '<div class="tag">Pick a member to see everything they took, by category, with dates.</div>'; return; }
+  const u = usage(sel, monthsOf(period)), cats = CFG.cats.filter(c => u[c] > 0);
+  const last6 = []; for (let k = 5; k >= 0; k--) { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() - k); last6.push(d.toISOString().slice(0, 7)); }
+  const per = last6.map(mo => usage(sel, [mo])), mx = Math.max(1, ...per.map(p => p.total));
+  const usedCats = CFG.cats.filter(c => per.some(p => p[c]));
+  const rec = ((CFG.members[sel] || {}).r || []);
+  $("mp").innerHTML = `<div class="mh"><div class="av">${esc(nameOf(sel).slice(0, 2).toUpperCase())}</div><div><b>${esc(nameOf(sel))}</b>`
+    + `${(CFG.names[sel] || [0, 1])[1] ? "" : ' <span class="tag">former member</span>'}<br><a href="${CFG.member_base}/member.html?id=${sel}">Open profile →</a></div></div>`
+    + `<div class="hst"><div><b>${num(u.total)}</b><span>Items · ${esc(label())}</span></div>${cats.map(c => `<div><b>${num(u[c])}</b><span>${ICON[c]} ${c}</span></div>`).join("")}</div>`
+    + `<div class="cats">${cats.map(c => `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${c}</b><span>${num(u[c])}</span></div>`
+        + Object.entries(u.byCat[c]).sort((a, b) => b[1] - a[1]).map(([nm, n]) => `<div class="it"><span>${esc(nm)}</span><b>${num(n)}</b></div>`).join("") + "</div>").join("")
+        || '<div class="tag">Nothing taken in this period.</div>'}</div>`
+    + `<h2 style="margin-top:16px">📈 Last 6 months</h2><div class="trend">${per.map(p => `<div class="col" title="${num(p.total)} items">`
+        + usedCats.map(c => p[c] ? `<i style="height:${Math.max(2, Math.round(100 * p[c] / mx))}px;background:${COL[c]}" title="${c}: ${num(p[c])}"></i>` : "").join("") + "</div>").join("")}</div>`
+    + `<div class="tl">${last6.map((mo, k) => `<span>${monthName(mo, true)}<br><b style="color:#ddd">${num(per[k].total)}</b></span>`).join("")}</div>`
+    + `<div class="leg">${usedCats.map(c => `<span><i style="background:${COL[c]}"></i>${c}</span>`).join("")}</div>`
+    + `<h2 style="margin-top:16px">🕐 Latest armory uses</h2>`
+    + (rec.length ? `<div class="scroll"><table><tr><th>When (TCT)</th><th>Item</th><th>Category</th><th class="n">Count</th><th>How</th></tr>`
+        + rec.map(([t, it, n, k]) => `<tr><td>${when(t)}</td><td>${esc(CFG.items[it])}</td><td class="tag">${ICON[CFG.item_cat[it]] || ""} ${esc(CFG.item_cat[it])}</td>`
+          + `<td class="n">${num(n)}</td><td class="tag">${KIND[k] || ""}</td></tr>`).join("") + "</table></div>"
+      : '<div class="tag">No armory uses on record.</div>');
+}
+
+// ---- 4. every member ----
+function drawTable(rows) {
+  const shown = rows.filter(r => r.cur || ($("fmr").checked && r.total));
+  const cats = CFG.cats.filter(c => rows.some(r => r[c] > 0));
+  const cols = [["Member", "name"], ["Total", "total"]].concat(cats.map(c => [c, c]));
+  shown.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x || 0) - (y || 0); return desc ? -r : r; });
+  $("tb").innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${ICON[l] ? ICON[l] + " " : ""}${l}</th>`).join("")}<th>Top items</th></tr>`
+    + shown.map(r => `<tr class="mr${r.total ? "" : " zero"}${r.id === sel ? " sel" : ""}" data-id="${r.id}"><td><b style="color:#e8be5a">${esc(r.name)}</b>${r.cur ? "" : ' <span class="tag">former</span>'}</td>`
+      + `<td class="n"><b>${num(r.total)}</b></td>` + cats.map(c => `<td class="n">${r[c] ? num(r[c]) : '<span class="tag">-</span>'}</td>`).join("")
+      + `<td class="tag">${Object.entries(r.items).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, v]) => `${esc(n)} ×${num(v)}`).join(" · ")}</td></tr>`).join("")
+    || `<tr><td class="tag" colspan="${cols.length + 1}">No armory usage in this period.</td></tr>`;
+  $("tb").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } drawTable(rows); });
+  $("tb").querySelectorAll("tr.mr").forEach(tr => tr.onclick = () => { pick(tr.dataset.id); $("mh2").scrollIntoView({behavior: "smooth"}); });
 }
 
 function draw() {
   const months = monthsOf(period);
-  const ids = new Set(Object.keys(CFG.members).concat(Object.keys(CFG.names).filter(i => CFG.names[i][1])));
-  const rows = [...ids].map(id => Object.assign({id, name: (CFG.names[id] || ["[" + id + "]"])[0], cur: !!(CFG.names[id] || [0, 0])[1]}, usage(id, months)));
-  const shown = rows.filter(r => r.cur || ($("fmr").checked && r.total));
-  // faction totals
+  const rows = allIds().map(id => Object.assign({id, name: nameOf(id), cur: !!(CFG.names[id] || [0, 0])[1]}, usage(id, months)));
   const T = {total: 0}; CFG.cats.forEach(c => T[c] = 0);
   rows.forEach(r => { CFG.cats.forEach(c => T[c] += r[c]); T.total += r.total; });
-  const cats = CFG.cats.filter(c => T[c] > 0);
-  $("tot").innerHTML = `<div><b>${num(T.total)}</b><span>Items taken</span></div>`
-    + `<div><b>${rows.filter(r => r.total).length}</b><span>Members</span></div>`
-    + cats.map(c => `<div><b>${num(T[c])}</b><span>${ICON[c] || ""} ${c}</span></div>`).join("");
-  // members table
-  const cols = [["Member", "name"], ["Total", "total"]].concat(cats.map(c => [c, c]));
-  shown.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x || 0) - (y || 0); return desc ? -r : r; });
-  $("tb").innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${k === "name" || k === "total" ? l : (ICON[l] || "") + " " + l}</th>`).join("")}<th>Top items</th></tr>`
-    + shown.map(r => {
-      const top = Object.entries(r.items).sort((a, b) => b[1] - a[1]);
-      return `<tr class="mr${r.total ? "" : " zero"}" data-id="${r.id}"><td><a href="${CFG.member_base}/member.html?id=${r.id}" onclick="event.stopPropagation()">${esc(r.name)}</a>${r.cur ? "" : ' <span class="tag">former</span>'}</td>`
-        + `<td class="n"><b>${num(r.total)}</b></td>` + cats.map(c => `<td class="n">${r[c] ? num(r[c]) : '<span class="tag">-</span>'}</td>`).join("")
-        + `<td class="tag">${top.slice(0, 3).map(([n, v]) => `${esc(n)} ×${num(v)}`).join(" · ")}</td></tr>`
-        + (open[r.id] ? `<tr class="det"><td colspan="${cols.length + 1}">${top.map(([n, v]) => `<span class="chip">${esc(n)} ×${num(v)}</span>`).join("") || "Nothing in this period."}</td></tr>` : "");
-    }).join("") || `<tr><td class="tag" colspan="${cols.length + 1}">No armory usage in this period.</td></tr>`;
-  $("tb").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } draw(); });
-  $("tb").querySelectorAll("tr.mr").forEach(tr => tr.onclick = () => { open[tr.dataset.id] = !open[tr.dataset.id]; draw(); });
-  // items
-  const items = {};
-  rows.forEach(r => Object.entries(r.items).forEach(([n, v]) => { const x = items[n] = items[n] || {n: 0, who: 0}; x.n += v; x.who++; }));
-  const il = Object.entries(items).sort((a, b) => b[1].n - a[1].n).slice(0, 25);
-  $("ti").innerHTML = `<tr><th>Item</th><th>Category</th><th class="n">Taken</th><th class="n">Members</th></tr>`
-    + il.map(([n, x]) => `<tr><td>${esc(n)}</td><td class="tag">${ICON[CFG.item_cat[CFG.items.indexOf(n)]] || ""} ${esc(CFG.item_cat[CFG.items.indexOf(n)] || "")}</td><td class="n">${num(x.n)}</td><td class="n">${x.who}</td></tr>`).join("")
-    || `<tr><td class="tag" colspan="4">Nothing in this period.</td></tr>`;
+  $("tot").innerHTML = `<div><b>${num(T.total)}</b><span>Items taken</span></div><div><b>${rows.filter(r => r.total).length}</b><span>Members</span></div>`
+    + CFG.cats.filter(c => T[c] > 0).map(c => `<div><b>${num(T[c])}</b><span>${ICON[c]} ${c}</span></div>`).join("");
+  drawCats(rows); drawMember(); drawTable(rows);
 }
+function pick(id) { sel = id || ""; $("who").value = sel ? nameOf(sel) : ""; try { history.replaceState(null, "", sel ? "#m" + sel : "#"); } catch (e) {} draw(); }
 
+$("wl").innerHTML = allIds().sort((a, b) => nameOf(a).localeCompare(nameOf(b))).map(i => `<option value="${esc(nameOf(i))}">`).join("");
+$("who").onchange = $("who").oninput = () => { const v = $("who").value.trim().toLowerCase(); const id = allIds().find(i => nameOf(i).toLowerCase() === v); if (id && id !== sel) pick(id); };
+$("clr").onclick = () => pick("");
 $("ctl").innerHTML = `<span>Period</span><button data-p="month" class="on">This month</button>`
   + `<select id="mon"><option value="">Pick a month…</option>${CFG.months.map(m => `<option value="${m}">${monthName(m)}</option>`).join("")}</select>`
   + `<button data-p="all">All time on record</button>`;
-const pick = p => { period = p; $("ctl").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
+const setP = p => { period = p; $("ctl").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
   if (p === "month" || p === "all") $("mon").value = ""; draw(); };
-$("ctl").querySelectorAll("button").forEach(b => b.onclick = () => pick(b.dataset.p));
-$("mon").onchange = () => { if ($("mon").value) pick($("mon").value); };
+$("ctl").querySelectorAll("button").forEach(b => b.onclick = () => setP(b.dataset.p));
+$("mon").onchange = () => { if ($("mon").value) setP($("mon").value); };
 $("fmr").onchange = draw;
+const h0 = location.hash.match(/^#m(\d+)/);
+if (h0) sel = h0[1], $("who").value = nameOf(sel);
 draw();
 </script>
 </body></html>
