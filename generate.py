@@ -4605,7 +4605,7 @@ function welcome(){const el=$("hbWel");if(!el)return;
    +`<div><div class="l">Gym, month so far</div><div class="v">${k(r[2]||0)}</div><div class="s">avg ${A.gym!=null?k(A.gym):"-"}</div></div>`
    +`<div><div class="l">Crime success</div><div class="v">${r[3]==null?"-":r[3]+"%"}</div>${r[3]==null?'<div class="s">no crimes yet</div>':diff(r[3],A.oc," pts")}</div>`;
   if(WHO.leader&&H.mine)get(H.mine).then(m=>{const s=m&&m.reliability&&m.reliability.score;const b=$("hbRel");
-    if(b&&s!=null){b.textContent="Reliability "+Math.round(s);b.hidden=false}});
+    if(b&&s!=null){const g=relG(s);b.innerHTML="Reliability <b style=\"color:"+g[1]+"\">"+g[0]+"</b> · "+Math.round(s);b.hidden=false}});
 }
 
 function attention(){const el=$("hbAtt");if(!el)return;const L=H.links||{},rows=[];
@@ -4961,7 +4961,7 @@ def _hub_sections(sections: list, hub: str) -> str:
             h += head + _hub_tiles([(x.get("icon", ""), x.get("title", ""), x.get("desc", ""), _hub_link(x.get("link"), hub))
                                     for x in sec.get("tiles") or []], "l" if hub == "leaders" else "")
     if live:
-        h += f"<script>window.HBH={json.dumps(home_js_cfg(hub))};</script><script>{HOME_JS}</script>"
+        h += f"<script>window.HBH={json.dumps(home_js_cfg(hub))};</script><script>{REL_GRADE_JS}\n{HOME_JS}</script>"
     return h
 
 
@@ -4993,7 +4993,7 @@ def write_homepages(out: Path, cfg: dict = None):
     pages = SITE_PAGES
     conf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": pages, "default": homepage_default(),
             "member_base": member_base(), "layout_v": HOME_LAYOUT_V,
-            "css": HUB_CSS, "js": HOME_JS, "jscfg": {"members": home_js_cfg("members"), "leaders": home_js_cfg("leaders")},
+            "css": HUB_CSS, "js": REL_GRADE_JS + "\n" + HOME_JS, "jscfg": {"members": home_js_cfg("members"), "leaders": home_js_cfg("leaders")},
             "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
     (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
                                         .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
@@ -5303,6 +5303,19 @@ def write_databases(out: Path, raw: dict, cfg: dict) -> dict:
 # Reliability (leaders: db/private.json - the Leader Monitor page itself was removed Nov 2026)
 # --------------------------------------------------------------------------
 TREND_WARS = 5          # participation trend: last N wars
+# Reliability GRADE (Nov 2026): the 0-100 score shown as a tier with the number as its secondary, e.g. "A · 87".
+# (lowest score for the grade, grade, colour) - highest first. The same table is used by the pages (REL_GRADE_JS).
+REL_GRADES = [(95, "S", "#c9a0ff"), (85, "A", "#78c878"), (75, "B", "#a8d878"), (65, "C", "#e8be5a"),
+              (55, "D", "#e8a05a"), (45, "E", "#e8705a"), (0, "F", "#e4382e")]
+
+
+def rel_grade(score) -> str:
+    return next(g_ for lo, g_, _c in REL_GRADES if (score or 0) >= lo)
+
+
+# the same grading for the pages: relG(score) -> [grade, colour]
+REL_GRADE_JS = ("function relG(s){var G=" + json.dumps([[lo, g_, c] for lo, g_, c in REL_GRADES])
+                + ";for(var i=0;i<G.length;i++)if((s||0)>=G[i][0])return[G[i][1],G[i][2]];return['F','#e4382e'];}")
 REL_WARS = 10           # reliability: wars looked at
 REL_DAYS = 30           # reliability: chains / crime delays looked at (days)
 REL_CHAIN_MIN = 100     # reliability: chains of this many hits count
@@ -5933,11 +5946,13 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     write_optin_pages(out)
     priv, sc = {}, [r["score"] for r in md["members"]]
     for r in md["members"]:
-        priv[str(r["id"])] = {"reliability": {"score": r["score"], "parts": r["parts"], "detail": r["detail"]},
+        priv[str(r["id"])] = {"reliability": {"score": r["score"], "grade": rel_grade(r["score"]), "parts": r["parts"],
+                                              "detail": r["detail"]},
                               "armory": armory_own(ad, r["id"]), "optin": oi.get(str(r["id"]))}
     avg_parts = {k: round(sum(r["parts"][k] for r in md["members"]) / len(md["members"]), 1) if md["members"] else 0
                  for k in ("war", "chains", "crimes", "activity")}
     _jdump(lout / "db" / "private.json", {"generated": md["generated"], "members": priv,
+                                          "grades": [[lo, g_, c] for lo, g_, c in REL_GRADES],
                                           "averages": {"reliability": round(sum(sc) / len(sc), 1) if sc else 0,
                                                        "parts": avg_parts}})
     # the Leader Monitor page was removed (Nov 2026) - reliability is on Members / profiles, armory on the Armory
@@ -6007,6 +6022,7 @@ def write_profiles(out: Path, db: dict):
     tpl = (ROOT / "tools" / "member_profile.html").read_text(encoding="utf-8")
     gurl = gate_cfg()["url"].rstrip("/") if gate_cfg() else ""
     (mout / "member.html").write_text(tpl.replace("__MENU__", site_menu("")).replace("__GATE__", gurl)
+                                      .replace("/*__RELG__*/", REL_GRADE_JS)
                                       .replace("__FRESH__", fresh_html(["members", "wars", "chains", "crimes", "gym"])), encoding="utf-8")
     # leaderboards.html (this month / all time) + leaderboard-history.html (any past month) - war, chain, OC, gym
     ltpl = (ROOT / "tools" / "leaderboards.html").read_text(encoding="utf-8").replace("__MENU__", site_menu("")) \
@@ -6043,14 +6059,15 @@ def write_profiles(out: Path, db: dict):
     # leaders only: a Reliability column, filled from the leaders' db/private.json (members never get the file)
     rel_js = ""
     if gate_cfg() and leader_dir():
-        rel_js = ("<script>(function(){fetch('whoami.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null;})"
+        rel_js = ("<script>" + REL_GRADE_JS + "(function(){fetch('whoami.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null;})"
                   ".then(function(w){if(!w||!w.leader)return;return fetch(" + json.dumps(leader_base() + "/db/private.json")
                   + ",{cache:'no-store'}).then(function(r){return r.json();}).then(function(P){"
                   "document.querySelectorAll('table.srt').forEach(function(t){var hd=t.rows[0];var th=document.createElement('th');"
                   "th.textContent='Reliability';th.title='Tap to sort';hd.insertBefore(th,hd.cells[2]);"
                   "for(var k=1;k<t.rows.length;k++){var tr=t.rows[k],e=(P.members||{})[tr.dataset.id],sc=e?e.reliability.score:null;"
                   "var td=document.createElement('td');td.dataset.v=sc==null?-1:sc;"
-                  "td.innerHTML=sc==null?'-':'<b style=\"color:'+(sc>=80?'#78c878':sc>=60?'#e8be5a':'#e4382e')+'\">'+sc+'</b>';"
+                  "var g=sc==null?null:relG(sc);"
+                  "td.innerHTML=sc==null?'-':'<b style=\"color:'+g[1]+'\">'+g[0]+'</b> <span style=\"color:#9a9a9c\">'+sc+'</span>';"
                   "tr.insertBefore(td,tr.cells[2]);}});});}).catch(function(){});})();</script>")
     body = (site_menu("") + f"<h2>👥 Current members ({len(cur)})</h2>" + table(cur)
             + f'<details style="margin-top:20px"><summary style="color:#e8be5a;cursor:pointer">Past members ({len(past)})</summary>'

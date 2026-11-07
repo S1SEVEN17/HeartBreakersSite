@@ -72,7 +72,8 @@ h2{scroll-margin-top:10px}
 .hero .av{width:74px;height:74px;border-radius:50%;background:#100a0b;border:2px solid var(--red);display:flex;align-items:center;justify-content:center;font-size:32px;font-weight:700;color:var(--gold);flex:0 0 auto}
 .hero .who{flex:1;min-width:200px}.hero h1{text-align:left;margin:0}.hero .sub{text-align:left;margin:4px 0 0}
 .hero .rel{flex:0 0 auto;text-align:center;background:#100a0b;border:1px solid var(--edge);border-radius:12px;padding:8px 14px;display:none}
-.hero .rel b{display:block;font-size:30px}.hero .rel span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.hero .rel b{display:block;font-size:30px}.hero .rel .gr{font-size:34px;font-weight:800;letter-spacing:1px}
+.hero .rel .gn{font-size:16px;color:#ddd;margin-left:6px;font-weight:600}.hero .rel span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:12px 0 0}
 .chips a{background:#1a1012;color:var(--gold);border:1px solid var(--edge);border-radius:20px;padding:5px 12px;text-decoration:none;font-size:13px}
 .chips a:hover{border-color:var(--gold)}
@@ -126,6 +127,8 @@ __MENU__
   </div>
 </div>
 <script>
+/*__RELG__*/
+
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const num = n => Math.round(n || 0).toLocaleString("en-US");
@@ -291,13 +294,15 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     if (!pv) return;
     const who_ = own ? "only you and leaders see this" : "leaders only";
     if (pv.reliability) {
-      const R = pv.reliability, A = pv.averages || {}, sc = R.score, col = sc >= 80 ? "#78c878" : sc >= 60 ? "#e8be5a" : "#e4382e";
-      $("rel").style.display = "block"; $("relv").textContent = sc; $("relv").style.color = col;
-      $("relp").textContent = `faction avg ${A.reliability ?? "-"} · ${who_}`;
+      // grade S..F with the 0-100 score as its secondary (relG - the grade table from generate.py REL_GRADES)
+      const R = pv.reliability, A = pv.averages || {}, sc = R.score, G = relG(sc), GA = relG(A.reliability);
+      $("rel").style.display = "block";
+      $("relv").innerHTML = `<span class="gr" style="color:${G[1]}">${G[0]}</span><span class="gn">${sc}</span>`;
+      $("relp").textContent = `faction avg ${A.reliability != null ? GA[0] + " · " + A.reliability : "-"} · ${who_}`;
       const D = R.detail || {}, AP = A.parts || {};
       const part = (label, k, max, note) => card(`${label} (out of ${max})`, R.parts[k], AP[k], v => n1(v), note);
       $("relsec").style.display = $("relsec").dataset.off ? "none" : "";
-      $("relt").textContent = "(war 40 · chains 20 · crimes 25 · activity 15)";
+      $("relt").textContent = `(grade ${G[0]} · ${sc}/100 = war 40 · chains 20 · crimes 25 · activity 15 · S 95+ · A 85+ · B 75+ · C 65+ · D 55+ · E 45+ · F under 45)`;
       $("relb").innerHTML = part("⚔️ War", "war", 40, `hit in ${D.wars_hit}/${D.wars_in} wars`)
         + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
         + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
