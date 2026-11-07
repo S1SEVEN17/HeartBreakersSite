@@ -874,6 +874,20 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
     # Full chain list needed while backfilling: first run, after the minimum
     # length is lowered, or while earlier runs hit the per-run cap.
     backfill = (not saved or hist.get("min_length") != min_len or not hist.get("complete"))
+    # Skip the chain-list read (Nov 2026) on hourly chain / war runs and leader-save renders when chain watch
+    # (every 15 min) has seen no chain activity since the last read - nothing can have ended. Scheduled 3-hour
+    # slot runs always read (safety net for a chain that started AND ended between two chain-watch checks).
+    # activity_at: chain watch's last "a chain started / ended / cooldown began"; listed_at: our last read that
+    # left nothing pending (no chain still running or waiting to settle, no reports left for later runs).
+    slot_run = os.environ.get("RUN_KIND", "full") == "full" and os.environ.get("HB_SLOT_RUN") == "true"
+    try:
+        activity = int(json.loads(CHAIN_WATCH_PATH.read_text(encoding="utf-8")).get("activity_at") or 0)
+    except (OSError, ValueError):
+        activity = None                  # no chain watch state: read as before
+    if key and not backfill and not slot_run and activity is not None \
+            and activity <= int(hist.get("listed_at") or 0):
+        print("Chain history: no chain activity since the last read - chain list not read")
+        return hist
     # chain list: mock file, full history while backfilling, else newest page
     if key is None:
         chains = _as_list((raw.get("chains") or {}).get("chains"))
@@ -981,7 +995,13 @@ def update_chain_history(raw: dict, cfg: dict, key: str = None) -> dict:
         if need:
             print(f"Chain bonus back-fill: {len(need)} chain(s)")
     complete = len(todo) <= CHAIN_REPORTS_PER_RUN
-    if key and (read or filled or hist.get("min_length") != min_len or hist.get("complete") != complete):
+    # nothing left to wait for: no chain in the list still running / settling, every report read
+    pending = (not complete) or any(int(c.get("end") or 0) > now_ - CHAIN_SETTLE for c in chains)
+    listed = hist.get("listed_at")
+    if key and not pending:
+        hist["listed_at"] = now_
+    if key and (read or filled or hist.get("min_length") != min_len or hist.get("complete") != complete
+                or hist.get("listed_at") != listed):
         hist["min_length"] = min_len
         hist["complete"] = complete
         CHAIN_HIST_PATH.parent.mkdir(exist_ok=True)
@@ -5105,7 +5125,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
             if pay:
                 t = T(i); t["paid"] += pay; t["payouts"] += 1
     members = []
-    for i in sorted(set(cur) | set(tot), key=lambda i: (i not in cur, names.get(i, "?").lower())):
+    for i in sorted(set(cur) | set(tot), key=lambda i: (i not in cur, names.get(i, "?").lower(), int(i))):   # id breaks ties: same order every build
         m = cur.get(i, {})
         t = tot.get(i) or T(i)
         t["war_resp"], t["chain_resp"] = round(t["war_resp"], 2), round(t["chain_resp"], 2)
@@ -5259,7 +5279,11 @@ def _spark(vals: list) -> str:
 ARMORY_LOG_PATH = ROOT / "data" / "armory_log.json"
 ITEM_TYPES_PATH = ROOT / "data" / "item_types.json"     # {"fetched": time, "types": {item name: Torn item type}}
 ARMORY_PAGES_NEW = 20
-ARMORY_PAGES_BACK = 10
+ARMORY_PAGES_BACK = 150   # catch-up pace (Nov 2026): ~2 busy months per 3-hour slot (was 10 = ~1 month a day). Only
+                          # used until the history is complete; afterwards the backfill stops and just forward reads run.
+                          # Torn's daily read cap (code 14) is unpublished, so the pace adapts: a code 14 halves the
+                          # backfill pages (log["back_pages"], min 10) and pauses the backfill until the next UTC day -
+                          # the forward read always goes first, so new uses are never held up by the catch-up.
 ARMORY_RECENT = 40        # latest uses kept per member for the Armory Monitor's member view
 ARMORY_CATS = ["Drugs", "Medical", "Boosters", "Refills", "Temporary", "Weapons", "Armor", "Crime items", "Other"]
 # Torn item types -> categories. v2 /torn/items names them "Weapon", "Armor", "Tool", "Material", "Enhancer" (the
@@ -5358,7 +5382,11 @@ def update_armory_log(key: str, founded: int = 0):
     idx = {n: k for k, n in enumerate(log["items"])}
     seen = {(e[0], e[1], e[2]) for e in log["events"]}
     stats = {"new": 0, "back": 0, "pages": 0}
-    budget = {"n": ARMORY_PAGES_NEW + ARMORY_PAGES_BACK}
+    today = now - now % 86400
+    if int(log.get("paused_day") or 0) < today:
+        log.pop("paused_day", None)
+    back_cap = int(log.get("back_pages") or ARMORY_PAGES_BACK)
+    budget = {"n": ARMORY_PAGES_NEW + back_cap, "limit": False}
 
     def take(items, which):
         for n in items:
@@ -5382,6 +5410,7 @@ def update_armory_log(key: str, founded: int = 0):
             data = fetch_section("news", key, {"cat": "armoryAction", "from": t0, "to": t1, "sort": sort, "limit": 100})
         except SystemExit as e:
             print(f"Armory log ({which}) stopped: {e}")
+            budget["limit"] = budget["limit"] or "'code': 14" in str(e) or "Daily read limit" in str(e)
             return lo, hi, False
         for _ in range(pages):
             if budget["n"] <= 0:
@@ -5401,6 +5430,7 @@ def update_armory_log(key: str, founded: int = 0):
                 data = fetch_url(nxt, key)
             except SystemExit as e:
                 print(f"Armory log ({which}) continues next run: {e}")
+                budget["limit"] = budget["limit"] or "'code': 14" in str(e) or "Daily read limit" in str(e)
                 return lo, hi, False
         return lo, hi, False
 
@@ -5410,7 +5440,9 @@ def update_armory_log(key: str, founded: int = 0):
         log["last"] = max(log["last"], hi)
     # 2) backfill, newest month first, while the page budget lasts
     stop = _utc_month_start(founded) if founded else 0
-    back_pages = ARMORY_PAGES_BACK
+    back_pages = 0 if (log.get("paused_day") or budget["limit"]) else back_cap
+    if log.get("paused_day") and not log["done"]:
+        print("Armory log: backfill paused until tomorrow (Torn daily read limit)")
     while not log["done"] and budget["n"] > 0 and back_pages > 0:
         w0 = _utc_month_start(log["oldest"] - 1)            # the month just before what's read
         if w0 < stop:
@@ -5426,6 +5458,10 @@ def update_armory_log(key: str, founded: int = 0):
         else:
             log["back"] = {"w0": w0, "pos": (hi or pos - 1) + 1 if hi else pos}
             break
+    if budget["limit"]:                        # Torn's daily read cap: slow the catch-up, pause it until tomorrow
+        log["back_pages"] = max(10, back_cap // 2)
+        log["paused_day"] = today
+        print(f"Armory log: daily read limit - backfill paused until tomorrow, then {log['back_pages']} pages/slot")
     log["events"].sort()
     log["read"] = now
     ARMORY_LOG_PATH.write_text(json.dumps(log, separators=(",", ":")) + "\n", encoding="utf-8")
@@ -6736,6 +6772,15 @@ def chain_watch(key: str, cfg: dict):
         oc = ongoing_chain(key)
         now = int(_t.time())
         running = bool(oc and oc["current"] > 0 and oc["timeout_at"] > now)
+        # chain ACTIVITY marker for the hourly chain-list read (update_chain_history): set when a new chain is
+        # seen running or a cooldown begins (a chain ended between checks); the chain end sets it below
+        if oc:
+            cd = oc["cooldown_at"] > now
+            if (running and oc.get("start") != st.get("act_start")) or (cd and not st.get("in_cd")):
+                st["activity_at"] = now
+            if running:
+                st["act_start"] = oc.get("start")
+            st["in_cd"] = cd
         st_ = {"chain_sig": st.get("chain_sig")}
         chain_ongoing_refresh(key, cfg, st_, oc)
         st["chain_sig"] = st_.get("chain_sig")
@@ -6751,6 +6796,7 @@ def chain_watch(key: str, cfg: dict):
             print("Chain watch: chain ended - waiting for Torn to finalise it, then a full update")
             _t.sleep(CHAIN_SETTLE + 60)
             st["request_full"] = True
+            st["activity_at"] = int(_t.time())     # the full update must read the chain list
             # keep the section accurate after the wait (cooldown timer)
             st_ = {"chain_sig": st.get("chain_sig")}
             chain_ongoing_refresh(key, cfg, st_, ongoing_chain(key))

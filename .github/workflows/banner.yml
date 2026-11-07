@@ -67,6 +67,7 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         with:
           python-version: "3.12"
+          cache: pip                 # packages restored from GitHub's cache - quicker start
 
       - name: Install dependencies
         if: steps.gate.outputs.run == 'true'
@@ -102,14 +103,46 @@ jobs:
           tools/store.sh save "Update saved faction data"
           if [ "$REQ" = 1 ]; then gh workflow run banner.yml --ref main && echo "Requested a full run (new report)"; fi
 
-      - uses: actions/setup-node@v4
+      # Deploy only when something a visitor sees changed (Nov 2026): a fingerprint of the built site + gatekeeper
+      # (build-time stamps blanked - tools/site_hash.py) + the leader positions setting is compared with the one
+      # saved after the last successful deploy (data/site_fingerprint.txt). Images keep their "Last updated" time
+      # unless their content changed (data/stamps.json), so an unchanged rebuild gives the same fingerprint.
+      - name: Check for site changes
+        id: fp
         if: steps.gate.outputs.deploy == 'true'
+        run: |
+          LEADERS=$(python3 -c "import json;print(','.join(json.load(open('config.json')).get('gate',{}).get('leader_positions',['Leader','Co-leader'])))")
+          FP=$( (python3 tools/site_hash.py site gate; echo "$LEADERS") | sha256sum | cut -c1-64)
+          OLD=$(cat data/site_fingerprint.txt 2>/dev/null || true)
+          echo "fp=$FP" >> "$GITHUB_OUTPUT"
+          if [ "$FP" = "$OLD" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"; echo "Site unchanged since the last deploy - upload skipped"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.deploy == 'true' && steps.fp.outputs.changed == 'true'
         with:
           node-version: "22"
 
       - name: Deploy site + gatekeeper to Cloudflare
-        if: steps.gate.outputs.deploy == 'true'
+        if: steps.gate.outputs.deploy == 'true' && steps.fp.outputs.changed == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: tools/deploy_site.sh
+
+      - name: Save site fingerprint
+        if: steps.gate.outputs.deploy == 'true' && steps.fp.outputs.changed == 'true'
+        run: |
+          echo "${{ steps.fp.outputs.fp }}" > data/site_fingerprint.txt
+          tools/store.sh save "Site fingerprint" data/site_fingerprint.txt
+
+      # Monthly (Nov 2026): squash the data repo's history to one commit so it stops growing - on the 1st of the
+      # month, in the scheduled 03:00 TCT full update (quiet hour; this workflow's concurrency group means no other
+      # site update is running). The previous history is kept on the "previous-history" branch until next month.
+      - name: Monthly data history squash
+        if: steps.gate.outputs.run == 'true' && steps.gate.outputs.scheduled == 'true' && steps.gate.outputs.kind == 'full'
+        run: |
+          if [ "$(date -u +%d)" = "01" ] && [ "$(date -u +%H)" = "03" ]; then tools/squash_data.sh; fi
