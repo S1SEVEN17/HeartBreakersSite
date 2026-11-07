@@ -136,7 +136,13 @@ jobs:
       - name: Save site fingerprint
         if: steps.gate.outputs.deploy == 'true' && steps.fp.outputs.changed == 'true'
         run: |
-          echo "${{ steps.fp.outputs.fp }}" > data/site_fingerprint.txt
+          # OC storage not set up yet (Cloudflare token without D1 permission): save a fingerprint that never
+          # matches, so the next update deploys again and retries the setup - stops once it's ready
+          if [ "$(cat "$RUNNER_TEMP/oc_storage" 2>/dev/null)" = "off" ]; then
+            echo "${{ steps.fp.outputs.fp }}:oc-off" > data/site_fingerprint.txt
+          else
+            echo "${{ steps.fp.outputs.fp }}" > data/site_fingerprint.txt
+          fi
           cp "$RUNNER_TEMP/site_manifest.json" data/site_manifest.json     # per-file list, for checking what changed
           tools/store.sh save "Site fingerprint" data/site_fingerprint.txt data/site_manifest.json
 

@@ -13,6 +13,7 @@ npm install --no-save --silent wrangler@4 >/dev/null 2>&1
 # wrangler.toml (wrangler.deploy.toml) - nothing to keep in the repo. If anything here fails, the site still
 # deploys without them and the /oc/cpr routes answer 503 "not set up yet".
 CFG=wrangler.toml
+echo "off" > "$RUNNER_TEMP/oc_storage"      # banner.yml: while "off", the next update deploys again (retries the setup)
 d1_id() { npx wrangler d1 list --json 2>/dev/null | python3 -c "import json,sys
 try: print(next((d.get('uuid') or d.get('id')) for d in json.load(sys.stdin) if d.get('name')=='hb-oc'))
 except Exception: pass"; }
@@ -28,6 +29,7 @@ if [ -n "$D1" ]; then
     printf '\n[[d1_databases]]\nbinding = "OC_DB"\ndatabase_name = "hb-oc"\ndatabase_id = "%s"\n' "$D1" >> wrangler.deploy.toml
     if [ -n "$KV" ]; then printf '\n[[kv_namespaces]]\nbinding = "OC_KV"\nid = "%s"\n' "$KV" >> wrangler.deploy.toml; fi
     CFG=wrangler.deploy.toml
+    echo "on" > "$RUNNER_TEMP/oc_storage"
     echo "OC storage: ready (D1$([ -n "$KV" ] && echo " + KV"))"
   else
     echo "::warning::OC storage: schema not applied - OC routes off this deploy"
