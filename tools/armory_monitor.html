@@ -20,6 +20,7 @@
        its category, a 6-month trend by category, and their latest armory uses with dates
     4. EVERY MEMBER - sortable table (tap a row -> section 3)
   Placeholders: __CONFIG__, __MENU__.
+  The FRESH placeholder (two underscores each side) = the data freshness footer (generate.py fresh_html).
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -67,7 +68,7 @@ __MENU__
 <div class="note" id="cov"></div>
 <div class="rng" id="ctl"></div>
 <div class="hst" id="tot"></div>
-<h2>🗂️ By category <span class="tag">(every item taken in this period)</span></h2>
+<h2>🗂️ By category <span class="tag" id="catt">(every item taken in this period)</span></h2>
 <div class="cats" id="cats"></div>
 <h2 id="mh2">👤 Member <span class="tag">(pick a member, or tap one in the table below)</span></h2>
 <div class="pick"><input id="who" list="wl" placeholder="Type a member's name"><datalist id="wl"></datalist><button id="clr">Clear</button></div>
@@ -85,7 +86,10 @@ const when = t => new Date(t * 1000).toLocaleString("en-US", {month: "short", da
 const thisMonth = new Date().toISOString().slice(0, 7);
 const ICON = {Drugs: "💊", Medical: "🩸", Boosters: "🍺", Refills: "⚡", Temporary: "💣", Weapons: "🔫", Armor: "🛡️", Other: "📦"};
 const COL = {Drugs: "#e4382e", Medical: "#ff8a80", Boosters: "#e8be5a", Refills: "#78c878", Temporary: "#d08a3a", Weapons: "#8ab4f8", Armor: "#9a9a9c", Other: "#6d6264"};
-const KIND = {u: "used", r: "refill", l: "loaned", g: "given"};
+const KIND = {u: "used", r: "points refill", l: "loaned", g: "given"};
+// display names: "Refills" are points refills (not armory items) - "Energy refill (points)" -> "Energy refill · points"
+const CL = c => c === "Refills" ? "Points refills" : c;
+const IL = nm => String(nm).replace(/ \(points\)$/, " · points");
 let period = "month", key = "total", desc = true, sel = "", openCats = {};
 const nameOf = id => (CFG.names[id] || ["[" + id + "]"])[0];
 
@@ -95,7 +99,13 @@ $("cov").innerHTML = CFG.oldest
   : "No armory history read yet - it starts on the next full update.";
 
 const monthsOf = p => p === "all" ? CFG.months : [p === "month" ? thisMonth : p];
-const label = () => period === "all" ? "all time on record" : period === "month" ? monthName(thisMonth) : monthName(period);
+// a month not fully read yet: older than the oldest month read (being filled in now), or the month the reading
+// stopped part-way through - shown as "filling in"; the current month is "so far"
+const oldestM = CFG.oldest ? new Date(CFG.oldest * 1000).toISOString().slice(0, 7) : "";
+const partial = m => !CFG.done && (m < oldestM || (m === oldestM && CFG.oldest !== Date.parse(oldestM + "-01T00:00:00Z") / 1000));
+const mlabel = m => m === thisMonth ? " (so far)" : partial(m) ? " (still filling in)" : "";
+const label = () => period === "all" ? "all time on record" + (CFG.done ? "" : " (older months still filling in)")
+  : period === "month" ? monthName(thisMonth) + " (so far)" : monthName(period) + mlabel(period);
 function usage(id, months) {           // {category: n, items: {name: n}, byCat: {cat: {name: n}}, total}
   const m = (CFG.members[id] || {}).m || {}, r = {items: {}, byCat: {}, total: 0};
   CFG.cats.forEach(c => r[c] = 0);
@@ -109,14 +119,15 @@ const allIds = () => [...new Set(Object.keys(CFG.members).concat(Object.keys(CFG
 
 // ---- 2. by category: every item, how many, by how many members ----
 function drawCats(rows) {
+  $("catt").textContent = `(every item taken · ${label()})`;
   const cat = {};
   rows.forEach(r => Object.entries(r.byCat).forEach(([c, its]) => Object.entries(its).forEach(([nm, n]) => {
     const x = ((cat[c] = cat[c] || {})[nm] = cat[c][nm] || {n: 0, who: 0}); x.n += n; x.who++; })));
   $("cats").innerHTML = CFG.cats.filter(c => cat[c]).map(c => {
     const list = Object.entries(cat[c]).sort((a, b) => b[1].n - a[1].n), tot = list.reduce((a, [, x]) => a + x.n, 0);
     const show = openCats[c] ? list : list.slice(0, 8);
-    return `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${c}</b><span>${num(tot)}</span></div>`
-      + show.map(([nm, x]) => `<div class="it"><span>${esc(nm)}</span><b>${num(x.n)}<i>${x.who} member${x.who > 1 ? "s" : ""}</i></b></div>`).join("")
+    return `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${CL(c)}</b><span>${num(tot)}</span></div>`
+      + show.map(([nm, x]) => `<div class="it"><span>${esc(IL(nm))}</span><b>${num(x.n)}<i>${x.who} member${x.who > 1 ? "s" : ""}</i></b></div>`).join("")
       + (list.length > 8 ? `<span class="more" data-c="${c}">${openCats[c] ? "Show less" : `Show all ${list.length} items`}</span>` : "") + "</div>";
   }).join("") || '<div class="tag">Nothing taken from the armory in this period.</div>';
   $("cats").querySelectorAll(".more").forEach(m => m.onclick = () => { openCats[m.dataset.c] = !openCats[m.dataset.c]; drawCats(rows); });
@@ -132,17 +143,17 @@ function drawMember() {
   const rec = ((CFG.members[sel] || {}).r || []);
   $("mp").innerHTML = `<div class="mh"><div class="av">${esc(nameOf(sel).slice(0, 2).toUpperCase())}</div><div><b>${esc(nameOf(sel))}</b>`
     + `${(CFG.names[sel] || [0, 1])[1] ? "" : ' <span class="tag">former member</span>'}<br><a href="${CFG.member_base}/member.html?id=${sel}">Open profile →</a></div></div>`
-    + `<div class="hst"><div><b>${num(u.total)}</b><span>Items · ${esc(label())}</span></div>${cats.map(c => `<div><b>${num(u[c])}</b><span>${ICON[c]} ${c}</span></div>`).join("")}</div>`
-    + `<div class="cats">${cats.map(c => `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${c}</b><span>${num(u[c])}</span></div>`
-        + Object.entries(u.byCat[c]).sort((a, b) => b[1] - a[1]).map(([nm, n]) => `<div class="it"><span>${esc(nm)}</span><b>${num(n)}</b></div>`).join("") + "</div>").join("")
+    + `<div class="hst"><div><b>${num(u.total)}</b><span>Items · ${esc(label())}</span></div>${cats.map(c => `<div><b>${num(u[c])}</b><span>${ICON[c]} ${CL(c)}</span></div>`).join("")}</div>`
+    + `<div class="cats">${cats.map(c => `<div class="cat"><div class="h"><span style="color:${COL[c]}">${ICON[c]}</span><b>${CL(c)}</b><span>${num(u[c])}</span></div>`
+        + Object.entries(u.byCat[c]).sort((a, b) => b[1] - a[1]).map(([nm, n]) => `<div class="it"><span>${esc(IL(nm))}</span><b>${num(n)}</b></div>`).join("") + "</div>").join("")
         || '<div class="tag">Nothing taken in this period.</div>'}</div>`
     + `<h2 style="margin-top:16px">📈 Last 6 months</h2><div class="trend">${per.map(p => `<div class="col" title="${num(p.total)} items">`
-        + usedCats.map(c => p[c] ? `<i style="height:${Math.max(2, Math.round(100 * p[c] / mx))}px;background:${COL[c]}" title="${c}: ${num(p[c])}"></i>` : "").join("") + "</div>").join("")}</div>`
+        + usedCats.map(c => p[c] ? `<i style="height:${Math.max(2, Math.round(100 * p[c] / mx))}px;background:${COL[c]}" title="${CL(c)}: ${num(p[c])}"></i>` : "").join("") + "</div>").join("")}</div>`
     + `<div class="tl">${last6.map((mo, k) => `<span>${monthName(mo, true)}<br><b style="color:#ddd">${num(per[k].total)}</b></span>`).join("")}</div>`
-    + `<div class="leg">${usedCats.map(c => `<span><i style="background:${COL[c]}"></i>${c}</span>`).join("")}</div>`
+    + `<div class="leg">${usedCats.map(c => `<span><i style="background:${COL[c]}"></i>${CL(c)}</span>`).join("")}</div>`
     + `<h2 style="margin-top:16px">🕐 Latest armory uses</h2>`
     + (rec.length ? `<div class="scroll"><table><tr><th>When (TCT)</th><th>Item</th><th>Category</th><th class="n">Count</th><th>How</th></tr>`
-        + rec.map(([t, it, n, k]) => `<tr><td>${when(t)}</td><td>${esc(CFG.items[it])}</td><td class="tag">${ICON[CFG.item_cat[it]] || ""} ${esc(CFG.item_cat[it])}</td>`
+        + rec.map(([t, it, n, k]) => `<tr><td>${when(t)}</td><td>${esc(IL(CFG.items[it]))}</td><td class="tag">${ICON[CFG.item_cat[it]] || ""} ${esc(CL(CFG.item_cat[it]))}</td>`
           + `<td class="n">${num(n)}</td><td class="tag">${KIND[k] || ""}</td></tr>`).join("") + "</table></div>"
       : '<div class="tag">No armory uses on record.</div>');
 }
@@ -153,10 +164,10 @@ function drawTable(rows) {
   const cats = CFG.cats.filter(c => rows.some(r => r[c] > 0));
   const cols = [["Member", "name"], ["Total", "total"]].concat(cats.map(c => [c, c]));
   shown.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x || 0) - (y || 0); return desc ? -r : r; });
-  $("tb").innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${ICON[l] ? ICON[l] + " " : ""}${l}</th>`).join("")}<th>Top items</th></tr>`
+  $("tb").innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${ICON[l] ? ICON[l] + " " + CL(l) : l}</th>`).join("")}<th>Top items</th></tr>`
     + shown.map(r => `<tr class="mr${r.total ? "" : " zero"}${r.id === sel ? " sel" : ""}" data-id="${r.id}"><td><b style="color:#e8be5a">${esc(r.name)}</b>${r.cur ? "" : ' <span class="tag">former</span>'}</td>`
       + `<td class="n"><b>${num(r.total)}</b></td>` + cats.map(c => `<td class="n">${r[c] ? num(r[c]) : '<span class="tag">-</span>'}</td>`).join("")
-      + `<td class="tag">${Object.entries(r.items).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, v]) => `${esc(n)} ×${num(v)}`).join(" · ")}</td></tr>`).join("")
+      + `<td class="tag">${Object.entries(r.items).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([n, v]) => `${esc(IL(n))} ×${num(v)}`).join(" · ")}</td></tr>`).join("")
     || `<tr><td class="tag" colspan="${cols.length + 1}">No armory usage in this period.</td></tr>`;
   $("tb").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } drawTable(rows); });
   $("tb").querySelectorAll("tr.mr").forEach(tr => tr.onclick = () => { pick(tr.dataset.id); $("mh2").scrollIntoView({behavior: "smooth"}); });
@@ -168,7 +179,7 @@ function draw() {
   const T = {total: 0}; CFG.cats.forEach(c => T[c] = 0);
   rows.forEach(r => { CFG.cats.forEach(c => T[c] += r[c]); T.total += r.total; });
   $("tot").innerHTML = `<div><b>${num(T.total)}</b><span>Items taken</span></div><div><b>${rows.filter(r => r.total).length}</b><span>Members</span></div>`
-    + CFG.cats.filter(c => T[c] > 0).map(c => `<div><b>${num(T[c])}</b><span>${ICON[c]} ${c}</span></div>`).join("");
+    + CFG.cats.filter(c => T[c] > 0).map(c => `<div><b>${num(T[c])}</b><span>${ICON[c]} ${CL(c)}</span></div>`).join("");
   drawCats(rows); drawMember(); drawTable(rows);
 }
 function pick(id) { sel = id || ""; $("who").value = sel ? nameOf(sel) : ""; try { history.replaceState(null, "", sel ? "#m" + sel : "#"); } catch (e) {} draw(); }
@@ -176,8 +187,8 @@ function pick(id) { sel = id || ""; $("who").value = sel ? nameOf(sel) : ""; try
 $("wl").innerHTML = allIds().sort((a, b) => nameOf(a).localeCompare(nameOf(b))).map(i => `<option value="${esc(nameOf(i))}">`).join("");
 $("who").onchange = $("who").oninput = () => { const v = $("who").value.trim().toLowerCase(); const id = allIds().find(i => nameOf(i).toLowerCase() === v); if (id && id !== sel) pick(id); };
 $("clr").onclick = () => pick("");
-$("ctl").innerHTML = `<span>Period</span><button data-p="month" class="on">This month</button>`
-  + `<select id="mon"><option value="">Pick a month…</option>${CFG.months.map(m => `<option value="${m}">${monthName(m)}</option>`).join("")}</select>`
+$("ctl").innerHTML = `<span>Period</span><button data-p="month" class="on">This month (so far)</button>`
+  + `<select id="mon"><option value="">Pick a month…</option>${CFG.months.map(m => `<option value="${m}">${monthName(m)}${mlabel(m)}</option>`).join("")}</select>`
   + `<button data-p="all">All time on record</button>`;
 const setP = p => { period = p; $("ctl").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
   if (p === "month" || p === "all") $("mon").value = ""; draw(); };
@@ -188,4 +199,5 @@ const h0 = location.hash.match(/^#m(\d+)/);
 if (h0) sel = h0[1], $("who").value = nameOf(sel);
 draw();
 </script>
+__FRESH__
 </body></html>

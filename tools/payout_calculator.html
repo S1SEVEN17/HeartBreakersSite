@@ -761,7 +761,7 @@ function newsletter() {
       r.mode == "pct" ? `${esc(m.label)}: ${m.weight}% → <strong>${per(m.per)}</strong> per ${unit[m.k] || "unit"}`
                       : `${esc(m.label)}: <strong>${per(m.per)}</strong> per ${unit[m.k] || "unit"}`).join("<br>")),
     stem ? P(`<a href="${base}/payouts/${stem}.html"><img src="${base}/payouts/${stem}.png" alt="War payout receipt" width="600"></a>`) : "",
-    P(`Full receipt &amp; past payouts: <a href="${base}/payouts.html">War Payouts archive</a>` +
+    P(`Full report &amp; past payouts: <a href="${base}/wars.html#paid">War History - paid wars</a>` +
       (r.paid_by ? `<br>Paid by ${esc(r.paid_by)}` : "") + (r.note ? ` · ${esc(r.note)}` : ""), "font-size:12px")];
   // Torn's newsletter shows paragraphs with NO gap between them, so put an empty paragraph between
   // sections - it then matches this page's preview spacing

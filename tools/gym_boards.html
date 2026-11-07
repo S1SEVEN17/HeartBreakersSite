@@ -14,9 +14,11 @@
   Energy = gym energy trained while in the faction (Torn's faction contributors), refreshed every few hours.
   History starts in November 2026 (when monthly gym data began being saved).
   gym-history.html also opens with a SUMMARY of every member: all-time energy (since joining, while in the faction),
-  this month, months on record, average per month (months on record) and best month - current members, plus
-  former members with "Show former members".
+  this month (so far), average per month = all-time energy ÷ months in the faction (accurate from day one - the
+  monthly history only starts Nov 2026), best month on record and months on record - current members, plus former
+  members with "Show former members".
   Placeholders: __MENU__ (site header), __MODE__ ("current" / "history").
+  The FRESH placeholder (two underscores each side) = the data freshness footer (generate.py fresh_html).
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -64,7 +66,7 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp
 const num = n => Math.round(n || 0).toLocaleString("en-US");
 const ST = [["gymstrength", "Strength"], ["gymspeed", "Speed"], ["gymdefense", "Defense"], ["gymdexterity", "Dexterity"], ["total", "Total"]];
 const monthName = m => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
-let G, M, names = {}, current = {}, sortKey = "total", desc = true;
+let G, M, names = {}, current = {}, days = {}, sortKey = "total", desc = true;
 
 // rows: [{id, name, left, gymstrength.., total}] -> top 3 per stat + the full sortable table
 function show(rows, label) {
@@ -115,14 +117,15 @@ function summary() {
   const allE = id => ST.slice(0, 4).reduce((a, [k]) => a + (((G.all[id] || {})[k]) || 0), 0);
   const ids = new Set(Object.keys(current).concat(...months.map(mo => Object.keys(G.history[mo] || {}))));
   const rows = [...ids].map(id => { const per = months.map(mo => tot((G.history[mo] || {})[id]));
-    const on = per.filter(v => v > 0);
+    const on = per.filter(v => v > 0), mIn = days[id] ? Math.max(1, days[id] / 30.4375) : null;
     return {id: +id, name: names[id] || "?", left: !current[id], all: allE(id), month: tot((G.history[G.month] || {})[id]),
-            months: on.length, avg: on.length ? on.reduce((a, b) => a + b, 0) / on.length : 0, best: Math.max(0, ...per)}; });
+            months: on.length, avg: mIn ? allE(id) / mIn : 0, best: Math.max(0, ...per)}; });
   const cur = rows.filter(r => !r.left), tr = cur.filter(r => r.all > 0);
-  $("sumS").innerHTML = [[num(cur.reduce((a, r) => a + r.all, 0)), "All-time energy"], [num(cur.reduce((a, r) => a + r.month, 0)), "This month"],
-    [`${tr.length}/${cur.length}`, "Members who trained"], [num(tr.length ? tr.reduce((a, r) => a + r.all, 0) / tr.length : 0), "Avg per trainer"],
+  $("sumS").innerHTML = [[num(cur.reduce((a, r) => a + r.all, 0)), "All-time energy"], [num(cur.reduce((a, r) => a + r.month, 0)), "This month (so far)"],
+    [`${tr.length}/${cur.length}`, "Members who trained"], [num(tr.length ? tr.reduce((a, r) => a + r.avg, 0) / tr.length : 0), "Avg per month (trainers)"],
     [String(months.length), "Months on record"]].map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
-  const cols = [["Member", "name"], ["All time", "all"], ["This month", "month"], ["Avg / month", "avg"], ["Best month", "best"], ["Months", "months"]];
+  const cols = [["Member", "name"], ["Since joining", "all"], ["This month (so far)", "month"], ["Avg / month in faction", "avg"],
+                ["Best month on record", "best"], ["Months on record", "months"]];
   let key = "all", dsc = true;
   const draw = () => { const show_ = rows.filter(r => $("sumF").checked || !r.left);
     show_.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : x - y; return dsc ? -r : r; });
@@ -136,7 +139,7 @@ function summary() {
 Promise.all(["db/gym.json", "db/members.json"].map(f => fetch(f).then(r => { if (!r.ok) throw new Error(f); return r.json(); })))
 .then(([g, m]) => {
   G = g; G.history = G.history || {}; M = m.members;
-  M.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; });
+  M.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; if (x.days != null) days[x.id] = x.days; });
   if (MODE === "history") {
     $("ttl").textContent = "Gym History";
     summary();
@@ -148,7 +151,7 @@ Promise.all(["db/gym.json", "db/members.json"].map(f => fetch(f).then(r => { if 
     $("mon").onchange = () => { history.replaceState(null, "", "#" + $("mon").value); viewMonth($("mon").value); };
     viewMonth($("mon").value);
   } else {
-    $("ctl").innerHTML = `<span>Period</span><button data-v="month" class="on">This month</button><button data-v="all">All time</button>`
+    $("ctl").innerHTML = `<span>Period</span><button data-v="month" class="on">This month (so far)</button><button data-v="all">All time</button>`
       + `<a href="gym-history.html" style="color:#e8be5a;margin-left:8px;font-size:13px">Past months →</a>`;
     $("ctl").querySelectorAll("button").forEach(b => b.onclick = () => {
       $("ctl").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); viewCurrent(b.dataset.v); });
@@ -156,4 +159,5 @@ Promise.all(["db/gym.json", "db/members.json"].map(f => fetch(f).then(r => { if 
   }
 }).catch(e => { $("meta").textContent = ""; $("err").style.display = "block"; $("err").textContent = "Couldn't load the gym data (" + e.message + ")."; });
 </script>
+__FRESH__
 </body></html>

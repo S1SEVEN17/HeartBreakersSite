@@ -17,6 +17,7 @@
     gym   - energy trained: total + each stat            (db/gym.json: month_gain / all / history)
   Current mode shows current members only; history includes members who've since left (marked "left").
   Placeholders: __MENU__ (site header), __MODE__.
+  The FRESH placeholder (two underscores each side) = the data freshness footer (generate.py fresh_html).
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -123,7 +124,7 @@ Promise.all(["members", "wars", "chains", "crimes", "gym"].map(f => fetch(`db/${
     $("mon").onchange = () => { history.replaceState(null, "", "?m=" + $("mon").value + location.hash); draw({month: $("mon").value}); };
     draw({month: $("mon").value});
   } else {
-    $("ctl").innerHTML = `<span>Period</span><button data-v="month" class="on">This month</button><button data-v="all">All time</button>`
+    $("ctl").innerHTML = `<span>Period</span><button data-v="month" class="on">This month (so far)</button><button data-v="all">All time (on record)</button>`
       + `<a href="leaderboard-history.html">Past months →</a>`;
     const thisMonth = new Date().toISOString().slice(0, 7);
     $("ctl").querySelectorAll("button").forEach(b => b.onclick = () => {
@@ -133,4 +134,5 @@ Promise.all(["members", "wars", "chains", "crimes", "gym"].map(f => fetch(`db/${
   }
 }).catch(e => { $("meta").textContent = ""; $("err").style.display = "block"; $("err").textContent = "Couldn't load the leaderboards (" + e.message + ")."; });
 </script>
+__FRESH__
 </body></html>

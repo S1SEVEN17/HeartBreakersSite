@@ -16,6 +16,7 @@
   Tap a crime's name -> every run of it in the range: date, result, payout, each member's share, respect, items, the
   members who took part (names from db/members.json) and its prerequisite crime (or the crime it led to).
   __MENU__ is replaced with the site header.
+  The FRESH placeholder (two underscores each side) = the data freshness footer (generate.py fresh_html).
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -196,4 +197,5 @@ Promise.all([fetch("db/crimes.json").then(r => { if (!r.ok) throw new Error(r.st
   draw(+(document.querySelector("#rng button.on") || {dataset: {r: 0}}).dataset.r);
 }).catch(e => { $("meta").textContent = ""; $("err").style.display = "block"; $("err").textContent = "Couldn't load the crime data (" + e.message + ")."; });
 </script>
+__FRESH__
 </body></html>
