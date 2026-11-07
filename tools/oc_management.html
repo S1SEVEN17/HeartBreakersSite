@@ -111,7 +111,7 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 
 let ENV = LS.get("hb_oc_env", "test"), TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, includeBusy: false, chains: false, maxAge: 24}, LS.get("hb_oc_opts", {}));
+const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, maxAge: 24}, LS.get("hb_oc_opts", {}));
 const saveOpts = () => LS.set("hb_oc_opts", OPT);
 const boardKey = () => "hb_oc_board_" + ENV;
 let BOARD = LS.get(boardKey(), {teams: []});
@@ -238,6 +238,13 @@ const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v
 const crimeOk = crime => { const off = new Set(D.config.disabled || []);
   return !off.has(crime) && rolesOf(crime).length && (OPT.chains || !(CFG.catalog[crime] || {}).prereq); };
 
+// ROLE CAP (Nov 2026): a member whose rate in a crime's role is ABOVE OPT.cap is held back for a HIGHER-difficulty
+// crime, as long as they pass a role in a higher, switched-on crime at or above the lowest-role %. Auto-build only;
+// if no higher team can use them they're placed anyway at the end (nobody sits idle because of the cap).
+// CAP_UP = {member id: highest difficulty they pass a role in} - set by autoBuild; null = cap not applied.
+let CAP_UP = null;
+const capped = (pid, crime, rate) => !!CAP_UP && OPT.cap < 100 && rate > OPT.cap && (CAP_UP[pid] || 0) > (diffOf(crime) || 0);
+
 // Best team for one crime from a pool, for AUTO-BUILD: every role at or above minRole, team average at or above the
 // target, maximising   team $/day  −  α × (what these members could earn in their own best crime)  −  release costs.
 //   α (0..1) = how much to save strong members for better crimes: at 0 the strongest go here; higher α fills the
@@ -249,7 +256,7 @@ function teamFor(crime, pool, alpha, opp, cost) {
   const need = OPT.target * roles.length - 1e-9;
   const cands = roles.map(pos => {
     const all = [];
-    pool.forEach(pid => { const r = rateOf(pid, crime, pos); if (r && r.rate >= OPT.minRole)
+    pool.forEach(pid => { const r = rateOf(pid, crime, pos); if (r && r.rate >= OPT.minRole && !capped(+pid, crime, r.rate))
       all.push({pid: +pid, name: nameOf(pid), rate: r.rate, src: r.src, sc: k * r.rate - alpha * (opp[pid] || 0) - (cost ? cost(+pid) : 0)}); });
     if (!all.length) return all;
     // best by score + best by rate (the high-rate ones keep the target reachable)
@@ -303,6 +310,9 @@ function autoBuild() {
       rolesOf(c).forEach(pos => { const r = rateOf(pid, c, pos); if (r && r.rate >= OPT.minRole) b = Math.max(b, v.pot * r.rate / 100 / v.days / n); }); });
     opp[pid] = b; });
   const density = c => { const v = valueOf(c); return v.pot / v.days / rolesOf(c).length; };
+  CAP_UP = {};
+  pool0.forEach(pid => crimes.forEach(c => { if ((diffOf(c) || 0) <= (CAP_UP[pid] || 0)) return;
+    if (rolesOf(c).some(pos => { const r = rateOf(pid, c, pos); return r && r.rate >= OPT.minRole; })) CAP_UP[pid] = diffOf(c) || 0; }));
   const t0 = performance.now();
   let best = null, bestScore = -1, runs = 0;
   const alphas = [0, 0.5, 1, 0.25, 0.75];
@@ -318,10 +328,13 @@ function autoBuild() {
     fill();
     improve(teams, free, order, opp);
     fill();
+    // members the cap held back who no higher team could use: place them after all (cap off for this last fill)
+    const cap = CAP_UP; CAP_UP = null; fill(); CAP_UP = cap;
     const sc = planScore(teams);
     if (sc > bestScore) { bestScore = sc; best = teams; }
     runs++;
   }
+  CAP_UP = null;                                      // the cap is for auto-build only (not Add team / ↻ / swaps)
   BOARD.teams = keep.concat(best || []);
   BOARD.teams.sort((a, b) => (teamPay(b) || 0) - (teamPay(a) || 0) || (b.difficulty || 0) - (a.difficulty || 0));
   saveBoard();
@@ -339,7 +352,7 @@ function improve(teams, free, order, opp) {
   const backfill = (t, ri, not) => {
     let b = null;
     free.forEach(pid => { if (not && not.has(pid)) return;
-      const r = rateOf(pid, t.crime, t.roles[ri].position); if (!r || r.rate < OPT.minRole) return;
+      const r = rateOf(pid, t.crime, t.roles[ri].position); if (!r || r.rate < OPT.minRole || capped(pid, t.crime, r.rate)) return;
       const tt = {crime: t.crime, roles: t.roles.map((x, i) => i === ri ? {rate: r.rate} : x)};
       if (teamAvg(tt) < OPT.target) return;
       const pay = teamPay(tt); if (!b || pay > b.pay) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay}; });
@@ -452,13 +465,15 @@ function drawBuilder() {
     .filter(p => Object.keys(CFG.hist).some(k => CFG.hist[k][p]) || D.rates[p]);
   $("view").innerHTML = `<div class="panel">
     <div class="hn">Auto-build aims for the <b>most pay per day for all members together</b>: crimes that pay the most per day come first,
-      every team reaches the target average, and strong members move to easier roles when that lets another crime run. Pay = recent average
+      every team reaches the target average, and strong members move to easier roles when that lets another crime run.
+      Anyone above the <b>role cap</b> in a crime is moved up to a harder crime they can pass (placed back only if no harder team can use them). Pay = recent average
       reward (items at market price) × payout % × team success ÷ planning days. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
     ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
       ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Tick <b>Include members already in a crime</b> to plan their next crime.</div>` : ""}
     <div class="opts">
       <label>Target team success <input type="number" id="o_t" min="1" max="100" value="${OPT.target}">%</label>
       <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>
+      <label title="Above this a member is moved up to a harder crime they can pass (100 = off)">Role cap <input type="number" id="o_cap" min="50" max="100" value="${OPT.cap}">%</label>
       <label>Shared rates max age <input type="number" id="o_a" min="1" max="720" value="${OPT.maxAge}">h</label>
       <label><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime</label>
       <label><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
@@ -480,7 +495,7 @@ function drawBuilder() {
     ${benched.length ? `<h2>Not placed (${benched.length})</h2><div class="bench">${benched.map(p => `<span>${esc(nameOf(p))}</span>`).join("")}</div>` : ""}
   </div>`;
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
-  num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_a", "maxAge", 1, 720);
+  num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_cap", "cap", 50, 100); num("o_a", "maxAge", 1, 720);
   $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
   $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
   $("auto").onclick = () => { autoBuild(); draw(); };
