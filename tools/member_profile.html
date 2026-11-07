@@ -240,10 +240,11 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     const from = Math.max(nowS - x.days * 86400, REC.o); return (T_(uid).crimes || 0) / Math.max(1, (nowS - from) / MON); };
   const crimeRate = uid => { const t = T_(uid); return t.crimes ? t.crimes_ok / t.crimes : null; };
   const favg = f => mean(CUR.map(x => f(x.id)).filter(v => v !== null && v !== undefined));
-  const card = (label, v, a, fmt, note) => {
+  // fmtV (optional): how the member's own value is written, when it differs from the average's (reliability points)
+  const card = (label, v, a, fmt, note, fmtV) => {
     if (v === null || v === undefined) return `<div class="cm"><div class="l">${label}</div><div class="v">-</div><div class="a">${note || "nothing to compare yet"}</div></div>`;
     const r = a ? v / a : (v ? 2 : 1), pc = Math.round(r * 100), col = r >= 1 ? "#78c878" : r >= 0.7 ? "#e8be5a" : "#e4382e";
-    return `<div class="cm"><div class="l">${label}<span class="pc" style="color:${col}">${pc}%</span></div><div class="v">${fmt(v)}</div>`
+    return `<div class="cm"><div class="l">${label}<span class="pc" style="color:${col}">${pc}%</span></div><div class="v">${(fmtV || fmt)(v)}</div>`
       + `<div class="a">faction average ${fmt(a)}${note ? " · " + note : ""}</div>`
       + `<div class="bar2"><i style="width:${Math.min(100, r * 50)}%;background:${col}"></i><u></u></div></div>`; };
   const pctF = v => Math.round(v * 100) + "%", n1 = v => (Math.round(v * 10) / 10).toLocaleString("en-US");
@@ -300,9 +301,11 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       $("relv").innerHTML = `<span class="gr" style="color:${G[1]}">${G[0]}</span><span class="gn">${sc}</span>`;
       $("relp").textContent = `faction avg ${A.reliability != null ? GA[0] + " · " + A.reliability : "-"} · ${who_}`;
       const D = R.detail || {}, AP = A.parts || {};
-      const part = (label, k, max, note) => card(`${label} (out of ${max})`, R.parts[k], AP[k], v => n1(v), note);
+      // each part is POINTS towards the 0-100 score: "32 / 40 pts" (max points for that part)
+      const part = (label, k, max, note) => card(`${label} · ${max} points max`, R.parts[k], AP[k], v => n1(v) + " pts", note,
+                                                 v => `${n1(v)} <span style="font-size:14px;color:#9a9a9c">/ ${max} pts</span>`);
       $("relsec").style.display = $("relsec").dataset.off ? "none" : "";
-      $("relt").textContent = `(grade ${G[0]} · ${sc}/100 = war 40 · chains 20 · crimes 25 · activity 15 · S 95+ · A 85+ · B 75+ · C 65+ · D 55+ · E 45+ · F under 45)`;
+      $("relt").textContent = `(grade ${G[0]} from ${sc} of 100 points: war up to 40 · chains up to 20 · crimes up to 25 · activity up to 15 · grades S 95+ · A 85+ · B 75+ · C 65+ · D 55+ · E 45+ · F under 45)`;
       $("relb").innerHTML = part("⚔️ War", "war", 40, `hit in ${D.wars_hit}/${D.wars_in} wars`)
         + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
         + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
