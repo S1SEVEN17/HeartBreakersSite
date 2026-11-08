@@ -80,3 +80,6 @@ jobs:
             "SELECT (SELECT COUNT(DISTINCT json_extract(j.value, '\$.id')) FROM oc_hist, json_each(oc_hist.data, '\$.rewards.items') AS j WHERE oc_hist.env = 'prod') AS ids, (SELECT COUNT(*) FROM oc_snap, json_each(oc_snap.data) WHERE oc_snap.env = 'prod' AND oc_snap.ds = 'prices') AS priced, (SELECT COUNT(*) FROM oc_snap, json_each(oc_snap.data) AS p WHERE oc_snap.env = 'prod' AND oc_snap.ds = 'prices' AND json_extract(p.value, '\$.price') = 0) AS zero" > pr.json 2> err.log \
             || { echo "::warning::couldn't read prices"; exit 0; }
           python3 -c "import json;d=json.load(open('pr.json'));r=(d[0]['results'] if isinstance(d,list) else d['results'])[0];print(f\"reward item ids in history: {r['ids']} · priced: {r['priced']} · priced at 0 (no market price): {r['zero']}\")"
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT p.key AS id, json_extract(p.value, '\$.name') AS name FROM oc_snap, json_each(oc_snap.data) AS p WHERE oc_snap.env = 'prod' AND oc_snap.ds = 'prices' AND json_extract(p.value, '\$.price') = 0" > z.json 2>/dev/null \
+            && python3 -c "import json;d=json.load(open('z.json'));print('no market price:', ', '.join(f\"{r['name'] or '?'} [{r['id']}]\" for r in (d[0]['results'] if isinstance(d,list) else d['results'])) or '-')"
