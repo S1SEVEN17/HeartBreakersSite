@@ -699,6 +699,17 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     return new Response(`{"as_of":${r ? Number(r.as_of) : 0},"crimes":${r ? r.data : "[]"}}`,
                         {headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
   }
+  // GET /l/oc/summaries.json?env= -> {summaries, prices} - the same payout data the OC Optimizer script uses, so the
+  // OC Management page shows the SAME pay per day (max payout recorded, Nov 2026)
+  if (req.method === "GET" && sub === "summaries.json") {
+    const envName = url.searchParams.get("env");
+    if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
+    const {results} = await env.OC_DB.prepare("SELECT ds, data FROM oc_snap WHERE env = ? AND ds IN ('summaries', 'prices')").bind(envName).all();
+    const by = {};
+    (results || []).forEach(r => { by[r.ds] = r.data; });
+    return new Response(`{"summaries":${by.summaries || "null"},"prices":${by.prices || "null"}}`,
+                        {headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
+  }
   if (req.method === "POST" && sub === "refresh") {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     const now = Date.now(), GAP = 60 * 1000;
