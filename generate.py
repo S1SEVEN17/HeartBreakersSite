@@ -635,7 +635,7 @@ def nb(m: dict):
     return (m.get("score") or 0), (m.get("attacks") or 0)
 
 
-ATTACK_LOG_DAYS = 40
+ATTACK_LOG_DAYS = 30      # Nov 2026: attack logs (Torn history reads) only for wars ended in the last 30 days - no backlog
 WAR_REFRESH_SECONDS = 8 * 60      # full war-history refresh: attack-log time per full run (see update_war_history)
 # 7 = payout stats: raids + "special" excluded, exact war window (Biggest Hit without chain bonus hits)
 ATTACK_LOG_V = 7
@@ -766,7 +766,8 @@ def update_war_history(raw: dict, key: str = None, recent: int = 5) -> dict:
     import time as _t
     cutoff = _t.time() - ATTACK_LOG_DAYS * 86400
     refreshing = bool(hist.get("refresh_attacks"))
-    hist["attack_log_queue"] = sorted((k for k in wars if refreshing or wars[k].get("end", 0) >= cutoff),
+    # (a full refresh no longer re-reads OLDER wars' attack logs either - Nov 2026, Torn's daily read limit)
+    hist["attack_log_queue"] = sorted((k for k in wars if wars[k].get("end", 0) >= cutoff),
                                       key=lambda k: -wars[k].get("end", 0))
     if key and fill_war_attack_log(hist, key, my_id):
         changed = True
@@ -775,7 +776,7 @@ def update_war_history(raw: dict, key: str = None, recent: int = 5) -> dict:
             t0 = _t.time()
             while _t.time() - t0 < WAR_REFRESH_SECONDS and fill_war_attack_log(hist, key, my_id):
                 pass
-    if refreshing and all(wars[k].get("attack_log") == ATTACK_LOG_V for k in wars):
+    if refreshing and all(wars[k].get("attack_log") == ATTACK_LOG_V for k in hist["attack_log_queue"]):
         hist.pop("refresh_attacks", None)
         print("War history: full refresh complete - every war's report and attack log re-read")
         changed = True
@@ -5436,7 +5437,8 @@ def _spark(vals: list) -> str:
 # Log: data/armory_log.json {"items": [item names], "last": newest news time read, "oldest": oldest time read,
 #   "done": the whole history is read, "events": [[time, member id, item index, count, kind]]} (kind u/l/g/r)
 # Every full update reads FORWARD first (everything new), then BACKFILLS older news in month windows, newest month
-# first - this month fills first, then each earlier month - until the faction's founding month is reached. Page budgets (Torn caps history reads per key per day - "Daily read limit", code 14):
+# first - but (Nov 2026) never further back than ARMORY_MAX_DAYS (30): no backlog catch-up, the log is built going
+# forward. Page budgets (Torn caps history reads per key per day - "Daily read limit", code 14):
 # ARMORY_PAGES_NEW forward + ARMORY_PAGES_BACK backfill (100 news rows a page).
 # ==========================================================================
 ARMORY_LOG_PATH = ROOT / "data" / "armory_log.json"
@@ -5447,6 +5449,8 @@ ARMORY_PAGES_BACK = 150   # catch-up pace (Nov 2026): ~2 busy months per 3-hour 
                           # Torn's daily read cap (code 14) is unpublished, so the pace adapts: a code 14 halves the
                           # backfill pages (log["back_pages"], min 10) and pauses the backfill until the next UTC day -
                           # the forward read always goes first, so new uses are never held up by the catch-up.
+ARMORY_MAX_DAYS = 30      # Nov 2026: reads never reach further back than this (no backlog catch-up - Torn's daily
+                          # read limit). Older news already saved stays; the log grows going forward from here.
 ARMORY_RECENT = 40        # latest uses kept per member for the Armory Monitor's member view
 # Categories (Nov 2026 rework): USED items only - loans / items given out are kept in the log but never counted.
 # Tracked PER MEMBER (most important first): Xanax, Medical (incl. Empty Blood Bags filled from the armory), points
@@ -5614,20 +5618,22 @@ def update_armory_log(key: str, founded: int = 0):
                 return lo, hi, False
         return lo, hi, False
 
-    # 1) forward (oldest first, so an unfinished read carries on from where it stopped)
-    _lo, hi, _end = walk(log["last"] + 1, now, "ASC", ARMORY_PAGES_NEW, "new")
+    floor = now - ARMORY_MAX_DAYS * 86400                  # never read further back than this
+    # 1) forward (oldest first, so an unfinished read carries on from where it stopped) - after a long gap
+    #    only the last ARMORY_MAX_DAYS are read
+    _lo, hi, _end = walk(max(log["last"] + 1, floor), now, "ASC", ARMORY_PAGES_NEW, "new")
     if hi:
         log["last"] = max(log["last"], hi)
     # 2) backfill, newest month first, while the page budget lasts
-    stop = _utc_month_start(founded) if founded else 0
+    stop = max(_utc_month_start(founded) if founded else 0, floor)   # backfill: last ARMORY_MAX_DAYS only
     back_pages = 0 if (log.get("paused_day") or budget["limit"]) else back_cap
     if log.get("paused_day") and not log["done"]:
         print("Armory log: backfill paused until tomorrow (Torn daily read limit)")
     while not log["done"] and budget["n"] > 0 and back_pages > 0:
-        w0 = _utc_month_start(log["oldest"] - 1)            # the month just before what's read
-        if w0 < stop:
-            log["done"] = True
+        if log["oldest"] <= stop:                           # read back as far as allowed
+            log["done"], log["back"] = True, None
             break
+        w0 = max(_utc_month_start(log["oldest"] - 1), stop)  # the month just before what's read (not past stop)
         bk = log.get("back") or {}
         pos = bk.get("pos", w0) if bk.get("w0") == w0 else w0
         before = budget["n"]
