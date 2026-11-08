@@ -146,9 +146,19 @@ async function load() {
       // payout summaries + item prices (the script's data - pay per day shown here matches the script)
       getJSON("oc/summaries.json?env=" + ENV).catch(() => null)]);
     D.sums = (sums && sums.summaries) || null; D.prices = (sums && sums.prices) || {};
-    D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
     D.config = cfg; D.rates = rates || {};
     D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
+    D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
+    // Active crimes (who's in what) come from the OC DATA FEED when it has them (Nov 2026): the Hub's own Torn pull
+    // every 3 minutes PLUS members' OC Optimizer refreshes written back - so a script refresh shows up here at once.
+    // data/oc_active.json (the 15-minute crime check) is only the fallback.
+    if (D.feed && D.feed.length) {
+      D.active = D.feed.filter(c => c && (c.status === "Recruiting" || c.status === "Planning")).map(c => ({
+        id: c.id, name: c.name, difficulty: c.difficulty, status: c.status, ready_at: c.ready_at,
+        slots: (c.slots || []).map(sl => [sl.user ? sl.user.id : 0, (sl.position_info && sl.position_info.label) || sl.position,
+                                          sl.user && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : 0])}));
+      D.activeT = Math.floor(D.feedT / 1000);
+    }
     if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
       CFG.members = pool.members; CFG.hist = pool.hist || {}; CFG.built = pool.t;
     }
