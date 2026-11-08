@@ -758,8 +758,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
 //   OPEN-SLOT checkpoint_pass_rate and item_requirement.is_available are the PULLING key's own view, so they're
 //   blanked (null) on every stored crime - the script fills the member's own rates from /oc/cpr/read.
 //   POST /oc/snapshot/read  {key, env, have: {crimes, history, roster, catalog, prices}}  (as_of ms the client has)
-//        -> {ok, <dataset>: {as_of, data}, ...} only datasets newer than have. history = only crimes STORED after
-//           have.history (a delta to merge by id; newest first, at most 500 - so have 0 = the newest 500).
+//        -> {ok, <dataset>: {as_of, data}, ...} only datasets newer than have (crimes, roster, catalog, prices,
+//           summaries). The history row-delta was retired (Nov 2026) - raw history is POST /oc/history on demand.
 //   POST /oc/snapshot/write {key, env, as_of, crimes?, history?, roster?, catalog?, prices?}
 //        -> each dataset stored only if as_of > the stored as_of (latest wins; as_of in the future = now);
 //           history rows are added by id. One write per member per minute ({ok, throttled:true} otherwise).
@@ -806,12 +806,8 @@ async function ocFeedRead(env, envName, have) {
       .bind(envName, ...want).all();
     for (const r of rows.results || []) parts.push(`"${r.ds}":{"as_of":${Number(r.as_of)},"data":${r.data}}`);
   }
-  const top = await env.OC_DB.prepare("SELECT MAX(as_of) AS a FROM oc_hist WHERE env = ?").bind(envName).first();
-  if (top && Number(top.a) > h("history")) {
-    const rows = await env.OC_DB.prepare("SELECT data FROM oc_hist WHERE env = ? AND as_of > ? ORDER BY executed_at DESC LIMIT ?")
-      .bind(envName, h("history"), FEED_HIST_MAX).all();
-    parts.push(`"history":{"as_of":${Number(top.a)},"data":[${(rows.results || []).map(r => r.data).join(",")}]}`);
-  }
+  // the old `history` row-delta is NO LONGER SENT (Nov 2026, summaries contract rollout: the script reads
+  // `summaries` + on-demand POST /oc/history instead). Members can still write history back.
   return "{" + parts.join(",") + "}";
 }
 
