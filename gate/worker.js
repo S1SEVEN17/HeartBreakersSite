@@ -393,6 +393,7 @@ const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready,
 //   the timer (every 3 min, ocOptinPull) -> each opted-in member about hourly, at most OC_OPTIN_PER_RUN a run
 //   nothing recruiting -> the last rates stay (not wiped); key deleted / not theirs (Torn code 2) -> row removed
 const OC_OPTIN_EVERY = 60 * 60e3, OC_OPTIN_PER_RUN = 8;
+const ocBaseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();   // "Muscle #2" -> "Muscle"
 const ocFb = x => String(x == null ? "" : x).replace(/[.$#\[\]/\x00-\x1f]/g, "_").trim();     // the script's fbKey
 async function ocCprDrop(env, id) {
   if (env.OC_DB) await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
@@ -437,6 +438,35 @@ async function ocOptinPull(env, now) {
   Object.keys(tried).forEach(i => { if (!data.members[i] || !data.members[i].oc) delete tried[i]; });
   if (due.length) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'oc-optin', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(tried)).run();
+}
+
+// DELAYED CRIMES for the script's leader alerts (Nov 2026, crimes-tab addendum): a crime that is READY (ready_at
+// passed, every slot filled) but held up by a member - the same rule as the Discord delay posts (generate.py
+// crime_issues): not Okay (travelling / abroad / hospital / jail), missing the slot's item, or no longer in the
+// faction. Member statuses (faction/members, 1 call) are read ONLY when some crime is ready - normally no call.
+// Saved as oc_snap env 'hub' ds 'delays': [{crime, crime_id, members: [{pid, name, position, reason, overdue_hours}], since}]
+async function ocDelayCheck(env, crimes, now, ops) {
+  const ready = crimes.filter(c => c && c.ready_at && c.ready_at * 1000 <= now && (c.slots || []).length && (c.slots || []).every(sl => sl.user));
+  let out = [];
+  if (ready.length) {
+    const m = await ocTorn(env, "faction/members");
+    const mem = new Map((Array.isArray(m.members) ? m.members : Object.values(m.members || {})).map(x => [Number(x.id), x]));
+    for (const c of ready) {
+      const who = [];
+      for (const sl of c.slots || []) {
+        const pid = Number(sl.user.id), x = mem.get(pid), pos = ocBaseRole((sl.position_info && sl.position_info.label) || sl.position);
+        const st = x && x.status ? x.status : null;
+        const reason = !x ? "no longer in the faction"
+          : st && String(st.state || "Okay").toLowerCase() !== "okay" ? (st.description || st.state)
+          : sl.item_requirement && sl.item_requirement.is_available === false ? "missing the required item" : null;
+        if (reason) who.push({pid, name: x ? x.name : "#" + pid, position: pos, reason,
+                              overdue_hours: Math.round((now / 1000 - c.ready_at) / 360) / 10});
+      }
+      if (who.length) out.push({crime: c.name, crime_id: c.id, members: who, since: c.ready_at * 1000});
+    }
+  }
+  ops.push(env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'delays', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(out)));
 }
 
 // "View my shared data" (Nov 2026): GET /m/shared.json - ONLY the signed-in member's own data, exactly what others
@@ -741,8 +771,13 @@ async function ocPlanRoute(env, ctx, req) {
 // {ok, disabled, assignment, plan_ts} for the caller (POST /oc/plan and /oc/bundle)
 async function ocPlanObj(env, envName, id) {
   const cfg = await ocConfig(env, envName);
+  const teamsCfg = (cfg.plan || {}).teams || [];
+  // the feed's crimes (every 3 min + members' write-backs) - read once for every spawn / status check below
+  const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = ? AND ds = 'crimes'").bind(envName).first();
+  let crimes = null;
+  try { crimes = snap ? JSON.parse(snap.data) : null; } catch (e) { crimes = null; }
   let assignment = null;
-  for (const t of ((cfg.plan || {}).teams || [])) {
+  for (const t of teamsCfg) {
     for (const r of (t.roles || [])) {
       if (Number(r.pid) === Number(id.player_id)) {
         assignment = {crime: t.crime, position: r.position, team: t.id, rate: r.rate ?? null,
@@ -755,15 +790,38 @@ async function ocPlanObj(env, envName, id) {
   //   recruiting   a Recruiting instance of the crime has at least one open slot
   //   role_open    a Recruiting instance has the member's role (base role, "#n" ignored) open
   //   spawn_needed !role_open -> the script warns "this crime needs to be spawned"
-  if (assignment) Object.assign(assignment, await ocSpawnState(env, envName, assignment.crime, assignment.position));
-  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null};
-}
+  if (assignment) Object.assign(assignment, ocSpawnState(crimes, snap, assignment.crime, assignment.position));
 
-const ocBaseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();
-async function ocSpawnState(env, envName, crime, position) {
-  const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = ? AND ds = 'crimes'").bind(envName).first();
-  let crimes = [];
-  try { crimes = JSON.parse(snap.data); } catch (e) { return {recruiting: null, role_open: null, spawn_needed: null}; }
+  // ---- Crimes-tab addendum (Nov 2026, project doc claude/oc-optimizer-hub-crimestab-addendum.md) ----
+  // is_leader: the key's player holds a leader position (the same LEADER_POSITIONS check as the Leaders Hub)
+  const members = await currentMembers(env).catch(() => null);
+  const me = members && members.get(Number(id.player_id));
+  const is_leader = !!(me && isLeader(env, me.position));
+  // teams: EVERY deployed team, visible to all members (the user approved showing the full roster). status per team:
+  //   needs_spawn  no Recruiting / Planning instance of the crime
+  //   recruiting   a Recruiting instance has at least one open slot
+  //   spawned      instances exist but none has an open slot (full / planning)
+  const teams = teamsCfg.length ? teamsCfg.map(t => {
+    const inst = (crimes || []).filter(c => c && c.name === t.crime && (c.status === "Recruiting" || c.status === "Planning"));
+    const open = inst.some(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user));
+    return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
+            status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
+            members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), pid: Number(r.pid),
+              name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null}))};
+  }) : null;
+  // delays: leaders only (gated here) - the timer's delay check (ocDelayCheck): ready crimes held up by a member
+  let delays = [];
+  if (is_leader) {
+    const d = await ocSnapGet(env, "hub", "delays");
+    delays = ((d && d.data) || []).map(x => {
+      const t = teamsCfg.find(tm => tm.crime === x.crime && (tm.roles || []).some(r => x.members.some(m => Number(m.pid) === Number(r.pid))));
+      return Object.assign({}, x, {team: t ? t.id : null});
+    });
+  }
+  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays};
+}
+function ocSpawnState(crimes, snap, crime, position) {
+  if (!crimes) return {recruiting: null, role_open: null, spawn_needed: null};
   const want = ocBaseRole(position);
   let recruiting = false, roleOpen = false;
   for (const c of crimes) {
@@ -1041,7 +1099,9 @@ async function ocFeedPull(env) {
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
-    put("crimes", (d.crimes || []).map(ocFeedCleanCrime));
+    const cl = (d.crimes || []).map(ocFeedCleanCrime);
+    put("crimes", cl);
+    try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
   } catch (e) { fail("crimes", e); }
   // OC pass rates of members who opted in with their stored key (their own keys, ~hourly each)
   try { await ocOptinPull(env, now); } catch (e) { fail("oc-optin", e); }
