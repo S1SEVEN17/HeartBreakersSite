@@ -53,6 +53,8 @@ input[type=number]{width:70px;text-align:center}
 .tabs{display:flex;gap:6px;justify-content:center;margin:10px 0 4px;flex-wrap:wrap}
 .panel{background:#130b0c;border:1px solid #3a1416;border-radius:14px;padding:12px 14px;margin-top:10px}
 .hn{color:var(--sub);font-size:13px;line-height:1.45;margin:0 0 10px}
+.kind{font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;white-space:nowrap}.kind.live{background:#10241a;color:var(--green);border:1px solid #2f5d3c}
+.kind.spawn{background:#2a1a10;color:var(--gold);border:1px solid #6b4a18}.fixed{flex:1;color:#ddd;font-size:13px}
 .status{color:var(--gold);font-size:13px;text-align:center;min-height:18px;margin:4px 0}
 .status.err{color:#ff7a70}
 .stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}
@@ -97,6 +99,10 @@ __MENU__
 <div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button></div>
 <div id="view"></div>
 <script>
+// ---- shared OC team planner (gate/oc_planner.js, inlined by generate.py) ----
+/*__PLANNER__*/
+</script>
+<script>
 const CFG = __CONFIG__;
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
@@ -113,7 +119,11 @@ const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
 const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, maxAge: 24}, LS.get("hb_oc_opts", {}));
-const saveOpts = () => LS.set("hb_oc_opts", OPT);
+// settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
+// plan uses the same target / lowest role / cap / chains / busy rules
+let optTimer = null;
+const saveOpts = () => { LS.set("hb_oc_opts", OPT); clearTimeout(optTimer);
+  optTimer = setTimeout(() => saveConfig("opts", OPT).catch(e => st("Settings not saved for the live plan: " + e.message, true)), 800); };
 const boardKey = () => "hb_oc_board_" + ENV;
 // a draft built on the old Test data set carries over once (Test was removed - Nov 2026)
 if (!LS.get(boardKey(), null) && LS.get("hb_oc_board_test", null)) LS.set(boardKey(), LS.get("hb_oc_board_test", {teams: []}));
@@ -147,6 +157,7 @@ async function load() {
       getJSON("oc/summaries.json?env=" + ENV).catch(() => null)]);
     D.sums = (sums && sums.summaries) || null; D.prices = (sums && sums.prices) || {};
     D.config = cfg; D.rates = rates || {};
+    if (cfg.opts && typeof cfg.opts === "object") Object.assign(OPT, cfg.opts);       // the live plan's settings
     D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
     D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
     // Active crimes (who's in what) come from the OC DATA FEED when it has them (Nov 2026): the Hub's own Torn pull
@@ -369,52 +380,21 @@ const planScore = teams => teams.reduce((s, t) => s + (teamExp(t) || 0) + 1 + (t
 //      that adds an extra crime), (b) UPGRADE - swap a free member into a role where they pass better
 //   3. keep the plan with the highest pay per day (ties: more crimes running, then harder crimes)
 // Locked teams are kept as they are. Difficulty only breaks ties - pay per day decides.
+// Auto-build (Nov 2026): the SHARED planner (gate/oc_planner.js) - exactly what the gatekeeper runs every 3 minutes
+// on the deployed plan, here from scratch (locked teams kept): open slots of RECRUITING crimes first (skipped when the
+// crime can't reach the target), then "needs spawn" teams for members left over (pay-per-day optimizer, ~1 s).
 function autoBuild() {
   const keep = BOARD.teams.filter(t => t.lock);
-  const blocked = usedIds(), busy = busyMap();
-  const crimes = Object.keys(CFG.catalog).filter(crimeOk);
-  const pool0 = Object.keys(CFG.members).map(Number).filter(p => !blocked.has(p) && (OPT.includeBusy || !busy[p]));
-  // opp[pid] = $/day this member earns in their best crime at their own rate (what α saves them for)
-  const opp = {};
-  pool0.forEach(pid => { let b = 0;
-    crimes.forEach(c => { const v = valueOf(c), n = rolesOf(c).length;
-      rolesOf(c).forEach(pos => { const r = rateOf(pid, c, pos); if (r && r.rate >= OPT.minRole) b = Math.max(b, v.pot * r.rate / 100 / v.days / n); }); });
-    opp[pid] = b; });
-  const density = c => { const v = valueOf(c); return v.pot / v.days / rolesOf(c).length; };
-  CAP_UP = {};
-  pool0.forEach(pid => crimes.forEach(c => { if ((diffOf(c) || 0) <= (CAP_UP[pid] || 0)) return;
-    if (rolesOf(c).some(pos => { const r = rateOf(pid, c, pos); return r && r.rate >= OPT.minRole; })) CAP_UP[pid] = diffOf(c) || 0; }));
-  const t0 = performance.now();
-  let best = null, bestScore = -1, runs = 0;
-  const alphas = [0, 0.5, 1, 0.25, 0.75];
-  while (runs < 5 || (performance.now() - t0 < 900 && runs < 60)) {
-    const alpha = runs < alphas.length ? alphas[runs] : Math.random();
-    const noise = runs < alphas.length ? 0 : 0.35;
-    const order = crimes.slice().sort((a, b) => density(b) * (1 + noise * Math.random()) - density(a) * (1 + noise * Math.random())
-      || (diffOf(b) || 0) - (diffOf(a) || 0));
-    const free = new Set(pool0), teams = [];
-    const fill = () => { for (const c of order) for (let g = 0; g < 20; g++) {
-      const t = teamFor(c, free, alpha, opp); if (!t) break;
-      t.roles.forEach(r => free.delete(r.pid)); teams.push(t); } };
-    fill();
-    improve(teams, free, order, opp);
-    fill();
-    // members the cap held back who no higher team could use: place them after all (cap off for this last fill)
-    const cap = CAP_UP; CAP_UP = null; fill(); CAP_UP = cap;
-    const sc = planScore(teams);
-    if (sc > bestScore) { bestScore = sc; best = teams; }
-    runs++;
-  }
-  CAP_UP = null;                                      // the cap is for auto-build only (not Add team / ↻ / swaps)
-  BOARD.teams = keep.concat(best || []);
-  BOARD.teams.sort((a, b) => (teamExp(b) || 0) - (teamExp(a) || 0) || (b.difficulty || 0) - (a.difficulty || 0));
+  const r = ocPlan({crimes: D.feed || [], prev: keep, fresh: true, catalog: CFG.catalog, members: CFG.members,
+    opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),
+    payOf: crime => valueOf(crime), budgetMs: 900});
+  BOARD.teams = r.teams;
   saveBoard();
-  const made = (best || []).length, pay = (best || []).reduce((s, t) => s + (teamPay(t) || 0), 0);
-  const busyN = Object.keys(CFG.members).filter(p => busy[p]).length, total = Object.keys(CFG.members).length;
-  st(made ? `Built ${made} team${made === 1 ? "" : "s"} at ${OPT.target}%+ average · about ${fmt$(pay)}/day for members${keep.length ? ` (+${keep.length} locked kept)` : ""}.`
-     : !OPT.includeBusy && busyN > total / 2
-       ? `No teams: ${busyN} of ${total} members are already in a crime - tick "Include members already in a crime" to plan their next one.`
-       : `No team reaches ${OPT.target}% with the members and rates available - lower the target or the lowest role %, or add members' rates.`, !made);
+  const busy = busyMap(), busyN = Object.keys(CFG.members).filter(p => busy[p]).length, total = Object.keys(CFG.members).length;
+  const made = r.teams.length - keep.length;
+  st(made ? `Built ${r.stats.live} team${r.stats.live === 1 ? "" : "s"} in recruiting crimes + ${r.stats.spawn} to spawn · about ${fmt$(r.stats.pay)}/day for members${keep.length ? ` (${keep.length} locked kept)` : ""}.`
+     : !D.feed ? "No live crime data yet - try Refresh."
+     : `No teams: nobody free reaches ${OPT.target}% in an open crime${!OPT.includeBusy && busyN > total / 2 ? ` (${busyN} of ${total} members are already in a crime)` : ""}.`, !made);
 }
 // step 2 of auto-build (changes teams + free in place)
 function improve(teams, free, order, opp) {
@@ -534,7 +514,9 @@ function drawBuilder() {
   const benched = Object.keys(CFG.members).filter(p => !used.has(+p) && (OPT.includeBusy || !busy[p]))
     .filter(p => Object.keys(CFG.hist).some(k => CFG.hist[k][p]) || D.rates[p]);
   $("view").innerHTML = `<div class="panel">
-    <div class="hn">Auto-build aims for the <b>most pay per day for all members together</b>: crimes that pay the most per day come first,
+    <div class="hn">Auto-build plans around the crimes in Torn right now: <b>open slots of recruiting crimes (🎯)</b> are filled first - a crime is
+      skipped if it can't reach the target with the members already in it - then members left over get <b>crimes to spawn (🧪)</b>. The deployed plan
+      is kept up to date the same way every 3 minutes. It aims for the <b>most pay per day for all members together</b>: crimes that pay the most per day come first,
       every team reaches the target average, and strong members move to easier roles when that lets another crime run.
       Anyone above the <b>role cap</b> in a crime is moved up to a harder crime they can pass (placed back only if no harder team can use them). Pay =
       max reward recorded (last 100 completions, items at market price) × payout % ÷ planning days - the same figure members see in the script. Auto-build also weighs team success. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
@@ -583,21 +565,24 @@ let SPAWN = null;                                       // spawnMap of the board
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
   const rows = t.roles.map((r, i) => {
+    if (r.existing) return `<div class="rr"><span class="pos">${esc(r.position)}</span><span class="fixed">✅ ${esc(r.name || nameOf(r.pid))} <span class="tag">in the crime</span></span>
+      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</span></div>`;
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid));
     const opts = `<option value="">— empty —</option>` + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
     return `<div class="rr"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span></div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
+      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}
       <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
       <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
-      <button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>
+      ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>`}
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
     <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
       return p == null ? "" : v.pot ? `💰 ${fmt$(p)}/day team · ${fmt$(p / t.roles.length)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""}`
         : "💰 no pay data yet"; })()}</div>
-    ${spawnHtml(SPAWN && SPAWN.get(t.id))}
+    ${t.kind === "live" ? "" : spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
 }
 function wireTeams() {
@@ -618,8 +603,8 @@ function wireTeams() {
 async function deploy() {
   const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
   if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
-  const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, avg: Math.round(teamAvg(t) || 0),
-    roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate}))}))};
+  const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
+    roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing}))}))};
   try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
@@ -639,18 +624,21 @@ function drawDeployed() {
       const stt = ok ? '<span class="ok">✅ joined</span>' : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>';
       return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
-    return `<div class="team"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b><span class="sr ${col(t.avg)}">${t.avg ? t.avg + "%" : "-"}</span></div>
-      ${spawnHtml(sm && sm.get(t.id))}
+    const av = teamAvg(t);
+    return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
+      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}
+      <span class="sr ${col(av)}">${av == null ? "-" : Math.round(av) + "%"}</span></div>
+      ${t.kind === "live" ? "" : spawnHtml(sm && sm.get(t.id))}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
-  $("view").innerHTML = `<div class="panel"><div class="hn">Deployed ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
+  $("view").innerHTML = `<div class="panel"><div class="hn">🔄 <b>Kept up to date automatically</b> every 3 minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Nothing that's still valid is moved; 🔒 locked teams are never changed.</div><div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${joined}</b><span>Joined</span></div><div><b>${total - joined}</b><span>Not yet</span></div></div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
     ${spawnSummary(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
   $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
-    BOARD = {teams: plan.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, lock: false,
-      roles: t.roles.map(r => Object.assign({}, r, rateOf(r.pid, t.crime, r.position) || {}))}))}; saveBoard(); TAB = "builder"; LS.set("hb_oc_tab", TAB); draw(); };
+    BOARD = {teams: plan.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
+      roles: t.roles.map(r => r.existing ? Object.assign({}, r) : Object.assign({}, r, rateOf(r.pid, t.crime, r.position) || {}))}))}; saveBoard(); TAB = "builder"; LS.set("hb_oc_tab", TAB); draw(); };
   $("undeploy").onclick = async () => { if (!confirm("Withdraw the deployed plan? Members stop seeing their assigned roles.")) return;
     try { await saveConfig("plan", {teams: []}); D.config.plan = {teams: []}; st("Plan withdrawn."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
 }

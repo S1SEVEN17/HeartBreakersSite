@@ -42,6 +42,8 @@
 //   (no Torn key here: members' Public keys at sign-in are the only Torn access the site uses)
 // =====================================================================================================
 
+import {ocPlan} from "./oc_planner.js";   // shared OC team planner (also inlined into the OC Management page)
+
 const COOKIE = "hb_s";
 const API_COMMENT = "Heart Breakers Hub";        // on every Torn API call the site makes
 const PASS_DAYS = 30;
@@ -780,8 +782,10 @@ async function ocPlanObj(env, envName, id) {
   for (const t of teamsCfg) {
     for (const r of (t.roles || [])) {
       if (Number(r.pid) === Number(id.player_id)) {
+        if (r.existing) continue;                           // already in that crime in Torn - nothing to do
         assignment = {crime: t.crime, position: r.position, team: t.id, rate: r.rate ?? null,
-                      difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null};
+                      difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
+                      kind: t.kind || "spawn", crime_id: t.crime_id || null};   // live: join THIS crime id + exact slot
       }
     }
   }
@@ -790,7 +794,11 @@ async function ocPlanObj(env, envName, id) {
   //   recruiting   a Recruiting instance of the crime has at least one open slot
   //   role_open    a Recruiting instance has the member's role (base role, "#n" ignored) open
   //   spawn_needed !role_open -> the script warns "this crime needs to be spawned"
-  if (assignment) Object.assign(assignment, ocSpawnState(crimes, snap, assignment.crime, assignment.position));
+  if (assignment) Object.assign(assignment, assignment.crime_id
+    ? (() => { const c = (crimes || []).find(x => String(x.id) === String(assignment.crime_id));
+        const open = !!(c && c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user && ((sl.position_info && sl.position_info.label) || sl.position) === assignment.position));
+        return {recruiting: !!(c && c.status === "Recruiting"), role_open: open, spawn_needed: false, crimes_as_of: snap ? Number(snap.as_of) : null}; })()
+    : ocSpawnState(crimes, snap, assignment.crime, assignment.position));
 
   // ---- Crimes-tab addendum (Nov 2026, project doc claude/oc-optimizer-hub-crimestab-addendum.md) ----
   // is_leader: the key's player holds a leader position (the same LEADER_POSITIONS check as the Leaders Hub)
@@ -802,12 +810,14 @@ async function ocPlanObj(env, envName, id) {
   //   recruiting   a Recruiting instance has at least one open slot
   //   spawned      instances exist but none has an open slot (full / planning)
   const teams = teamsCfg.length ? teamsCfg.map(t => {
-    const inst = (crimes || []).filter(c => c && c.name === t.crime && (c.status === "Recruiting" || c.status === "Planning"));
+    const inst = (crimes || []).filter(c => c && (t.crime_id ? String(c.id) === String(t.crime_id) : c.name === t.crime) && (c.status === "Recruiting" || c.status === "Planning"));
     const open = inst.some(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user));
     return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
+            kind: t.kind || "spawn", crime_id: t.crime_id || null,
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
-            members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), pid: Number(r.pid),
-              name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null}))};
+            members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), slot: r.position, pid: Number(r.pid),
+              name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
+              existing: !!r.existing, joined: !!r.joined}))};
   }) : null;
   // delays: leaders only (gated here) - the timer's delay check (ocDelayCheck): ready crimes held up by a member
   let delays = [];
@@ -833,6 +843,17 @@ function ocSpawnState(crimes, snap, crime, position) {
     }
   }
   return {recruiting, role_open: roleOpen, spawn_needed: !roleOpen, crimes_as_of: Number(snap.as_of)};
+}
+
+// a plan's teams, checked + trimmed (leaders' Deploy and the automatic planner) - see gate/oc_planner.js for the shape
+function ocCleanTeams(teams) {
+  return (teams || []).slice(0, 100).map(t => ({id: String(t.id || "").slice(0, 40), crime: String(t.crime || "").slice(0, 80),
+    difficulty: Number(t.difficulty) || null, kind: t.kind === "live" ? "live" : "spawn",
+    crime_id: t.kind === "live" && t.crime_id != null ? Number(t.crime_id) || null : null, lock: !!t.lock,
+    roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 10).map(r => ({position: String(r.position || "").slice(0, 40),
+      pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
+      rate: r.rate == null ? null : Math.round(Number(r.rate)) || 0, src: r.src ? String(r.src).slice(0, 20) : null,
+      existing: !!r.existing, joined: !!r.joined}))}));
 }
 
 async function ocLeaderRoute(env, req, url, who, sub) {
@@ -888,18 +909,20 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     let b;
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
-    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
     if (b.k === "disabled") {
       if (!Array.isArray(v)) return Response.json({ok: false, error: "disabled must be a list"}, {status: 400});
       v = [...new Set(v.map(x => String(x).slice(0, 80)))].slice(0, 200);
+    } else if (b.k === "opts") {
+      // Team Builder settings - the gatekeeper's automatic planner uses the same ones (ocAutoPlan)
+      const n = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
+      v = v && typeof v === "object" ? v : {};
+      v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65), cap: n(v.cap, 50, 100, 85), maxAge: n(v.maxAge, 1, 720, 24),
+           chains: !!v.chains, includeBusy: !!v.includeBusy};
     } else {
       if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
-      v = {teams: v.teams.slice(0, 100).map(t => ({id: String(t.id || "").slice(0, 40), crime: String(t.crime || "").slice(0, 80),
-        difficulty: Number(t.difficulty) || null, avg: Number(t.avg) || null,
-        roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 8).map(r => ({position: String(r.position || "").slice(0, 40),
-          pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
-          rate: r.rate == null ? null : Math.round(Number(r.rate)) || 0}))}))};
+      v = {teams: ocCleanTeams(v.teams)};
     }
     const text = JSON.stringify(v);
     if (text.length > 200000) return Response.json({ok: false, error: "too large"}, {status: 413});
@@ -1095,13 +1118,14 @@ async function ocFeedPull(env) {
   const fail = (step, e) => errs.push(step + ": " + String((e && e.message) || e).slice(0, 60));
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
-  let newHist = false;
+  let newHist = false, crimesNow = null;
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
     const cl = (d.crimes || []).map(ocFeedCleanCrime);
     put("crimes", cl);
     try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
+    crimesNow = cl;
   } catch (e) { fail("crimes", e); }
   // OC pass rates of members who opted in with their stored key (their own keys, ~hourly each)
   try { await ocOptinPull(env, now); } catch (e) { fail("oc-optin", e); }
@@ -1183,6 +1207,8 @@ async function ocFeedPull(env) {
     const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'").first();
     if (newHist || newRoster || !have) for (const e of ENVS) await ocSummariesSave(env, e);
   } catch (e) { fail("summaries", e); }
+  // the automatic team plan (live crimes) - after everything above is saved (it reads the new roster / summaries)
+  if (crimesNow) try { await ocAutoPlan(env, crimesNow, now); } catch (e) { fail("plan", e); }
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pull:errors', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(errs)).run();
 }
@@ -1316,4 +1342,62 @@ async function ocBackfill(env, now, ENVS) {
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(out)).run();
   if (err) throw err;
   return got.length > 0;
+}
+
+
+// =====================================================================================================
+// AUTOMATIC TEAM PLAN (Nov 2026): every timer run (3 min) the deployed plan (prod) is maintained from the crimes
+// that exist in Torn right now - gate/oc_planner.js (the same planner as the OC Management page's Auto-build):
+// open slots of recruiting crimes are filled (skipped when the crime can't reach the target), leftovers get
+// "needs spawn" teams, nothing valid is reshuffled, locked teams are kept. Saved only when something changed
+// (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
+// (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
+// =====================================================================================================
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, maxAge: 24, chains: false, includeBusy: false};
+async function ocAutoPlan(env, crimes, now) {
+  const cfg = await ocConfig(env, "prod");
+  const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
+  const [ros, catS, sumS, priS] = await Promise.all([ocSnapGet(env, "prod", "roster"), ocSnapGet(env, "prod", "catalog"),
+                                                     ocSnapGet(env, "prod", "summaries"), ocSnapGet(env, "prod", "prices")]);
+  const members = (ros && ros.data) || null;
+  if (!members || !catS) return;
+  const catalog = {};
+  for (const c of (catS.data.organizedcrimes || [])) if (c && c.name)
+    catalog[c.name] = {difficulty: c.difficulty ?? null, roles: (c.slots || []).map((sl, i) => (sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1))),
+                       prereq: c.prerequisite || null};
+  // rates: live shares (oc_cpr, within maxAge) > the member's rate in a crime they're in now > history (summaries)
+  const {results} = await env.OC_DB.prepare("SELECT player_id, roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ?").bind(Number(env.FACTION_ID)).all();
+  const live = new Map();
+  for (const r of results || []) { try { if (now - Number(r.ts) <= opts.maxAge * 3600e3) live.set(String(r.player_id), JSON.parse(r.roles)); } catch (e) {} }
+  const inCrime = new Map();
+  for (const c of crimes) for (const sl of c.slots || []) if (sl.user && typeof sl.checkpoint_pass_rate === "number")
+    inCrime.set(`${sl.user.id}|${c.name}|${ocBaseRole((sl.position_info && sl.position_info.label) || sl.position)}`, Math.round(sl.checkpoint_pass_rate));
+  const hist = new Map(), S = (sumS && sumS.data) || {};
+  for (const [crime, byRole] of Object.entries(S.memberRates || {})) for (const [role, list] of Object.entries(byRole)) for (const m of list)
+    hist.set(`${m.pid}|${crime}|${role}`, m.rate);
+  const rateOf = (pid, crime, label) => {
+    const b = ocBaseRole(label), lr = live.get(String(pid)), k = ocFb(crime) + "|" + ocFb(b);
+    if (lr && lr[k] != null) return {rate: lr[k], src: "live"};
+    const ic = inCrime.get(`${pid}|${crime}|${b}`); if (ic != null) return {rate: ic, src: "live"};
+    const h = hist.get(`${pid}|${crime}|${b}`); if (h != null) return {rate: h, src: "history"};
+    return null;
+  };
+  // pay: max payout recorded (summaries, items at prices) x 80% payout, per day - the same figure the page and script show
+  const prices = (priS && priS.data) || {};
+  const gross = n => { const p = (S.payouts || {})[n]; if (!p || (p.samples || 0) < 3) return 0;
+    let iv = 0; Object.keys(p.items || {}).forEach(id => { iv += (p.items[id] || 0) * (Number((prices[id] || {}).price) || 0); });
+    return (p.moneyMax || 0) + iv; };
+  const seats = n => (catalog[n] || {roles: []}).roles.length || 1;
+  const payOf = n => {
+    const s = seats(n), pre = (catalog[n] || {}).prereq, fin = Object.keys(catalog).find(x => catalog[x].prereq === n);
+    if (fin) { const sf = seats(fin); return {pot: gross(fin) * 0.8 * s / (s + sf), days: s + sf}; }
+    if (pre) { const sp = seats(pre); return {pot: gross(n) * 0.8 * s / (s + sp), days: s}; }
+    return {pot: gross(n) * 0.8, days: s};
+  };
+  const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
+                    rateOf, payOf, budgetMs: 0});
+  if (!r.changed) return;
+  await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
+    "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
+    .bind(JSON.stringify({teams: ocCleanTeams(r.teams), auto: r.stats}), now).run();
 }

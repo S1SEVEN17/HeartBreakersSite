@@ -83,3 +83,21 @@ jobs:
           npx wrangler d1 execute hb-oc --remote --json --command \
             "SELECT p.key AS id, json_extract(p.value, '\$.name') AS name FROM oc_snap, json_each(oc_snap.data) AS p WHERE oc_snap.env = 'prod' AND oc_snap.ds = 'prices' AND json_extract(p.value, '\$.price') = 0" > z.json 2>/dev/null \
             && python3 -c "import json;d=json.load(open('z.json'));print('no market price:', ', '.join(f\"{r['name'] or '?'} [{r['id']}]\" for r in (d[0]['results'] if isinstance(d,list) else d['results'])) or '-')"
+      - name: Deployed plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # counts only: teams live / spawn, members placed, when + by whom it last changed (auto or a leader's Deploy)
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT ts, CASE WHEN by LIKE 'auto%' THEN 'auto (Hub)' ELSE 'a leader' END AS who, v FROM oc_config WHERE env = 'prod' AND k = 'plan'" > plan.json 2>/dev/null || exit 0
+          python3 - <<'PY'
+          import json, time
+          d = json.load(open("plan.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
+          if not rows: print("No plan deployed yet."); raise SystemExit
+          r = rows[0]; v = json.loads(r["v"] or "{}"); t = v.get("teams") or []
+          live = sum(1 for x in t if x.get("kind") == "live"); placed = sum(1 for x in t for y in x.get("roles", []) if y.get("pid") and not y.get("existing"))
+          print(f"Plan: {len(t)} teams ({live} in recruiting crimes, {len(t) - live} to spawn) · {placed} members placed · "
+                f"last change {(time.time() * 1000 - r['ts']) / 60000:.0f} min ago by {r['who']}" + (f" · planner {v['auto'].get('ms')} ms" if v.get('auto') else ""))
+          PY

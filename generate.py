@@ -5752,6 +5752,10 @@ def write_oc_management(out: Path, db: dict):
             "members": cur, "member_base": member_base(),
             "repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "built": int(datetime.now(timezone.utc).timestamp())}
     tpl = (ROOT / "tools" / "oc_management.html").read_text(encoding="utf-8")
+    # the shared team planner (gate/oc_planner.js - the gatekeeper's automatic plan runs the same code), inlined
+    planner = re.sub(r"^export ", "", (ROOT / "gate" / "oc_planner.js").read_text(encoding="utf-8"), flags=re.M)
+    # wrapped so its helper names (baseRole, uid...) don't clash with the page's own - only ocPlan is exposed
+    tpl = tpl.replace("/*__PLANNER__*/", "const ocPlan = (() => {\n" + planner + "\nreturn ocPlan;\n})();")
     (lout / "oc.html").write_text(tpl.replace("__CONFIG__", json.dumps(conf, separators=(",", ":")).replace("</", "<\\/"))
                                   .replace("__MENU__", leader_menu("")), encoding="utf-8")
 
