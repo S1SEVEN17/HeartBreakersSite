@@ -4098,34 +4098,6 @@ ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🔐 My data & sharing", "my-data.
                  ("⚔️ My Wars", "me#wars"), ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
 
 
-# OC PASS RATES FROM THE HUB (Nov 2026): members without the OC Optimizer script share their OC checkpoint pass rates
-# with leadership (OC Management's Team Builder). Their Torn API key is kept ONLY in their own browser (localStorage
-# hb_oc_key) - never sent to the site: the browser asks Torn itself (user/basic once to check the key is theirs,
-# user/organizedcrimes for the rates - only open roles of recruiting crimes carry the key owner's rate) and posts
-# just {roles: {"Crime|Role": rate}} to /m/oc/cpr (the gatekeeper knows who from the Hub sign-in).
-# Turned on in My data & sharing; afterwards re-shared at most once an hour whenever they open a Hub page (the
-# account menu runs it). Role keys are built exactly like the script's (fbKey + baseRole), so both land the same.
-OC_SHARE_JS = r"""(function(){var KK='hb_oc_key',KO='hb_oc_owner',KT='hb_oc_shared_at',ROOT=__ROOT__;
-function ls(k,v){try{if(v===undefined)return localStorage.getItem(k);if(v===null)localStorage.removeItem(k);else localStorage.setItem(k,v);}catch(e){return null;}}
-function fb(x){return String(x==null?'':x).replace(/[.$#\[\]\/\x00-\x1f]/g,'_').trim();}
-function base(l){return String(l||'').replace(/#\s*\d+/g,'').replace(/\s+/g,' ').trim();}
-async function torn(path,key){/* API: Heart Breakers Hub - member's own OC pass rates (Torn V2), from their browser */
-var r=await fetch('https://api.torn.com/v2/'+path+'?comment=Heart%20Breakers%20Hub',{headers:{Authorization:'ApiKey '+key,Accept:'application/json'},cache:'no-store'});
-var j=await r.json();if(j.error){var e=new Error(j.error.error||'Torn error');e.code=j.error.code;throw e;}return j;}
-window.hbOcShare=async function(o){var key=o.key||ls(KK);if(!key)return{ok:false,msg:'no key'};
-if(!o.force&&Date.now()-(+ls(KT)||0)<3600e3)return{ok:true,skipped:true};
-if(o.key||ls(KO)!==String(o.me)){var b=await torn('user/basic',key);var id=b.player_id||b.id||(b.profile&&b.profile.id);
-if(String(id)!==String(o.me))throw new Error("That key isn't yours - use your own Torn API key.");ls(KO,String(id));}
-var d=await torn('user/organizedcrimes',key),roles={};
-(d.organizedcrimes||[]).forEach(function(c){(c.slots||[]).forEach(function(s){if(s.user)return;var v=s.checkpoint_pass_rate;if(typeof v!=='number')return;
-roles[fb(c.name)+'|'+fb(base((s.position_info&&s.position_info.label)||s.position))]=Math.round(v);});});
-if(o.key)ls(KK,key);var n=Object.keys(roles).length;
-if(!n){ls(KT,String(Date.now()));return{ok:true,n:0};}   /* nothing recruiting: keep the rates already shared */
-var res=await fetch(ROOT+'oc/cpr',{method:'POST',headers:{'Content-Type':'application/json','X-HB-Save':'1'},body:JSON.stringify({roles:roles}),cache:'no-store'});
-if(!res.ok)throw new Error("The site couldn't save your rates ("+res.status+")");var j={};try{j=await res.json();}catch(x){}
-ls(KT,String(Date.now()));return{ok:true,n:n,throttled:!!j.throttled};};})();"""
-
-
 def account_menu(mroot: str) -> str:
     g_ = gate_cfg()["url"].rstrip("/")
     links = "".join(f'<a href="{mroot}{u}">{t}</a>' for t, u in ACCOUNT_LINKS)
@@ -4136,12 +4108,12 @@ def account_menu(mroot: str) -> str:
             "<script>(function(){var K='hb_pub_key',b=document.getElementById('hbKeyClr');try{if(localStorage.getItem(K))b.style.display='';}catch(e){}"
             "b.onclick=function(e){e.preventDefault();if(confirm('Remove your Torn API key from this browser? (The live war and chain timers stop until you add it again.)'))"
             "{try{localStorage.removeItem(K);}catch(x){}b.style.display='none';location.reload();}};})();</script>"
-            "<script>" + OC_SHARE_JS.replace("__ROOT__", json.dumps(mroot)) + "</script>"
+            # OC pass rates moved to the stored opt-in key (Nov 2026): clear the old browser-only OC key everywhere
+            "<script>try{['hb_oc_key','hb_oc_owner','hb_oc_shared_at'].forEach(function(k){localStorage.removeItem(k);});}catch(e){}</script>"
             "<script>(function(){fetch(" + json.dumps(mroot + "whoami.json") + ",{cache:'no-store'})"
             ".then(function(r){return r.ok?r.json():null;}).then(function(w){if(!w)return;"
             "document.getElementById('hbaccn').textContent='👤 '+w.name;"
-            # OC pass rates: re-share (at most hourly) when this browser has the member's key - see OC_SHARE_JS
-            "try{if(localStorage.getItem('hb_oc_key')&&window.hbOcShare)window.hbOcShare({me:w.id}).catch(function(){});}catch(e){}"
+
             "if(w.leader)document.querySelectorAll('.hbm .hbl').forEach(function(e){e.style.display='';});"
             "}).catch(function(){});})();</script>")
 

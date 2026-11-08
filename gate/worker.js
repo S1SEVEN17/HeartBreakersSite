@@ -232,9 +232,6 @@ export default {
     if (area === "m" && rest === "mine.json") return mine(env, who);
     // opt-in stats (own Limited key): settings / save / delete - always the signed-in member's own entry
     if (area === "m" && (rest === "optin" || rest === "optin.json")) return optinRoute(env, req, who);
-    // OC pass rates shared from the Hub (My data & sharing) - the member's browser reads them from Torn with a key
-    // kept ONLY in that browser and sends just the rates here; always the signed-in member's own row
-    if (area === "m" && rest === "oc/cpr") return ocMemberShare(env, req, who);
     // "View my shared data" (My data & sharing): everything the signed-in member shares, and with whom
     if (area === "m" && rest === "shared.json") return mySharedData(env, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
@@ -387,7 +384,61 @@ async function tornUser(key, selections) {
   const r = await fetch(`https://api.torn.com/user/?selections=${selections}&key=${encodeURIComponent(key)}&comment=${encodeURIComponent(API_COMMENT)}`);
   return r.json();
 }
-const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready, since: e.since, updated: e.updated} : {opted: false};
+const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready, oc: !!e.oc, since: e.since, updated: e.updated} : {opted: false};
+// OC PASS RATES WITH THE STORED KEY (Nov 2026, My data & sharing "🕵️ OC pass rates"): the member's opt-in key
+// (the same encrypted key as their stats) reads THEIR checkpoint pass rates - v2 user/organizedcrimes: only the open
+// roles of recruiting crimes carry the key owner's rate - into oc_cpr (prod), exactly like the OC Optimizer script's
+// shares, so OC Management's Team Builder and the script's role suggestions use them.
+//   on save (turned on)  -> read at once          turned off / deleted -> their row removed
+//   the timer (every 3 min, ocOptinPull) -> each opted-in member about hourly, at most OC_OPTIN_PER_RUN a run
+//   nothing recruiting -> the last rates stay (not wiped); key deleted / not theirs (Torn code 2) -> row removed
+const OC_OPTIN_EVERY = 60 * 60e3, OC_OPTIN_PER_RUN = 8;
+const ocFb = x => String(x == null ? "" : x).replace(/[.$#\[\]/\x00-\x1f]/g, "_").trim();     // the script's fbKey
+async function ocCprDrop(env, id) {
+  if (env.OC_DB) await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
+    .bind(Number(env.FACTION_ID), Number(id)).run();
+}
+// -> {roles: n} | {bad: true} (key gone) | {err}
+async function ocPullMember(env, id, name, key) {
+  // API: Heart Breakers Hub - a member's own OC pass rates with THEIR opt-in key (Torn V2 user/organizedcrimes)
+  const r = await fetch(`https://api.torn.com/v2/user/organizedcrimes?comment=${encodeURIComponent(API_COMMENT)}`,
+                        {headers: {Authorization: "ApiKey " + key, Accept: "application/json"}});
+  const d = await r.json();
+  if (d.error) { if (d.error.code === 2) { await ocCprDrop(env, id); return {bad: true}; } return {err: d.error.error || "Torn error"}; }
+  const roles = {};
+  for (const c of d.organizedcrimes || []) for (const sl of c.slots || []) {
+    if (sl.user || typeof sl.checkpoint_pass_rate !== "number") continue;
+    roles[ocFb(c.name) + "|" + ocFb(ocBaseRole((sl.position_info && sl.position_info.label) || sl.position))] = Math.round(sl.checkpoint_pass_rate);
+  }
+  const n = Object.keys(roles).length;
+  if (n) await env.OC_DB.prepare(
+    "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
+    "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
+    .bind(Number(env.FACTION_ID), Number(id), String(name || "").slice(0, 40), JSON.stringify(roles), Date.now()).run();
+  return {roles: n};
+}
+// timer step: members with "OC pass rates" on, oldest-tried first, about hourly each; also removes shared rows of
+// anyone no longer in the faction (roster)
+async function ocOptinPull(env, now) {
+  const {data} = await readOptin(env, false);
+  const ros = await ocSnapGet(env, "prod", "roster");
+  const roster = (ros && ros.data) || null;
+  if (roster && Object.keys(roster).length > 10) {
+    const ids = Object.keys(roster).map(Number).filter(Boolean);
+    await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
+  }
+  const tried = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
+  const due = Object.keys(data.members).filter(i => data.members[i].oc && (!roster || roster[i] != null) && now - (tried[i] || 0) >= OC_OPTIN_EVERY)
+    .sort((a, b) => (tried[a] || 0) - (tried[b] || 0)).slice(0, OC_OPTIN_PER_RUN);
+  for (const i of due) {
+    tried[i] = now;
+    try { await ocPullMember(env, i, roster ? roster[i] : "", await openKey(env, data.members[i].k)); } catch (e) {}
+  }
+  Object.keys(tried).forEach(i => { if (!data.members[i] || !data.members[i].oc) delete tried[i]; });
+  if (due.length) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'oc-optin', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(tried)).run();
+}
+
 // "View my shared data" (Nov 2026): GET /m/shared.json - ONLY the signed-in member's own data, exactly what others
 // can see of it:
 //   optin  {bs, ws, ready, since, updated} (never the key - only whether one is stored)
@@ -400,7 +451,7 @@ async function mySharedData(env, who) {
   try {
     const {data} = await readOptin(env, true);
     const e = data.members[id];
-    out.optin = e ? {bs: e.bs, ws: e.ws, ready: !!e.ready, since: e.since, updated: e.updated, key_stored: !!e.k} : null;
+    out.optin = e ? {bs: e.bs, ws: e.ws, ready: !!e.ready, oc: !!e.oc, since: e.since, updated: e.updated, key_stored: !!e.k} : null;
     if (e && (e.bs !== "off" || e.ws !== "off")) {
       const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/data/optin_stats.json?ref=main`,
                             {headers: Object.assign(ghHeaders(env), {Accept: "application/vnd.github.raw"})});
@@ -438,14 +489,16 @@ async function optinRoute(env, req, who) {
     const tag = `(by ${who.name} [${who.id}])`;
     if (req.method === "DELETE") {
       await writeOptin(env, id, () => null, `Opt-in data deleted ${tag}`);
+      await ocCprDrop(env, id);
       return Response.json({opted: false}, H);
     }
     if (req.method !== "PUT") return new Response("Method not allowed", {status: 405});
     const j = await req.json().catch(() => null);
     if (!j) return new Response("Bad request", {status: 400});
-    const bs = SHARE.includes(j.bs) ? j.bs : "off", ws = SHARE.includes(j.ws) ? j.ws : "off", ready = !!j.ready;
-    if (bs === "off" && ws === "off" && !ready) {
+    const bs = SHARE.includes(j.bs) ? j.bs : "off", ws = SHARE.includes(j.ws) ? j.ws : "off", ready = !!j.ready, oc = !!j.oc;
+    if (bs === "off" && ws === "off" && !ready && !oc) {
       await writeOptin(env, id, () => null, `Opt-in turned off ${tag}`);
+      await ocCprDrop(env, id);
       return Response.json({opted: false}, H);
     }
     let sealed = null;
@@ -459,13 +512,18 @@ async function optinRoute(env, req, who) {
       sealed = await sealKey(env, key);
     }
     const now = Math.floor(Date.now() / 1000);
-    let missing = false;
+    let missing = false, sealedNow = null;
     await writeOptin(env, id, cur => {
       if (!cur && !sealed) { missing = true; return null; }
-      return {k: sealed || cur.k, bs, ws, ready, since: cur ? cur.since : now, updated: now};
+      sealedNow = sealed || cur.k;
+      return {k: sealedNow, bs, ws, ready, oc, since: cur ? cur.since : now, updated: now};
     }, `Opt-in settings saved ${tag}`);
     if (missing) return new Response("Add your Limited API key first.", {status: 400});
-    return Response.json(publicEntry({bs, ws, ready, since: now, updated: now}), H);
+    // OC pass rates: read straight away when on (then hourly by the timer - ocOptinPull); removed when off
+    let ocNote = null;
+    if (oc) ocNote = await ocPullMember(env, id, who.name, await openKey(env, sealedNow)).catch(() => null);
+    else await ocCprDrop(env, id);
+    return Response.json(Object.assign(publicEntry({bs, ws, ready, oc, since: now, updated: now}), {oc_now: ocNote}), H);
   } catch (e) {
     return new Response(e.message || "Something went wrong", {status: 502});
   }
@@ -600,49 +658,6 @@ async function ocWrite(env, ctx, req, body, del) {
     "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
     .bind(body.env, fid, id.player_id, name, JSON.stringify(clean), now).run();
   return ocJson({ok: true});
-}
-
-// MEMBERS' HUB SHARING (Nov 2026, "My data & sharing"): a member without the OC Optimizer script shares their OC
-// checkpoint pass rates with leadership. Their Torn API key stays in THEIR BROWSER (localStorage) - it never reaches
-// this Worker or the site: the browser reads user/organizedcrimes from Torn itself and sends only the rates.
-//   GET    /m/oc/cpr  -> {shared, ts, roles: n}        the signed-in member's own row (prod)
-//   POST   /m/oc/cpr  {roles: {"Crime|Role": 0-100}}  (X-HB-Save: 1) -> same checks + 1/min throttle as /oc/cpr
-//   DELETE /m/oc/cpr  (X-HB-Save: 1)                   -> removes their shared rates
-// Who it is comes from the Hub sign-in, never from the body, so nobody can write someone else's row.
-async function ocMemberShare(env, req, who) {
-  const H = {headers: {"Cache-Control": "no-store"}};
-  if (!env.OC_DB) return Response.json({ok: false, error: "OC sharing isn't set up yet"}, {status: 503});
-  const fid = Number(env.FACTION_ID), pid = Number(who.id);
-  if (req.method === "GET") {
-    const r = await env.OC_DB.prepare("SELECT roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(fid, pid).first();
-    let n = 0; try { n = r ? Object.keys(JSON.parse(r.roles)).length : 0; } catch (e) {}
-    return Response.json({shared: !!r, ts: r ? Number(r.ts) : null, roles: n}, H);
-  }
-  if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
-  if (req.method === "DELETE") {
-    await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(fid, pid).run();
-    return Response.json({ok: true, shared: false}, H);
-  }
-  if (req.method !== "POST") return new Response("Method not allowed", {status: 405});
-  let body; try { body = await req.json(); } catch (e) { return new Response("Body must be JSON", {status: 400}); }
-  const roles = body && body.roles;
-  if (!roles || typeof roles !== "object" || Array.isArray(roles)) return new Response("roles must be an object", {status: 400});
-  const ks = Object.keys(roles), clean = {};
-  if (ks.length > OC_MAX_ROLES) return new Response("too many roles", {status: 400});
-  for (const k of ks) {
-    const v = roles[k];
-    if (!k.includes("|") || k.length > OC_MAX_KEY_LEN) return new Response("bad role name", {status: 400});
-    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100) return new Response("pass rates must be 0-100", {status: 400});
-    clean[k] = Math.round(v);
-  }
-  const now = Date.now();
-  const last = await env.OC_DB.prepare("SELECT ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(fid, pid).first();
-  if (last && now - Number(last.ts) < OC_WRITE_GAP_MS) return Response.json({ok: true, throttled: true, ts: Number(last.ts)}, H);
-  await env.OC_DB.prepare(
-    "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
-    "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
-    .bind(fid, pid, String(who.name || "").slice(0, 40), JSON.stringify(clean), now).run();
-  return Response.json({ok: true, ts: now, roles: ks.length}, H);
 }
 
 // the key: X-API-Key / Authorization: Bearer header first, else the body / query value
@@ -1028,6 +1043,8 @@ async function ocFeedPull(env) {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
     put("crimes", (d.crimes || []).map(ocFeedCleanCrime));
   } catch (e) { fail("crimes", e); }
+  // OC pass rates of members who opted in with their stored key (their own keys, ~hourly each)
+  try { await ocOptinPull(env, now); } catch (e) { fail("oc-optin", e); }
   // roster - hourly (1 call)
   let newRoster = false;
   if (due("roster")) try {
