@@ -10449,13 +10449,18 @@ def discord_crime_alerts(key: str, cfg: dict):
     ids_cache = {}
 
     def ping(cr, who, text, image=True):
-        ids = []
+        # every member is written as their in-game name + ID, with a Discord mention in front when
+        # they've linked one. A webhook can't tell whether that Discord account is in the server
+        # (an account outside it shows as "@unknown-user"), so the name + ID always shows who it is.
+        ids, tags = [], []
         for m in who:
             if m["id"] not in ids_cache:
                 ids_cache[m["id"]] = _discord_id(m["id"], key)
-            if ids_cache[m["id"]]:
-                ids.append(ids_cache[m["id"]])
-        tag = " ".join(f"<@{x}>" for x in ids) or ", ".join(f"**{m['name']}**" for m in who)
+            did = ids_cache[m["id"]]
+            if did:
+                ids.append(did)
+            tags.append((f"<@{did}> " if did else "") + f"**{m['name']}** [{m['id']}]")
+        tag = ", ".join(tags)
         payload = {"username": name, "content": fill(text, {"ping": tag, "crime": cr["name"]}).strip(),
                    "allowed_mentions": {"parse": [], "users": ids}}
         if image:
