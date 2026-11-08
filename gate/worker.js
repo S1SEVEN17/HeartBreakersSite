@@ -232,6 +232,9 @@ export default {
     if (area === "m" && rest === "mine.json") return mine(env, who);
     // opt-in stats (own Limited key): settings / save / delete - always the signed-in member's own entry
     if (area === "m" && (rest === "optin" || rest === "optin.json")) return optinRoute(env, req, who);
+    // OC pass rates shared from the Hub (My data & sharing) - the member's browser reads them from Torn with a key
+    // kept ONLY in that browser and sends just the rates here; always the signed-in member's own row
+    if (area === "m" && rest === "oc/cpr") return ocMemberShare(env, req, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
@@ -558,6 +561,49 @@ async function ocWrite(env, ctx, req, body, del) {
     "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
     .bind(body.env, fid, id.player_id, name, JSON.stringify(clean), now).run();
   return ocJson({ok: true});
+}
+
+// MEMBERS' HUB SHARING (Nov 2026, "My data & sharing"): a member without the OC Optimizer script shares their OC
+// checkpoint pass rates with leadership. Their Torn API key stays in THEIR BROWSER (localStorage) - it never reaches
+// this Worker or the site: the browser reads user/organizedcrimes from Torn itself and sends only the rates.
+//   GET    /m/oc/cpr  -> {shared, ts, roles: n}        the signed-in member's own row (prod)
+//   POST   /m/oc/cpr  {roles: {"Crime|Role": 0-100}}  (X-HB-Save: 1) -> same checks + 1/min throttle as /oc/cpr
+//   DELETE /m/oc/cpr  (X-HB-Save: 1)                   -> removes their shared rates
+// Who it is comes from the Hub sign-in, never from the body, so nobody can write someone else's row.
+async function ocMemberShare(env, req, who) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (!env.OC_DB) return Response.json({ok: false, error: "OC sharing isn't set up yet"}, {status: 503});
+  const fid = Number(env.FACTION_ID), pid = Number(who.id);
+  if (req.method === "GET") {
+    const r = await env.OC_DB.prepare("SELECT roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(fid, pid).first();
+    let n = 0; try { n = r ? Object.keys(JSON.parse(r.roles)).length : 0; } catch (e) {}
+    return Response.json({shared: !!r, ts: r ? Number(r.ts) : null, roles: n}, H);
+  }
+  if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+  if (req.method === "DELETE") {
+    await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(fid, pid).run();
+    return Response.json({ok: true, shared: false}, H);
+  }
+  if (req.method !== "POST") return new Response("Method not allowed", {status: 405});
+  let body; try { body = await req.json(); } catch (e) { return new Response("Body must be JSON", {status: 400}); }
+  const roles = body && body.roles;
+  if (!roles || typeof roles !== "object" || Array.isArray(roles)) return new Response("roles must be an object", {status: 400});
+  const ks = Object.keys(roles), clean = {};
+  if (ks.length > OC_MAX_ROLES) return new Response("too many roles", {status: 400});
+  for (const k of ks) {
+    const v = roles[k];
+    if (!k.includes("|") || k.length > OC_MAX_KEY_LEN) return new Response("bad role name", {status: 400});
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 100) return new Response("pass rates must be 0-100", {status: 400});
+    clean[k] = Math.round(v);
+  }
+  const now = Date.now();
+  const last = await env.OC_DB.prepare("SELECT ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(fid, pid).first();
+  if (last && now - Number(last.ts) < OC_WRITE_GAP_MS) return Response.json({ok: true, throttled: true, ts: Number(last.ts)}, H);
+  await env.OC_DB.prepare(
+    "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
+    "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
+    .bind(fid, pid, String(who.name || "").slice(0, 40), JSON.stringify(clean), now).run();
+  return Response.json({ok: true, ts: now, roles: ks.length}, H);
 }
 
 // the key: X-API-Key / Authorization: Bearer header first, else the body / query value
