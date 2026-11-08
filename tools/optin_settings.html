@@ -19,6 +19,10 @@
   leadership without the OC Optimizer script. The key for this is kept ONLY in this browser (localStorage
   hb_oc_key) and never sent to the site - the browser reads the rates from Torn and sends just the rates
   (window.hbOcShare, OC_SHARE_JS in generate.py, loaded by the account menu; /m/oc/cpr in gate/worker.js).
+  KEYS (Nov 2026): "Your keys" says plainly which key is STORED ON THE HUB (stats key, encrypted) and which is ONLY IN
+  THIS BROWSER (OC pass-rate key); each section carries its own "How this key and data are used" disclosure.
+  VIEW MY SHARED DATA: GET /m/shared.json (gate/worker.js mySharedData) - everything the member shares, who sees it,
+  and live war readiness as leaders see it. Their own data only; keys are never returned.
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
@@ -43,23 +47,40 @@ input[type=password]{width:100%;background:#1f1214;color:#eee;border:1px solid #
 table{width:100%;border-collapse:collapse;font-size:13px}td{border-top:1px solid #2a1416;padding:7px 4px;vertical-align:top}
 td:first-child{color:var(--gold);white-space:nowrap;padding-right:10px}a{color:var(--gold)}
 ul{margin:6px 0 0;padding-left:18px;color:#cfc6c6;font-size:13px}li{margin:3px 0}
+.badge{display:inline-block;font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;margin-top:4px;white-space:nowrap}
+.badge.hub{background:#2a1a10;color:var(--gold);border:1px solid #6b4a18}.badge.dev{background:#10241a;color:var(--green);border:1px solid #2f5d3c}
+.keyrow{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid #2a1416}.keyrow:first-child{border-top:0}
+.keyrow .t{flex:1;min-width:0}.keyrow .t b{color:#fff}.keyrow .s{text-align:right;font-size:12px;color:var(--sub);flex:none;max-width:45%}
+.how{margin-top:14px;border-top:1px dashed var(--edge);padding-top:10px}.how h3{color:var(--gold);font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:0 0 6px}
+#viewbtn{width:100%;margin:2px 0 10px;border-radius:10px;padding:11px;font:600 15px system-ui;cursor:pointer;border:1px solid #6b4a18;background:#2a1a10;color:var(--gold)}
+#viewer{display:none}#viewer .sec{border-top:1px solid #2a1416;padding:10px 0}#viewer .sec:first-of-type{border-top:0}
+#viewer h4{margin:0 0 4px;color:#fff;font-size:15px}.who{font-size:12px;color:var(--sub);margin-bottom:6px}.who b{color:var(--gold)}
+.vt{width:100%;font-size:12px;border-collapse:collapse}.vt th{color:var(--sub);text-align:left;font-weight:600;padding:3px 4px;border-bottom:1px solid var(--edge)}
+.vt td{padding:3px 4px;border-top:1px solid #241214;color:#ddd}.vt td:first-child{color:#ddd;padding-right:4px}.vscroll{max-height:240px;overflow:auto}.err{color:#ff8a80}
 </style></head><body>
 __MENU__
 <h1>My Data &amp; Sharing</h1>
-<div class="sub">Optional extras with your own <b>Limited</b> API key - nothing here is on unless you turn it on</div>
+<div class="sub">Optional extras with your own API key - nothing here is on unless you turn it on</div>
 
 <div class="card st"><span class="dot" id="dot"></span><div><b id="stt">Loading…</b><div class="muted" id="std"></div></div></div>
+<button id="viewbtn">👁️ View my shared data</button>
+<div class="card" id="viewer"></div>
 
-<h2>🔑 Your Limited API key</h2>
+<h2>🔑 Your keys</h2>
 <div class="card">
-  <label class="k" for="key" id="keyl">Torn API key with <b>Limited Access</b></label>
-  <input id="key" type="password" autocomplete="off" maxlength="16" placeholder="16-character Limited key">
-  <div class="muted" style="margin-top:6px">Make one in Torn → <a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Settings → API Keys</a>
-    → Create key → <b>Limited Access</b>, named e.g. "Heart Breakers Hub". It's checked with Torn (it must be yours), then stored encrypted - nobody, leaders included, can ever see it.</div>
+  <div class="keyrow"><div class="t"><b>Stats key</b> <span class="muted">· battle stats, work stats, war readiness</span><br>
+    <span class="badge hub">🔒 Stored on the Hub (encrypted)</span></div><div class="s" id="k1s">-</div></div>
+  <div class="keyrow"><div class="t"><b>OC pass-rate key</b> <span class="muted">· organized crime pass rates</span><br>
+    <span class="badge dev">📱 Only in this browser - never stored on the Hub</span></div><div class="s" id="k2s">-</div></div>
 </div>
 
-<h2>📤 What to share</h2>
+<h2>📤 Stats, work stats &amp; war readiness</h2>
 <div class="card" id="opts">
+  <label class="k" for="key" id="keyl">Torn API key with <b>Limited Access</b></label>
+  <input id="key" type="password" autocomplete="off" maxlength="16" placeholder="16-character Limited key">
+  <div class="muted" style="margin:6px 0 4px">Make one in Torn → <a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Settings → API Keys</a>
+    → Create key → <b>Limited Access</b>, named e.g. "Heart Breakers Hub". It's checked with Torn (it must be yours), then
+    <b>stored on the Hub, encrypted</b> so your stats can be read daily while you're away - nobody, leaders included, can ever see it.</div>
   <div class="opt"><div class="t"><b>💪 Battle stats</b><span>Strength, defense, speed, dexterity - saved daily so your gains are tracked</span></div>
     <div class="seg" data-k="bs"><button data-v="off">Off</button><button data-v="leaders">Leaders</button><button data-v="faction">Faction</button></div></div>
   <div class="opt"><div class="t"><b>🧰 Work stats</b><span>Manual labor, intelligence, endurance - saved daily</span></div>
@@ -68,43 +89,43 @@ __MENU__
     <div class="seg" data-k="ready"><button data-v="false">Off</button><button data-v="true">Leaders</button></div></div>
   <div class="btns"><button class="go" id="save">Save</button><button class="del" id="del">Delete my key and all my data</button></div>
   <div id="msg"></div>
+  <div class="how"><h3>📜 How this key and data are used</h3>
+  <table>
+    <tr><td>Key storage</td><td><span class="badge hub">🔒 Stored on the Hub (encrypted)</span><br>Used only for automation (a daily stats reading, and live readiness when a leader opens it) · never shared or shown</td></tr>
+    <tr><td>Key access level</td><td>Limited Access</td></tr>
+    <tr><td>Data storage</td><td>Persistent - until you delete it here, turn everything off, leave Heart Breakers, or your key stops existing</td></tr>
+    <tr><td>Data sharing</td><td>Your choice per item: <b>faction leaders</b> only, or <b>faction members</b>. War readiness: leaders only. Never outside the faction</td></tr>
+    <tr><td>Purpose of use</td><td>Tracking your battle and work stat gains, and war readiness for faction leaders' war planning</td></tr>
+  </table>
+  <ul>
+    <li><b>Delete any time:</b> "Delete my key and all my data" removes your key at once and your saved stats with the next update.</li>
+    <li><b>Leaving the faction:</b> your key and all your saved stats are deleted automatically.</li>
+    <li><b>Deleting your key or Torn account:</b> when Torn reports the key no longer exists, everything is deleted automatically.</li>
+    <li>Turning one item off deletes that item's saved history. Every request is made with the comment "Heart Breakers Hub", so you can see it in Torn's API key log.</li>
+  </ul></div>
 </div>
 
 <h2>🕵️ Organized crime pass rates</h2>
 <div class="card">
   <div class="st" style="margin-bottom:8px"><span class="dot" id="ocdot"></span><div><b id="ocst">Loading…</b><div class="muted" id="ocsd"></div></div></div>
-  <div class="muted" style="margin-bottom:8px">Share your checkpoint pass rate for each OC role with <b>leadership</b>, so the OC Management
+  <div class="muted" style="margin-bottom:8px">Share your checkpoint pass rate for each OC role, so the OC Management
     Team Builder can put you in the roles you pass best - no script needed. Only roles in crimes that are recruiting
     right now show your rate, so it updates each time you open the Hub (at most once an hour).</div>
-  <label class="k" for="ockey" id="ockeyl">Torn API key (Limited Access - the same kind as above)</label>
+  <label class="k" for="ockey" id="ockeyl">Torn API key (Limited Access)</label>
   <input id="ockey" type="password" autocomplete="off" maxlength="16" placeholder="16-character key">
-  <div class="muted" style="margin-top:6px">This key is <b>saved only in this browser</b> - it's never sent to or stored on the site. Your browser
+  <div class="muted" style="margin-top:6px">This key is <b>saved only in this browser</b> - it's never sent to or stored on the Hub. Your browser
     asks Torn for your rates itself and sends just the rates. Use the same browser/device to keep them updated.</div>
   <div class="btns"><button class="go" id="ocsave">Share my pass rates</button><button class="del" id="ocoff">Stop sharing</button></div>
   <div id="ocmsg"></div>
-  <table style="margin-top:10px">
-    <tr><td>Data storage</td><td>Your latest pass rates per crime role - until you stop sharing or leave Heart Breakers</td></tr>
-    <tr><td>Data sharing</td><td>Faction leaders (OC Management) and the OC Optimizer script's role suggestions - never outside the faction</td></tr>
-    <tr><td>Purpose of use</td><td>Building organized crime teams with the best pass rate in every role</td></tr>
-    <tr><td>Key storage &amp; sharing</td><td>Stored only in your browser on this device · used from your browser to read your OC pass rates · never sent to the site or shared</td></tr>
+  <div class="how"><h3>📜 How this key and data are used</h3>
+  <table>
+    <tr><td>Key storage</td><td><span class="badge dev">📱 Only in this browser on this device</span><br>Used from your browser to read your OC pass rates · never sent to the Hub or shared</td></tr>
     <tr><td>Key access level</td><td>Limited Access</td></tr>
-  </table>
+    <tr><td>Data storage</td><td>Your latest pass rate per crime role - until you stop sharing or leave Heart Breakers</td></tr>
+    <tr><td>Data sharing</td><td><b>Faction leaders</b> (OC Management Team Builder) and <b>faction members using the OC Optimizer script</b> (its role suggestions show your name and rate) - never outside the faction</td></tr>
+    <tr><td>Purpose of use</td><td>Building organized crime teams with the best pass rate in every role</td></tr>
+  </table></div>
 </div>
-
-<h2>📜 How your key and data are used</h2>
-<div class="card"><table>
-  <tr><td>Data storage</td><td>Persistent - until you delete it here, turn everything off, leave Heart Breakers, or your key stops existing</td></tr>
-  <tr><td>Data sharing</td><td>Your choice per item: <b>faction leaders</b> only, or <b>faction members</b>. War readiness: leaders only. Never outside the faction</td></tr>
-  <tr><td>Purpose of use</td><td>Tracking your battle and work stat gains, and war readiness for faction leaders' war planning</td></tr>
-  <tr><td>Key storage &amp; sharing</td><td>Stored remotely, encrypted · used only for automation (a daily stats reading, and live readiness when a leader opens it) · never shared or shown</td></tr>
-  <tr><td>Key access level</td><td>Limited Access</td></tr>
-</table>
-<ul>
-  <li><b>Delete any time:</b> "Delete my key and all my data" removes your key at once and your saved stats with the next update.</li>
-  <li><b>Leaving the faction:</b> your key and all your saved stats are deleted automatically.</li>
-  <li><b>Deleting your key or Torn account:</b> when Torn reports the key no longer exists, everything is deleted automatically.</li>
-  <li>Turning one item off deletes that item's saved history. Every request is made with the comment "Heart Breakers Hub", so you can see it in Torn's API key log.</li>
-</ul></div>
 <script>
 const CFG = __CONFIG__;
 const $ = id => document.getElementById(id);
@@ -120,6 +141,7 @@ function status(o) {
                                : "Add a Limited key and choose what to share.";
   $("keyl").innerHTML = opted ? "Replace your key (optional)" : "Torn API key with <b>Limited Access</b>";
   $("del").style.display = opted ? "" : "none";
+  $("k1s").textContent = opted ? "Stored ✓" : "None";
   if (opted) S = {bs: o.bs || "off", ws: o.ws || "off", ready: String(!!o.ready)};
   seg();
 }
@@ -153,11 +175,12 @@ async function ocStatus() {
   try {
     const r = await fetch("oc/cpr", {cache: "no-store"}); const o = await r.json();
     $("ocdot").classList.toggle("on", !!o.shared);
-    $("ocst").textContent = o.shared ? "Sharing with leadership" : "Not sharing";
+    $("ocst").textContent = o.shared ? "Sharing your pass rates" : "Not sharing";
     $("ocsd").textContent = o.shared ? `Last shared ${ago(o.ts)} · ${o.roles} role${o.roles === 1 ? "" : "s"}${hasKey() ? " · key saved in this browser" : " · no key in this browser (add it to keep them updated)"}`
                                      : (hasKey() ? "Key saved in this browser - press Share" : "Add your key and press Share.");
     $("ockeyl").textContent = hasKey() ? "Replace the key saved in this browser (optional)" : "Torn API key (Limited Access - the same kind as above)";
     $("ocoff").style.display = o.shared || hasKey() ? "" : "none";
+    $("k2s").textContent = hasKey() ? "Saved in this browser ✓" : "None in this browser";
   } catch (e) { $("ocst").textContent = "Couldn't load"; $("ocsd").textContent = ""; }
 }
 $("ocsave").onclick = async () => {
@@ -185,6 +208,49 @@ $("ocoff").onclick = async () => {
   ocStatus();
 };
 ocStatus();
+
+// ---- 👁️ View my shared data: everything you share, who sees it, where the key lives (GET /m/shared.json) ----
+const esc = v => String(v == null ? "" : v).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const num = v => v == null ? "-" : Math.round(v).toLocaleString("en-US");
+const whom = v => v === "faction" ? "<b>Faction members</b> (your profile) and <b>leaders</b>" : v === "leaders" ? "<b>Faction leaders</b> only" : "nobody (off)";
+const dstr = d => { const t = typeof d === "number" && d > 1e8 ? d * 1000 : Date.parse(d); return isNaN(t) ? esc(d) : new Date(t).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric"}); };
+function statTable(rows, cols) {
+  if (!rows || !rows.length) return '<div class="muted">Nothing saved yet - the first reading comes with the next update.</div>';
+  const r = rows.slice().reverse();
+  return `<div class="muted" style="margin-bottom:4px">${rows.length} daily reading${rows.length === 1 ? "" : "s"} saved (newest first)</div><div class="vscroll"><table class="vt"><tr><th>Day</th>${cols.map(c => `<th>${c}</th>`).join("")}</tr>` +
+    r.map(x => `<tr><td>${dstr(x[0])}</td>${x.slice(1).map(v => `<td>${num(v)}</td>`).join("")}</tr>`).join("") + "</table></div>";
+}
+async function showViewer() {
+  const v = $("viewer");
+  if (v.style.display === "block") { v.style.display = "none"; $("viewbtn").textContent = "👁️ View my shared data"; return; }
+  v.style.display = "block"; $("viewbtn").textContent = "✕ Close my shared data"; v.innerHTML = '<div class="muted">Loading everything you share…</div>';
+  let d;
+  try { const r = await fetch("shared.json", {cache: "no-store"}); if (!r.ok) throw new Error(r.status === 401 ? "Sign in again, then retry." : "Couldn't load (" + r.status + ")"); d = await r.json(); }
+  catch (e) { v.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const o = d.optin, sec = [];
+  sec.push(`<div class="sec"><h4>🔑 Your keys</h4><table class="vt">
+    <tr><td>Stats key</td><td>${o && o.key_stored ? "Stored on the Hub, encrypted (never shown - not even to you)" : "None stored"}</td></tr>
+    <tr><td>OC pass-rate key</td><td>${hasKey() ? "Saved in this browser only" : "None in this browser"} - never on the Hub</td></tr></table></div>`);
+  const bs = o ? o.bs : "off", ws = o ? o.ws : "off";
+  sec.push(`<div class="sec"><h4>💪 Battle stats</h4><div class="who">Shared with: ${whom(bs)}</div>${bs !== "off" ? statTable((d.stats || {}).bs, ["Str", "Def", "Spd", "Dex"]) : ""}</div>`);
+  sec.push(`<div class="sec"><h4>🧰 Work stats</h4><div class="who">Shared with: ${whom(ws)}</div>${ws !== "off" ? statTable((d.stats || {}).ws, ["Man", "Int", "End"]) : ""}</div>`);
+  let rd = "";
+  if (o && o.ready) {
+    const R = d.ready || {}, bar = b => b ? `${b.cur} / ${b.max}` : "-";
+    rd = R.err ? `<div class="err">${esc(R.err)}</div>` : `<div class="muted" style="margin-bottom:4px">What leaders see right now (read live from Torn when they open War Readiness - not saved):</div>
+      <table class="vt"><tr><td>Energy</td><td>${bar(R.energy)}</td></tr><tr><td>Nerve</td><td>${bar(R.nerve)}</td></tr><tr><td>Happy</td><td>${bar(R.happy)}</td></tr><tr><td>Life</td><td>${bar(R.life)}</td></tr>
+      ${Object.entries(R.cd || {}).map(([k, x]) => `<tr><td>${esc(k[0].toUpperCase() + k.slice(1))} cooldown</td><td>${x ? Math.ceil(x / 60) + " min" : "none"}</td></tr>`).join("")}
+      <tr><td>Energy refill used today</td><td>${R.refill == null ? "-" : R.refill ? "yes" : "no"}</td></tr><tr><td>Status</td><td>${esc(R.status || "-")}</td></tr></table>`;
+  }
+  sec.push(`<div class="sec"><h4>⚔️ War readiness</h4><div class="who">Shared with: ${o && o.ready ? "<b>Faction leaders</b> only" : "nobody (off)"}</div>${rd}</div>`);
+  const oc = d.oc, ks = oc ? Object.keys(oc.roles || {}).sort() : [];
+  sec.push(`<div class="sec"><h4>🕵️ Organized crime pass rates</h4><div class="who">Shared with: ${oc ? "<b>Faction leaders</b> (OC Management) and <b>faction members using the OC Optimizer script</b>" : "nobody (not sharing)"}</div>` +
+    (oc ? `<div class="muted" style="margin-bottom:4px">Last shared ${ago(oc.ts)} · ${ks.length} role${ks.length === 1 ? "" : "s"}</div><div class="vscroll"><table class="vt"><tr><th>Crime</th><th>Role</th><th>Pass rate</th></tr>` +
+      ks.map(k => { const [c, r] = k.split("|"); return `<tr><td>${esc(c)}</td><td>${esc(r)}</td><td>${oc.roles[k]}%</td></tr>`; }).join("") + "</table></div>" : "") + "</div>");
+  if (o) sec.push(`<div class="sec muted">Opted in since ${day(o.since)} · settings last changed ${day(o.updated)}</div>`);
+  v.innerHTML = sec.join("");
+}
+$("viewbtn").onclick = showViewer;
 call("GET").then(status).catch(e => { $("stt").textContent = "Couldn't load your settings"; $("std").textContent = e.message; });
 </script>
 </body></html>

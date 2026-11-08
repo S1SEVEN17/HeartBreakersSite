@@ -235,6 +235,8 @@ export default {
     // OC pass rates shared from the Hub (My data & sharing) - the member's browser reads them from Torn with a key
     // kept ONLY in that browser and sends just the rates here; always the signed-in member's own row
     if (area === "m" && rest === "oc/cpr") return ocMemberShare(env, req, who);
+    // "View my shared data" (My data & sharing): everything the signed-in member shares, and with whom
+    if (area === "m" && rest === "shared.json") return mySharedData(env, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
@@ -386,6 +388,43 @@ async function tornUser(key, selections) {
   return r.json();
 }
 const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready, since: e.since, updated: e.updated} : {opted: false};
+// "View my shared data" (Nov 2026): GET /m/shared.json - ONLY the signed-in member's own data, exactly what others
+// can see of it:
+//   optin  {bs, ws, ready, since, updated} (never the key - only whether one is stored)
+//   stats  {bs: [[day, str, def, spd, dex]...], ws: [[day, man, int, end]...]} from data/optin_stats.json
+//   ready  what leaders see on War Readiness right now (read live from Torn with their stored key; nothing saved)
+//   oc     {ts, roles: {"Crime|Role": rate}} their shared OC pass rates (D1 oc_cpr, live)
+async function mySharedData(env, who) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  const id = String(Number(who.id)), out = {id: Number(id), name: who.name};
+  try {
+    const {data} = await readOptin(env, true);
+    const e = data.members[id];
+    out.optin = e ? {bs: e.bs, ws: e.ws, ready: !!e.ready, since: e.since, updated: e.updated, key_stored: !!e.k} : null;
+    if (e && (e.bs !== "off" || e.ws !== "off")) {
+      const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/data/optin_stats.json?ref=main`,
+                            {headers: Object.assign(ghHeaders(env), {Accept: "application/vnd.github.raw"})});
+      if (r.ok) { const st = await r.json(); out.stats = st[id] || {}; }
+    }
+    if (e && e.ready) {
+      try {
+        const d = await tornUser(await openKey(env, e.k), "bars,cooldowns,profile,refills");
+        const bar = b => b ? {cur: b.current, max: b.maximum} : null;
+        out.ready = d.error ? {err: d.error.error || "Torn error"} :
+          {energy: bar(d.energy), nerve: bar(d.nerve), happy: bar(d.happy), life: bar(d.life), cd: d.cooldowns || {},
+           refill: (d.refills || {}).energy_refill_used ?? null, status: d.status ? d.status.description : null};
+      } catch (x) { out.ready = {err: "couldn't read right now"}; }
+    }
+  } catch (x) { out.optin_err = "couldn't read your opt-in settings right now"; }
+  if (env.OC_DB) {
+    const r = await env.OC_DB.prepare("SELECT roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
+      .bind(Number(env.FACTION_ID), Number(id)).first();
+    let roles = {}; try { roles = r ? JSON.parse(r.roles) : {}; } catch (x) {}
+    out.oc = r ? {ts: Number(r.ts), roles} : null;
+  }
+  return Response.json(out, H);
+}
+
 async function optinRoute(env, req, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
   if (!env.GH_DISPATCH && !env.GH_SAVE) return new Response("Saving isn't set up", {status: 503});
