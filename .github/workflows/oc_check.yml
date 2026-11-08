@@ -69,3 +69,14 @@ jobs:
           curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts/hb-gate/secrets" \
             | python3 -c "import json,sys;d=json.load(sys.stdin);print('feed key set:', any(s.get('name')=='HUB_TORN_KEY' for s in (d.get('result') or [])), 'ok' if d.get('success') else d.get('errors'))"
+      - name: Item prices coverage
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # counts only: reward item ids in history vs priced (and priced at 0 = no market price)
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT (SELECT COUNT(DISTINCT json_extract(j.value, '\$.id')) FROM oc_hist, json_each(oc_hist.data, '\$.rewards.items') AS j WHERE oc_hist.env = 'prod') AS ids, (SELECT COUNT(*) FROM oc_snap, json_each(oc_snap.data) WHERE oc_snap.env = 'prod' AND oc_snap.ds = 'prices') AS priced, (SELECT COUNT(*) FROM oc_snap, json_each(oc_snap.data) AS p WHERE oc_snap.env = 'prod' AND oc_snap.ds = 'prices' AND json_extract(p.value, '\$.price') = 0) AS zero" > pr.json 2> err.log \
+            || { echo "::warning::couldn't read prices"; exit 0; }
+          python3 -c "import json;d=json.load(open('pr.json'));r=(d[0]['results'] if isinstance(d,list) else d['results'])[0];print(f\"reward item ids in history: {r['ids']} · priced: {r['priced']} · priced at 0 (no market price): {r['zero']}\")"

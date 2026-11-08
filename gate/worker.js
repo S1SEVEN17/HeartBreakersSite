@@ -765,7 +765,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
 //     history  faction/crimes?cat=successful, newest first until a known id - every 30 min -> oc_hist (row per crime)
 //     roster   faction/members -> {id: name} - hourly                                     -> oc_snap
 //     catalog  torn/organizedcrimes, as Torn returns it - weekly                          -> oc_snap
-//     prices   torn/items for every reward item id in history -> {id: {name, price}} - daily -> oc_snap
+//     prices   torn/items for every reward item id in history -> {id: {name, price = market × 0.95}} - daily after
+//              00:10 TCT, plus any newly seen id on the next run                                     -> oc_snap
 //   OPEN-SLOT checkpoint_pass_rate and item_requirement.is_available are the PULLING key's own view, so they're
 //   blanked (null) on every stored crime - the script fills the member's own rates from /oc/cpr/read.
 //   POST /oc/snapshot/read  {key, env, have: {crimes, history, roster, catalog, prices}}  (as_of ms the client has)
@@ -976,18 +977,42 @@ async function ocFeedPull(env) {
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) newHist = true; } catch (e) { fail("backfill", e); }
-  // prices - daily: every reward item id seen in history (1 call per 100 ids)
-  if (due("prices")) try {
+  // prices (item-reward pricing addendum, Nov 2026): EVERY reward item id in the FULL stored history (all types -
+  // armor, weapons, medical, drugs, temporaries), priced at value.market_price × 0.95 (Torn's 5% market fee - the
+  // value a member can actually realise), saved as {"<id>": {name, price}}. Item without a market price -> 0.
+  //   * the full re-price runs once a day, the first timer run after 00:10 TCT (= UTC), so it's the new market day
+  //   * any id that turns up in history and isn't priced yet is priced on the next run (no waiting for tomorrow)
+  // 1 call per 100 ids (normally one call).
+  try {
     // the ids come out of the stored JSON inside D1 (no parsing of every crime here - Worker CPU)
     const rows = (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
       "json_each(oc_hist.data, '$.rewards.items') AS j WHERE oc_hist.env = 'prod'").all()).results || [];
-    const out = {}, list = rows.map(r => Number(r.i)).filter(i => i > 0);
-    for (let i = 0; i < list.length; i += 100) {
-      const d = await ocTorn(env, "torn/items?ids=" + list.slice(i, i + 100).join(","));
-      (Array.isArray(d.items) ? d.items : Object.values(d.items || {})).forEach(it => {
-        if (it && it.id) out[String(it.id)] = {name: String(it.name || ""), price: Number((it.value || {}).market_price) || 0}; });
+    const all = [...new Set(rows.map(r => Number(r.i)).filter(i => i > 0))];
+    const cur = await ocSnapGet(env, "prod", "prices");
+    const have = (cur && cur.data && typeof cur.data === "object") ? cur.data : {};
+    const dayStart = now - now % 86400e3, slot = dayStart + 10 * 60e3;          // 00:10 TCT today
+    // one forced full re-price when the 5% net pricing went live (hub row 'prices-net' marks it done)
+    const netDone = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds = 'prices-net'").first();
+    const daily = !netDone || (now >= slot && (lastPull.prices || 0) < slot);
+    const list = daily ? all : all.filter(i => !have[String(i)]);
+    if (list.length) {
+      const out = daily ? {} : Object.assign({}, have);
+      for (let i = 0; i < list.length; i += 100) {
+        const chunk = list.slice(i, i + 100);
+        const d = await ocTorn(env, "torn/items?ids=" + chunk.join(","));
+        const got = {};
+        (Array.isArray(d.items) ? d.items : Object.values(d.items || {})).forEach(it => { if (it && it.id) got[String(it.id)] = it; });
+        chunk.forEach(id => {
+          const it = got[String(id)];
+          out[String(id)] = {name: String((it && it.name) || (have[String(id)] || {}).name || ""),
+                             price: Math.round((Number(((it || {}).value || {}).market_price) || 0) * 0.95)};
+        });
+      }
+      if (daily) all.forEach(id => { if (!out[String(id)]) out[String(id)] = {name: "", price: 0}; });
+      put("prices", out);                                   // marks pull:prices only on success
+      if (daily && !netDone) ops.push(env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'prices-net', ?, '{}', 'hub') " +
+        "ON CONFLICT (env, ds) DO NOTHING").bind(now));
     }
-    if (Object.keys(out).length) put("prices", out);      // nothing priced yet -> try again next run
   } catch (e) { fail("prices", e); }
   await env.OC_DB.batch(ops);
   // summaries (payout stats + member rates) - AFTER the writes above (they use the new roster + history): whenever
