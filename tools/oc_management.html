@@ -135,12 +135,15 @@ async function ghJSON(path) {
 async function load() {
   st("Loading…");
   try {
-    const [cfg, rates, act, pool] = await Promise.all([
+    const [cfg, rates, act, pool, feed] = await Promise.all([
       getJSON("oc/config.json?env=" + ENV), getJSON("oc/rates.json?env=" + ENV),
       // active crimes (who's in what, right now) - the crime check saves it every 15 minutes
       ghJSON("data/oc_active.json"),
       // members + history rates from the last Refresh - used when newer than the copy built into this page
-      ghJSON("data/oc_pool.json")]);
+      ghJSON("data/oc_pool.json"),
+      // the OC data feed's crimes (recruiting + planning, every 3 minutes) - "needs to be spawned" warnings
+      getJSON("oc/crimes.json?env=" + ENV).catch(() => null)]);
+    D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
     D.config = cfg; D.rates = rates || {};
     D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
     if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
@@ -161,6 +164,37 @@ async function saveConfig(k, v) {
 // ---------- pass rates ----------
 // busy = in an active crime right now; activeRate = their rate in that crime (live)
 function busyMap() { const b = {}; D.active.forEach(c => (c.slots || []).forEach(([pid, pos, rate]) => { if (pid) b[pid] = {crime: c.name, pos, rate, status: c.status}; })); return b; }
+// ---------- spawn warnings (Nov 2026) ----------
+// Teams are built whether or not their crime is recruiting. A team can only start once Torn has a Recruiting instance
+// of that crime with its roles open, so each team is matched to one (the feed's crimes, every 3 min): teams of the
+// same crime share that crime's recruiting instances in board order; a team left without one, or whose instance
+// is missing some of its roles, gets "needs to be spawned". null = no feed data (no warning shown).
+function spawnMap(teams) {
+  if (!D.feed) return null;
+  const pool = {};                                      // crime -> [[open base roles], ...] recruiting instances
+  D.feed.forEach(c => { if (c && c.status === "Recruiting") {
+    const open = (c.slots || []).filter(sl => !sl.user).map(sl => baseRole((sl.position_info && sl.position_info.label) || sl.position));
+    if (open.length) (pool[c.name] || (pool[c.name] = [])).push(open); } });
+  const out = new Map();
+  teams.forEach(t => {
+    const inst = (pool[t.crime] || []).shift();
+    if (!inst) { out.set(t.id, {ok: false, why: "no " + t.crime + " is recruiting - it needs to be spawned"}); return; }
+    const left = inst.slice(), miss = [];
+    t.roles.forEach(r => { const i = left.indexOf(baseRole(r.position)); if (i >= 0) left.splice(i, 1); else miss.push(baseRole(r.position)); });
+    out.set(t.id, miss.length ? {ok: false, why: `the recruiting ${t.crime} has no open ${[...new Set(miss)].join(", ")} - another needs to be spawned`}
+                              : {ok: true});
+  });
+  return out;
+}
+const spawnHtml = sp => sp && !sp.ok ? `<div class="hn" style="color:var(--gold)">⚠️ Not available: ${esc(sp.why)}.</div>` : "";
+function spawnSummary(teams, sm) {
+  if (!sm) return "";
+  const need = {};
+  teams.forEach(t => { const x = sm.get(t.id); if (x && !x.ok) need[t.crime] = (need[t.crime] || 0) + 1; });
+  const list = Object.entries(need).map(([c, n]) => esc(c) + (n > 1 ? " ×" + n : ""));
+  return list.length ? `<div class="hn" style="color:var(--gold)">⚠️ ${list.length === 1 && Object.values(need)[0] === 1 ? "This crime needs" : "These crimes need"} to be spawned before the team can join: <b>${list.join(", ")}</b>.</div>` : "";
+}
+
 // the best known rate for member pid in crime + role: live (shared / active crime) when fresh, else history
 function rateOf(pid, crime, pos) {
   const k = rkey(crime, pos), maxAge = OPT.maxAge * 3600e3;
@@ -493,6 +527,7 @@ function drawBuilder() {
       <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average success</span></div>
       <div><b>${fmt$(BOARD.teams.reduce((x, t) => x + (teamPay(t) || 0), 0))}</b><span>Members' pay / day</span></div>
       <div><b>${free}</b><span>Not in a crime now</span></div></div>
+    ${spawnSummary(BOARD.teams, SPAWN = spawnMap(BOARD.teams))}
     <div class="teams">${BOARD.teams.map(teamCard).join("") || '<div class="tag">No teams yet - press Auto-build, or pick a crime and Add team.</div>'}</div>
     ${benched.length ? `<h2>Not placed (${benched.length})</h2><div class="bench">${benched.map(p => `<span>${esc(nameOf(p))}</span>`).join("")}</div>` : ""}
   </div>`;
@@ -510,6 +545,7 @@ function drawBuilder() {
   $("deploy").onclick = deploy;
   wireTeams();
 }
+let SPAWN = null;                                       // spawnMap of the board being drawn
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
   const rows = t.roles.map((r, i) => {
@@ -527,6 +563,7 @@ function teamCard(t) {
     <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
       return p == null ? "" : v.pot ? `💰 ${fmt$(p)}/day team · ${fmt$(p / t.roles.length)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""}`
         : "💰 no pay data yet"; })()}</div>
+    ${spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
 }
 function wireTeams() {
@@ -557,6 +594,7 @@ function drawDeployed() {
   const plan = D.config.plan, busy = busyMap();
   if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel"><div class="hn">Nothing deployed to Live yet - build teams in the Team Builder and press Deploy.</div></div>`; return; }
   let joined = 0, total = 0;
+  const sm = spawnMap(plan.teams);
   const cards = plan.teams.map(t => {
     const rows = t.roles.map(r => {
       if (r.pid == null) return `<tr><td>${esc(r.position)}</td><td class="tag">empty</td><td></td><td></td></tr>`;
@@ -568,11 +606,13 @@ function drawDeployed() {
       return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b><span class="sr ${col(t.avg)}">${t.avg ? t.avg + "%" : "-"}</span></div>
+      ${spawnHtml(sm && sm.get(t.id))}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
   $("view").innerHTML = `<div class="panel"><div class="hn">Deployed ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${joined}</b><span>Joined</span></div><div><b>${total - joined}</b><span>Not yet</span></div></div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
+    ${spawnSummary(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
   $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
     BOARD = {teams: plan.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, lock: false,

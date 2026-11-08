@@ -206,7 +206,8 @@ export default {
     // OC Payout Optimizer script (runs on torn.com, authenticates with the member's own Torn key)
     if (p === "/oc/cpr" || p === "/oc/cpr/read" || p === "/oc/cpr/delete") return ocRoute(env, ctx, req, url, p);
     if (p === "/oc/plan") return ocPlanRoute(env, ctx, req);
-    if (p === "/oc/snapshot/read" || p === "/oc/snapshot/write" || p === "/oc/bundle") return ocFeedRoute(env, ctx, req, p);
+    if (p === "/oc/snapshot/read" || p === "/oc/snapshot/write" || p === "/oc/bundle" || p === "/oc/history") return ocFeedRoute(env, ctx, req, p);
+    if (p === "/oc/history/stats") return ocHistStats(env);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -649,7 +650,31 @@ async function ocPlanObj(env, envName, id) {
       }
     }
   }
+  // Spawn state (Nov 2026): teams are planned whether or not the crime is recruiting, so tell the member when
+  // there's nothing to join yet. From the feed's crimes (every 3 min):
+  //   recruiting   a Recruiting instance of the crime has at least one open slot
+  //   role_open    a Recruiting instance has the member's role (base role, "#n" ignored) open
+  //   spawn_needed !role_open -> the script warns "this crime needs to be spawned"
+  if (assignment) Object.assign(assignment, await ocSpawnState(env, envName, assignment.crime, assignment.position));
   return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null};
+}
+
+const ocBaseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();
+async function ocSpawnState(env, envName, crime, position) {
+  const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = ? AND ds = 'crimes'").bind(envName).first();
+  let crimes = [];
+  try { crimes = JSON.parse(snap.data); } catch (e) { return {recruiting: null, role_open: null, spawn_needed: null}; }
+  const want = ocBaseRole(position);
+  let recruiting = false, roleOpen = false;
+  for (const c of crimes) {
+    if (!c || c.name !== crime || c.status !== "Recruiting") continue;
+    for (const sl of c.slots || []) {
+      if (sl.user) continue;
+      recruiting = true;
+      if (ocBaseRole((sl.position_info && sl.position_info.label) || sl.position) === want) roleOpen = true;
+    }
+  }
+  return {recruiting, role_open: roleOpen, spawn_needed: !roleOpen, crimes_as_of: Number(snap.as_of)};
 }
 
 async function ocLeaderRoute(env, req, url, who, sub) {
@@ -664,6 +689,15 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     const out = {};
     for (const r of results || []) { let roles = {}; try { roles = JSON.parse(r.roles); } catch (e) {} out[String(r.player_id)] = {name: r.name, ts: r.ts, roles}; }
     return Response.json(out, H);
+  }
+  // GET /l/oc/crimes.json?env= -> the feed's crimes {as_of, crimes} (recruiting + planning, every 3 min) - the
+  // OC Management page's "needs to be spawned" warnings
+  if (req.method === "GET" && sub === "crimes.json") {
+    const envName = url.searchParams.get("env");
+    if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
+    const r = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = ? AND ds = 'crimes'").bind(envName).first();
+    return new Response(`{"as_of":${r ? Number(r.as_of) : 0},"crimes":${r ? r.data : "[]"}}`,
+                        {headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
   }
   if (req.method === "POST" && sub === "refresh") {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
@@ -751,6 +785,7 @@ async function ocFeedRoute(env, ctx, req, p) {
   const id = await ocIdentify(env, ctx, ocKey(req, body.key));
   if (id.err) return ocErr(id.status, id.err);
   if (p === "/oc/snapshot/write") return ocFeedWrite(env, body, id);
+  if (p === "/oc/history") return ocHistoryPage(env, body);
   const snap = await ocFeedRead(env, body.env, body.have || {});
   if (p === "/oc/snapshot/read") return new Response(snap, {headers: {...OC_CORS, "Content-Type": "application/json"}});
   // bundle: the snapshot (already JSON text - not re-parsed) + rates + plan
@@ -763,7 +798,7 @@ async function ocFeedRoute(env, ctx, req, p) {
 async function ocFeedRead(env, envName, have) {
   const h = k => Number(have[k]) || 0;
   const parts = ['"ok":true'];
-  const {results} = await env.OC_DB.prepare("SELECT ds, as_of FROM oc_snap WHERE env = ? AND ds IN ('crimes','roster','catalog','prices')")
+  const {results} = await env.OC_DB.prepare("SELECT ds, as_of FROM oc_snap WHERE env = ? AND ds IN ('crimes','roster','catalog','prices','summaries')")
     .bind(envName).all();
   const want = (results || []).filter(r => Number(r.as_of) > h(r.ds)).map(r => r.ds);
   if (want.length) {
@@ -863,6 +898,7 @@ async function ocFeedWrite(env, body, id) {
   ops.push(env.OC_DB.prepare("INSERT INTO oc_wb (env, player_id, ts) VALUES (?, ?, ?) ON CONFLICT (env, player_id) DO UPDATE SET ts = excluded.ts")
     .bind(envName, id.player_id, now));
   await env.OC_DB.batch(ops);
+  if (stored.includes("history")) await ocSummariesSave(env, envName).catch(() => {});
   return ocJson({ok: true, stored, dropped});
 }
 
@@ -893,17 +929,19 @@ async function ocFeedPull(env) {
   const fail = (step, e) => errs.push(step + ": " + String((e && e.message) || e).slice(0, 60));
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
+  let newHist = false;
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
     put("crimes", (d.crimes || []).map(ocFeedCleanCrime));
   } catch (e) { fail("crimes", e); }
   // roster - hourly (1 call)
+  let newRoster = false;
   if (due("roster")) try {
     const d = await ocTorn(env, "faction/members");
     const out = {};
     (Array.isArray(d.members) ? d.members : Object.values(d.members || {})).forEach(m => { if (m && m.id) out[String(m.id)] = String(m.name || ""); });
-    if (Object.keys(out).length) put("roster", out);
+    if (Object.keys(out).length) { put("roster", out); newRoster = true; }
   } catch (e) { fail("roster", e); }
   // catalog - weekly (1 call)
   if (due("catalog")) try {
@@ -925,9 +963,12 @@ async function ocFeedPull(env) {
     // stored now (not with the rest at the end) so the prices step below already sees new reward items
     const hops = [];
     if (fresh.length) ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now)));
-    if (hops.length) await env.OC_DB.batch(hops);
+    if (hops.length) { await env.OC_DB.batch(hops); newHist = true; }
     mark("history");
   } catch (e) { fail("history", e); }
+  // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
+  // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
+  try { if (await ocBackfill(env, now, ENVS)) newHist = true; } catch (e) { fail("backfill", e); }
   // prices - daily: every reward item id seen in history (1 call per 100 ids)
   if (due("prices")) try {
     // the ids come out of the stored JSON inside D1 (no parsing of every crime here - Worker CPU)
@@ -941,7 +982,144 @@ async function ocFeedPull(env) {
     }
     if (Object.keys(out).length) put("prices", out);      // nothing priced yet -> try again next run
   } catch (e) { fail("prices", e); }
-  ops.push(env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pull:errors', ?, ?, 'hub') " +
-    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(errs)));
   await env.OC_DB.batch(ops);
+  // summaries (payout stats + member rates) - AFTER the writes above (they use the new roster + history): whenever
+  // history or the roster changed, or none are stored yet
+  try {
+    const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'").first();
+    if (newHist || newRoster || !have) for (const e of ENVS) await ocSummariesSave(env, e);
+  } catch (e) { fail("summaries", e); }
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pull:errors', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(errs)).run();
+}
+
+
+// =====================================================================================================
+// OC SUMMARIES FEED (Nov 2026) - project doc claude/oc-optimizer-hub-summaries-contract.md ("Option B")
+// The script stops keeping crime history: /oc/bundle (and /oc/snapshot/read) carry `summaries`, worked out HERE from
+// the Hub's full history (oc_hist) in SQL - D1 does the JSON work, so the Worker's CPU stays tiny:
+//   summaries = {as_of: newest completion (ms), window: 100,
+//     payouts: {crime: {samples, moneyAvg, moneyMin, moneyMax, respAvg, respMin, respMax, items: {id: avg count},
+//                       itemBased}}           <- the latest `window` completions of each crime (cash PRE-split)
+//     memberRates: {crime: {baseRole: [{pid, name, rate}]}}   <- each CURRENT member's latest rate, ALL history
+//   POST /oc/history {key, env, crime?, limit? (50, max 200), before? (ms)} -> {ok, rows: [crimes as Torn gave them],
+//        next: ms cursor | null} - on-demand raw history (the script doesn't store it)
+//   GET  /oc/history/stats -> {ok, count, earliest (ms), done} - the backfill probe (how far back Torn's data goes)
+// =====================================================================================================
+const SUM_WINDOW = 100;
+const SUM_BASE_ROLE = "trim(CASE WHEN instr(label, '#') > 0 THEN substr(label, 1, instr(label, '#') - 1) ELSE label END)";
+
+async function ocSummaries(env, envName) {
+  const db = env.OC_DB;
+  const top = await db.prepare("SELECT MAX(executed_at) AS t FROM oc_hist WHERE env = ?").bind(envName).first();
+  const pay = await db.prepare(
+    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
+                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
+                FROM oc_hist WHERE env = ?)
+     SELECT crime, COUNT(*) AS samples,
+            AVG(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mavg, MIN(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mmin,
+            MAX(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mmax,
+            AVG(json_extract(data, '$.rewards.respect')) AS ravg, MIN(json_extract(data, '$.rewards.respect')) AS rmin,
+            MAX(json_extract(data, '$.rewards.respect')) AS rmax
+     FROM c WHERE n <= ? AND crime IS NOT NULL GROUP BY crime`).bind(envName, SUM_WINDOW).all();
+  const items = await db.prepare(
+    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
+                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
+                FROM oc_hist WHERE env = ?)
+     SELECT c.crime, COALESCE(json_extract(j.value, '$.id'), json_extract(j.value, '$.item_id')) AS item,
+            SUM(COALESCE(json_extract(j.value, '$.quantity'), json_extract(j.value, '$.amount'), 1)) AS qty
+     FROM c, json_each(c.data, '$.rewards.items') AS j WHERE c.n <= ? GROUP BY c.crime, item`).bind(envName, SUM_WINDOW).all();
+  const rates = await db.prepare(
+    `WITH s AS (SELECT json_extract(h.data, '$.name') AS crime, h.executed_at AS t,
+                       json_extract(j.value, '$.user.id') AS pid, json_extract(j.value, '$.checkpoint_pass_rate') AS rate,
+                       COALESCE(json_extract(j.value, '$.position_info.label'), json_extract(j.value, '$.position')) AS label
+                FROM oc_hist AS h, json_each(h.data, '$.slots') AS j WHERE h.env = ?),
+          b AS (SELECT crime, t, pid, rate, ${SUM_BASE_ROLE} AS role FROM s WHERE pid IS NOT NULL AND rate IS NOT NULL),
+          r AS (SELECT crime, role, pid, rate, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
+     SELECT crime, role, pid, rate FROM r WHERE n = 1`).bind(envName).all();
+  const ros = await ocSnapGet(env, envName, "roster");
+  const roster = (ros && ros.data) || null;
+  const payouts = {};
+  for (const r of pay.results || []) {
+    payouts[r.crime] = {samples: r.samples, moneyAvg: Math.round(r.mavg || 0), moneyMin: r.mmin || 0, moneyMax: r.mmax || 0,
+                        respAvg: r.ravg == null ? null : Math.round(r.ravg), respMin: r.rmin ?? null, respMax: r.rmax ?? null,
+                        items: {}, itemBased: false};
+  }
+  for (const r of items.results || []) {
+    const p = payouts[r.crime];
+    if (p && r.item != null) p.items[String(r.item)] = Math.round(100 * (r.qty || 0) / p.samples) / 100;
+  }
+  for (const p of Object.values(payouts)) p.itemBased = p.moneyMax === 0 && Object.keys(p.items).length > 0;
+  const memberRates = {};
+  for (const r of rates.results || []) {
+    if (roster && roster[String(r.pid)] == null) continue;                 // members who left aren't suggested
+    const byRole = memberRates[r.crime] || (memberRates[r.crime] = {});
+    (byRole[r.role] || (byRole[r.role] = [])).push({pid: Number(r.pid), name: roster ? roster[String(r.pid)] : "#" + r.pid,
+                                                     rate: Math.round(r.rate)});
+  }
+  for (const byRole of Object.values(memberRates)) for (const l of Object.values(byRole)) l.sort((a, b) => b.rate - a.rate);
+  return {as_of: (Number(top && top.t) || 0) * 1000, window: SUM_WINDOW, payouts, memberRates};
+}
+async function ocSummariesSave(env, envName) {
+  const s = await ocSummaries(env, envName);
+  // stored with its own write time as the version, so a recompute (e.g. a member renamed) still reaches clients;
+  // the "newest completion" stays in the data as as_of
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES (?, 'summaries', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+    .bind(envName, Date.now(), JSON.stringify(s)).run();
+}
+
+// on-demand raw history (newest first)
+async function ocHistoryPage(env, body) {
+  const limit = Math.max(1, Math.min(200, Number(body.limit) || 50));
+  const before = Number(body.before) > 0 ? Math.floor(Number(body.before) / 1000) : 4e9;      // ms cursor -> s
+  const crime = typeof body.crime === "string" && body.crime ? body.crime.slice(0, 60) : null;
+  const q = crime
+    ? env.OC_DB.prepare("SELECT executed_at, data FROM oc_hist WHERE env = ? AND executed_at < ? AND json_extract(data, '$.name') = ? ORDER BY executed_at DESC LIMIT ?")
+        .bind(body.env, before, crime, limit)
+    : env.OC_DB.prepare("SELECT executed_at, data FROM oc_hist WHERE env = ? AND executed_at < ? ORDER BY executed_at DESC LIMIT ?")
+        .bind(body.env, before, limit);
+  const rows = (await q.all()).results || [];
+  const next = rows.length === limit ? Number(rows[rows.length - 1].executed_at) * 1000 : null;
+  return new Response(`{"ok":true,"rows":[${rows.map(r => r.data).join(",")}],"next":${next}}`,
+                      {headers: {...OC_CORS, "Content-Type": "application/json"}});
+}
+
+// the backfill probe - counts + a date only (no key needed: nothing personal)
+async function ocHistStats(env) {
+  if (!env.OC_DB) return ocErr(503, "OC sharing isn't set up yet");
+  const r = await env.OC_DB.prepare("SELECT COUNT(*) AS n, MIN(executed_at) AS e FROM oc_hist WHERE env = 'prod'").first();
+  const b = await ocSnapGet(env, "hub", "backfill");
+  return ocJson({ok: true, count: r ? r.n : 0, earliest: r && r.e ? r.e * 1000 : null, done: !!(b && b.data && b.data.done)});
+}
+
+// one-time backfill: BACKFILL_PAGES pages per timer run (offset kept in oc_snap env 'hub' ds 'backfill'), until an
+// empty page. Returns true if it stored anything.
+const BACKFILL_PAGES = 5;
+async function ocBackfill(env, now, ENVS) {
+  const st = (await ocSnapGet(env, "hub", "backfill")) || {data: {}};
+  const b = st.data || {};
+  if (b.done) return false;
+  if (b.paused_day && b.paused_day === Math.floor(now / 86400e3)) return false;     // Torn said stop: tomorrow
+  let off = Number(b.offset) || 0, got = [], done = false, err = null;
+  for (let i = 0; i < BACKFILL_PAGES; i++) {
+    let d;
+    try { d = await ocTorn(env, `faction/crimes?cat=successful&limit=100&offset=${off}&sort=DESC`); }
+    catch (e) { err = e; break; }
+    const list = (d.crimes || []).filter(c => c && c.id && c.executed_at);
+    if (!(d.crimes || []).length) { done = true; break; }
+    got = got.concat(list);
+    off += (d.crimes || []).length;
+  }
+  if (got.length) { const ops = []; ENVS.forEach(e => ops.push(...ocHistPut(env, e, got, now))); await env.OC_DB.batch(ops); }
+  const out = {offset: off, done, pages_total: (b.pages_total || 0) + Math.ceil(got.length / 100)};
+  if (err) out.paused_day = Math.floor(now / 86400e3);
+  if (done) {
+    const r = await env.OC_DB.prepare("SELECT COUNT(*) AS n, MIN(executed_at) AS e FROM oc_hist WHERE env = 'prod'").first();
+    Object.assign(out, {count: r.n, earliest: r.e * 1000, finished: now});
+  }
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'backfill', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(out)).run();
+  if (err) throw err;
+  return got.length > 0;
 }
