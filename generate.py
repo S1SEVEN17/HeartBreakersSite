@@ -94,7 +94,7 @@ API_COMMENT = "Heart Breakers Hub"
 #   crime check / chain watch         every 15 min (:00 :15 :30 :45 / :07 :22 :37 :52) - Cloudflare timer
 # tools/should_run.py makes the 3-hourly FULL update land on the same 3-hour slots.
 # ==========================================================================
-SLOT_H = {"core": 3, "core_slow": 24, "gym": 6, "crimes": 3, "armory": 3, "vault": 3, "optin": 3, "item_types": 168}
+SLOT_H = {"core": 3, "core_slow": 24, "gym": 6, "crimes": 3, "armory": 3, "vault": 3, "optin": 24, "item_types": 168}   # optin: battle / work stats once a day, 00:00 TCT (Nov 2026)
 _MONDAY = 4 * 86400                 # 1970-01-05 00:00 UTC was a Monday - weekly slots start on Mondays
 
 
@@ -5870,10 +5870,12 @@ def optin_update(raw: dict):
         st = {}
     current = {str(m.get("id")) for m in _as_list((raw.get("members") or {}).get("members"))}
     last_read = int((st.get("_meta") or {}).get("read") or 0)
-    # LEADER / MEMBER SAVES: a member who opted in or changed what they share since the last read is read straight
-    # away (only them); everyone else waits for the next 3-hour slot as usual
+    # ONCE A DAY (Nov 2026): everyone is read in the 00:00 TCT slot. A member who opted in or changed what they share
+    # is read straight away ONLY if they haven't been read yet today - nobody is read twice in a day.
+    today0 = slot_start("optin")
     pending = {i for i, e in opt.items() if (e.get("bs", "off") != "off" or e.get("ws", "off") != "off")
-               and int(e.get("updated") or 0) > int((st.get(i) or {}).get("r") or 0)}     # r = when last read
+               and int(e.get("updated") or 0) > int((st.get(i) or {}).get("r") or 0)     # r = when last read
+               and int((st.get(i) or {}).get("r") or 0) < today0}
     only = None
     if not due("optin", last_read):
         if not pending:

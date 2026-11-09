@@ -392,9 +392,10 @@ const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready,
 // roles of recruiting crimes carry the key owner's rate - into oc_cpr (prod), exactly like the OC Optimizer script's
 // shares, so OC Management's Team Builder and the script's role suggestions use them.
 //   on save (turned on)  -> read at once          turned off / deleted -> their row removed
-//   the timer (every 3 min, ocOptinPull) -> each opted-in member about hourly, at most OC_OPTIN_PER_RUN a run
+//   the timer (every 3 min, ocOptinPull) -> each opted-in member once per HALF-HOUR SLOT (Nov 2026: scheduled at
+//   :00 and :30 TCT), at most OC_OPTIN_PER_RUN a run - so the slot's reads land in its first few runs (:00, :03, ...)
 //   nothing recruiting -> the last rates stay (not wiped); key deleted / not theirs (Torn code 2) -> row removed
-const OC_OPTIN_EVERY = 60 * 60e3, OC_OPTIN_PER_RUN = 8;
+const OC_OPTIN_SLOT = 30 * 60e3, OC_OPTIN_PER_RUN = 10;
 const ocBaseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();   // "Muscle #2" -> "Muscle"
 const ocFb = x => String(x == null ? "" : x).replace(/[.$#\[\]/\x00-\x1f]/g, "_").trim();     // the script's fbKey
 async function ocCprDrop(env, id) {
@@ -420,7 +421,7 @@ async function ocPullMember(env, id, name, key) {
     .bind(Number(env.FACTION_ID), Number(id), String(name || "").slice(0, 40), JSON.stringify(roles), Date.now()).run();
   return {roles: n};
 }
-// timer step: members with "OC pass rates" on, oldest-tried first, about hourly each; also removes shared rows of
+// timer step: members with "OC pass rates" on, once each per :00 / :30 slot, oldest-tried first; also removes shared rows of
 // anyone no longer in the faction (roster)
 async function ocOptinPull(env, now) {
   const {data} = await readOptin(env, false);
@@ -431,7 +432,8 @@ async function ocOptinPull(env, now) {
     await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
   }
   const tried = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
-  const due = Object.keys(data.members).filter(i => data.members[i].oc && (!roster || roster[i] != null) && now - (tried[i] || 0) >= OC_OPTIN_EVERY)
+  const slot = now - now % OC_OPTIN_SLOT;                 // start of this :00 / :30 slot (TCT = UTC)
+  const due = Object.keys(data.members).filter(i => data.members[i].oc && (!roster || roster[i] != null) && (tried[i] || 0) < slot)
     .sort((a, b) => (tried[a] || 0) - (tried[b] || 0)).slice(0, OC_OPTIN_PER_RUN);
   for (const i of due) {
     tried[i] = now;

@@ -84,7 +84,7 @@ function draw() {
       + `<div class="foot"><span>Energy refill: ${r.refill == null ? "-" : r.refill ? "used today" : "<b style='color:#78c878'>available</b>"}</span>`
       + `<span>${r.last ? "active " + dur(now() - r.last) + " ago" : ""}</span></div></div>`;
   }).join("") || '<div class="note" style="grid-column:1/-1">Nobody has turned war readiness on yet.</div>';
-  $("meta").textContent = `Live from Torn with each member's own key · read ${dur(now() - D.at)} ago · refreshes every minute`;
+  $("meta").textContent = `Live from Torn with each member's own key · read ${dur(now() - D.at)} ago · refreshes every minute while this page is open`;
 }
 function load() {
   fetch("readiness.json", {cache: "no-store"}).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
@@ -92,6 +92,13 @@ function load() {
 }
 document.querySelectorAll(".ctl button").forEach(b => b.onclick = () => { sortBy = b.dataset.s;
   document.querySelectorAll(".ctl button").forEach(x => x.classList.toggle("on", x === b)); draw(); });
-load(); setInterval(load, 60e3); setInterval(draw, 1e3);
+// (Nov 2026) members' keys are only read once a minute WHILE a leader is actively on this page: the minute refresh
+// stops when the tab is hidden / minimised / closed and starts again (with a fresh read) when it's shown again
+let poll = null;
+function startPoll() { if (poll) return; load(); poll = setInterval(load, 60e3); }
+function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
+document.addEventListener("visibilitychange", () => document.visibilityState === "visible" ? startPoll() : stopPoll());
+if (document.visibilityState === "visible") startPoll(); else draw();
+setInterval(draw, 1e3);
 </script>
 </body></html>
