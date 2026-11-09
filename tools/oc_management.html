@@ -20,7 +20,7 @@
                  Crimes with a prerequisite (e.g. Bidding War after No Reserve) are only auto-built when "Include chain
                  finals" is on - they can only start after their prerequisite. Locked teams (🔒) are kept by Auto-build.
     DEPLOYED     the plan that's live for the script, with each member's progress from the active crimes
-                 (✅ in their assigned role · ⏳ not joined yet · ⚠️ in a different crime).
+                 (✅ in their assigned role · ⏳ not joined yet · 🕒 queued - joins when their current crime pays out · ⚠️ in a different crime).
   PASS RATES (a member's checkpoint pass rate for one crime + role - the same "Crime|Role" keys as the script):
     live      the OC Optimizer's shared rates (D1, /l/oc/rates.json) + members' rates in the active crimes right now
     history   their latest rate for that crime + role from completed crimes (CFG.hist, rebuilt every full update)
@@ -562,6 +562,9 @@ function drawBuilder() {
   wireTeams();
 }
 let SPAWN = null;                                       // spawnMap of the board being drawn
+// QUEUE (Nov 2026): a queued member is still in a Planning crime and joins this one when it pays out (free_at, ms)
+const freeIn = ms => { const h = (ms - Date.now()) / 3600e3; return h <= 0 ? "any moment" : h < 1 ? Math.max(1, Math.round(h * 60)) + "m" : (Math.round(h * 10) / 10) + "h"; };
+const queueTag = r => r && r.queued ? `<span class="tag" title="In a crime that's planning - joins this one when it pays out">🕒 queued · free in ${freeIn(r.free_at)}</span>` : "";
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
   const rows = t.roles.map((r, i) => {
@@ -569,7 +572,7 @@ function teamCard(t) {
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</span></div>`;
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid));
     const opts = `<option value="">— empty —</option>` + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
-    return `<div class="rr"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>
+    return `<div class="rr"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r)}
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span></div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
@@ -604,7 +607,8 @@ async function deploy() {
   const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
   if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
   const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
-    roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing}))}))};
+    roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing,
+      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null}))}))};
   try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
@@ -621,7 +625,7 @@ function drawDeployed() {
       const b = busy[r.pid];
       const ok = b && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position);
       if (ok) joined++;
-      const stt = ok ? '<span class="ok">✅ joined</span>' : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>';
+      const stt = ok ? '<span class="ok">✅ joined</span>' : r.queued ? queueTag(r) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>';
       return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
     const av = teamAvg(t);

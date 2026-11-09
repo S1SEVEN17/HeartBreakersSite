@@ -12,6 +12,11 @@
 //   * Planning crimes: full - their members are busy until the crime pays out.
 //   * Members left over: "needs spawn" teams for crime TYPES (the pay-per-day optimizer: multi-start greedy +
 //     steal/backfill + upgrades, role cap) - the script and the Hub warn the crime needs to be spawned.
+//   QUEUE (Nov 2026): a member in a PLANNING crime that's ready within opts.queueHours (12) can be QUEUED for their
+//     next crime - they join it when their current crime pays out. Queued roles carry queued: true + free_at (ms).
+//     Live open slots: only when no free member can fill the crime to the target (fewest queued members, and only
+//     if they're free before the crime expires). Spawn teams: allowed, free members preferred. One slot each.
+//     When their crime completes the next run drops the flag and it's a normal assignment (Join in the script).
 //   STABILITY (fully automatic, re-run every 3 min): an assignment only changes when it stops being valid -
 //     the member joined something else / left the faction, someone else took the slot, or the crime is gone.
 //     New open slots are filled; nothing valid is reshuffled. A spawn team whose crime starts recruiting is
@@ -29,6 +34,7 @@
 //   opts     {target, minRole, cap, chains, includeBusy}            disabled Set of crime names switched off
 //   rateOf(pid, crime, label) -> {rate, src} | null                  payOf(crime) -> {pot, days} (team, max)
 //   budgetMs  time for the spawn optimizer's extra passes (page ~900, gatekeeper 0 = one pass)
+//   now       ms (default Date.now()) - for the queue window
 //   fresh     true = ignore prev (except locked teams) - the page's "Auto-build" from scratch
 // =====================================================================================================
 export const baseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();
@@ -52,6 +58,15 @@ export function ocPlan(X) {
     inst.set(String(c.id), c);
     for (const sl of c.slots || []) if (sl.user) busy.set(Number(sl.user.id), {cid: String(c.id), label: slotLabel(sl)});
   }
+  // ---- queue: members in a Planning crime that's ready within the window ----
+  const NOW = X.now || Date.now(), QWIN = (O.queueHours ?? 12) * 3600e3;
+  const freeAt = new Map();                                // pid -> ms their current (Planning) crime is ready
+  for (const c of inst.values()) if (c.status === "Planning" && c.ready_at)
+    for (const sl of c.slots || []) if (sl.user) freeAt.set(Number(sl.user.id), c.ready_at * 1000);
+  const queueable = pid => freeAt.has(Number(pid)) && freeAt.get(Number(pid)) <= NOW + QWIN;
+  const beforeExpiry = (pid, c) => !c || !c.expired_at || freeAt.get(Number(pid)) < c.expired_at * 1000;
+  // can this member be planned here? free now, or queueable (and free before the live crime `c` expires)
+  const usable = (pid, c) => !busy.has(Number(pid)) || (queueable(pid) && beforeExpiry(pid, c));
   const crimeOk = n => !X.disabled.has(n) && rolesOf(n).length && (O.chains || !(cat[n] || {}).prereq);
 
   // ---- role cap (as before): above OPT.cap in a crime -> held for a harder crime they pass (spawn + live fills) ----
@@ -87,7 +102,7 @@ export function ocPlan(X) {
                   rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : ((rateOf(pid, c.name, label) || {}).rate ?? null), src: "in crime"};
         }
         // open slot: keep the planned member while they're still free, still here and not planned elsewhere
-        if (o.pid != null && !o.existing && roster[String(o.pid)] != null && !busy.has(Number(o.pid)) && !assigned.has(Number(o.pid)))
+        if (o.pid != null && !o.existing && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid)))
           return Object.assign({}, o, {joined: false});
         return {position: label, pid: null, name: "", rate: null};
       });
@@ -97,7 +112,7 @@ export function ocPlan(X) {
       teams.push(t);
     } else {
       t.kind = "spawn"; t.crime_id = null;
-      t.roles = (t.roles || []).map(r => (r.pid != null && (roster[String(r.pid)] == null || (busy.has(Number(r.pid)) && !O.includeBusy) || assigned.has(Number(r.pid))))
+      t.roles = (t.roles || []).map(r => (r.pid != null && (roster[String(r.pid)] == null || (!usable(r.pid) && !O.includeBusy) || assigned.has(Number(r.pid))))
         ? Object.assign({}, r, {pid: null, name: "", rate: null, src: null}) : r);
       t.roles.forEach(r => { if (r.pid != null) take(r.pid); });
       teams.push(t);
@@ -110,7 +125,7 @@ export function ocPlan(X) {
     if (t.kind !== "spawn" || t.lock) continue;
     const c = [...inst.values()].find(x => x.name === t.crime && x.status === "Recruiting" && !claimed.has(String(x.id)) && (x.slots || []).some(sl => !sl.user));
     if (!c) continue;
-    const want = t.roles.filter(r => r.pid != null && !busy.has(Number(r.pid)));
+    const want = t.roles.filter(r => r.pid != null && usable(r.pid, c));
     const roles = (c.slots || []).map(sl => {
       const label = slotLabel(sl);
       if (sl.user) { const pid = Number(sl.user.id);
@@ -160,7 +175,7 @@ export function ocPlan(X) {
   const freePool = () => Object.keys(roster).map(Number).filter(p => !busy.has(p) && !assigned.has(p)).map(pid => ({pid, soft: false}));
   const softPool = () => {
     const out = [];
-    teams.forEach(t => { if (t.kind === "spawn" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !busy.has(Number(r.pid))) out.push({pid: Number(r.pid), soft: true}); }); });
+    teams.forEach(t => { if (t.kind === "spawn" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !busy.has(Number(r.pid))) out.push({pid: Number(r.pid), soft: true}); }); });   // queued spawn members aren't moved to live slots
     return out;
   };
 
@@ -199,8 +214,15 @@ export function ocPlan(X) {
     const fixedSum = fixed.reduce((a, r) => a + r.rate, 0);
     const pool = freePool().concat(softPool());
     const k = payDay(c.name) / roles.length / 100;     // a member's pay per day here = k x their rate
-    const best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
+    let best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
                            (p, rate) => k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6, 20000);
+    // QUEUE: nobody free can fill it to the target -> let members finishing their crime soon in, as few as possible
+    if (!best) {
+      const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c))
+        .map(pid => ({pid, soft: false, q: true}));
+      if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
+                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0), 20000);
+    }
     if (!best) continue;                                   // can't reach the target: SKIPPED (left open)
     best.forEach((b, k) => {
       const i = open[k];
@@ -221,8 +243,8 @@ export function ocPlan(X) {
     const open = t.roles.map((r, i) => r.pid == null ? i : -1).filter(i => i >= 0);
     if (!open.length) continue;
     const fixed = t.roles.filter(r => r.pid != null), fixedSum = fixed.reduce((a, r) => a + (r.rate || 0), 0);
-    const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || !busy.has(p)) && !assigned.has(p)).map(pid => ({pid, soft: false}));
-    const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => rate, 20000);
+    const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p)).map(pid => ({pid, soft: false}));
+    const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => rate - (busy.has(p.pid) ? 3 : 0), 20000);
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
   }
   // spawn teams that are now short of members or below the target are dissolved (members back to the pool)
@@ -234,7 +256,7 @@ export function ocPlan(X) {
   }
   // new spawn teams: the pay-per-day optimizer (as the page's Auto-build did) over crime TYPES not recruiting now
   const spawnCrimes = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n));
-  const pool0 = Object.keys(roster).map(Number).filter(p => (O.includeBusy || !busy.has(p)) && !assigned.has(p));
+  const pool0 = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p));   // free + queueable
   const opp = {};
   pool0.forEach(pid => { let b = 0;
     spawnCrimes.forEach(c => { const n = rolesOf(c).length || 1, pd = payDay(c);
@@ -246,7 +268,7 @@ export function ocPlan(X) {
     const roles = rolesOf(crime); if (!roles.length) return null;
     const k = payDay(crime) / roles.length / 100;
     const best = fillSlots(crime, roles.map(l => ({label: l})), 0, roles.length, [...pool].map(pid => ({pid: Number(pid)})),
-      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0), 40000);
+      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0) - (busy.has(p.pid) ? k * 3 : 0), 40000);   // free members preferred over queued
     if (!best) return null;
     return {id: uid(), crime, difficulty: diffOf(crime), kind: "spawn", crime_id: null, lock: false,
             roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: nameOf(best[i].pid), rate: best[i].rate, src: best[i].src}))};
@@ -318,8 +340,13 @@ export function ocPlan(X) {
   best.forEach(t => { t.roles.forEach(r => take(r.pid)); teams.push(t); });
 
   // ---- result ----
+  // queued flag, recomputed every run: planned (not already in this crime) but still busy in their current crime
+  teams.forEach(t => t.roles.forEach(r => {
+    const q = r.pid != null && !r.existing && busy.has(Number(r.pid)) && freeAt.has(Number(r.pid));
+    if (q) { r.queued = true; r.free_at = freeAt.get(Number(r.pid)); } else { delete r.queued; delete r.free_at; }
+  }));
   teams.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "live" ? -1 : 1) || payDay(b.crime) - payDay(a.crime) || (b.difficulty || 0) - (a.difficulty || 0));
-  const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0])]));
+  const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
   const changed = sig(teams) !== sig(X.prev || []);
   return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0)}};

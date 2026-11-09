@@ -785,7 +785,8 @@ async function ocPlanObj(env, envName, id) {
         if (r.existing) continue;                           // already in that crime in Torn - nothing to do
         assignment = {crime: t.crime, position: r.position, team: t.id, rate: r.rate ?? null,
                       difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
-                      kind: t.kind || "spawn", crime_id: t.crime_id || null};   // live: join THIS crime id + exact slot
+                      kind: t.kind || "spawn", crime_id: t.crime_id || null,   // live: join THIS crime id + exact slot
+                      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null};   // QUEUE: join after the current crime pays out
       }
     }
   }
@@ -817,7 +818,7 @@ async function ocPlanObj(env, envName, id) {
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), slot: r.position, pid: Number(r.pid),
               name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
-              existing: !!r.existing, joined: !!r.joined}))};
+              existing: !!r.existing, joined: !!r.joined, queued: !!r.queued, free_at: r.queued ? r.free_at || null : null}))};
   }) : null;
   // delays: leaders only (gated here) - the timer's delay check (ocDelayCheck): ready crimes held up by a member
   let delays = [];
@@ -853,7 +854,8 @@ function ocCleanTeams(teams) {
     roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 10).map(r => ({position: String(r.position || "").slice(0, 40),
       pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
       rate: r.rate == null ? null : Math.round(Number(r.rate)) || 0, src: r.src ? String(r.src).slice(0, 20) : null,
-      existing: !!r.existing, joined: !!r.joined}))}));
+      existing: !!r.existing, joined: !!r.joined,
+      queued: !!r.queued, free_at: r.queued && Number(r.free_at) ? Number(r.free_at) : null}))}));   // QUEUE: still in a Planning crime
 }
 
 async function ocLeaderRoute(env, req, url, who, sub) {
@@ -1395,7 +1397,7 @@ async function ocAutoPlan(env, crimes, now) {
     return {pot: gross(n) * 0.8, days: s};
   };
   const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
-                    rateOf, payOf, budgetMs: 0});
+                    rateOf, payOf, budgetMs: 0, now});
   if (!r.changed) return;
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
