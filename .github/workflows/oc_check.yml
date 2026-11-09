@@ -91,7 +91,7 @@ jobs:
           # counts only: teams live / spawn, members placed, when + by whom it last changed (auto or a leader's Deploy)
           cd w
           npx wrangler d1 execute hb-oc --remote --json --command \
-            "SELECT ts, CASE WHEN by LIKE 'auto%' THEN 'auto (Hub)' ELSE 'a leader' END AS who, v FROM oc_config WHERE env = 'prod' AND k = 'plan'" > plan.json 2>/dev/null || exit 0
+            "SELECT ts, CASE WHEN by LIKE 'auto%' THEN 'auto (Hub)' ELSE 'a leader' END AS who, v, (SELECT data FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats') AS stats FROM oc_config WHERE env = 'prod' AND k = 'plan'" > plan.json 2>/dev/null || exit 0
           python3 - <<'PY'
           import json, time
           d = json.load(open("plan.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
@@ -101,6 +101,6 @@ jobs:
           print(f"Plan: {len(t)} teams ({live} in recruiting crimes, {len(t) - live} to spawn) · {placed} members placed ({queued} queued) · "
                 f"last change {(time.time() * 1000 - r['ts']) / 60000:.0f} min ago by {r['who']}" + (f" · planner {v['auto'].get('ms')} ms" if v.get('auto') else ""))
           # recruiting crimes the planner left open and why (crime names + rates only - no member names or IDs)
-          for k in (v.get("auto") or {}).get("skipped") or []:
+          for k in (json.loads(r.get("stats") or "null") or v.get("auto") or {}).get("skipped") or []:
               print(f"  open: {k.get('crime')} [{k.get('filled')}] - {k.get('reason')}" + (f" · new members need avg {k['need']}% · in crime {k.get('inCrime')} · best per role {k.get('best')}" if k.get("need") is not None else ""))
           PY

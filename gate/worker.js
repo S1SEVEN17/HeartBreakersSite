@@ -1404,6 +1404,10 @@ async function ocAutoPlan(env, crimes, now) {
   };
   const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
                     rateOf, payOf, budgetMs: 0, now});
+  // the planner's stats every run (incl. why recruiting crimes were left open) - read by the oc_check workflow
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+    .bind(now, JSON.stringify(r.stats)).run().catch(() => {});
   if (!r.changed) return;
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
