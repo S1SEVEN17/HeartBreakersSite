@@ -33,7 +33,14 @@ button.x{background:none;border:1px solid #3a1414;color:#f08a84;padding:4px 10px
 .chk small{color:var(--sub);display:block;margin-top:3px}
 .day{margin-top:12px}.day h3{font-size:13px;color:#fff;margin:0 0 6px;display:flex;justify-content:space-between}
 .day h3 span{color:var(--sub);font-weight:400}
+.gw{position:relative;padding-top:16px}
 .grid{display:grid;grid-template-columns:repeat(24,1fr);gap:2px}
+/* "Current" marker (Nov 2026): a line over today's bar at the current TCT time + label; the current hour is outlined */
+.cur{position:absolute;top:0;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 4px #fff;pointer-events:none;transform:translateX(-1px)}
+.cur b{position:absolute;top:0;left:50%;transform:translateX(-50%);font-size:10px;line-height:14px;font-weight:700;color:#100a0b;background:#fff;border-radius:4px;padding:0 4px;white-space:nowrap}
+.cur.r b{left:auto;right:0;transform:none}.cur.l b{left:0;transform:none}
+.grid i.now{box-shadow:inset 0 0 0 2px #fff}
+.pill.c{background:#fff;color:#100a0b;font-weight:700}
 .grid i{height:22px;border-radius:3px;background:#22151a;cursor:pointer;position:relative}
 .grid i.p{background:#2e6b2e}.grid i.b{background:#6b5a20}.grid i.past{opacity:.35;cursor:default}
 .grid i.sel{outline:2px solid var(--gold)}
@@ -134,25 +141,41 @@ function render() {
       const t = base + h * 3600, on = D.shifts.filter(x => x.start_at <= t && x.end_at > t);
       const cls = on.some(x => x.role === "primary") ? "p" : on.length ? "b" : "";
       const tip = on.length ? on.map(x => `${D.roles[x.role]}: ${x.name}`).join(" · ") : "Open";
-      cells.push(`<i class="${cls}${t + 3600 <= now ? " past" : ""}${pick === t ? " sel" : ""}" data-t="${t}" title="${hh(t)} TCT - ${esc(tip)}"></i>`);
+      const isNow = t <= now && now < t + 3600;
+      cells.push(`<i class="${cls}${t + 3600 <= now ? " past" : ""}${isNow ? " now" : ""}${pick === t ? " sel" : ""}" data-t="${t}" title="${hh(t)} TCT${isNow ? " (current)" : ""} - ${esc(tip)}"></i>`);
     }
     const list = D.shifts.filter(x => dayKey(x.start_at) === k).map(x => {
       const short = x.est_hits != null && x.need_hits && x.est_hits < x.need_hits;
+      const live = x.start_at <= now && now < x.end_at;
       return `<div class="sh${x.pid === me.pid ? " me" : ""}"><span class="t">${hh(x.start_at)}–${hh(x.end_at)}</span>`
+        + (live ? `<span class="pill c">Current</span>` : "")
         + `<span class="pill ${ROLE_CLASS[x.role]}">${esc(D.roles[x.role])}</span>`
         + `<span class="n"><a href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(x.pid)}" target="_blank" rel="noopener" style="color:#fff">${esc(x.name)}</a></span>`
         + (x.est_hits == null ? `<span class="pill">energy ?</span>` : short ? `<span class="pill w" title="Their energy covers about ${x.est_hits} of ${x.need_hits} hits alone">⚠ ${x.est_hits}/${x.need_hits} hits</span>` : `<span class="pill p">✓ energy</span>`)
         + (me.leader && x.pid !== me.pid ? `<button class="x" data-del="${x.id}" title="Remove (leaders)">Remove</button>` : "") + `</div>`;
     }).join("");
-    return `<div class="day"><h3>${dayName(base)}<span>${byDay[k].length ? "" : "nobody yet"}</span></h3><div class="grid">${cells.join("")}</div>`
+    const today = k === dayKey(now);
+    return `<div class="day"><h3>${dayName(base)}${today ? " · today" : ""}<span>${byDay[k].length ? "" : "nobody yet"}</span></h3>`
+      + `<div class="gw"${today ? ` data-day="${base}"` : ""}>${today ? `<div class="cur" id="curMark"><b>Current</b></div>` : ""}<div class="grid">${cells.join("")}</div></div>`
       + `<div class="hrs">${Array.from({length: 24}, (_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div><div class="list">${list}</div></div>`;
   }).join("");
+  placeCurrent();
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => del(Number(b.dataset.del)));
   document.querySelectorAll(".grid i[data-t]").forEach(c => c.onclick = () => {
     const t = Number(c.dataset.t);
     if (t + 3600 <= D.now || D.me.mine) return;
     pick = t; touched = true; render(); $("mine").scrollIntoView({behavior: "smooth", block: "start"});
   });
+}
+// the "Current" marker: positioned at the current TCT time across today's 24-hour bar (moved every 30 s)
+function placeCurrent() {
+  const m = $("curMark"); if (!m) return;
+  const base = Number(m.parentNode.dataset.day), t = Date.now() / 1000;
+  if (t >= base + 86400) { load(); return; }              // a new TCT day started - redraw the schedule
+  const pct = Math.max(0, Math.min(100, (t - base) / 864));
+  m.style.left = pct + "%";
+  m.className = "cur" + (pct > 92 ? " r" : pct < 8 ? " l" : "");
+  m.title = "Current time: " + new Date(t * 1000).toISOString().slice(11, 16) + " TCT";
 }
 function preview() {
   const start = Number($("fHour").value), hrs = Number($("fHrs").value), role = $("fRole").value, end = start + hrs * 3600;
@@ -193,5 +216,6 @@ async function load() {
 load();
 // pick up other members' sign-ups every 2 minutes while the page is visible (not while you're filling the form)
 setInterval(() => { if (!document.hidden && !touched) load(); }, 120000);
+setInterval(() => { if (!document.hidden) placeCurrent(); }, 30000);
 </script>
 </body></html>
