@@ -829,7 +829,18 @@ async function ocPlanObj(env, envName, id) {
       return Object.assign({}, x, {team: t ? t.id : null});
     });
   }
-  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays};
+  // sharing (Nov 2026): which CURRENT members share their CPR rates with the Hub (oc_cpr - the script's sync or the
+  // opt-in key) and when they last did. Visible to every member (the user's choice). Rates themselves aren't sent.
+  let sharing = null;
+  if (members) {
+    const {results} = await env.OC_DB.prepare("SELECT player_id, ts, LENGTH(roles) > 2 AS has FROM oc_cpr WHERE env = ? AND faction_id = ?")
+      .bind(envName, Number(env.FACTION_ID)).all();
+    const by = new Map((results || []).filter(r => r.has).map(r => [Number(r.player_id), Number(r.ts) || null]));
+    sharing = [...members.entries()].map(([pid, m]) => ({pid: Number(pid), name: (m && m.name) || ("#" + pid),
+      sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null}))
+      .sort((a, b) => (a.sharing - b.sharing) || a.name.localeCompare(b.name));
+  }
+  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing};
 }
 function ocSpawnState(crimes, snap, crime, position) {
   if (!crimes) return {recruiting: null, role_open: null, spawn_needed: null};

@@ -96,7 +96,7 @@ __MENU__
 <div class="sub">Choose which crimes the OC Optimizer suggests, build teams and deploy them to members using the script</div>
 <div class="bar"><button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
-<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button></div>
+<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="sharing">📡 Rate sharing</button></div>
 <div id="view"></div>
 <script>
 // ---- shared OC team planner (gate/oc_planner.js, inlined by generate.py) ----
@@ -469,7 +469,7 @@ function addTeam(crime) {
 // ---------- views ----------
 function draw() {
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
-  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else drawBuilder();
+  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
 }
 
 function drawCrimes() {
@@ -620,6 +620,22 @@ async function deploy() {
       queued: !!r.queued, free_at: r.queued ? r.free_at || null : null}))}))};
   try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
+}
+
+// RATE SHARING (Nov 2026): which current members share their CPR rates with the Hub (the OC Optimizer script's
+// sync or the opt-in key on the site - both land in D1 oc_cpr, read here as D.rates) and when they last did.
+// Members who don't share can only be placed from their history, so new or rarely-run crimes can't use them.
+function drawSharing() {
+  const ids = Object.keys(CFG.members);
+  const rows = ids.map(pid => { const r = D.rates[pid]; const n = r && r.roles ? Object.keys(r.roles).length : 0;
+    return {pid, name: nameOf(pid), on: !!(r && n), ts: r ? Number(r.ts) || 0 : 0, n}; })
+    .sort((a, b) => (a.on - b.on) || (a.on ? a.ts - b.ts : 0) || a.name.localeCompare(b.name));   // not sharing first, then the stalest
+  const on = rows.filter(x => x.on).length;
+  $("view").innerHTML = `<div class="panel"><div class="hn">📡 Members who share their CPR rates (through the OC Optimizer script or the opt-in key on their Settings page) can be placed in any crime. Members who don't can only be placed in crimes they've completed before, from those old rates.</div>
+    <div class="stat"><div><b class="ok">${on}</b><span>Sharing</span></div><div><b class="${on < ids.length ? "bad" : ""}">${ids.length - on}</b><span>Not sharing</span></div><div><b>${ids.length}</b><span>Members</span></div></div>
+    <table><tr><th>Member</th><th>Status</th><th>Last shared</th><th>Roles</th></tr>${rows.map(x =>
+      `<tr><td><b>${esc(x.name)}</b> <span class="tag">[${esc(x.pid)}]</span></td><td>${x.on ? '<span class="ok">✅ sharing</span>' : '<span class="bad">❌ not sharing</span>'}</td>
+       <td>${x.on ? ago(x.ts) : "-"}</td><td>${x.on ? x.n : "-"}</td></tr>`).join("")}</table></div>`;
 }
 
 function drawDeployed() {
