@@ -921,7 +921,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       const n = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
       v = v && typeof v === "object" ? v : {};
       v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65), cap: n(v.cap, 50, 100, 85), maxAge: n(v.maxAge, 1, 720, 24),
-           chains: !!v.chains, includeBusy: !!v.includeBusy};
+           chains: !!v.chains, includeBusy: !!v.includeBusy,
+           // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
+           share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null)};
     } else {
       if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
       v = {teams: ocCleanTeams(v.teams)};
@@ -1242,7 +1244,8 @@ async function ocSummaries(env, envName) {
             AVG(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mavg, MIN(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mmin,
             MAX(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mmax,
             AVG(json_extract(data, '$.rewards.respect')) AS ravg, MIN(json_extract(data, '$.rewards.respect')) AS rmin,
-            MAX(json_extract(data, '$.rewards.respect')) AS rmax
+            MAX(json_extract(data, '$.rewards.respect')) AS rmax,
+            AVG(json_extract(data, '$.rewards.payout.percentage')) AS ppavg
      FROM c WHERE n <= ? AND crime IS NOT NULL GROUP BY crime`).bind(envName, SUM_WINDOW).all();
   const items = await db.prepare(
     `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
@@ -1265,7 +1268,8 @@ async function ocSummaries(env, envName) {
   for (const r of pay.results || []) {
     payouts[r.crime] = {samples: r.samples, moneyAvg: Math.round(r.mavg || 0), moneyMin: r.mmin || 0, moneyMax: r.mmax || 0,
                         respAvg: r.ravg == null ? null : Math.round(r.ravg), respMin: r.rmin ?? null, respMax: r.rmax ?? null,
-                        items: {}, itemBased: false};
+                        items: {}, itemBased: false,
+                        ppAvg: r.ppavg == null ? null : Math.round(r.ppavg)};   // average payout % to members (Nov 2026)
   }
   for (const r of items.results || []) {
     const p = payouts[r.crime];
@@ -1355,7 +1359,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, maxAge: 24, chains: false, includeBusy: false};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, maxAge: 24, chains: false, includeBusy: false, share: null};
 async function ocAutoPlan(env, crimes, now) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -1384,19 +1388,19 @@ async function ocAutoPlan(env, crimes, now) {
     const h = hist.get(`${pid}|${crime}|${b}`); if (h != null) return {rate: h, src: "history"};
     return null;
   };
-  // pay per member per day (Nov 2026, the user's formula): max payout recorded (summaries, items at prices) - 20%
-  // faction tax, ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).
+  // pay per member per day (Nov 2026, the user's formula): max payout recorded (summaries, items at prices) x the
+  // members' share (opts.share if a leader set one, else that crime's recorded payout %, else 80%), ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).
   // pot here = this crime's seats' share, so pot ÷ days ÷ seats = per member per day - the same figure the page and script show
   const prices = (priS && priS.data) || {};
   const gross = n => { const p = (S.payouts || {})[n]; if (!p || (p.samples || 0) < 3) return 0;
     let iv = 0; Object.keys(p.items || {}).forEach(id => { iv += (p.items[id] || 0) * (Number((prices[id] || {}).price) || 0); });
-    return (p.moneyMax || 0) + iv; };
+    return ((p.moneyMax || 0) + iv) * (opts.share != null ? opts.share : (p.ppAvg ?? 80)) / 100; };
   const seats = n => (catalog[n] || {roles: []}).roles.length || 1;
   const payOf = n => {
     const s = seats(n), pre = (catalog[n] || {}).prereq, fin = Object.keys(catalog).find(x => catalog[x].prereq === n);
-    if (fin) { const sf = seats(fin); return {pot: gross(fin) * 0.8 * s / (s + sf), days: s + sf}; }
-    if (pre) { const sp = seats(pre); return {pot: gross(n) * 0.8 * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
-    return {pot: gross(n) * 0.8, days: s};
+    if (fin) { const sf = seats(fin); return {pot: gross(fin) * s / (s + sf), days: s + sf}; }
+    if (pre) { const sp = seats(pre); return {pot: gross(n) * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
+    return {pot: gross(n), days: s};
   };
   const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
                     rateOf, payOf, budgetMs: 0, now});

@@ -118,7 +118,7 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, maxAge: 24}, LS.get("hb_oc_opts", {}));
+const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, maxAge: 24, share: null}, LS.get("hb_oc_opts", {}));
 // settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
 // plan uses the same target / lowest role / cap / chains / busy rules
 let optTimer = null;
@@ -280,9 +280,9 @@ function bestTeam(crime, blocked) {
 // from the latest successful completed crimes. Planning takes one day per role (24 h each, one after another), so a
 // crime with s roles locks its members for s days.
 // PAY PER MEMBER PER DAY (Nov 2026, the user's formula) - the figure SHOWN everywhere:
-//   total payout (max recorded) - 20% faction tax, ÷ every participant (prerequisite seats too), ÷ days (prerequisite
+//   total payout (max recorded) × members' share (the crime's recorded payout %, or the leaders' fixed %), ÷ every participant (prerequisite seats too), ÷ days (prerequisite
 //   days too)
-//   member pot  = g × 80%                      (what the members split; the faction keeps 20%)
+//   member pot  = g × share%                   (what the members split; the faction keeps the rest)
 //   each $/day  = pot ÷ roles ÷ days
 // Prerequisite chains (No Reserve -> Bidding War): only the final crime pays, split over every seat in the chain.
 //   both crimes: pot = final pot × its seats ÷ all seats, days = both crimes' roles (the whole chain)
@@ -303,7 +303,12 @@ function grossOf(crime) {
   const v = (CFG.values || {})[crime];
   return v ? v.g : 0;
 }
-const potRaw = crime => grossOf(crime) * 0.8;          // - 20% faction tax (PP_DEFAULT is no longer used for pay)
+// members' share: OPT.share (a fixed % set by a leader) or, by default, the crime's recorded payout % (summaries
+// ppAvg, else the site's values, else the typical %)
+const shareOf = crime => { if (OPT.share != null) return OPT.share;
+  const p = D.sums && D.sums.payouts && D.sums.payouts[crime]; if (p && p.ppAvg != null) return p.ppAvg;
+  const v = (CFG.values || {})[crime]; return (v && v.pp) ?? PP_DEFAULT; };
+const potRaw = crime => grossOf(crime) * shareOf(crime) / 100;
 function valueOf(crime) {
   const s = rolesOf(crime).length || 1, pre = (CFG.catalog[crime] || {}).prereq;
   const fin = Object.keys(CFG.catalog).find(n => (CFG.catalog[n] || {}).prereq === crime);
@@ -528,6 +533,7 @@ function drawBuilder() {
       <label>Target team success <input type="number" id="o_t" min="1" max="100" value="${OPT.target}">%</label>
       <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>
       <label title="Above this a member is moved up to a harder crime they can pass (100 = off)">Role cap <input type="number" id="o_cap" min="50" max="100" value="${OPT.cap}">%</label>
+      <label title="Members' share of each payout. Empty = each crime's recorded payout %">Members' share <input type="number" id="o_sh" min="0" max="100" placeholder="recorded" value="${OPT.share ?? ""}" style="width:80px">%</label>
       <label>Shared rates max age <input type="number" id="o_a" min="1" max="720" value="${OPT.maxAge}">h</label>
       <label><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime</label>
       <label><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
@@ -551,6 +557,7 @@ function drawBuilder() {
   </div>`;
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_cap", "cap", 50, 100); num("o_a", "maxAge", 1, 720);
+  $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
   $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
   $("auto").onclick = () => { autoBuild(); draw(); };

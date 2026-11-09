@@ -196,10 +196,14 @@ export function ocPlan(X) {
     Object.keys(cat).forEach(c => { if (!crimeOk(c)) return; const n = rolesOf(c).length || 1, pd = payDay(c);
       rolesOf(c).forEach(pos => { const r = rateOf(pid, c, pos); if (r && r.rate >= O.minRole && !capped(pid, c, r.rate)) b = Math.max(b, pd * r.rate / 100 / n); }); });
     bestDay[pid] = b; });
+  // why recruiting crimes were left open (stats.skipped, counts per reason + the gap) - diagnostics only
+  const skipped = [];
+  const skip = (c, reason, x) => skipped.push(Object.assign({crime: c.name, crime_id: c.id,
+    filled: (c.slots || []).filter(sl => sl.user).length + "/" + (c.slots || []).length, reason}, x || {}));
   for (const c of recruiting) {
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
-    if (t && t.lock) continue;
-    if (!t && (X.disabled.has(c.name) || (!O.chains && (cat[c.name] || {}).prereq))) continue;   // switched off (an existing team is kept)
+    if (t && t.lock) { skip(c, "locked"); continue; }
+    if (!t && (X.disabled.has(c.name) || (!O.chains && (cat[c.name] || {}).prereq))) { skip(c, X.disabled.has(c.name) ? "switched off" : "chain final"); continue; }   // switched off (an existing team is kept)
     const roles = t ? t.roles : (c.slots || []).map(sl => {
       const label = slotLabel(sl);
       if (!sl.user) return {position: label, pid: null, name: "", rate: null};
@@ -210,7 +214,7 @@ export function ocPlan(X) {
     const open = roles.map((r, i) => r.pid == null ? i : -1).filter(i => i >= 0);
     if (!open.length) continue;
     const fixed = roles.filter(r => r.pid != null);
-    if (fixed.some(r => r.rate == null)) continue;         // someone in it has no known rate - can't judge the success
+    if (fixed.some(r => r.rate == null)) { skip(c, "a member in it has no known rate"); continue; }         // someone in it has no known rate - can't judge the success
     const fixedSum = fixed.reduce((a, r) => a + r.rate, 0);
     const pool = freePool().concat(softPool());
     const k = payDay(c.name) / roles.length / 100;     // a member's pay per day here = k x their rate
@@ -223,7 +227,18 @@ export function ocPlan(X) {
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
                            (p, rate) => k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0), 20000);
     }
-    if (!best) continue;                                   // can't reach the target: SKIPPED (left open)
+    if (!best) {                                           // can't reach the target: SKIPPED (left open)
+      // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
+      // free or queued, ignoring that one member can only take one slot); roles nobody can fill at all
+      const cand = Object.keys(roster).map(Number).filter(p => !assigned.has(p) && usable(p, c));
+      const per = open.map(i => { let b = null;
+        cand.forEach(p => { const r = rateOf(p, c.name, roles[i].position); if (r && r.rate >= O.minRole && !capped(p, c.name, r.rate) && (b == null || r.rate > b)) b = r.rate; });
+        return {role: roles[i].position, best: b}; });
+      skip(c, per.some(x => x.best == null) ? "no available member can take a role" : "can't reach the target", {
+        need: Math.round((O.target * roles.length - fixedSum) / open.length), inCrime: fixed.map(r => r.rate),
+        best: per.map(x => x.role + ":" + (x.best ?? "-")).join(" "), candidates: cand.length});
+      continue;
+    }
     best.forEach((b, k) => {
       const i = open[k];
       roles[i] = {position: roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src};
@@ -349,5 +364,5 @@ export function ocPlan(X) {
   const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
   const changed = sig(teams) !== sig(X.prev || []);
   return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
-    pay: teams.reduce((s, t) => s + (avgOf(t.roles) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0)}};
+    pay: teams.reduce((s, t) => s + (avgOf(t.roles) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped}};
 }

@@ -100,4 +100,7 @@ jobs:
           live = sum(1 for x in t if x.get("kind") == "live"); placed = sum(1 for x in t for y in x.get("roles", []) if y.get("pid") and not y.get("existing")); queued = sum(1 for x in t for y in x.get("roles", []) if y.get("queued"))
           print(f"Plan: {len(t)} teams ({live} in recruiting crimes, {len(t) - live} to spawn) · {placed} members placed ({queued} queued) · "
                 f"last change {(time.time() * 1000 - r['ts']) / 60000:.0f} min ago by {r['who']}" + (f" · planner {v['auto'].get('ms')} ms" if v.get('auto') else ""))
+          # recruiting crimes the planner left open and why (crime names + rates only - no member names or IDs)
+          for k in (v.get("auto") or {}).get("skipped") or []:
+              print(f"  open: {k.get('crime')} [{k.get('filled')}] - {k.get('reason')}" + (f" · new members need avg {k['need']}% · in crime {k.get('inCrime')} · best per role {k.get('best')}" if k.get("need") is not None else ""))
           PY
