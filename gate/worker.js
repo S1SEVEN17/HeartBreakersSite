@@ -1253,7 +1253,8 @@ async function ocFeedPull(env) {
   // summaries (payout stats + member rates) - AFTER the writes above (they use the new roster + history): whenever
   // history or the roster changed, or none are stored yet
   try {
-    const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'").first();
+    // stored summaries from before the net values (Nov 2026) count as missing, so they're worked out once now
+    const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries' AND instr(data, '\"valueMax\"') > 0").first();
     if (newHist || newRoster || newPrices || !have) for (const e of ENVS) await ocSummariesSave(env, e);
   } catch (e) { fail("summaries", e); }
   // the automatic team plan (live crimes) - after everything above is saved (it reads the new roster / summaries)
