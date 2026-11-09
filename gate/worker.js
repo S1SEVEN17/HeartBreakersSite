@@ -43,7 +43,7 @@
 // =====================================================================================================
 
 import {ocPlan} from "./oc_planner.js";   // shared OC team planner (also inlined into the OC Management page)
-import {cwRoute, cwStub, CW_DEFAULT_CONFIG, cwEnergyCover} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
+import {cwRoute, cwStub, CW_DEFAULT_CONFIG, CW_ROLES, CW_MAX_HOURS, CW_AHEAD_S, cwShiftRows, cwStatsFor, cwShiftAdd, cwShiftDelete} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
 export {ChainRoom} from "./chainroom.js";   // the Durable Object class (wrangler.toml CHAINROOM binding)
 
 const COOKIE = "hb_s";
@@ -1694,66 +1694,38 @@ async function cwReading(env, req, who) {
 // The energy check (cwEnergyCover) uses the member's last Chain Watch script report, else their war-readiness reading
 // (opt-in) - stored with the shift as est_hits / need_hits. No Torn call here.
 // ======================================================================================================
-const CW_ROLES = {primary: "Primary", backup: "Backup", backup2: "2nd backup"};
-const CW_MAX_HOURS = 6, CW_AHEAD_S = 7 * 86400;
+// Rules live in chainroom.js (cwShiftAdd / cwShiftDelete) - shared with the script's WebSocket shift_* messages.
 async function cwMyStats(env, pid) {
-  // 1) the Chain Watch script's last report (ChainRoom), 2) the opt-in war readiness reading (D1 cache)
-  let best = null;
-  try { if (env.CHAINROOM) best = (await (await cwStub(env).fetch(`https://do/laststats?pid=${pid}`)).json()).stats || null; } catch (e) {}
-  if (best) best = Object.assign({src: "script"}, best);
-  try {
-    const r = await ocSnapGet(env, "hub", "readiness");
-    const list = r && r.data && Array.isArray(r.data.members) ? r.data.members : [];
-    const m = list.find(x => Number(x.id) === Number(pid) && !x.err) || null;
-    if (m && m.energy && (!best || Number(r.as_of) > Number(best.at))) {
-      const e = m.energy, rate = e.cur < e.max && e.full > 0 ? (e.max - e.cur) / e.full : 0;   // energy per second
-      best = {src: "readiness", energyCur: e.cur, energyMax: e.max, energyInc: 5, energyInt: rate > 0 ? Math.round(5 / rate) : 600,
-              drug: Number((m.cd || {}).drug) || 0, booster: Number((m.cd || {}).booster) || 0,
-              refill: m.refill === false ? 1 : m.refill === true ? 0 : 0, at: Number(r.as_of)};
-    }
-  } catch (e) {}
-  return best;
+  let st = null;
+  try { if (env.CHAINROOM) st = (await (await cwStub(env).fetch(`https://do/laststats?pid=${pid}`)).json()).stats || null; } catch (e) {}
+  return cwStatsFor(env, pid, st);
+}
+async function cwPokeRoom(env) {   // tell every connected script about the change
+  try { if (env.CHAINROOM) await cwStub(env).fetch("https://do/schedule-changed", {method: "POST"}); } catch (e) {}
 }
 async function cwSchedule(env, req, url, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
   if (!env.OC_DB) return Response.json({ok: false, error: "Hub storage isn't set up yet"}, {status: 503});
   const nowS = Math.floor(Date.now() / 1000), pid = Number(who.id);
-  const bad = (m, st) => Response.json({ok: false, error: m}, {status: st || 400});
   if (req.method === "GET") {
-    const {results} = await env.OC_DB.prepare("SELECT id, pid, name, role, start_at, end_at, est_hits, need_hits FROM cw_shift " +
-      "WHERE end_at > ? AND start_at < ? ORDER BY start_at, role").bind(nowS, nowS + CW_AHEAD_S).all();
-    const shifts = results || [];
+    const shifts = await cwShiftRows(env);
     return Response.json({ok: true, now: nowS, roles: CW_ROLES, max_hours: CW_MAX_HOURS, ahead_s: CW_AHEAD_S, shifts,
       me: {pid, name: who.name, leader: !!who.leader, mine: shifts.find(x => Number(x.pid) === pid) || null, stats: await cwMyStats(env, pid)}}, H);
   }
   if (req.method === "POST") {
-    let b; try { b = await req.json(); } catch (e) { return bad("bad request"); }
-    const start = Math.floor(Number(b.start)), hours = Math.floor(Number(b.hours)), role = String(b.role || "");
-    if (!CW_ROLES[role]) return bad("pick a role: primary, backup or 2nd backup");
-    if (!(hours >= 1 && hours <= CW_MAX_HOURS)) return bad(`shifts are 1-${CW_MAX_HOURS} hours`);
-    if (!Number.isFinite(start) || start % 3600) return bad("shifts start on the hour (TCT)");
-    const end = start + hours * 3600;
-    if (end <= nowS) return bad("that time has already passed");
-    if (start < nowS - 3600 || start > nowS + CW_AHEAD_S) return bad("pick a time within the next 7 days");
-    const mine = await env.OC_DB.prepare("SELECT start_at, end_at FROM cw_shift WHERE pid = ? AND end_at > ?").bind(pid, nowS).first();
-    if (mine) return bad("you already have a chain watch shift - one at a time. Cancel it first to pick another.", 409);
-    const clash = await env.OC_DB.prepare("SELECT name, start_at FROM cw_shift WHERE role = ? AND start_at < ? AND end_at > ? LIMIT 1")
-      .bind(role, end, start).first();
-    if (clash) return bad(`${CW_ROLES[role]} is already taken by ${clash.name} for part of that time`, 409);
-    const cover = cwEnergyCover(await cwMyStats(env, pid), start, end);
-    await env.OC_DB.prepare("INSERT INTO cw_shift (pid, name, role, start_at, end_at, created, est_hits, need_hits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .bind(pid, who.name, role, start, end, Date.now(), cover ? cover.hits : null, cover ? cover.need : hours * 12).run();
-    return Response.json({ok: true, cover}, H);
+    let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }
+    const r = await cwShiftAdd(env, pid, who.name, b.start, b.hours, b.role, await cwMyStats(env, pid));
+    if (!r.ok) return Response.json({ok: false, error: r.error}, {status: r.status || 400});
+    await cwPokeRoom(env);
+    return Response.json({ok: true, cover: r.cover}, H);
   }
   if (req.method === "DELETE") {
-    const id = Number(url.searchParams.get("id"));
-    const row = id ? await env.OC_DB.prepare("SELECT pid FROM cw_shift WHERE id = ?").bind(id).first() : null;
-    if (!row) return bad("not found", 404);
-    if (Number(row.pid) !== pid && !who.leader) return bad("you can only cancel your own shift", 403);
-    await env.OC_DB.prepare("DELETE FROM cw_shift WHERE id = ?").bind(id).run();
+    const r = await cwShiftDelete(env, Number(url.searchParams.get("id")) || null, pid, !!who.leader);
+    if (!r.ok) return Response.json({ok: false, error: r.error}, {status: r.status || 400});
+    await cwPokeRoom(env);
     return Response.json({ok: true}, H);
   }
-  return bad("not allowed", 405);
+  return Response.json({ok: false, error: "not allowed"}, {status: 405});
 }
 
 // Discord "your chain watch shift is starting" (Worker timer, every 3 min): every shift starting within the next

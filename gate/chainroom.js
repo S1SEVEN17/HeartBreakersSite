@@ -237,6 +237,8 @@ export class ChainRoom {
       lastStats: {},         // pid -> the member's last stats report (kept after they leave the queue - schedule check)
       notices: {},           // pid -> [messages] waiting for a /cw/sync device
     }, saved || {});
+    // Chain Watching Schedule (script addendum): kept in memory only, re-read from D1 when it changes / hourly
+    this.sched = null; this.schedAt = 0; this.schedDirty = false;
     if (!this.mem.config) this.mem.config = await this.loadConfig();
     // Recover live sockets after a hibernation wake.
     for (const ws of this.state.getWebSockets()) {
@@ -270,6 +272,10 @@ export class ChainRoom {
     if (path === "/config")   return this.handleConfigReload();
     if (path === "/status")   return this.handleStatus(new URL(request.url).searchParams.get("detail") === "1");
     if (path === "/reading")  return this.handleWebReading(request);
+    if (path === "/schedule-changed") {   // the Hub page changed a shift -> re-read + push to every script
+      await this.reloadSchedule(true); this.broadcastDeltas();
+      return Response.json({ ok: true });
+    }
     if (path === "/laststats") {   // schedule page: one member's last stats report (worker.js, signed-in member's own)
       const pid = Number(new URL(request.url).searchParams.get("pid"));
       return Response.json({ ok: true, stats: this.mem.lastStats[pid] || null });
@@ -308,6 +314,7 @@ export class ChainRoom {
     this.conns.set(pid, { ws: server, name });
 
     await this.ensureAlarm();                       // first connection: start the read loop
+    if (!this.sched) await this.reloadSchedule(false);
     this.sendTo(server, this.snapshotMessage(pid)); // full snapshot right away
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -354,6 +361,8 @@ export class ChainRoom {
         break;
       }
       case "bonus": changed = this.doAssignBonus(pid, msg); break;
+      // CHAIN WATCHING SCHEDULE from the script (addendum): same rules as the Hub page (cwShiftAdd / cwShiftDelete)
+      case "shift_add": case "shift_cancel": case "shift_remove": changed = await this.doShift(pid, t, msg); break;
       case "join": changed = this.doJoin(pid, msg); break;
       case "leave":
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
@@ -408,6 +417,39 @@ export class ChainRoom {
     const at = Number(msg.at) > cur && BONUS_HITS.includes(Number(msg.at)) ? Number(msg.at) : nextBonus(cur);
     this.mem.bonus = { at, pid: Number(msg.pid), name: who.name, by: `${me.name} [${pid}]`, set_at: Date.now() };
     return true;
+  }
+
+  /* ---- schedule: script sign-up / cancel / leader remove -> D1, then push the new schedule to everyone ---- */
+  async doShift(pid, t, msg) {
+    if (!this.env.OC_DB) { this.notify(pid, { t: "notice", kind: "shift_refused", text: "The schedule isn't available right now.", now: Date.now() }); return false; }
+    const m = this.mem.members[pid] || {};
+    let r;
+    if (t === "shift_add") {
+      r = await cwShiftAdd(this.env, pid, m.name || (this.conns.get(pid) || {}).name || "Unknown", msg.start, msg.hours, msg.role,
+                           await cwStatsFor(this.env, pid, this.mem.lastStats[pid]));
+    } else if (t === "shift_remove") {
+      if (!m.is_leader) r = { ok: false, error: "Only leaders can remove other members' shifts." };
+      else r = await cwShiftDelete(this.env, msg.id, pid, true);
+    } else {
+      r = await cwShiftDelete(this.env, msg.id || null, pid, false);   // own registration only
+    }
+    if (!r.ok) { this.notify(pid, { t: "notice", kind: "shift_refused", text: r.error, now: Date.now() }); return false; }
+    await this.reloadSchedule(true);
+    return true;
+  }
+  async reloadSchedule(dirty) {
+    try { this.sched = this.env.OC_DB ? await cwShiftRows(this.env) : []; this.schedAt = Date.now(); if (dirty) this.schedDirty = true; }
+    catch (e) { /* keep the last copy */ }
+  }
+  // the addendum's payload: {shifts: [{id, pid, name, start, hours, role, est_hits, need_hits}], mine}
+  schedulePayload(pid) {
+    const rows = this.sched || [];
+    const mine = rows.find((x) => Number(x.pid) === Number(pid));
+    return {
+      shifts: rows.map((x) => ({ id: x.id, pid: x.pid, name: x.name, start: x.start_at, hours: Math.round((x.end_at - x.start_at) / 3600),
+                                role: x.role, est_hits: x.est_hits, need_hits: x.need_hits })),
+      mine: mine ? mine.id : null,
+    };
   }
 
   /* ---- a message for one member (WebSocket now, or held for their next /cw/sync) ---- */
@@ -533,6 +575,8 @@ export class ChainRoom {
     }
 
     // ---- housekeeping ----
+    // schedule: drop ended shifts once an hour passes (shifts end on whole hours) - 1 D1 read
+    if (this.sched && Math.floor(now / 3600000) !== Math.floor(this.schedAt / 3600000)) await this.reloadSchedule(true);
     this.expireRetals(now);
     this.enforceQueueRules(now);
     this.maybeIdleWipe(now);
@@ -724,14 +768,22 @@ export class ChainRoom {
             members: me.is_leader ? Object.keys(this.mem.members).map((k) => ({ pid: Number(k), name: this.mem.members[k].name })) : undefined },
       mode: this.modeOf(), reason: this.reasonOf(),
       ...this.extras(),
+      schedule: this.schedulePayload(pid),
     };
   }
   broadcastDeltas() {
     const now = Date.now();
-    this.broadcast(Object.assign({
+    const base = Object.assign({
       t: "sync", now, chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
-    }, this.extras()));
+    }, this.extras());
+    if (this.schedDirty && this.sched) {
+      // schedule changed: each member gets it with their own `mine`
+      this.schedDirty = false;
+      for (const [pid, c] of this.conns) {
+        try { c.ws.send(JSON.stringify(Object.assign({}, base, { schedule: this.schedulePayload(pid) }))); } catch (e) { this.conns.delete(pid); }
+      }
+    } else this.broadcast(base);
     if (this._pendingHits && this._pendingHits.length) {
       this._pendingHits.forEach((h) => this.broadcast(Object.assign({ t: "hit" }, h, { now })));
       this._pendingHits = [];
@@ -839,6 +891,7 @@ export class ChainRoom {
     for (const m of body.out || []) await this.onMessage(pid, m);
     await this.save();
     await this.ensureAlarm();   // keep Hub reads going for these devices too
+    if (!this.sched) await this.reloadSchedule(false);
     const held = this.mem.notices[pid] || [];
     if (held.length) { delete this.mem.notices[pid]; await this.save(); }
     return Response.json({ ok: true, in: [this.snapshotMessage(pid)].concat(held), now: Date.now() });
@@ -969,4 +1022,72 @@ export function cwEnergyCover(s, startS, endS) {
   const need = Math.ceil((endS - startS) / 300);
   return { hits: Math.floor((e + regen + refill + xanax) / HIT_ENERGY_COST), need,
            start_e: Math.round(e), regen_e: regen, refill_e: refill, xanax_e: xanax };
+}
+
+/* ============================================================================
+ * CHAIN WATCHING SCHEDULE core (contract §10 + claude/chainwatch-schedule-script-addendum.md) - ONE set of rules for
+ * both ways in: the Hub page (worker.js /m/cw/schedule) and the script (WebSocket shift_add / shift_cancel /
+ * shift_remove, handled by the ChainRoom). D1 table cw_shift. No Torn call.
+ * ========================================================================== */
+export const CW_ROLES = { primary: "Primary", backup: "Backup", backup2: "2nd backup" };
+export const CW_MAX_HOURS = 6, CW_AHEAD_S = 7 * 86400;
+
+// every shift that hasn't ended, inside the 7-day window
+export async function cwShiftRows(env) {
+  const nowS = Math.floor(Date.now() / 1000);
+  const { results } = await env.OC_DB.prepare("SELECT id, pid, name, role, start_at, end_at, est_hits, need_hits FROM cw_shift " +
+    "WHERE end_at > ? AND start_at < ? ORDER BY start_at, role").bind(nowS, nowS + CW_AHEAD_S).all();
+  return results || [];
+}
+
+// the member's latest energy reading: their Chain Watch script report (lastStats, from the room) or the opt-in War
+// readiness reading (D1 oc_snap hub/readiness) - whichever is newer
+export async function cwStatsFor(env, pid, scriptStats) {
+  let best = scriptStats ? Object.assign({ src: "script" }, scriptStats) : null;
+  try {
+    const r = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'hub' AND ds = 'readiness'").first();
+    const data = r ? JSON.parse(r.data) : null;
+    const list = data && Array.isArray(data.members) ? data.members : [];
+    const m = list.find((x) => Number(x.id) === Number(pid) && !x.err) || null;
+    if (m && m.energy && (!best || Number(r.as_of) > Number(best.at))) {
+      const e = m.energy, rate = e.cur < e.max && e.full > 0 ? (e.max - e.cur) / e.full : 0;   // energy per second
+      best = { src: "readiness", energyCur: e.cur, energyMax: e.max, energyInc: 5, energyInt: rate > 0 ? Math.round(5 / rate) : 600,
+               drug: Number((m.cd || {}).drug) || 0, booster: Number((m.cd || {}).booster) || 0,
+               refill: m.refill === false ? 1 : 0, at: Number(r.as_of) };
+    }
+  } catch (e) { /* script reading only */ }
+  return best;
+}
+
+// sign up -> {ok, cover} or {ok:false, error, status}
+export async function cwShiftAdd(env, pid, name, start, hours, role, stats) {
+  const nowS = Math.floor(Date.now() / 1000);
+  start = Math.floor(Number(start)); hours = Math.floor(Number(hours)); role = String(role || "");
+  const no = (error, status) => ({ ok: false, error, status: status || 400 });
+  if (!CW_ROLES[role]) return no("Pick a role: Primary, Backup or 2nd backup.");
+  if (!(hours >= 1 && hours <= CW_MAX_HOURS)) return no(`Shifts are 1-${CW_MAX_HOURS} hours.`);
+  if (!Number.isFinite(start) || start % 3600) return no("Shifts start on the hour (TCT).");
+  const end = start + hours * 3600;
+  if (end <= nowS) return no("That time has already passed.");
+  if (start < nowS - 3600 || start > nowS + CW_AHEAD_S) return no("Pick a time within the next 7 days.");
+  const mine = await env.OC_DB.prepare("SELECT id FROM cw_shift WHERE pid = ? AND end_at > ?").bind(pid, nowS).first();
+  if (mine) return no("You already have a chain watch shift - one at a time. Cancel it first to pick another.", 409);
+  const clash = await env.OC_DB.prepare("SELECT name, start_at, end_at FROM cw_shift WHERE role = ? AND start_at < ? AND end_at > ? LIMIT 1")
+    .bind(role, end, start).first();
+  if (clash) return no(`${CW_ROLES[role]} is already taken by ${clash.name} for part of that time.`, 409);
+  const cover = cwEnergyCover(stats, start, end);
+  await env.OC_DB.prepare("INSERT INTO cw_shift (pid, name, role, start_at, end_at, created, est_hits, need_hits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(pid, name, role, start, end, Date.now(), cover ? cover.hits : null, cover ? cover.need : hours * 12).run();
+  return { ok: true, cover };
+}
+
+// cancel / remove -> {ok} or {ok:false, error, status}. id null = the member's own current registration.
+export async function cwShiftDelete(env, id, pid, isLeader) {
+  const nowS = Math.floor(Date.now() / 1000);
+  const row = id ? await env.OC_DB.prepare("SELECT id, pid FROM cw_shift WHERE id = ?").bind(Number(id)).first()
+                 : await env.OC_DB.prepare("SELECT id, pid FROM cw_shift WHERE pid = ? AND end_at > ? ORDER BY start_at LIMIT 1").bind(pid, nowS).first();
+  if (!row) return { ok: false, error: id ? "That shift isn't on the schedule any more." : "You don't have a chain watch shift.", status: 404 };
+  if (Number(row.pid) !== Number(pid) && !isLeader) return { ok: false, error: "You can only cancel your own shift - leaders can remove others'.", status: 403 };
+  await env.OC_DB.prepare("DELETE FROM cw_shift WHERE id = ?").bind(row.id).run();
+  return { ok: true };
 }
