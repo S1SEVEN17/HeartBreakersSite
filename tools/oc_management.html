@@ -493,11 +493,13 @@ function drawCrimes() {
     ${D.config.disabled_by ? `Last saved by ${esc(D.config.disabled_by)} ${ago(D.config.disabled_ts)}.` : ""}</div>
     <div class="bar" style="justify-content:flex-start"><button class="go" id="savecr">Save</button><button id="allon">All on</button>
       <span class="tag" id="crn">${names.length - off.size} of ${names.length} on</span></div>
-    <div class="crl">${names.length ? names.map(n => { const c = CFG.catalog[n];
-      return `<label class="cr${off.has(n) ? " off" : ""}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
+    <div class="crl">${names.length ? names.map((n, ix) => { const c = CFG.catalog[n];
+      // for="crN": a <button> inside the label (🔁 Rotate) would otherwise be the label's control and swallow the
+      // row's click, so the on/off switch never toggled (fixed Nov 2026)
+      return `<label class="cr${off.has(n) ? " off" : ""}" for="cr${ix}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
         <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}</i></span>
         <button type="button" class="rot${rot.has(n) ? " on" : ""}" data-rot="${esc(n)}" title="Rotate this crime">🔁 Rotate</button>
-        <span class="sw"><input type="checkbox" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
+        <span class="sw"><input type="checkbox" id="cr${ix}" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
       : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;
   const count = () => { const n = document.querySelectorAll("[data-cr]:not(:checked)").length; $("crn").textContent = `${names.length - n} of ${names.length} on`; };
   document.querySelectorAll("[data-cr]").forEach(x => x.onchange = () => { x.closest(".cr").classList.toggle("off", !x.checked); count(); });
