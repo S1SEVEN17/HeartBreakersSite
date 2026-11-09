@@ -4,8 +4,8 @@
 // "export" keywords removed). ONE copy of the logic, so the page and the live plan always agree.
 //
 // Teams come from the crimes that EXIST in Torn right now (the OC data feed's crimes, every 3 min):
-//   * Recruiting crimes: every OPEN slot is a role to fill. Crimes already BUILT (members in them) go first, the
-//     most-filled first; members are picked by their own pay per day there vs their best crime elsewhere. Members already in the crime stay and their real
+//   * Recruiting crimes: every OPEN slot is a role to fill. Highest pay per member per day first, a BUILT crime (members
+//     in it) ahead of an empty copy of the same crime; members are picked by their own pay per day there vs their best crime elsewhere. Members already in the crime stay and their real
 //     pass rates count. A crime is only filled when the whole crime (existing + new members) reaches the
 //     target average success (each new member >= the lowest-role %, role cap applies) - otherwise it's
 //     SKIPPED (left open, members go elsewhere). Best pay per day first.
@@ -180,13 +180,13 @@ export function ocPlan(X) {
   };
 
   // ---- 3. fill open slots of recruiting crimes; skip crimes that can't reach the target ----
-  // ORDER (Nov 2026): crimes that are already BUILT (members in them) come first, the most-filled first - finishing a
-  // crime gets everyone in it paid, and an abandoned half-built crime pays nobody. Then the rest; ties by pay per
-  // member per day.
+  // ORDER (Nov 2026, revised): highest pay per MEMBER per day first; among crimes that pay the same (e.g. several
+  // instances of one crime) the one already BUILT (members in it), most-filled first, goes first - so a half-built
+  // crime is finished before a fresh copy of it, but never ahead of a better-paying crime.
   const filled = c => { const sl = c.slots || []; return sl.length ? sl.filter(x => x.user).length / sl.length : 0; };
+  const each = c => payDay(c.name) / ((c.slots || []).length || 1);
   const recruiting = [...inst.values()].filter(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user))
-    .sort((a, b) => (filled(b) > 0) - (filled(a) > 0) || filled(b) - filled(a)
-      || payDay(b.name) / ((b.slots || []).length || 1) - payDay(a.name) / ((a.slots || []).length || 1) || (b.difficulty || 0) - (a.difficulty || 0));
+    .sort((a, b) => each(b) - each(a) || filled(b) - filled(a) || (b.difficulty || 0) - (a.difficulty || 0));
   // WHO fills a slot: each member's own pay per day there (crime pay/day per slot x their pass rate), minus half of
   // what they'd earn per day in their best crime anywhere - so strong members aren't spent on a low-paying crime a
   // weaker member can pass, and are left for the crimes where they earn the most. The slots still get filled

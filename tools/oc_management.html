@@ -187,7 +187,7 @@ async function saveConfig(k, v) {
 
 // ---------- pass rates ----------
 // busy = in an active crime right now; activeRate = their rate in that crime (live)
-function busyMap() { const b = {}; D.active.forEach(c => (c.slots || []).forEach(([pid, pos, rate]) => { if (pid) b[pid] = {crime: c.name, pos, rate, status: c.status}; })); return b; }
+function busyMap() { const b = {}; D.active.forEach(c => (c.slots || []).forEach(([pid, pos, rate]) => { if (pid) b[pid] = {crime: c.name, cid: c.id, pos, rate, status: c.status}; })); return b; }   // cid: which crime (Nov 2026)
 // ---------- spawn warnings (Nov 2026) ----------
 // Teams are built whether or not their crime is recruiting. A team can only start once Torn has a Recruiting instance
 // of that crime with its roles open, so each team is matched to one (the feed's crimes, every 3 min): teams of the
@@ -632,7 +632,9 @@ function drawDeployed() {
       if (r.pid == null) return `<tr><td>${esc(r.position)}</td><td class="tag">empty</td><td></td><td></td></tr>`;
       total++;
       const b = busy[r.pid];
-      const ok = b && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position);
+      // JOINED vs QUEUED (Nov 2026): a live team's member has joined only when they're in THAT crime id; a queued
+      // member who is still in another crime of the same type is queued, not joined
+      const ok = b && (t.crime_id && b.cid != null ? String(b.cid) === String(t.crime_id) : (!r.queued && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position)));
       if (ok) joined++;
       const stt = ok ? '<span class="ok">✅ joined</span>' : r.queued ? queueTag(r) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>';
       return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
