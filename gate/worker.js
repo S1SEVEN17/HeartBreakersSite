@@ -1306,7 +1306,7 @@ async function ocSummaries(env, envName) {
                        COALESCE(json_extract(j.value, '$.position_info.label'), json_extract(j.value, '$.position')) AS label
                 FROM oc_hist AS h, json_each(h.data, '$.slots') AS j WHERE h.env = ?),
           b AS (SELECT crime, t, pid, rate, ${SUM_BASE_ROLE} AS role FROM s WHERE pid IS NOT NULL AND rate IS NOT NULL),
-          r AS (SELECT crime, role, pid, rate, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
+          r AS (SELECT crime, role, pid, rate, t, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
      SELECT crime, role, pid, rate, t FROM r WHERE n = 1`).bind(envName).all();
   // NET VALUE per completion (Nov 2026, project doc claude/oc-optimizer-hub-netpayout-addendum.md): each of the
   // latest `window` completions' cash + reward items at today's prices (net of the 5% fee), x the members' share
