@@ -391,11 +391,12 @@ const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready,
 // (the same encrypted key as their stats) reads THEIR checkpoint pass rates - v2 user/organizedcrimes: only the open
 // roles of recruiting crimes carry the key owner's rate - into oc_cpr (prod), exactly like the OC Optimizer script's
 // shares, so OC Management's Team Builder and the script's role suggestions use them.
-//   on save (turned on)  -> read at once          turned off / deleted -> their row removed
-//   the timer (every 3 min, ocOptinPull) -> each opted-in member once per HALF-HOUR SLOT (Nov 2026: scheduled at
-//   :00 and :30 TCT), at most OC_OPTIN_PER_RUN a run - so the slot's reads land in its first few runs (:00, :03, ...)
-//   nothing recruiting -> the last rates stay (not wiped); key deleted / not theirs (Torn code 2) -> row removed
-const OC_OPTIN_SLOT = 30 * 60e3, OC_OPTIN_PER_RUN = 10;
+//   WHEN (Nov 2026, the user's rule): only when the Hub's 3-minute crimes read finds a NEW crime (an id it hasn't
+//   seen) - then every opted-in member is read once (at most OC_OPTIN_PER_RUN a run, the rest on the next runs).
+//   Not on save, not on a timer. Turned off / deleted -> their row removed.
+//   MERGE: rates read are written over the member's stored ones per crime|role; every other stored rate is kept
+//   (so a rate only changes when a new one is found for that crime / role). Key deleted / not theirs -> row removed.
+const OC_OPTIN_PER_RUN = 10;
 const ocBaseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();   // "Muscle #2" -> "Muscle"
 const ocFb = x => String(x == null ? "" : x).replace(/[.$#\[\]/\x00-\x1f]/g, "_").trim();     // the script's fbKey
 async function ocCprDrop(env, id) {
@@ -415,15 +416,24 @@ async function ocPullMember(env, id, name, key) {
     roles[ocFb(c.name) + "|" + ocFb(ocBaseRole((sl.position_info && sl.position_info.label) || sl.position))] = Math.round(sl.checkpoint_pass_rate);
   }
   const n = Object.keys(roles).length;
-  if (n) await env.OC_DB.prepare(
-    "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
-    "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
-    .bind(Number(env.FACTION_ID), Number(id), String(name || "").slice(0, 40), JSON.stringify(roles), Date.now()).run();
-  return {roles: n};
+  if (n) {
+    // merge over what's stored; only written (and ts moved on) when a rate is new or different
+    const cur = await env.OC_DB.prepare("SELECT roles FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
+      .bind(Number(env.FACTION_ID), Number(id)).first();
+    let old = {}; try { old = cur ? JSON.parse(cur.roles) || {} : {}; } catch (e) {}
+    const changed = Object.keys(roles).filter(k => old[k] !== roles[k]).length;
+    if (changed) await env.OC_DB.prepare(
+      "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
+      "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
+      .bind(Number(env.FACTION_ID), Number(id), String(name || "").slice(0, 40), JSON.stringify(Object.assign(old, roles)), Date.now()).run();
+    return {roles: n, changed};
+  }
+  return {roles: 0, changed: 0};
 }
-// timer step: members with "OC pass rates" on, once each per :00 / :30 slot, oldest-tried first; also removes shared rows of
-// anyone no longer in the faction (roster)
-async function ocOptinPull(env, now) {
+// timer step: when the crimes read found a NEW crime id, queue every member with "OC pass rates" on; read up to
+// OC_OPTIN_PER_RUN queued members a run. Also removes shared rows of anyone no longer in the faction (roster).
+// State: oc_snap hub 'oc-optin' {seen: [crime ids], pending: [member ids]}
+async function ocOptinPull(env, now, crimes) {
   const {data} = await readOptin(env, false);
   const ros = await ocSnapGet(env, "prod", "roster");
   const roster = (ros && ros.data) || null;
@@ -431,17 +441,26 @@ async function ocOptinPull(env, now) {
     const ids = Object.keys(roster).map(Number).filter(Boolean);
     await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
   }
-  const tried = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
-  const slot = now - now % OC_OPTIN_SLOT;                 // start of this :00 / :30 slot (TCT = UTC)
-  const due = Object.keys(data.members).filter(i => data.members[i].oc && (!roster || roster[i] != null) && (tried[i] || 0) < slot)
-    .sort((a, b) => (tried[a] || 0) - (tried[b] || 0)).slice(0, OC_OPTIN_PER_RUN);
+  const st0 = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
+  const st = {seen: Array.isArray(st0.seen) ? st0.seen : [], pending: Array.isArray(st0.pending) ? st0.pending : []};
+  let dirty = false;
+  if (Array.isArray(crimes)) {                             // null when the crimes read failed - nothing to compare
+    const seen = new Set(st.seen.map(String)), ids = crimes.map(c => String(c.id));
+    const fresh = ids.filter(id => !seen.has(id));
+    if (fresh.length) {                                    // a NEW crime -> everyone with OC rates on is read once
+      const add = Object.keys(data.members).filter(i => data.members[i].oc && (!roster || roster[i] != null));
+      st.pending = [...new Set(st.pending.concat(add))];
+    }
+    if (fresh.length || ids.length !== st.seen.length) { st.seen = ids; dirty = true; }
+  }
+  st.pending = st.pending.filter(i => data.members[i] && data.members[i].oc);
+  const due = st.pending.slice(0, OC_OPTIN_PER_RUN);
   for (const i of due) {
-    tried[i] = now;
     try { await ocPullMember(env, i, roster ? roster[i] : "", await openKey(env, data.members[i].k)); } catch (e) {}
   }
-  Object.keys(tried).forEach(i => { if (!data.members[i] || !data.members[i].oc) delete tried[i]; });
-  if (due.length) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'oc-optin', ?, ?, 'hub') " +
-    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(tried)).run();
+  if (due.length) { st.pending = st.pending.slice(due.length); dirty = true; }
+  if (dirty) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'oc-optin', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(st)).run();
 }
 
 // DELAYED CRIMES for the script's leader alerts (Nov 2026, crimes-tab addendum): a crime that is READY (ready_at
@@ -477,7 +496,7 @@ async function ocDelayCheck(env, crimes, now, ops) {
 // can see of it:
 //   optin  {bs, ws, ready, since, updated} (never the key - only whether one is stored)
 //   stats  {bs: [[day, str, def, spd, dex]...], ws: [[day, man, int, end]...]} from data/optin_stats.json
-//   ready  what leaders see on War Readiness right now (read live from Torn with their stored key; nothing saved)
+//   ready  what leaders last saw on War Readiness (no Torn call here - only read while a leader has the page open)
 //   oc     {ts, roles: {"Crime|Role": rate}} their shared OC pass rates (D1 oc_cpr, live)
 async function mySharedData(env, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
@@ -492,13 +511,13 @@ async function mySharedData(env, who) {
       if (r.ok) { const st = await r.json(); out.stats = st[id] || {}; }
     }
     if (e && e.ready) {
-      try {
-        const d = await tornUser(await openKey(env, e.k), "bars,cooldowns,profile,refills");
-        const bar = b => b ? {cur: b.current, max: b.maximum} : null;
-        out.ready = d.error ? {err: d.error.error || "Torn error"} :
-          {energy: bar(d.energy), nerve: bar(d.nerve), happy: bar(d.happy), life: bar(d.life), cd: d.cooldowns || {},
-           refill: (d.refills || {}).energy_refill_used ?? null, status: d.status ? d.status.description : null};
-      } catch (x) { out.ready = {err: "couldn't read right now"}; }
+      // (Nov 2026) no Torn call here: what leaders last saw on War Readiness (read only while a leader has it open)
+      const c = await readinessCached(env).catch(() => ({v: null}));
+      const row = c.v && (c.v.members || []).find(m => String(m.id) === id);
+      out.ready = !row ? {err: "nothing read yet - War Readiness is only read while a leader has it open"}
+        : row.err ? {err: row.err}
+        : {energy: row.energy, nerve: row.nerve, happy: row.happy, life: row.life, cd: row.cd || {}, refill: row.refill,
+           status: row.status ? row.status.desc : null, at: c.v.at};
     }
   } catch (x) { out.optin_err = "couldn't read your opt-in settings right now"; }
   if (env.OC_DB) {
@@ -539,7 +558,9 @@ async function optinRoute(env, req, who) {
     if (j.key) {
       const key = String(j.key).trim();
       if (!/^[A-Za-z0-9]{16}$/.test(key)) return new Response("That doesn't look like a Torn API key (16 letters/numbers).", {status: 400});
-      const d = await tornUser(key, "basic,battlestats,workstats,bars,cooldowns,refills");
+      // API: Heart Breakers Hub - key check only (who owns it); stats are read at 00:00 TCT, OC rates when a new crime
+      // appears, war readiness while a leader has the page open (Nov 2026)
+      const d = await tornUser(key, "basic");
       if (d.error) return new Response(d.error.code === 16 ? "That key's access is too low - create a Limited Access key."
                                         : `Torn said: ${d.error.error || "error " + d.error.code}`, {status: 400});
       if (String(d.player_id) !== id) return new Response("That key belongs to someone else - use your own key.", {status: 400});
@@ -553,19 +574,28 @@ async function optinRoute(env, req, who) {
       return {k: sealedNow, bs, ws, ready, oc, since: cur ? cur.since : now, updated: now};
     }, `Opt-in settings saved ${tag}`);
     if (missing) return new Response("Add your Limited API key first.", {status: 400});
-    // OC pass rates: read straight away when on (then hourly by the timer - ocOptinPull); removed when off
+    // OC pass rates: read when the Hub finds a NEW crime (ocOptinPull, Nov 2026) - not on save; removed when off
     let ocNote = null;
-    if (oc) ocNote = await ocPullMember(env, id, who.name, await openKey(env, sealedNow)).catch(() => null);
-    else await ocCprDrop(env, id);
+    if (!oc) await ocCprDrop(env, id);
     return Response.json(Object.assign(publicEntry({bs, ws, ready, oc, since: now, updated: now}), {oc_now: ocNote}), H);
   } catch (e) {
     return new Response(e.message || "Something went wrong", {status: 502});
   }
 }
 // live war readiness for leaders: every opted-in member with "ready" on, read with their own key
+// (Nov 2026) members' keys are read AT MOST ONCE A MINUTE, and only because a leader has the War Readiness page open
+// (it asks once a minute while visible). The last read is kept in D1 (oc_snap hub 'readiness') so every Worker
+// instance shares that minute - nothing else reads readiness from Torn.
 let READY_CACHE = {t: 0, v: null};
+async function readinessCached(env) {
+  if (READY_CACHE.v) return READY_CACHE;
+  const s = env.OC_DB ? await ocSnapGet(env, "hub", "readiness").catch(() => null) : null;
+  if (s && s.data) READY_CACHE = {t: Number(s.as_of) || 0, v: s.data};
+  return READY_CACHE;
+}
 async function readiness(env, ctx) {
   const H = {headers: {"Cache-Control": "no-store"}};
+  if (env.OC_DB) { const s = await ocSnapGet(env, "hub", "readiness").catch(() => null); if (s && s.data) READY_CACHE = {t: Number(s.as_of) || 0, v: s.data}; }
   if (READY_CACHE.v && Date.now() - READY_CACHE.t < 60e3) return Response.json(READY_CACHE.v, H);
   const {data} = await readOptin(env, false);
   const members = await currentMembers(env, ctx) || new Map();
@@ -583,6 +613,8 @@ async function readiness(env, ctx) {
     } catch (e) { return {id: +i, name: m.name, err: "couldn't read"}; }
   }));
   READY_CACHE = {t: Date.now(), v: {at: Math.floor(Date.now() / 1000), members: rows}};
+  if (env.OC_DB) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'readiness', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(READY_CACHE.t, JSON.stringify(READY_CACHE.v)).run().catch(() => {});
   return Response.json(READY_CACHE.v, H);
 }
 
@@ -1177,8 +1209,8 @@ async function ocFeedPull(env) {
     try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
     crimesNow = cl;
   } catch (e) { fail("crimes", e); }
-  // OC pass rates of members who opted in with their stored key (their own keys, ~hourly each)
-  try { await ocOptinPull(env, now); } catch (e) { fail("oc-optin", e); }
+  // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
+  try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
   // roster - hourly (1 call)
   let newRoster = false;
   if (due("roster")) try {

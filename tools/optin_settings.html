@@ -16,7 +16,7 @@
   Deleted automatically when they leave the faction or their key stops existing (deleted key / deleted account) -
   see OPT-IN STATS in generate.py. Placeholders: __CONFIG__ ({gate}), __MENU__.
   OC PASS RATES (Nov 2026): a fourth option on the SAME stored key - oc: true -> the gatekeeper reads the member's
-  OC checkpoint pass rates with their encrypted key (on save, then every 30 minutes at :00 / :30 TCT - ocOptinPull in gate/worker.js) into
+  OC checkpoint pass rates with their encrypted key (only when the Hub finds a new crime - ocOptinPull in gate/worker.js, Nov 2026) into
   the shared rates the OC Management Team Builder and the OC Optimizer script use.
   KEY: ONE key for everything on this page, stored on the Hub encrypted ("Your key" panel says so plainly); the
   "How your key and data are used" disclosure is part of the sharing panel.
@@ -84,13 +84,13 @@ __MENU__
     <div class="seg" data-k="ws"><button data-v="off">Off</button><button data-v="leaders">Leaders</button><button data-v="faction">Faction</button></div></div>
   <div class="opt"><div class="t"><b>⚔️ War readiness</b><span>Leaders see your energy, happy, drug / booster / medical cooldowns, refill and status - live, for war planning</span></div>
     <div class="seg" data-k="ready"><button data-v="false">Off</button><button data-v="true">Leaders</button></div></div>
-  <div class="opt"><div class="t"><b>🕵️ OC pass rates</b><span>Your checkpoint pass rate per organized crime role - read every 30 minutes, so leaders' Team Builder and the OC Optimizer script can put you in the roles you pass best</span></div>
+  <div class="opt"><div class="t"><b>🕵️ OC pass rates</b><span>Your checkpoint pass rate per organized crime role - read whenever the Hub finds a new crime, so leaders' Team Builder and the OC Optimizer script can put you in the roles you pass best</span></div>
     <div class="seg" data-k="oc"><button data-v="false">Off</button><button data-v="true">On</button></div></div>
   <div class="btns"><button class="go" id="save">Save</button><button class="del" id="del">Delete my key and all my data</button></div>
   <div id="msg"></div>
   <div class="how"><h3>📜 How your key and data are used</h3>
   <table>
-    <tr><td>Key storage</td><td><span class="badge hub">🔒 Stored on the Hub (encrypted)</span><br>Used only for automation (battle / work stats once a day at 00:00 TCT, OC pass rates every 30 minutes at :00 and :30, and war readiness once a minute only while a leader has the War readiness page open) · never shared or shown</td></tr>
+    <tr><td>Key storage</td><td><span class="badge hub">🔒 Stored on the Hub (encrypted)</span><br>Used only for automation (battle / work stats once a day at 00:00 TCT, OC pass rates whenever the Hub finds a new crime, and war readiness once a minute only while a leader has the War readiness page open) · never shared or shown</td></tr>
     <tr><td>Key access level</td><td>Limited Access</td></tr>
     <tr><td>Data storage</td><td>Persistent - until you delete it here, turn everything off, leave Heart Breakers, or your key stops existing</td></tr>
     <tr><td>Data sharing</td><td>Your choice per item: <b>faction leaders</b> only, or <b>faction members</b>. War readiness: leaders only. OC pass rates: <b>faction leaders</b> (OC Management) and <b>faction members using the OC Optimizer script</b> (its role suggestions show your name and rate). Never outside the faction</td></tr>
@@ -138,9 +138,9 @@ $("save").onclick = async () => {
   say("Checking with Torn and saving…", true);
   try { const o = await call("PUT", {key: key || undefined, bs: S.bs, ws: S.ws, ready: S.ready === "true", oc: S.oc === "true"}); $("key").value = "";
     status(o);
-    const ocTxt = !o.oc ? "" : o.oc_now && o.oc_now.roles ? ` OC pass rates shared (${o.oc_now.roles} role${o.oc_now.roles === 1 ? "" : "s"}).`
-      : o.oc_now && o.oc_now.roles === 0 ? " OC pass rates: no crimes are recruiting right now - they're read again at the next :00 or :30." : " OC pass rates are read at the next :00 or :30.";
-    say(o.opted ? "Saved ✓ - your stats show up after the next update (within the hour)." + ocTxt : "Turned off - your key and data were deleted.", true); }
+    // (Nov 2026) nothing is read on save: stats at the next 00:00 TCT, OC pass rates when the Hub finds a new crime
+    const ocTxt = !o.oc ? "" : " Your OC pass rates are read the next time the Hub finds a new crime.";
+    say(o.opted ? "Saved ✓ - your battle / work stats are read at the next 00:00 TCT." + ocTxt : "Turned off - your key and data were deleted.", true); }
   catch (e) { say(e.message); }
 };
 $("del").onclick = async () => {
@@ -177,7 +177,7 @@ async function showViewer() {
   let rd = "";
   if (o && o.ready) {
     const R = d.ready || {}, bar = b => b ? `${b.cur} / ${b.max}` : "-";
-    rd = R.err ? `<div class="err">${esc(R.err)}</div>` : `<div class="muted" style="margin-bottom:4px">What leaders see right now (read live from Torn when they open War Readiness - not saved):</div>
+    rd = R.err ? `<div class="err">${esc(R.err)}</div>` : `<div class="muted" style="margin-bottom:4px">What leaders last saw on War Readiness${R.at ? ` (read ${Math.max(0, Math.round((Date.now() / 1000 - R.at) / 60))} min ago)` : ""} - it's only read from Torn once a minute while a leader has that page open:</div>
       <table class="vt"><tr><td>Energy</td><td>${bar(R.energy)}</td></tr><tr><td>Nerve</td><td>${bar(R.nerve)}</td></tr><tr><td>Happy</td><td>${bar(R.happy)}</td></tr><tr><td>Life</td><td>${bar(R.life)}</td></tr>
       ${Object.entries(R.cd || {}).map(([k, x]) => `<tr><td>${esc(k[0].toUpperCase() + k.slice(1))} cooldown</td><td>${x ? Math.ceil(x / 60) + " min" : "none"}</td></tr>`).join("")}
       <tr><td>Energy refill used today</td><td>${R.refill == null ? "-" : R.refill ? "yes" : "no"}</td></tr><tr><td>Status</td><td>${esc(R.status || "-")}</td></tr></table>`;

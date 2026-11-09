@@ -5870,19 +5870,12 @@ def optin_update(raw: dict):
         st = {}
     current = {str(m.get("id")) for m in _as_list((raw.get("members") or {}).get("members"))}
     last_read = int((st.get("_meta") or {}).get("read") or 0)
-    # ONCE A DAY (Nov 2026): everyone is read in the 00:00 TCT slot. A member who opted in or changed what they share
-    # is read straight away ONLY if they haven't been read yet today - nobody is read twice in a day.
-    today0 = slot_start("optin")
-    pending = {i for i, e in opt.items() if (e.get("bs", "off") != "off" or e.get("ws", "off") != "off")
-               and int(e.get("updated") or 0) > int((st.get(i) or {}).get("r") or 0)     # r = when last read
-               and int((st.get(i) or {}).get("r") or 0) < today0}
+    # ONCE A DAY ONLY (Nov 2026, the user's rule): battle / work stats are read for everyone in the 00:00 TCT slot and
+    # at no other time - a member who opts in or changes what they share is read at the next 00:00 TCT.
     only = None
     if not due("optin", last_read):
-        if not pending:
-            print("Opt-in: read this slot already")
-            return opt, {k: v for k, v in st.items() if k != "_meta"}
-        only = pending
-        print(f"Opt-in: {len(pending)} new / changed member(s) read now")
+        print("Opt-in: read this slot already (next read 00:00 TCT)")
+        return opt, {k: v for k, v in st.items() if k != "_meta"}
     meta = st.pop("_meta", None) or {}
     gone, bad = set(), set()
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
