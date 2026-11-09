@@ -756,6 +756,23 @@ async function ocConfig(env, envName) {
     out[r.k] = v; out[r.k + "_ts"] = r.ts; out[r.k + "_by"] = r.by;
   }
   if (!Array.isArray(out.disabled)) out.disabled = [];
+  if (!Array.isArray(out.rotate)) out.rotate = [];
+  return out;
+}
+// ROTATION mix rule (Nov 2026): who was in the latest completed runs of each rotated crime (oc_hist, newest first)
+// -> {crime: [[pids of the latest run], [pids of the run before]]}
+async function ocLastRuns(env, envName, names) {
+  if (!names || !names.length) return {};
+  const {results} = await env.OC_DB.prepare(
+    `WITH h AS (SELECT json_extract(data, '$.name') AS crime, data,
+                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
+                FROM oc_hist WHERE env = ? AND json_extract(data, '$.name') IN (SELECT value FROM json_each(?)))
+     SELECT crime, n, json_extract(j.value, '$.user.id') AS pid FROM h, json_each(h.data, '$.slots') AS j WHERE n <= 2`)
+    .bind(envName, JSON.stringify(names)).all();
+  const out = {};
+  for (const r of results || []) { if (r.pid == null) continue;
+    const l = out[r.crime] || (out[r.crime] = []); (l[r.n - 1] || (l[r.n - 1] = [])).push(Number(r.pid)); }
+  for (const k of Object.keys(out)) out[k] = Array.from(out[k], x => x || []);
   return out;
 }
 
@@ -811,16 +828,23 @@ async function ocPlanObj(env, envName, id) {
   //   needs_spawn  no Recruiting / Planning instance of the crime
   //   recruiting   a Recruiting instance has at least one open slot
   //   spawned      instances exist but none has an open slot (full / planning)
+  // pay per member per day + required items per role, from the planner's latest stats (every 3 min) - Nov 2026
+  const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
+  const payDay = (ps && ps.data && ps.data.pay_day) || {}, items = (ps && ps.data && ps.data.items) || {};
+  const rotSet = new Set(cfg.rotate || []);
   const teams = teamsCfg.length ? teamsCfg.map(t => {
     const inst = (crimes || []).filter(c => c && (t.crime_id ? String(c.id) === String(t.crime_id) : c.name === t.crime) && (c.status === "Recruiting" || c.status === "Planning"));
     const open = inst.some(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user));
     return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
             kind: t.kind || "spawn", crime_id: t.crime_id || null,
+            pay_day: payDay[t.crime] ?? null,                 // per member per day (the planner's figure)
+            rotation: rotSet.has(t.crime),                    // a crime leaders rotate
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), slot: r.position, pid: Number(r.pid),
               name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
               existing: !!r.existing, joined: !!r.joined, queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
-              replaces: r.replaces || null}))};   // replaces {pid, name}: a leader is swapping out the member in this slot
+              replaces: r.replaces || null,
+              item: (items[t.crime] || {})[r.position] || null}))};   // required item {id, name} for this role, or null   // replaces {pid, name}: a leader is swapping out the member in this slot
   }) : null;
   // delays: leaders only (gated here) - the timer's delay check (ocDelayCheck): ready crimes held up by a member
   let delays = [];
@@ -878,7 +902,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
   if (req.method === "GET" && (sub === "config.json" || sub === "rates.json")) {
     const envName = url.searchParams.get("env");
     if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
-    if (sub === "config.json") return Response.json(await ocConfig(env, envName), H);
+    if (sub === "config.json") { const c = await ocConfig(env, envName);
+      c.last_runs = await ocLastRuns(env, envName, c.rotate).catch(() => ({}));   // for the page's Auto-build (rotation mix rule)
+      return Response.json(c, H); }
     const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
       .bind(envName, Number(env.FACTION_ID)).all();
     const out = {};
@@ -925,10 +951,11 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     let b;
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
-    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
-    if (b.k === "disabled") {
-      if (!Array.isArray(v)) return Response.json({ok: false, error: "disabled must be a list"}, {status: 400});
+    if (b.k === "disabled" || b.k === "rotate") {
+      // disabled: crimes switched off; rotate (Nov 2026): crimes leaders ROTATE (the page adds their prerequisites)
+      if (!Array.isArray(v)) return Response.json({ok: false, error: b.k + " must be a list"}, {status: 400});
       v = [...new Set(v.map(x => String(x).slice(0, 80)))].slice(0, 200);
     } else if (b.k === "opts") {
       // Team Builder settings - the gatekeeper's automatic planner uses the same ones (ocAutoPlan)
@@ -1418,8 +1445,17 @@ async function ocAutoPlan(env, crimes, now) {
     if (pre) { const sp = seats(pre); return {pot: gross(n) * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
     return {pot: gross(n), days: s};
   };
+  const lastRuns = {};
+  for (const [k, v] of Object.entries(await ocLastRuns(env, "prod", cfg.rotate || []).catch(() => ({})))) lastRuns[k] = v.map(l => new Set(l));
   const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
-                    rateOf, payOf, budgetMs: 0, now});
+                    rotate: new Set(cfg.rotate || []), lastRuns, rateOf, payOf, budgetMs: 0, now});
+  // for the script (Nov 2026): pay per member per day of every planned crime + each catalog role's required item
+  r.stats.pay_day = {}; r.stats.items = {};
+  for (const t of r.teams) { const p = payOf(t.crime); r.stats.pay_day[t.crime] = p.days ? Math.round(p.pot / p.days / seats(t.crime)) : 0; }
+  for (const c of (catS.data.organizedcrimes || [])) if (c && c.name && r.teams.some(t => t.crime === c.name)) {
+    const m = {}; (c.slots || []).forEach((sl, i) => { const it = sl.required_item; if (it && it.id)
+      m[(sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1))] = {id: it.id, name: it.name || null}; });
+    r.stats.items[c.name] = m; }
   // the planner's stats every run (incl. why recruiting crimes were left open) - read by the oc_check workflow
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
