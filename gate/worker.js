@@ -786,7 +786,8 @@ async function ocPlanObj(env, envName, id) {
         assignment = {crime: t.crime, position: r.position, team: t.id, rate: r.rate ?? null,
                       difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
                       kind: t.kind || "spawn", crime_id: t.crime_id || null,   // live: join THIS crime id + exact slot
-                      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null};   // QUEUE: join after the current crime pays out
+                      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
+                      replaces: r.replaces || null};   // the slot is still held by this member until they leave   // QUEUE: join after the current crime pays out
       }
     }
   }
@@ -818,7 +819,8 @@ async function ocPlanObj(env, envName, id) {
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), slot: r.position, pid: Number(r.pid),
               name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
-              existing: !!r.existing, joined: !!r.joined, queued: !!r.queued, free_at: r.queued ? r.free_at || null : null}))};
+              existing: !!r.existing, joined: !!r.joined, queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
+              replaces: r.replaces || null}))};   // replaces {pid, name}: a leader is swapping out the member in this slot
   }) : null;
   // delays: leaders only (gated here) - the timer's delay check (ocDelayCheck): ready crimes held up by a member
   let delays = [];
@@ -866,7 +868,8 @@ function ocCleanTeams(teams) {
       pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
       rate: r.rate == null ? null : Math.round(Number(r.rate)) || 0, src: r.src ? String(r.src).slice(0, 20) : null,
       existing: !!r.existing, joined: !!r.joined,
-      queued: !!r.queued, free_at: r.queued && Number(r.free_at) ? Number(r.free_at) : null}))}));   // QUEUE: still in a Planning crime
+      queued: !!r.queued, free_at: r.queued && Number(r.free_at) ? Number(r.free_at) : null,   // QUEUE: still in a Planning crime
+      replaces: r.replaces && Number(r.replaces.pid) ? {pid: Number(r.replaces.pid), name: String(r.replaces.name || "").slice(0, 40)} : null}))}));
 }
 
 async function ocLeaderRoute(env, req, url, who, sub) {

@@ -26,7 +26,8 @@
 // Team shape (the deployed plan, oc_config 'plan'):
 //   {id, crime, difficulty, kind: "live"|"spawn", crime_id (Torn crime id for live, null for spawn), lock,
 //    roles: [{position: exact slot label ("Picklock #2"), pid|null, name, rate, src, existing (already in the
-//             crime in Torn), joined (a planned member who has now joined)}]}
+//             crime in Torn), joined (a planned member who has now joined),
+//             replaces {pid, name} (a leader chose to replace the member in this slot - kept until they leave)}]}
 //
 // ocPlan(X) -> {teams, changed, stats}. X:
 //   crimes   feed crimes (Torn v2 shape)          prev     the current plan's teams (or [])
@@ -98,12 +99,18 @@ export function ocPlan(X) {
         const label = slotLabel(sl), o = old.get(label) || {};
         if (sl.user) {
           const pid = Number(sl.user.id);
+          // REPLACEMENT (Nov 2026): a leader swapped out the member in this slot (their planning is lost) - keep the
+          // replacement while the old member is still in the slot and the replacement is still usable
+          if (o.replaces && Number(o.replaces.pid) === pid && o.pid != null && Number(o.pid) !== pid && roster[String(o.pid)] != null
+              && usable(o.pid, c) && !assigned.has(Number(o.pid)))
+            return Object.assign({}, o, {existing: false, joined: false});
           return {position: label, pid, name: nameOf(pid), existing: true, joined: o.pid != null && Number(o.pid) === pid && (!o.existing || !!o.joined),   // planned, then joined
                   rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : ((rateOf(pid, c.name, label) || {}).rate ?? null), src: "in crime"};
         }
         // open slot: keep the planned member while they're still free, still here and not planned elsewhere
-        if (o.pid != null && !o.existing && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid)))
-          return Object.assign({}, o, {joined: false});
+        if (o.pid != null && !o.existing && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid))) {
+          const k = Object.assign({}, o, {joined: false}); delete k.replaces; return k;   // the old member has left: a normal open slot now
+        }
         return {position: label, pid: null, name: "", rate: null};
       });
       t.kind = "live"; t.crime = c.name; t.difficulty = c.difficulty ?? t.difficulty;

@@ -577,12 +577,13 @@ const queueTag = r => r && r.queued ? `<span class="tag" title="In a crime that'
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
   const rows = t.roles.map((r, i) => {
-    if (r.existing) return `<div class="rr"><span class="pos">${esc(r.position)}</span><span class="fixed">✅ ${esc(r.name || nameOf(r.pid))} <span class="tag">in the crime</span></span>
-      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</span></div>`;
-    const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid));
-    const opts = `<option value="">— empty —</option>` + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
-    return `<div class="rr"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r)}
-      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span></div>`;
+    // a member already IN the crime (or a leader's replacement of one): changeable, defaults to them (Nov 2026)
+    const held = r.existing ? {pid: +r.pid, name: r.name || nameOf(r.pid)} : r.replaces ? {pid: +r.replaces.pid, name: r.replaces.name || nameOf(r.replaces.pid)} : null;
+    const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
+    const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
+    const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r)}${r.existing ? '<span class="tag">in the crime</span>' : ""}
+      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}
@@ -597,9 +598,30 @@ function teamCard(t) {
     ${t.kind === "live" ? "" : spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
 }
+// planning progress of the member holding this slot in Torn (the feed's slot user.progress), e.g. "40%", or ""
+function planPct(t, r) {
+  const c = (D.feed || []).find(x => String(x.id) === String(t.crime_id));
+  const sl = c && (c.slots || []).find(x => ((x.position_info && x.position_info.label) || x.position) === r.position);
+  const p = sl && sl.user && Number(sl.user.progress);
+  return p > 0 ? Math.round(p) + "%" : "";
+}
 function wireTeams() {
   document.querySelectorAll("select[data-t]").forEach(s => s.onchange = () => {
     const t = BOARD.teams.find(x => x.id === s.dataset.t), r = t.roles[+s.dataset.r];
+    // REPLACING a member already in the crime (Nov 2026): warn first - their planning is lost and the crime delayed
+    const held = r.existing ? {pid: +r.pid, name: r.name || nameOf(r.pid)} : r.replaces ? {pid: +r.replaces.pid, name: r.replaces.name || nameOf(r.replaces.pid)} : null;
+    if (held) {
+      if (+s.value === held.pid) {                        // back to the member in the crime
+        const rt = r.existing ? {} : (rateOf(held.pid, t.crime, r.position) || {});
+        if (!r.existing) Object.assign(r, {pid: held.pid, name: held.name, rate: rt.rate ?? r.rate, src: "in crime", existing: true});
+        delete r.replaces; saveBoard(); draw(); return;
+      }
+      if (r.existing) {
+        const pc = planPct(t, r);
+        if (!confirm(`${held.name} is already in ${t.crime}${pc ? ` and ${pc} through planning` : " and their planning has begun"}.\n\nReplacing them will DELAY the crime and WASTE their current planning progress. They'll need to leave the crime before the new member can join.\n\nReplace them?`)) { draw(); return; }
+        r.replaces = held; r.existing = false; r.joined = false;
+      }
+    }
     if (!s.value) Object.assign(r, {pid: null, name: "", rate: null, src: null});
     else { const pid = +s.value, rt = rateOf(pid, t.crime, r.position) || {};
       Object.assign(r, {pid, name: nameOf(pid), rate: rt.rate ?? null, src: rt.src || null}); }
@@ -617,7 +639,7 @@ async function deploy() {
   if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
   const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
     roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing,
-      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null}))}))};
+      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null}))}))};
   try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
@@ -652,7 +674,8 @@ function drawDeployed() {
       // member who is still in another crime of the same type is queued, not joined
       const ok = b && (t.crime_id && b.cid != null ? String(b.cid) === String(t.crime_id) : (!r.queued && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position)));
       if (ok) joined++;
-      const stt = ok ? '<span class="ok">✅ joined</span>' : r.queued ? queueTag(r) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>';
+      const stt = (ok ? '<span class="ok">✅ joined</span>' : r.queued ? queueTag(r) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>')
+        + (r.replaces && !ok ? ` <span class="bad">🔁 replacing ${esc(r.replaces.name || nameOf(r.replaces.pid))}</span>` : "");
       return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
     const av = teamAvg(t);
