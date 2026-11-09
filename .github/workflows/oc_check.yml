@@ -104,3 +104,33 @@ jobs:
           for k in (json.loads(r.get("stats") or "null") or v.get("auto") or {}).get("skipped") or []:
               print(f"  open: {k.get('crime')} [{k.get('filled')}] - {k.get('reason')}" + (f" · new members need avg {k['need']}% · in crime {k.get('inCrime')} · best per role {k.get('best')}" if k.get("need") is not None else ""))
           PY
+      - name: Planning order probe
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Rotation planning (Nov 2026): does planning run in JOIN order? For each Planning/Recruiting crime, per slot
+          # (slot order): join rank, hours since joining, planning progress. Crime names + numbers only - no member ids.
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'" > cr.json 2>/dev/null || exit 0
+          python3 - <<'PY'
+          import json, time
+          d = json.load(open("cr.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
+          if not rows: print("no crimes"); raise SystemExit
+          crimes = json.loads(rows[0]["data"]); now = time.time()
+          keys = set()
+          for c in crimes:
+              for s in c.get("slots") or []:
+                  if s.get("user"): keys |= set(s["user"].keys())
+          print("slot.user fields:", sorted(keys))
+          for c in crimes:
+              if c.get("status") not in ("Planning", "Recruiting"): continue
+              us = [(i, s["user"]) for i, s in enumerate(c.get("slots") or []) if s.get("user")]
+              if len(us) < 2: continue
+              order = sorted(us, key=lambda x: x[1].get("joined_at") or 0)
+              rank = {i: k + 1 for k, (i, _) in enumerate(order)}
+              ra = c.get("ready_at")
+              print(f"{c['status']:10} {c['name']:26} ready in {((ra or now) - now) / 3600:6.1f}h  slots " + " | ".join(
+                  f"#{i + 1}: join{rank[i]} {(now - (u.get('joined_at') or now)) / 3600:5.1f}h ago prog {u.get('progress')}" for i, u in us))
+          PY
