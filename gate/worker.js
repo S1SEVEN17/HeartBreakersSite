@@ -1384,7 +1384,9 @@ async function ocAutoPlan(env, crimes, now) {
     const h = hist.get(`${pid}|${crime}|${b}`); if (h != null) return {rate: h, src: "history"};
     return null;
   };
-  // pay: max payout recorded (summaries, items at prices) x 80% payout, per day - the same figure the page and script show
+  // pay per member per day (Nov 2026, the user's formula): max payout recorded (summaries, items at prices) - 20%
+  // faction tax, ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).
+  // pot here = this crime's seats' share, so pot ÷ days ÷ seats = per member per day - the same figure the page and script show
   const prices = (priS && priS.data) || {};
   const gross = n => { const p = (S.payouts || {})[n]; if (!p || (p.samples || 0) < 3) return 0;
     let iv = 0; Object.keys(p.items || {}).forEach(id => { iv += (p.items[id] || 0) * (Number((prices[id] || {}).price) || 0); });
@@ -1393,7 +1395,7 @@ async function ocAutoPlan(env, crimes, now) {
   const payOf = n => {
     const s = seats(n), pre = (catalog[n] || {}).prereq, fin = Object.keys(catalog).find(x => catalog[x].prereq === n);
     if (fin) { const sf = seats(fin); return {pot: gross(fin) * 0.8 * s / (s + sf), days: s + sf}; }
-    if (pre) { const sp = seats(pre); return {pot: gross(n) * 0.8 * s / (s + sp), days: s}; }
+    if (pre) { const sp = seats(pre); return {pot: gross(n) * 0.8 * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
     return {pot: gross(n) * 0.8, days: s};
   };
   const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),

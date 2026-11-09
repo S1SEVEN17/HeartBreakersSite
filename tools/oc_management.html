@@ -278,14 +278,15 @@ function bestTeam(crime, blocked) {
 //   Falls back to CFG.values (built into the page: g = recent average) only if the summaries can't be read.
 // CFG.values {crime: {g: average gross reward $ (cash + items at market price), pp: payout % to members, n, ok}}
 // from the latest successful completed crimes. Planning takes one day per role (24 h each, one after another), so a
-// crime with s roles locks its members for s days:
-//   member pot  = g × pp%                       (what the members split; the faction keeps the rest)
-//   team $/day  = pot × team success % ÷ days   (expected pay per day for the whole team)
-//   each $/day  = team $/day ÷ roles
+// crime with s roles locks its members for s days.
+// PAY PER MEMBER PER DAY (Nov 2026, the user's formula) - the figure SHOWN everywhere:
+//   total payout (max recorded) - 20% faction tax, ÷ every participant (prerequisite seats too), ÷ days (prerequisite
+//   days too)
+//   member pot  = g × 80%                      (what the members split; the faction keeps 20%)
+//   each $/day  = pot ÷ roles ÷ days
 // Prerequisite chains (No Reserve -> Bidding War): only the final crime pays, split over every seat in the chain.
-//   prerequisite: pot = final pot × its seats ÷ all seats,
-//                 days = its roles + the final's roles (its members wait for the final to pay)
-//   final:        pot = final pot × its seats ÷ all seats, days = its roles
+//   both crimes: pot = final pot × its seats ÷ all seats, days = both crimes' roles (the whole chain)
+// Auto-build RANKS by that × team success (teamExp), so safer teams win among those that reach the target.
 const fmt$ = n => n == null ? "-" : n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "b" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n);
 const PP_DEFAULT = (() => { const v = Object.values(CFG.values || {}).map(x => x.pp).filter(x => x != null).sort((a, b) => a - b);
   return v.length ? v[v.length >> 1] : 100; })();           // typical payout % when a crime's own isn't known
@@ -302,20 +303,21 @@ function grossOf(crime) {
   const v = (CFG.values || {})[crime];
   return v ? v.g : 0;
 }
-const potRaw = crime => { const v = (CFG.values || {})[crime]; return grossOf(crime) * ((v && v.pp) ?? PP_DEFAULT) / 100; };
+const potRaw = crime => grossOf(crime) * 0.8;          // - 20% faction tax (PP_DEFAULT is no longer used for pay)
 function valueOf(crime) {
   const s = rolesOf(crime).length || 1, pre = (CFG.catalog[crime] || {}).prereq;
   const fin = Object.keys(CFG.catalog).find(n => (CFG.catalog[n] || {}).prereq === crime);
   if (fin) { const sf = rolesOf(fin).length || 1;
     return {pot: potRaw(fin) * s / (s + sf), days: s + sf, seats: s, chain: fin}; }
   if (pre) { const sp = rolesOf(pre).length || 1;
-    return {pot: potRaw(crime) * s / (s + sp), days: s, seats: s, chain: pre}; }
+    return {pot: potRaw(crime) * s / (s + sp), days: s + sp, seats: s, chain: pre}; }
   return {pot: potRaw(crime), days: s, seats: s};
 }
-// teamPay = what's SHOWN: max payout per day for the team (÷ roles = each member) - same as the script.
+// teamPay = max payout per day for the team; eachPay = per member per day (what's SHOWN) - same as the script.
 // teamExp = what auto-build RANKS by: that × team success, so among teams that all reach the target the safer,
 //           better-paying ones still win (the target itself is a hard limit either way).
 const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / v.days; };
+const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
 const teamExp = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
 const crimeOk = crime => { const off = new Set(D.config.disabled || []);
   return !off.has(crime) && rolesOf(crime).length && (OPT.chains || !(CFG.catalog[crime] || {}).prereq); };
@@ -534,8 +536,8 @@ function drawBuilder() {
       <button class="gold" id="auto">⚡ Auto-build teams</button>
       <select id="addc">
         ${sugg.length ? `<optgroup label="⭐ Full team ready at ${OPT.target}%+ - best pay first">${sugg.map(x =>
-          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${fmt$(x.pay)}/day · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
-        <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(valueOf(n).pot / valueOf(n).days / (rolesOf(n).length || 1))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
+          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${fmt$(eachPay(x.crime))}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
+        <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(eachPay(n))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
       <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to Live</button>
     </div>
@@ -554,7 +556,7 @@ function drawBuilder() {
   $("auto").onclick = () => { autoBuild(); draw(); };
   // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
   $("add").onclick = () => { const x = suggBy.get($("addc").value);
-    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${fmt$(x.pay)}/day at ${Math.round(teamAvg(x.team))}%.`); }
+    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${fmt$(eachPay(x.crime))}/day each at ${Math.round(teamAvg(x.team))}%.`); }
     else addTeam($("addc").value);
     draw(); };
   $("clr").onclick = () => { if (!confirm("Remove every unlocked team from the board?")) return; BOARD.teams = BOARD.teams.filter(t => t.lock); saveBoard(); draw(); };
@@ -583,7 +585,7 @@ function teamCard(t) {
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
     <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
-      return p == null ? "" : v.pot ? `💰 ${fmt$(p)}/day team · ${fmt$(p / t.roles.length)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""}`
+      return p == null ? "" : v.pot ? `💰 ${fmt$(eachPay(t.crime))}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
         : "💰 no pay data yet"; })()}</div>
     ${t.kind === "live" ? "" : spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
