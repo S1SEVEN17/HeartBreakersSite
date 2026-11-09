@@ -138,3 +138,20 @@ jobs:
               print(f"{c['status']:10} {c['name']:26} ready in {((ra or now) - now) / 3600:6.1f}h  slots " + " | ".join(
                   f"#{i + 1}: join{rank[i]} {(now - (u.get('joined_at') or now)) / 3600:5.1f}h ago prog {u.get('progress')}" for i, u in us))
           PY
+      - name: Net payout values
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # net-payout addendum (Nov 2026): how many crimes in the summaries carry valueMin/Avg/Max - counts only
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT as_of, data FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'" > su.json 2>/dev/null || exit 0
+          python3 - <<'PY'
+          import json, time
+          d = json.load(open("su.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
+          if not rows: print("no summaries"); raise SystemExit
+          p = json.loads(rows[0]["data"]).get("payouts") or {}
+          n = sum(1 for x in p.values() if x.get("valueMax") is not None); ib = sum(1 for x in p.values() if x.get("itemBased") and (x.get("valueMax") or 0) > 0)
+          print(f"summaries {(time.time() * 1000 - rows[0]['as_of']) / 60000:.0f} min old: {len(p)} crimes, {n} with net values, {ib} item-reward crimes valued")
+          PY

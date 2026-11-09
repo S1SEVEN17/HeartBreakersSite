@@ -971,9 +971,12 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     }
     const text = JSON.stringify(v);
     if (text.length > 200000) return Response.json({ok: false, error: "too large"}, {status: 413});
+    const prevShare = b.k === "opts" ? (((await ocConfig(env, b.env)).opts || {}).share ?? null) : null;
     await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES (?, ?, ?, ?, ?) " +
       "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
       .bind(b.env, b.k, text, Date.now(), `${who.name} [${who.id}]`).run();
+    // the members' share changed -> the summaries' net values (valueMin/Avg/Max) are worked out again now
+    if (b.k === "opts" && prevShare !== (v.share ?? null)) await ocSummariesSave(env, b.env).catch(() => {});
     return Response.json({ok: true}, H);
   }
   return new Response("Not found", {status: 404});
@@ -1163,7 +1166,7 @@ async function ocFeedPull(env) {
   const fail = (step, e) => errs.push(step + ": " + String((e && e.message) || e).slice(0, 60));
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
-  let newHist = false, crimesNow = null;
+  let newHist = false, crimesNow = null, newPrices = false;
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
@@ -1241,6 +1244,7 @@ async function ocFeedPull(env) {
       }
       if (daily) all.forEach(id => { if (!out[String(id)]) out[String(id)] = {name: "", price: 0}; });
       put("prices", out);                                   // marks pull:prices only on success
+      newPrices = true;                                     // item values in the summaries change with prices
       if (daily && !netDone) ops.push(env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'prices-net', ?, '{}', 'hub') " +
         "ON CONFLICT (env, ds) DO NOTHING").bind(now));
     }
@@ -1250,7 +1254,7 @@ async function ocFeedPull(env) {
   // history or the roster changed, or none are stored yet
   try {
     const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'").first();
-    if (newHist || newRoster || !have) for (const e of ENVS) await ocSummariesSave(env, e);
+    if (newHist || newRoster || newPrices || !have) for (const e of ENVS) await ocSummariesSave(env, e);
   } catch (e) { fail("summaries", e); }
   // the automatic team plan (live crimes) - after everything above is saved (it reads the new roster / summaries)
   if (crimesNow) try { await ocAutoPlan(env, crimesNow, now); } catch (e) { fail("plan", e); }
@@ -1303,6 +1307,27 @@ async function ocSummaries(env, envName) {
           b AS (SELECT crime, t, pid, rate, ${SUM_BASE_ROLE} AS role FROM s WHERE pid IS NOT NULL AND rate IS NOT NULL),
           r AS (SELECT crime, role, pid, rate, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
      SELECT crime, role, pid, rate, t FROM r WHERE n = 1`).bind(envName).all();
+  // NET VALUE per completion (Nov 2026, project doc claude/oc-optimizer-hub-netpayout-addendum.md): each of the
+  // latest `window` completions' cash + reward items at today's prices (net of the 5% fee), x the members' share
+  // (the leaders' fixed % if set, else that crime's average recorded payout %, else 80%) -> valueMin / Avg / Max.
+  // Every crime with >= 1 successful completion is included (no minimum).
+  const rowsQ = await db.prepare(
+    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
+                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
+                FROM oc_hist WHERE env = ?)
+     SELECT crime, n, COALESCE(json_extract(data, '$.rewards.money'), 0) AS money FROM c WHERE n <= ? AND crime IS NOT NULL`)
+    .bind(envName, SUM_WINDOW).all();
+  const rowItems = await db.prepare(
+    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
+                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
+                FROM oc_hist WHERE env = ?)
+     SELECT c.crime, c.n, COALESCE(json_extract(j.value, '$.id'), json_extract(j.value, '$.item_id')) AS item,
+            COALESCE(json_extract(j.value, '$.quantity'), json_extract(j.value, '$.amount'), 1) AS qty
+     FROM c, json_each(c.data, '$.rewards.items') AS j WHERE c.n <= ?`).bind(envName, SUM_WINDOW).all();
+  const priS = (await ocSnapGet(env, envName, "prices")) || (await ocSnapGet(env, "prod", "prices"));
+  const prices = (priS && priS.data) || {};
+  const cfgO = await ocConfig(env, envName).catch(() => ({}));
+  const fixedShare = cfgO.opts && cfgO.opts.share != null ? Number(cfgO.opts.share) : null;
   const ros = await ocSnapGet(env, envName, "roster");
   const roster = (ros && ros.data) || null;
   const payouts = {};
@@ -1317,6 +1342,22 @@ async function ocSummaries(env, envName) {
     if (p && r.item != null) p.items[String(r.item)] = Math.round(100 * (r.qty || 0) / p.samples) / 100;
   }
   for (const p of Object.values(payouts)) p.itemBased = p.moneyMax === 0 && Object.keys(p.items).length > 0;
+  {
+    const rowVal = {};                                     // "crime|n" -> cash + items at today's price
+    for (const r of rowsQ.results || []) rowVal[r.crime + "|" + r.n] = Number(r.money) || 0;
+    for (const r of rowItems.results || []) { const k = r.crime + "|" + r.n;
+      if (k in rowVal && r.item != null) rowVal[k] += (Number(r.qty) || 0) * (Number((prices[String(r.item)] || {}).price) || 0); }
+    const by = {};
+    for (const [k, v] of Object.entries(rowVal)) { const c = k.slice(0, k.lastIndexOf("|")); (by[c] || (by[c] = [])).push(v); }
+    for (const [c, vals] of Object.entries(by)) {
+      const p = payouts[c]; if (!p || !vals.length) continue;
+      const share = (fixedShare != null ? fixedShare : (p.ppAvg ?? 80)) / 100;
+      p.valueMin = Math.round(Math.min(...vals) * share);
+      p.valueAvg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * share);
+      p.valueMax = Math.round(Math.max(...vals) * share);
+      p.share = Math.round(share * 100);                   // the members' share used (%)
+    }
+  }
   const memberRates = {};
   for (const r of rates.results || []) {
     if (roster && roster[String(r.pid)] == null) continue;                 // members who left aren't suggested
@@ -1435,7 +1476,8 @@ async function ocAutoPlan(env, crimes, now) {
   // members' share (opts.share if a leader set one, else that crime's recorded payout %, else 80%), ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).
   // pot here = this crime's seats' share, so pot ÷ days ÷ seats = per member per day - the same figure the page and script show
   const prices = (priS && priS.data) || {};
-  const gross = n => { const p = (S.payouts || {})[n]; if (!p || (p.samples || 0) < 3) return 0;
+  const gross = n => { const p = (S.payouts || {})[n]; if (!p || !(p.samples > 0)) return 0;
+    if (p.valueMax != null) return p.valueMax;              // net + items, worked out in the summaries (Nov 2026)
     let iv = 0; Object.keys(p.items || {}).forEach(id => { iv += (p.items[id] || 0) * (Number((prices[id] || {}).price) || 0); });
     return ((p.moneyMax || 0) + iv) * (opts.share != null ? opts.share : (p.ppAvg ?? 80)) / 100; };
   const seats = n => (catalog[n] || {roles: []}).roles.length || 1;
