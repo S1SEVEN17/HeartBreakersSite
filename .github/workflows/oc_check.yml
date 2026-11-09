@@ -158,3 +158,12 @@ jobs:
           n = sum(1 for x in p.values() if x.get("valueMax") is not None); ib = sum(1 for x in p.values() if x.get("itemBased") and (x.get("valueMax") or 0) > 0)
           print(f"summaries {(time.time() * 1000 - rows[0]['as_of']) / 60000:.0f} min old: {len(p)} crimes, {n} with net values, {ib} item-reward crimes valued")
           PY
+      - name: Identity check (status codes only)
+        run: |
+          # client-reported identity (Nov 2026): a roster member 200, unknown pid 403, wrong faction 403
+          B=https://hb-gate.heartbreakers.workers.dev
+          for body in '{"pid":974757,"faction":51384,"env":"prod"}' '{"pid":1,"faction":51384,"env":"prod"}' '{"pid":974757,"faction":1,"env":"prod"}'; do
+            code=$(curl -s -o /tmp/r.json -w "%{http_code}" -X POST $B/oc/plan -H 'Content-Type: application/json' -d "$body")
+            ok=$(python3 -c "import json;d=json.load(open('/tmp/r.json'));print(d.get('ok'), (d.get('error') or '')[:60], 'teams=%s' % len(d.get('teams') or []))" 2>/dev/null)
+            echo "plan $code $ok"
+          done
