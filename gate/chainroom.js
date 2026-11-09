@@ -561,7 +561,7 @@ export class ChainRoom {
   enforceQueueRules(now) {
     this.orderedQueue(true).forEach((q, idx) => {
       const s = q.stats, e = energyNow(q, now);
-      if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s)) {   // under 25e, no way back
+      if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s, now)) {   // under 25e, no way back
         delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; return;
       }
       const st = this.mem.status[q.pid];
@@ -790,10 +790,12 @@ function sanitizeStats(s) {
     drug: n(s.drug), booster: n(s.booster), refill: n(s.refill), at: Date.now(),
   };
 }
-function canRestoreEnergy(s) {
+function canRestoreEnergy(s, now) {
   if (!s) return true;                                     // unknown -> don't drop on a guess
+  // cooldowns were reported as seconds left at s.at - count them down to now
+  const el = Math.max(0, ((now || Date.now()) - (Number(s.at) || 0)) / 1000);
   if (Number(s.refill) === 1) return true;
-  if (Number(s.drug) === 0) return true;                   // drug cooldown clear
-  if (Number(s.booster) < BOOSTER_CD_CEILING) return true; // booster usable (<24h)
+  if (Number(s.drug) - el <= 0) return true;               // drug cooldown clear
+  if (Number(s.booster) - el < BOOSTER_CD_CEILING) return true; // booster usable (<24h)
   return false;
 }
