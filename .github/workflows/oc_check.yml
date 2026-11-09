@@ -97,7 +97,7 @@ jobs:
           d = json.load(open("plan.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
           if not rows: print("No plan deployed yet."); raise SystemExit
           r = rows[0]; v = json.loads(r["v"] or "{}"); t = v.get("teams") or []
-          live = sum(1 for x in t if x.get("kind") == "live"); placed = sum(1 for x in t for y in x.get("roles", []) if y.get("pid") and not y.get("existing"))
-          print(f"Plan: {len(t)} teams ({live} in recruiting crimes, {len(t) - live} to spawn) · {placed} members placed · "
+          live = sum(1 for x in t if x.get("kind") == "live"); placed = sum(1 for x in t for y in x.get("roles", []) if y.get("pid") and not y.get("existing")); queued = sum(1 for x in t for y in x.get("roles", []) if y.get("queued"))
+          print(f"Plan: {len(t)} teams ({live} in recruiting crimes, {len(t) - live} to spawn) · {placed} members placed ({queued} queued) · "
                 f"last change {(time.time() * 1000 - r['ts']) / 60000:.0f} min ago by {r['who']}" + (f" · planner {v['auto'].get('ms')} ms" if v.get('auto') else ""))
           PY
