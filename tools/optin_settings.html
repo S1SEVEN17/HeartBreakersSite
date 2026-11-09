@@ -138,9 +138,10 @@ $("save").onclick = async () => {
   say("Checking with Torn and saving…", true);
   try { const o = await call("PUT", {key: key || undefined, bs: S.bs, ws: S.ws, ready: S.ready === "true", oc: S.oc === "true"}); $("key").value = "";
     status(o);
-    // (Nov 2026) nothing is read on save: stats at the next 00:00 TCT, OC pass rates when the Hub finds a new crime
-    const ocTxt = !o.oc ? "" : " Your OC pass rates are read the next time the Hub finds a new crime.";
-    say(o.opted ? "Saved ✓ - your battle / work stats are read at the next 00:00 TCT." + ocTxt : "Turned off - your key and data were deleted.", true); }
+    // (Nov 2026) read straight away on opting in, then on the schedule: stats 00:00 TCT, OC rates on each new crime
+    const ocTxt = !o.oc ? "" : o.oc_now && o.oc_now.roles ? ` OC pass rates shared (${o.oc_now.roles} role${o.oc_now.roles === 1 ? "" : "s"}) - updated whenever the Hub finds a new crime.`
+      : " OC pass rates: no crimes are recruiting right now - they're read the next time the Hub finds a new crime.";
+    say(o.opted ? "Saved ✓ - your stats are read now (they show up within a few minutes), then every day at 00:00 TCT." + ocTxt : "Turned off - your key and data were deleted.", true); }
   catch (e) { say(e.message); }
 };
 $("del").onclick = async () => {

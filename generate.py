@@ -5870,12 +5870,20 @@ def optin_update(raw: dict):
         st = {}
     current = {str(m.get("id")) for m in _as_list((raw.get("members") or {}).get("members"))}
     last_read = int((st.get("_meta") or {}).get("read") or 0)
-    # ONCE A DAY ONLY (Nov 2026, the user's rule): battle / work stats are read for everyone in the 00:00 TCT slot and
-    # at no other time - a member who opts in or changes what they share is read at the next 00:00 TCT.
+    # SCHEDULE (Nov 2026, the user's rule): everyone is read once a day in the 00:00 TCT slot. A member who OPTS IN
+    # (or turns a stat on) is read straight away - saving commits data/optin.json, which starts a full update - then
+    # follows the 00:00 schedule. Nobody is read twice in a day (a second save the same day waits for 00:00).
+    today0 = slot_start("optin")
+    pending = {i for i, e in opt.items() if (e.get("bs", "off") != "off" or e.get("ws", "off") != "off")
+               and int(e.get("updated") or 0) > int((st.get(i) or {}).get("r") or 0)     # r = when last read
+               and int((st.get(i) or {}).get("r") or 0) < today0}
     only = None
     if not due("optin", last_read):
-        print("Opt-in: read this slot already (next read 00:00 TCT)")
-        return opt, {k: v for k, v in st.items() if k != "_meta"}
+        if not pending:
+            print("Opt-in: read this slot already (next read 00:00 TCT)")
+            return opt, {k: v for k, v in st.items() if k != "_meta"}
+        only = pending
+        print(f"Opt-in: {len(pending)} newly opted-in member(s) read now")
     meta = st.pop("_meta", None) or {}
     gone, bad = set(), set()
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")

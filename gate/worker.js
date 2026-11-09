@@ -393,7 +393,7 @@ const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready,
 // shares, so OC Management's Team Builder and the script's role suggestions use them.
 //   WHEN (Nov 2026, the user's rule): only when the Hub's 3-minute crimes read finds a NEW crime (an id it hasn't
 //   seen) - then every opted-in member is read once (at most OC_OPTIN_PER_RUN a run, the rest on the next runs).
-//   Not on save, not on a timer. Turned off / deleted -> their row removed.
+//   Plus once straight away when a member turns it on (optinRoute). Turned off / deleted -> their row removed.
 //   MERGE: rates read are written over the member's stored ones per crime|role; every other stored rate is kept
 //   (so a rate only changes when a new one is found for that crime / role). Key deleted / not theirs -> row removed.
 const OC_OPTIN_PER_RUN = 10;
@@ -574,9 +574,11 @@ async function optinRoute(env, req, who) {
       return {k: sealedNow, bs, ws, ready, oc, since: cur ? cur.since : now, updated: now};
     }, `Opt-in settings saved ${tag}`);
     if (missing) return new Response("Add your Limited API key first.", {status: 400});
-    // OC pass rates: read when the Hub finds a NEW crime (ocOptinPull, Nov 2026) - not on save; removed when off
+    // OC pass rates: read straight away when turned on (Nov 2026: on opting in), then whenever the Hub finds a NEW
+    // crime (ocOptinPull); removed when off
     let ocNote = null;
-    if (!oc) await ocCprDrop(env, id);
+    if (oc) ocNote = await ocPullMember(env, id, who.name, await openKey(env, sealedNow)).catch(() => null);
+    else await ocCprDrop(env, id);
     return Response.json(Object.assign(publicEntry({bs, ws, ready, oc, since: now, updated: now}), {oc_now: ocNote}), H);
   } catch (e) {
     return new Response(e.message || "Something went wrong", {status: 502});
