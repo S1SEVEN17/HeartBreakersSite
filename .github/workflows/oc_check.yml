@@ -179,6 +179,8 @@ jobs:
           python3 - <<'PY' > /tmp/sync.json
           import json; print(json.dumps({"token": json.load(open("/tmp/good.json")).get("token", ""), "out": []}))
           PY
+          curl -s -o /dev/null -X POST $B/cw/sync -H 'Content-Type: application/json' --data @/tmp/sync.json
+          sleep 8   # the room's first Torn reads (chain / members) run ~1 s after a device appears
           code=$(curl -s -o /tmp/s.json -w "%{http_code}" -X POST $B/cw/sync -H 'Content-Type: application/json' --data @/tmp/sync.json)
           python3 -c "
           import json; d=json.load(open('/tmp/s.json')); s=(d.get('in') or [{}])[0]
