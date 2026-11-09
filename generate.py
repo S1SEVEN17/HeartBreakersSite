@@ -4023,7 +4023,8 @@ def member_out(out: Path) -> Path:
 #         Members Hub for everyone else) · a full https:// address. Dropdowns are <details>, so they work by tap.
 def header_default() -> dict:
     L = lambda label, link: {"label": label, "link": link}
-    return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("👥 Members", "M:members.html")],
+    return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("👥 Members", "M:members.html"),
+                        L("⛓️ Chain watch", "M:chainwatch-schedule.html")],
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🏠 Leaders Hub", "L:index.html"),
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
@@ -4880,6 +4881,7 @@ def homepage_default() -> dict:
         ("🕵️", "Crimes", "M:crimes.html"), ("🏋️", "Gym", "M:gym.html")])}
     # Explore = the site's main navigation (the header is kept small) - every members' page is in here
     compete = {"title": "Compete", "links": link([("⚔️", "War history", "M:wars.html"), ("⛓️", "Chain history", "M:chains.html"),
+                                                  ("🕒", "Chain watch schedule", "M:chainwatch-schedule.html"),
                                                   ("🏆", "Leaderboards", "M:leaderboards.html"),
                                                   ("📜", "Board history", "M:leaderboard-history.html")])}
     grow = {"title": "Grow", "links": link([("🏋️", "Gym", "M:gym.html"), ("📈", "Gym history", "M:gym-history.html"),
@@ -5029,7 +5031,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
              ("Leaders Hub", "L:index.html"), ("Armory Monitor", "L:armory.html"),
              ("Profile layout (default)", "L:profile-default.html"),
-             ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
+             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
@@ -5969,6 +5971,8 @@ def write_optin_pages(out: Path):
     page = lambda tpl, conf, menu: (ROOT / "tools" / tpl).read_text(encoding="utf-8") \
         .replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", menu)
     (member_out(out) / "my-data.html").write_text(page("optin_settings.html", {"gate": gate}, site_menu("")), encoding="utf-8")
+    # Chain Watching Schedule (Nov 2026): members sign up for chain watch shifts (gatekeeper /m/cw/schedule)
+    (member_out(out) / "chainwatch-schedule.html").write_text(page("chainwatch_schedule.html", {"gate": gate}, site_menu("")), encoding="utf-8")
     if leader_dir():
         lout = out / leader_dir()
         conf = {"member_base": member_base(), "gate": gate}

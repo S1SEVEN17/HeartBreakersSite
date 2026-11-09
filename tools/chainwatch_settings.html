@@ -47,9 +47,15 @@ __MENU__
 <div class="sub">Faction settings for the Faction Chain Watch script. Members see them view-only; changes reach every connected script straight away.</div>
 
 <div class="card">
+  <h2>Chain</h2>
+  <div class="st" id="cx"><div><b>…</b><span>loading</span></div></div>
+  <div class="note" id="cxn"></div>
+</div>
+
+<div class="card">
   <h2>Queue <span class="pill" id="qn"></span></h2>
   <div class="q" id="q"><div class="empty">Loading…</div></div>
-  <div class="note">Ordered by current energy (most first). Energy and cooldowns come from each member's own Chain Watch script; between its reports the Hub adds regen and takes 25 off for each hit it sees.</div>
+  <div class="note">Ordered by current energy (most first). Members in hospital, jail or mid-flight drop to the back until they can attack again. Energy and cooldowns come from each member's own Chain Watch script; between its reports the Hub adds regen and takes 25 off for each hit it sees. Recruits (first 72 h) can't join.</div>
 </div>
 
 <div class="card">
@@ -59,6 +65,8 @@ __MENU__
   <div class="row"><label for="rest">2nd alert<small>seconds left</small></label><input id="rest" type="number" min="5" max="300" inputmode="numeric"></div>
   <div class="row"><label for="third">3rd alert<small>seconds left</small></label><input id="third" type="number" min="5" max="300" inputmode="numeric"></div>
   <div class="row"><label for="min">Minimum chain<small>no alerts below this many hits</small></label><input id="min" type="number" min="0" max="100000" inputmode="numeric"></div>
+  <div class="row"><label for="hand">Backup alert<small>alert the backup (#2) if whoever's up hasn't hit within this many seconds</small></label><input id="hand" type="number" min="30" max="280" inputmode="numeric"></div>
+  <div class="row"><label for="bwarn">Bonus heads-up<small>warn the queue this many hits before a bonus (0 = off)</small></label><input id="bwarn" type="number" min="0" max="50" inputmode="numeric"></div>
   <div class="acts"><button class="alt" id="reset" type="button">Starting values</button><button id="save" type="button">Save</button></div>
   <div class="msg" id="msg"></div>
   <div class="note" id="by"></div>
@@ -73,7 +81,8 @@ __MENU__
 <script>
 const CONF = __CONFIG__;
 const $ = id => document.getElementById(id);
-const FIELDS = {top: "topAlertSeconds", rest: "restAlertSeconds", third: "thirdAlertSeconds", min: "minChain"};
+const FIELDS = {top: "topAlertSeconds", rest: "restAlertSeconds", third: "thirdAlertSeconds", min: "minChain",
+                hand: "handoffSeconds", bwarn: "bonusWarnHits"};
 let defaults = null;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 function fill(c) {
@@ -86,7 +95,7 @@ function setBy(c) {
 }
 function say(t, ok) { $("msg").textContent = t; $("msg").className = "msg " + (ok ? "ok" : "bad"); }
 // ---- queue (from status.queue; Hub clock = status.now) ----
-let Q = null, QT = 0, QL = 0;   // queue, Hub time it was read, local time it arrived
+let Q = null, QT = 0, QL = 0, X = null;   // queue, Hub time it was read, local time it arrived, turn/bonus/runway/cooldown
 const cd = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
   return h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m ${String(s % 60).padStart(2, "0")}s`; };
 function drawQueue() {
@@ -101,9 +110,12 @@ function drawQueue() {
     const pct = max ? Math.min(100, Math.round(100 * (e || 0) / max)) : 0;
     const on = st && st.status, onC = on === "Online" ? "g" : on === "Idle" ? "y" : on ? "r" : "";
     const hitting = m.hitting_until > hubNow;
+    const cant = m.can_hit === false, role = X && X.turn ? (X.turn.up === m.pid ? "Up" : X.turn.backup === m.pid ? "Backup" : "") : "";
     const drug = s ? left(s.drug) : 0, boost = s ? left(s.booster) : 0;
     return `<div class="qm${hitting ? " hit" : ""}"><div class="qh"><span class="n">#${i + 1}</span>`
       + `<a href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(m.pid)}" target="_blank" rel="noopener">${esc(m.name)}</a>`
+      + (role ? `<span class="pill g">${role}${role === "Up" && X.turn.reason === "bonus" ? " · bonus" : ""}</span>` : "")
+      + (cant ? `<span class="pill r" title="${esc(st && st.desc || "")}">${esc(st && st.state || "Can't attack")}${st && st.until ? " · " + cd(st.until - hubNow / 1000) : ""}</span>` : "")
       + (hitting ? `<span class="pill y">Hitting now</span>` : "")
       + (on ? `<span class="pill ${onC}">${esc(on)}</span>` : "")
       + `<span class="pill${m.connected ? " g" : ""}">${m.connected ? "Script on" : "Script off"}</span></div>`
@@ -118,8 +130,23 @@ function drawQueue() {
       + `</div>`;
   }).join("");
 }
+// ---- chain box: count, next bonus + who's assigned, runway, cooldown ----
+function drawChain(s) {
+  const box = (v, l) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`, x = X || {}, r = x.runway || {}, b = x.bonus;
+  const hubNow = QT + (Date.now() - QL);
+  let h = box(s.chain || "—", "chain");
+  if (b) h += box(b.next.toLocaleString(), "next bonus") + box(b.name || "nobody", "bonus hitter");
+  h += box(r.banked_hits != null ? r.banked_hits : "—", "hits in the queue") + box(r.regen_per_hour != null ? r.regen_per_hour : "—", "regen hits / hour")
+    + box(r.hours == null ? (r.banked_hits ? "∞" : "—") : r.hours + " h", "runway (slowest pace)");
+  if (x.cooldown) h += box(cd((x.cooldown.until - hubNow) / 1000), "cooldown left");
+  $("cx").innerHTML = h;
+  $("cxn").textContent = (b && b.name ? `Bonus ${b.next} assigned to ${b.name} by ${b.by}. ` : "")
+    + (r.hits_to_bonus ? `${r.hits_to_bonus} hits to the next bonus - ${r.bonus_reachable ? "the queue has enough energy right now" : "the queue doesn't have enough energy for it right now"}. ` : "")
+    + "Runway = how long the queue's energy (plus regen) keeps the chain alive at one hit every 5 minutes. "
+    + (x.cooldown ? "The chain is cooling down - the queue is for the next chain." : "") + " Leaders assign the bonus hitter in the Chain Watch script.";
+}
 function showStatus(s) {
-  if (s && Array.isArray(s.queue)) { Q = s.queue; QT = Number(s.now) || Date.now(); QL = Date.now(); drawQueue(); }
+  if (s && Array.isArray(s.queue)) { Q = s.queue; X = s.extras || null; QT = Number(s.now) || Date.now(); QL = Date.now(); drawQueue(); drawChain(s); }
   else if (!s) $("q").innerHTML = `<div class="empty">The queue isn't running yet.</div>`;
   if (!s) { $("st").innerHTML = `<div><b>—</b><span>not running yet</span></div>`; return; }
   const box = (v, l) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`;

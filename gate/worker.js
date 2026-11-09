@@ -43,7 +43,7 @@
 // =====================================================================================================
 
 import {ocPlan} from "./oc_planner.js";   // shared OC team planner (also inlined into the OC Management page)
-import {cwRoute, cwStub, CW_DEFAULT_CONFIG} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
+import {cwRoute, cwStub, CW_DEFAULT_CONFIG, cwEnergyCover} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
 export {ChainRoom} from "./chainroom.js";   // the Durable Object class (wrangler.toml CHAINROOM binding)
 
 const COOKIE = "hb_s";
@@ -243,6 +243,8 @@ export default {
     // Hub homepage "Right Now" card: its chain reading (read in the member's browser with their own key - the key
     // never comes here) recycled for the Chain Watch queue's timer (chainroom.js /reading, shorten-only)
     if (area === "m" && rest === "cw/reading") return cwReading(env, req, who);
+    // Chain Watching Schedule (members sign up for chain watch shifts; leaders can remove anyone's)
+    if (area === "m" && (rest === "cw/schedule.json" || rest === "cw/schedule")) return cwSchedule(env, req, url, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
@@ -259,7 +261,11 @@ export default {
   // "7,22,37,52 * * * *" -> Chain watch, "*/3 * * * *" -> OC data feed pull (no GitHub). Needs the GH_DISPATCH secret (token with Actions: write on CODE_REPO).
   async scheduled(event, env, ctx) {
     // "*/3 * * * *" -> the OC data feed: the Hub pulls OC data from Torn itself (ocFeedPull, below)
-    if (event.cron.startsWith("*/3")) { ctx.waitUntil(ocFeedPull(env).catch(() => {})); return; }
+    if (event.cron.startsWith("*/3")) {
+      ctx.waitUntil(ocFeedPull(env).catch(() => {}));
+      ctx.waitUntil(cwShiftAlerts(env).catch(() => {}));   // Chain Watching Schedule: "your shift is starting" pings
+      return;
+    }
     const minute = new Date(event.scheduledTime).getUTCMinutes();
     const runs = event.cron.startsWith("7,") ? [["chainwatch.yml", {}]]
       : [["crimes.yml", {}]].concat(minute === 0 ? [["banner.yml", {scheduled: "1"}]] : []);
@@ -1623,7 +1629,8 @@ async function ocAutoPlan(env, crimes, now) {
 // FACTION CHAIN WATCH - Leaders Hub settings (Nov 2026, project doc claude/chainwatch-hub-contract.md §7)
 //   GET  /l/cw/config.json -> {config, status}   status = counts from the ChainRoom (connected, queued, mode...) +
 //                             status.queue: the queue in order with each member's reported energy / cooldowns / refill
-//   POST /l/cw/config      {topAlertSeconds, restAlertSeconds, thirdAlertSeconds, firstAlertPrimaryOnly, minChain}
+//   POST /l/cw/config      {topAlertSeconds, restAlertSeconds, thirdAlertSeconds, firstAlertPrimaryOnly, minChain,
+//                           handoffSeconds, bonusWarnHits}
 //        -> saved to D1 oc_config (env 'prod', k 'chainwatch', by = the signed-in leader) and pushed to every script
 // The script shows these view-only; leaders change them here. No Torn call.
 // ======================================================================================================
@@ -1644,7 +1651,11 @@ async function cwLeaderRoute(env, req, who, sub) {
     const sec = (x, lo, hi) => { const n = Math.round(Number(x)); return Number.isFinite(n) && n >= lo && n <= hi ? n : null; };
     const v = {topAlertSeconds: sec(b.topAlertSeconds, 10, 300), restAlertSeconds: sec(b.restAlertSeconds, 5, 300),
                thirdAlertSeconds: sec(b.thirdAlertSeconds, 5, 300), minChain: sec(b.minChain, 0, 100000),
-               firstAlertPrimaryOnly: !!b.firstAlertPrimaryOnly};
+               firstAlertPrimaryOnly: !!b.firstAlertPrimaryOnly,
+               // Nov 2026: backup alert (#2 if #1 hasn't hit within N s of being up) + bonus heads-up (N hits before)
+               handoffSeconds: sec(b.handoffSeconds, 30, 280), bonusWarnHits: sec(b.bonusWarnHits, 0, 50)};
+    if (v.handoffSeconds == null) return Response.json({ok: false, error: "backup alert must be 30-280 seconds"}, {status: 400});
+    if (v.bonusWarnHits == null) return Response.json({ok: false, error: "bonus heads-up must be 0-50 hits before"}, {status: 400});
     if (v.topAlertSeconds == null || v.restAlertSeconds == null || v.thirdAlertSeconds == null)
       return Response.json({ok: false, error: "alert times must be 5-300 seconds (1st alert at least 10)"}, {status: 400});
     if (!(v.topAlertSeconds > v.restAlertSeconds && v.restAlertSeconds > v.thirdAlertSeconds))
@@ -1672,4 +1683,113 @@ async function cwReading(env, req, who) {
   if (!(reading.current > 0 && reading.timeout > 0 && reading.timeout <= 300)) return Response.json({ok: true, used: false});
   const r = await cwStub(env).fetch("https://do/reading", {method: "POST", body: JSON.stringify(reading)});
   return Response.json(await r.json(), {headers: {"Cache-Control": "no-store"}});
+}
+
+// ======================================================================================================
+// CHAIN WATCHING SCHEDULE (Nov 2026, user; contract §10). Members Hub page chainwatch-schedule.html.
+//   GET    /m/cw/schedule.json -> {now, shifts: [...] (now -> 7 days), me: {pid, name, leader, mine, stats}}
+//   POST   /m/cw/schedule {start (epoch s, on the hour), hours 1-6, role primary|backup|backup2}
+//   DELETE /m/cw/schedule?id=  (your own; leaders: anyone's)
+// Rules: whole hours (TCT); up to 7 days ahead; each role once per hour; ONE registration per member until it ends.
+// The energy check (cwEnergyCover) uses the member's last Chain Watch script report, else their war-readiness reading
+// (opt-in) - stored with the shift as est_hits / need_hits. No Torn call here.
+// ======================================================================================================
+const CW_ROLES = {primary: "Primary", backup: "Backup", backup2: "2nd backup"};
+const CW_MAX_HOURS = 6, CW_AHEAD_S = 7 * 86400;
+async function cwMyStats(env, pid) {
+  // 1) the Chain Watch script's last report (ChainRoom), 2) the opt-in war readiness reading (D1 cache)
+  let best = null;
+  try { if (env.CHAINROOM) best = (await (await cwStub(env).fetch(`https://do/laststats?pid=${pid}`)).json()).stats || null; } catch (e) {}
+  if (best) best = Object.assign({src: "script"}, best);
+  try {
+    const r = await ocSnapGet(env, "hub", "readiness");
+    const list = r && r.data && Array.isArray(r.data.members) ? r.data.members : [];
+    const m = list.find(x => Number(x.id) === Number(pid) && !x.err) || null;
+    if (m && m.energy && (!best || Number(r.as_of) > Number(best.at))) {
+      const e = m.energy, rate = e.cur < e.max && e.full > 0 ? (e.max - e.cur) / e.full : 0;   // energy per second
+      best = {src: "readiness", energyCur: e.cur, energyMax: e.max, energyInc: 5, energyInt: rate > 0 ? Math.round(5 / rate) : 600,
+              drug: Number((m.cd || {}).drug) || 0, booster: Number((m.cd || {}).booster) || 0,
+              refill: m.refill === false ? 1 : m.refill === true ? 0 : 0, at: Number(r.as_of)};
+    }
+  } catch (e) {}
+  return best;
+}
+async function cwSchedule(env, req, url, who) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (!env.OC_DB) return Response.json({ok: false, error: "Hub storage isn't set up yet"}, {status: 503});
+  const nowS = Math.floor(Date.now() / 1000), pid = Number(who.id);
+  const bad = (m, st) => Response.json({ok: false, error: m}, {status: st || 400});
+  if (req.method === "GET") {
+    const {results} = await env.OC_DB.prepare("SELECT id, pid, name, role, start_at, end_at, est_hits, need_hits FROM cw_shift " +
+      "WHERE end_at > ? AND start_at < ? ORDER BY start_at, role").bind(nowS, nowS + CW_AHEAD_S).all();
+    const shifts = results || [];
+    return Response.json({ok: true, now: nowS, roles: CW_ROLES, max_hours: CW_MAX_HOURS, ahead_s: CW_AHEAD_S, shifts,
+      me: {pid, name: who.name, leader: !!who.leader, mine: shifts.find(x => Number(x.pid) === pid) || null, stats: await cwMyStats(env, pid)}}, H);
+  }
+  if (req.method === "POST") {
+    let b; try { b = await req.json(); } catch (e) { return bad("bad request"); }
+    const start = Math.floor(Number(b.start)), hours = Math.floor(Number(b.hours)), role = String(b.role || "");
+    if (!CW_ROLES[role]) return bad("pick a role: primary, backup or 2nd backup");
+    if (!(hours >= 1 && hours <= CW_MAX_HOURS)) return bad(`shifts are 1-${CW_MAX_HOURS} hours`);
+    if (!Number.isFinite(start) || start % 3600) return bad("shifts start on the hour (TCT)");
+    const end = start + hours * 3600;
+    if (end <= nowS) return bad("that time has already passed");
+    if (start < nowS - 3600 || start > nowS + CW_AHEAD_S) return bad("pick a time within the next 7 days");
+    const mine = await env.OC_DB.prepare("SELECT start_at, end_at FROM cw_shift WHERE pid = ? AND end_at > ?").bind(pid, nowS).first();
+    if (mine) return bad("you already have a chain watch shift - one at a time. Cancel it first to pick another.", 409);
+    const clash = await env.OC_DB.prepare("SELECT name, start_at FROM cw_shift WHERE role = ? AND start_at < ? AND end_at > ? LIMIT 1")
+      .bind(role, end, start).first();
+    if (clash) return bad(`${CW_ROLES[role]} is already taken by ${clash.name} for part of that time`, 409);
+    const cover = cwEnergyCover(await cwMyStats(env, pid), start, end);
+    await env.OC_DB.prepare("INSERT INTO cw_shift (pid, name, role, start_at, end_at, created, est_hits, need_hits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(pid, who.name, role, start, end, Date.now(), cover ? cover.hits : null, cover ? cover.need : hours * 12).run();
+    return Response.json({ok: true, cover}, H);
+  }
+  if (req.method === "DELETE") {
+    const id = Number(url.searchParams.get("id"));
+    const row = id ? await env.OC_DB.prepare("SELECT pid FROM cw_shift WHERE id = ?").bind(id).first() : null;
+    if (!row) return bad("not found", 404);
+    if (Number(row.pid) !== pid && !who.leader) return bad("you can only cancel your own shift", 403);
+    await env.OC_DB.prepare("DELETE FROM cw_shift WHERE id = ?").bind(id).run();
+    return Response.json({ok: true}, H);
+  }
+  return bad("not allowed", 405);
+}
+
+// Discord "your chain watch shift is starting" (Worker timer, every 3 min): every shift starting within the next
+// 3 minutes (or that started in the last 10 and wasn't pinged) - one message per start time, chains channel webhook
+// (Worker secret CW_DISCORD_WEBHOOK, copied from the DISCORD_WEBHOOK_CHAINS GitHub secret; never logged).
+// Mentions: the member's linked Discord account (Torn /v2/user/{id}/discord on the Hub key, 1 call each, not
+// saved), else "Name [ID]" (the user's rule for unknown Discord users).
+async function cwShiftAlerts(env) {
+  if (!env.OC_DB || !env.CW_DISCORD_WEBHOOK) return;
+  const nowS = Math.floor(Date.now() / 1000);
+  const {results} = await env.OC_DB.prepare("SELECT id, pid, name, role, start_at, end_at FROM cw_shift " +
+    "WHERE notified = 0 AND start_at <= ? AND start_at > ? AND end_at > ? ORDER BY start_at").bind(nowS + 180, nowS - 600, nowS).all();
+  if (!results || !results.length) return;
+  const byStart = {};
+  results.forEach(r => (byStart[r.start_at] = byStart[r.start_at] || []).push(r));
+  for (const st of Object.keys(byStart)) {
+    const rows = byStart[st].sort((a, b) => Object.keys(CW_ROLES).indexOf(a.role) - Object.keys(CW_ROLES).indexOf(b.role));
+    const users = [], lines = [];
+    for (const r of rows) {
+      let did = null;
+      try {
+        // API: Heart Breakers Hub - Chain Watch schedule ping (Discord link, Torn V2, key in the header)
+        const d = await ocTorn(env, `user/${Number(r.pid)}/discord`);
+        const x = d && (d.discord || d);
+        did = x && (x.discord_id || x.discordId || x.discordID);
+        did = did && /^\d+$/.test(String(did)) ? String(did) : null;
+      } catch (e) { did = null; }
+      if (did) users.push(did);
+      lines.push(`**${CW_ROLES[r.role] || r.role}:** ${did ? `<@${did}>` : `${r.name} [${r.pid}]`} · until <t:${r.end_at}:t>`);
+    }
+    const body = {content: `⛓️ **Chain watch shift ${Number(st) > nowS ? "starting" : "started"} <t:${st}:R>** (<t:${st}:t>)\n${lines.join("\n")}`,
+                  allowed_mentions: {users}};
+    try {
+      const res = await fetch(String(env.CW_DISCORD_WEBHOOK).trim(), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (!res.ok) continue;                               // try again on the next run
+    } catch (e) { continue; }
+    await env.OC_DB.prepare(`UPDATE cw_shift SET notified = 1 WHERE id IN (${rows.map(() => "?").join(",")})`).bind(...rows.map(r => r.id)).run();
+  }
 }

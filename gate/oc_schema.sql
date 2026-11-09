@@ -54,3 +54,23 @@ CREATE TABLE IF NOT EXISTS oc_wb (
   ts         INTEGER NOT NULL,
   PRIMARY KEY (env, player_id)
 );
+
+-- CHAIN WATCHING SCHEDULE (Nov 2026, project doc claude/chainwatch-hub-contract.md §10): members sign up for chain
+-- watch shifts on the Members Hub (/m/chainwatch-schedule.html). Whole hours (TCT), up to 6 h, up to 7 days ahead;
+-- 3 roles per hour (primary / backup / backup2); ONE registration per member at a time (until it ends).
+--   est_hits / need_hits: the energy check at sign-up (hits their energy covers alone vs 1 hit per 5 min)
+--   notified: the Worker's Discord "your shift is starting" ping went out (worker.js cwShiftAlerts)
+CREATE TABLE IF NOT EXISTS cw_shift (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  pid        INTEGER NOT NULL,
+  name       TEXT,
+  role       TEXT    NOT NULL,          -- 'primary' | 'backup' | 'backup2'
+  start_at   INTEGER NOT NULL,          -- epoch s, on the hour (TCT = UTC)
+  end_at     INTEGER NOT NULL,          -- epoch s
+  created    INTEGER NOT NULL,          -- epoch ms
+  est_hits   INTEGER,
+  need_hits  INTEGER,
+  notified   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cw_shift_time ON cw_shift (start_at, end_at);
+CREATE INDEX IF NOT EXISTS idx_cw_shift_pid ON cw_shift (pid, end_at);

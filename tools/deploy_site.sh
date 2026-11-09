@@ -59,3 +59,14 @@ if [ -n "${TORN_API_KEY:-}" ]; then
   fi
   rm -f "$RUNNER_TEMP/secret.log"
 fi
+
+# ---- Chain Watching Schedule (Nov 2026): the Worker pings members in the chains channel when their chain watch
+# shift starts. The webhook is copied from the GitHub secret into a Worker secret the same way (stdin, yes/no only).
+if [ -n "${DISCORD_WEBHOOK_CHAINS:-}" ]; then
+  if printf '%s' "$DISCORD_WEBHOOK_CHAINS" | tr -d '[:space:]' | npx wrangler secret put CW_DISCORD_WEBHOOK -c "$CFG" > "$RUNNER_TEMP/secret.log" 2>&1; then
+    echo "Chain watch shift pings: webhook set"
+  else
+    echo "::warning::Chain watch shift pings: couldn't set the Worker's webhook (pings stay off)"
+  fi
+  rm -f "$RUNNER_TEMP/secret.log"
+fi

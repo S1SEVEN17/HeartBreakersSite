@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Chain Watching Schedule - Heart Breakers</title>
+<!--
+  CHAIN WATCHING SCHEDULE (members' folder: chainwatch-schedule.html, published by generate.py write_optin_pages).
+  Members sign up for chain watch shifts: whole hours in TCT, 1-6 hours, up to 7 days ahead, as Primary, Backup or
+  2nd backup (each role once per hour). ONE registration per member until it ends. The Hub pings everyone in the
+  chains Discord channel when their shift starts (worker.js cwShiftAlerts). Leaders can remove anyone's shift.
+  Energy check: can you cover the shift ALONE (1 hit every 5 min)? From your last Chain Watch script report, else
+  your War readiness reading - same formula as the Hub (gate/chainroom.js cwEnergyCover; keep the two in step).
+  Data: /m/cw/schedule.json (GET), /m/cw/schedule (POST {start, hours, role} / DELETE ?id=). No Torn call here.
+  Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:820px}
+h1{color:var(--red);font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card h2{color:var(--gold);font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px}
+.f{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+.f label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)}
+select{background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:7px;padding:9px;font:15px system-ui;min-height:42px}
+button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:11px 18px;font:600 15px system-ui;cursor:pointer;min-height:44px}
+button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+button.x{background:none;border:1px solid #3a1414;color:#f08a84;padding:4px 10px;min-height:32px;font-size:13px}
+.acts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px}
+.msg{min-height:20px;font-size:13px;margin-top:6px}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+.chk{background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:9px 11px;margin-top:10px;font-size:13px;line-height:1.45}
+.chk b{color:#fff}.chk.ok{border-color:#2f5a2f}.chk.warn{border-color:#6b5a20}
+.chk small{color:var(--sub);display:block;margin-top:3px}
+.day{margin-top:12px}.day h3{font-size:13px;color:#fff;margin:0 0 6px;display:flex;justify-content:space-between}
+.day h3 span{color:var(--sub);font-weight:400}
+.grid{display:grid;grid-template-columns:repeat(24,1fr);gap:2px}
+.grid i{height:22px;border-radius:3px;background:#22151a;cursor:pointer;position:relative}
+.grid i.p{background:#2e6b2e}.grid i.b{background:#6b5a20}.grid i.past{opacity:.35;cursor:default}
+.grid i.sel{outline:2px solid var(--gold)}
+.hrs{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:9px;color:var(--sub);text-align:center;margin-top:2px}
+.list{margin-top:6px;display:grid;gap:5px}
+.sh{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:7px 10px;font-size:13px}
+.sh.me{border-color:var(--gold)}.sh .t{color:#fff;font-weight:600;min-width:108px}.sh .n{flex:1;min-width:0}
+.pill{font-size:11px;padding:2px 8px;border-radius:8px;background:#2a1416;color:var(--sub);white-space:nowrap}
+.pill.p{background:#173117;color:#9be29b}.pill.b{background:#3a2e12;color:var(--gold)}.pill.w{background:#3a1414;color:#f08a84}
+.key{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--sub);margin-top:6px}
+.key i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px}
+.note{color:var(--sub);font-size:12px;margin-top:8px}
+</style></head><body>
+__MENU__
+<h1>Chain Watching Schedule</h1>
+<div class="sub">Sign up to watch the chain. Times are TCT (Torn time). The Hub pings you in Discord when your shift starts.</div>
+
+<div class="card" id="mine"><h2>Your shift</h2><div id="mineBody">Loading…</div></div>
+
+<div class="card">
+  <h2>Schedule · next 7 days</h2>
+  <div class="key"><span><i style="background:#2e6b2e"></i>Primary covered</span><span><i style="background:#6b5a20"></i>Backup only</span><span><i style="background:#22151a"></i>Open</span><span>Tap an hour to pick it.</span></div>
+  <div id="days"></div>
+</div>
+
+<script>
+const CONF = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let D = null, pick = null, touched = false;   // schedule data; the hour picked on the grid (epoch s); form in use
+const ROLE_CLASS = {primary: "p", backup: "b", backup2: "b"};
+const hh = t => String(new Date(t * 1000).getUTCHours()).padStart(2, "0") + ":00";
+const dayKey = t => Math.floor(t / 86400);
+const dayName = t => new Date(t * 1000).toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric", timeZone: "UTC"});
+const local = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+const ago = ms => { const m = Math.round(ms / 60000); return m < 60 ? m + " min" : m < 1440 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " d"; };
+
+// Same formula as gate/chainroom.js cwEnergyCover - can you cover start..end ALONE (1 hit every 5 min)?
+function cover(s, startS, endS) {
+  if (!s || !(Number(s.energyMax) > 0)) return null;
+  const at = Number(s.at) || Date.now(), max = Number(s.energyMax);
+  const inc = Number(s.energyInc) || 5, int = Number(s.energyInt) || 600;
+  const toStart = Math.max(0, startS - at / 1000), dur = Math.max(0, endS - Math.max(startS, at / 1000));
+  let e = Number(s.energyCur) || 0;
+  if (e < max) e = Math.min(max, e + Math.floor(toStart / int) * inc);
+  const regen = Math.floor(dur / int) * inc;
+  const day = t => Math.floor(t / 86400);
+  const refill = Number(s.refill) === 1 || day(startS) > day(at / 1000) ? max : 0;
+  const xanax = Number(s.drug) - toStart <= 0 ? 250 : 0;
+  const need = Math.ceil((endS - startS) / 300);
+  return {hits: Math.floor((e + regen + refill + xanax) / 25), need, start_e: Math.round(e), regen_e: regen, refill_e: refill, xanax_e: xanax};
+}
+function coverHtml(c, s) {
+  if (!c) return `<div class="chk warn"><b>No energy reading yet.</b> Open Torn with the Faction Chain Watch script running, or turn on War readiness in My data &amp; sharing, so the Hub can check whether you'll have enough energy.</div>`;
+  const ok = c.hits >= c.need;
+  const parts = [`${c.start_e} at the start`, c.regen_e ? `+${c.regen_e} regen` : "", c.refill_e ? `+${c.refill_e} refill` : "", c.xanax_e ? "+250 Xanax" : ""].filter(Boolean).join(", ");
+  return `<div class="chk ${ok ? "ok" : "warn"}">${ok ? "✅ <b>Enough energy to cover it alone</b>" : `⚠️ <b>Covers about ${c.hits} of ${c.need} hits alone</b> - fine with others hitting too, short if you're the only one`}`
+    + ` (${c.hits} hits possible, 1 every 5 min needs ${c.need}).<small>Energy: ${parts}. From your ${s.src === "readiness" ? "War readiness reading" : "Chain Watch script report"} ${ago(Date.now() - Number(s.at))} ago; boosters not counted.</small></div>`;
+}
+
+function render() {
+  const now = D.now, me = D.me, mine = me.mine;
+  // ---- your shift / sign-up form ----
+  if (mine) {
+    const s = me.stats;
+    $("mineBody").innerHTML = `<div class="sh me"><span class="t">${dayName(mine.start_at)} ${hh(mine.start_at)}–${hh(mine.end_at)}</span>`
+      + `<span class="pill ${ROLE_CLASS[mine.role]}">${esc(D.roles[mine.role])}</span><span class="n">${local(mine.start_at)}–${local(mine.end_at)} your time</span>`
+      + `<button class="x" data-del="${mine.id}">Cancel</button></div>` + coverHtml(cover(s, mine.start_at, mine.end_at), s)
+      + `<div class="note">One shift at a time - cancel this one to pick another.</div>`;
+  } else {
+    const days = [], start0 = Math.floor(now / 3600) * 3600;
+    for (let d = 0; d <= 7; d++) { const t = (dayKey(now) + d) * 86400; if (t < now + D.ahead_s) days.push(t); }
+    const p = pick || start0;
+    $("mineBody").innerHTML = `<div class="f">`
+      + `<label>Day (TCT)<select id="fDay">${days.map(t => `<option value="${t}"${dayKey(p) === dayKey(t) ? " selected" : ""}>${dayName(t)}</option>`).join("")}</select></label>`
+      + `<label>Start (TCT)<select id="fHour"></select></label>`
+      + `<label>Hours<select id="fHrs">${Array.from({length: D.max_hours}, (_, i) => `<option>${i + 1}</option>`).join("")}</select></label>`
+      + `<label>Role<select id="fRole">${Object.keys(D.roles).map(k => `<option value="${k}">${esc(D.roles[k])}</option>`).join("")}</select></label></div>`
+      + `<div id="fChk"></div><div class="acts"><button id="fGo" type="button">Sign up</button></div><div class="msg" id="fMsg"></div>`;
+    const hours = () => {
+      const day = Number($("fDay").value), cur = pick && dayKey(pick) === dayKey(day) ? pick : null;
+      $("fHour").innerHTML = Array.from({length: 24}, (_, h) => day + h * 3600).filter(t => t + 3600 > now)
+        .map(t => `<option value="${t}"${cur === t ? " selected" : ""}>${hh(t)} (${local(t)} yours)</option>`).join("");
+      preview();
+    };
+    $("fDay").onchange = () => { pick = null; touched = true; hours(); };
+    ["fHour", "fHrs", "fRole"].forEach(id => $(id).onchange = () => { touched = true; preview(); });
+    $("fGo").onclick = signUp;
+    hours();
+  }
+  // ---- 7-day grid + shift list ----
+  const byDay = {};
+  for (let d = 0; d <= 7; d++) byDay[dayKey(now) + d] = [];
+  D.shifts.forEach(x => { for (let t = x.start_at; t < x.end_at; t += 3600) if (byDay[dayKey(t)]) byDay[dayKey(t)].push(x); });
+  $("days").innerHTML = Object.keys(byDay).map(Number).filter(k => k * 86400 < now + D.ahead_s).map(k => {
+    const base = k * 86400, cells = [];
+    for (let h = 0; h < 24; h++) {
+      const t = base + h * 3600, on = D.shifts.filter(x => x.start_at <= t && x.end_at > t);
+      const cls = on.some(x => x.role === "primary") ? "p" : on.length ? "b" : "";
+      const tip = on.length ? on.map(x => `${D.roles[x.role]}: ${x.name}`).join(" · ") : "Open";
+      cells.push(`<i class="${cls}${t + 3600 <= now ? " past" : ""}${pick === t ? " sel" : ""}" data-t="${t}" title="${hh(t)} TCT - ${esc(tip)}"></i>`);
+    }
+    const list = D.shifts.filter(x => dayKey(x.start_at) === k).map(x => {
+      const short = x.est_hits != null && x.need_hits && x.est_hits < x.need_hits;
+      return `<div class="sh${x.pid === me.pid ? " me" : ""}"><span class="t">${hh(x.start_at)}–${hh(x.end_at)}</span>`
+        + `<span class="pill ${ROLE_CLASS[x.role]}">${esc(D.roles[x.role])}</span>`
+        + `<span class="n"><a href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(x.pid)}" target="_blank" rel="noopener" style="color:#fff">${esc(x.name)}</a></span>`
+        + (x.est_hits == null ? `<span class="pill">energy ?</span>` : short ? `<span class="pill w" title="Their energy covers about ${x.est_hits} of ${x.need_hits} hits alone">⚠ ${x.est_hits}/${x.need_hits} hits</span>` : `<span class="pill p">✓ energy</span>`)
+        + (me.leader && x.pid !== me.pid ? `<button class="x" data-del="${x.id}" title="Remove (leaders)">Remove</button>` : "") + `</div>`;
+    }).join("");
+    return `<div class="day"><h3>${dayName(base)}<span>${byDay[k].length ? "" : "nobody yet"}</span></h3><div class="grid">${cells.join("")}</div>`
+      + `<div class="hrs">${Array.from({length: 24}, (_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div><div class="list">${list}</div></div>`;
+  }).join("");
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => del(Number(b.dataset.del)));
+  document.querySelectorAll(".grid i[data-t]").forEach(c => c.onclick = () => {
+    const t = Number(c.dataset.t);
+    if (t + 3600 <= D.now || D.me.mine) return;
+    pick = t; touched = true; render(); $("mine").scrollIntoView({behavior: "smooth", block: "start"});
+  });
+}
+function preview() {
+  const start = Number($("fHour").value), hrs = Number($("fHrs").value), role = $("fRole").value, end = start + hrs * 3600;
+  const clash = D.shifts.find(x => x.role === role && x.start_at < end && x.end_at > start);
+  $("fChk").innerHTML = (clash ? `<div class="chk warn">⚠️ <b>${esc(D.roles[role])}</b> is already taken by ${esc(clash.name)} for part of that time (${hh(clash.start_at)}–${hh(clash.end_at)}).</div>` : "")
+    + coverHtml(cover(D.me.stats, start, end), D.me.stats);
+  $("fGo").disabled = !!clash;
+}
+function say(t, ok) { const m = $("fMsg"); if (m) { m.textContent = t; m.className = "msg " + (ok ? "ok" : "bad"); } }
+async function signUp() {
+  const body = {start: Number($("fHour").value), hours: Number($("fHrs").value), role: $("fRole").value};
+  $("fGo").disabled = true; say("Signing you up…", true);
+  try {
+    const r = await fetch("cw/schedule", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    pick = null; touched = false; await load();
+  } catch (e) { say("Not signed up: " + e.message, false); $("fGo").disabled = false; }
+}
+async function del(id) {
+  const own = D.me.mine && D.me.mine.id === id;
+  if (!confirm(own ? "Cancel your chain watch shift?" : "Remove this member's shift?")) return;
+  try {
+    const r = await fetch("cw/schedule?id=" + id, {method: "DELETE", credentials: "same-origin"});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    await load();
+  } catch (e) { alert("Couldn't remove it: " + e.message); }
+}
+async function load() {
+  try {
+    const r = await fetch("cw/schedule.json", {cache: "no-store", credentials: "same-origin"});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    D = d; render();
+  } catch (e) { $("mineBody").textContent = "Couldn't load the schedule: " + e.message; }
+}
+load();
+// pick up other members' sign-ups every 2 minutes while the page is visible (not while you're filling the form)
+setInterval(() => { if (!document.hidden && !touched) load(); }, 120000);
+</script>
+</body></html>

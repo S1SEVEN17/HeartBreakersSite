@@ -68,6 +68,11 @@ const PING = '{"t":"ping"}', PONG = '{"t":"pong"}'; // answered by the runtime w
 const HIT_ENERGY_COST = 25;
 const BOOSTER_CD_CEILING = 24 * 3600;     // booster usable while cooldown < 24h (stacks to 24h)
 const FAIL_RESULTS = ["Lost", "Stalemate", "Interrupted", "Assist", "Escape", "Timeout"]; // not a landed hit
+const BONUS_HITS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
+const CHAIN_TIMEOUT_S = 300;              // every hit resets the chain timer to 5 minutes
+const MIN_PACE_HITS_PER_HOUR = 12;        // the slowest pace that keeps a chain alive (1 hit / 5 min)
+const CONFIRM_READ_GAP_MS = 10000;        // a higher count from a script -> one confirming Hub read, at most every 10 s
+const RECRUIT_DAYS = 3;                   // Torn: members can't add chain hits during their first 72 h (Recruit)
 
 // Free-plan self-governor (§8): incoming DO requests per UTC day (100k free).
 const DAILY_DO_REQUEST_SOFT = 70000;      // 70% -> "degraded": timers doubled
@@ -80,6 +85,10 @@ export const CW_DEFAULT_CONFIG = {
   thirdAlertSeconds: 30,
   firstAlertPrimaryOnly: true,
   minChain: 25,
+  // Nov 2026 (user): alert the backup (#2) when #1 hasn't hit within this many seconds of being up
+  handoffSeconds: 120,
+  // Nov 2026 (user): bonus heads-up this many hits before a bonus milestone
+  bonusWarnHits: 5,
   set_by: "Chris5295 [974757]",
   set_at: 0,
 };
@@ -223,6 +232,10 @@ export class ChainRoom {
       usageCount: 0,
       level: 0,              // 0 normal, 1 degraded (>=70%), 2 fall back (>=90%)
       lastErr: "",           // last Torn error code (status line only)
+      bonus: null,           // {at, pid, name, by, set_at} - a leader's "Assign bonus" (cleared once `at` is reached)
+      turnUp: 0, turnUpAt: 0,// who's up (#1 eligible) and since when (for the backup alert)
+      lastStats: {},         // pid -> the member's last stats report (kept after they leave the queue - schedule check)
+      notices: {},           // pid -> [messages] waiting for a /cw/sync device
     }, saved || {});
     if (!this.mem.config) this.mem.config = await this.loadConfig();
     // Recover live sockets after a hibernation wake.
@@ -257,6 +270,10 @@ export class ChainRoom {
     if (path === "/config")   return this.handleConfigReload();
     if (path === "/status")   return this.handleStatus(new URL(request.url).searchParams.get("detail") === "1");
     if (path === "/reading")  return this.handleWebReading(request);
+    if (path === "/laststats") {   // schedule page: one member's last stats report (worker.js, signed-in member's own)
+      const pid = Number(new URL(request.url).searchParams.get("pid"));
+      return Response.json({ ok: true, stats: this.mem.lastStats[pid] || null });
+    }
     return new Response("not found", { status: 404 });
   }
 
@@ -330,10 +347,13 @@ export class ChainRoom {
     switch (t) {
       case "chain": changed = this.applyScriptChain(msg); break;       // shorten-only (§3)
       case "stats": {
+        const st = sanitizeStats(msg);
+        this.mem.lastStats[pid] = st;            // kept for the Chain Watching Schedule's energy check
         const q = this.mem.queue[pid];
-        if (q) { q.stats = sanitizeStats(msg); changed = true; }
+        if (q) { q.stats = st; changed = true; } else await this.save();
         break;
       }
+      case "bonus": changed = this.doAssignBonus(pid, msg); break;
       case "join": changed = this.doJoin(pid, msg); break;
       case "leave":
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
@@ -357,13 +377,45 @@ export class ChainRoom {
   doJoin(pid, msg) {
     if (this.mem.queue[pid]) return false;
     const m = this.mem.members[pid] || {};
+    // RECRUITS (Nov 2026, user): Torn doesn't count chain hits from members in their first 72 h, so they can't join
+    // - and they're told why.
+    if (isRecruit(m)) {
+      const d = Number(m.days);
+      this.notify(pid, { t: "notice", kind: "join_refused", reason: "recruit", now: Date.now(),
+        text: "You're still a Recruit, so your hits won't count toward the chain yet. Torn only counts chain hits from "
+          + "members who've been in the faction for 72 hours" + (Number.isFinite(d) ? ` (you joined ${d} day${d === 1 ? "" : "s"} ago)` : "")
+          + ". You can join the queue once your Recruit status ends." });
+      return false;
+    }
     this.mem.queue[pid] = {
       pid,
       name: m.name || (this.conns.get(pid) && this.conns.get(pid).name) || "Unknown",
       joined_at: Date.now(), hitting_until: 0,
-      stats: msg.stats ? sanitizeStats(msg.stats) : null, hits: 0,
+      stats: msg.stats ? sanitizeStats(msg.stats) : (this.mem.lastStats[pid] || null), hits: 0,
     };
+    if (msg.stats) this.mem.lastStats[pid] = this.mem.queue[pid].stats;
     return true;
+  }
+
+  /* ---- ASSIGN BONUS (Nov 2026, user): a leader names who takes the next bonus hit (script button) ---------- */
+  doAssignBonus(pid, msg) {
+    const me = this.mem.members[pid];
+    if (!me || !me.is_leader) { this.notify(pid, { t: "notice", kind: "bonus_refused", text: "Only leaders can assign the bonus hit.", now: Date.now() }); return false; }
+    if (msg.pid == null || msg.pid === 0) { if (!this.mem.bonus) return false; this.mem.bonus = null; return true; }
+    const who = this.mem.members[Number(msg.pid)];
+    if (!who) { this.notify(pid, { t: "notice", kind: "bonus_refused", text: "That player isn't on the member list.", now: Date.now() }); return false; }
+    const cur = (this.mem.chain && this.mem.chain.current) || 0;
+    const at = Number(msg.at) > cur && BONUS_HITS.includes(Number(msg.at)) ? Number(msg.at) : nextBonus(cur);
+    this.mem.bonus = { at, pid: Number(msg.pid), name: who.name, by: `${me.name} [${pid}]`, set_at: Date.now() };
+    return true;
+  }
+
+  /* ---- a message for one member (WebSocket now, or held for their next /cw/sync) ---- */
+  notify(pid, obj) {
+    const c = this.conns.get(pid);
+    if (c) { this.sendTo(c.ws, obj); return; }
+    const list = (this.mem.notices[pid] = (this.mem.notices[pid] || []).concat(obj).slice(-5));
+    return list;
   }
 
   /* ---- RETAL actions (call / release / done) ----------------------------- */
@@ -396,9 +448,24 @@ export class ChainRoom {
       };
       return true;
     }
+    if (cur > c.current && c.current > 0 && cur - c.current <= 10) {
+      // CONFIRMED-HIT REFRESH (Nov 2026, user): a higher count means a hit probably just landed - but a reading
+      // could be wrong, so the Hub CONFIRMS it with one read of its own (at most every 10 s) instead of trusting it.
+      // Nothing changes until that read says so.
+      this.requestConfirmRead();
+      return false;
+    }
     if (cur !== c.current) return false;                // only for the count the Hub itself saw
     if (reading_expires < c.expires_at) { c.expires_at = reading_expires; c.as_of = now; c.src = "script"; return true; }
     return false;
+  }
+
+  requestConfirmRead() {
+    const now = Date.now();
+    if (now - (this.mem._confirmAt || 0) < CONFIRM_READ_GAP_MS) return;
+    this.mem._confirmAt = now;
+    this.mem._chainAt = 0;                               // the chain read is due on the next alarm...
+    this.storage.setAlarm(now + 250).catch(() => {});    // ...which runs now (it reschedules itself after)
   }
 
   /* ---- CHAIN: Hub-sourced reading (authoritative for `current`) ---------- */
@@ -416,7 +483,11 @@ export class ChainRoom {
       current: cur, max: Number(chain.max) || cur, cooldown: Number(chain.cooldown) || 0,
       modifier: chain.modifier != null ? Number(chain.modifier) : null,
       expires_at: expires, as_of: now, src: "hub",
+      // COOLDOWN (Nov 2026): after a break Torn cools the chain 6 s per hit - when the next chain can start
+      cooldown_until: cur === 0 && Number(chain.cooldown) > 0 ? now + Number(chain.cooldown) * 1000 : 0,
     };
+    // the assigned bonus is done once the chain reaches it (or the chain ends)
+    if (this.mem.bonus && (cur >= this.mem.bonus.at || cur === 0)) this.mem.bonus = null;
     if (prev && prev.current > 0 && cur === 0) this.mem.lastChainEndedAt = now;
     if (cur > 0) this.mem.lastChainEndedAt = 0;
   }
@@ -481,9 +552,13 @@ export class ChainRoom {
     const members = {}, status = {};
     d.members.forEach((mm) => {
       const id = String(mm.id);
-      members[id] = { name: mm.name || "Unknown", position: String(mm.position || ""), is_leader: leaderPos(this.env, mm.position) };
-      const la = mm.last_action || {};
-      if (this.mem.queue[id]) status[id] = { status: la.status || "Unknown", relative: la.relative || "", ts: now };
+      members[id] = { name: mm.name || "Unknown", position: String(mm.position || ""), is_leader: leaderPos(this.env, mm.position),
+                      days: mm.days_in_faction != null ? Number(mm.days_in_faction) : null };
+      const la = mm.last_action || {}, ps = mm.status || {};
+      // state: Okay / Hospital / Jail / Traveling / Abroad / Federal ... + until (epoch s) - members who can't
+      // attack right now go to the back of the queue until they're Okay (§5)
+      if (this.mem.queue[id]) status[id] = { status: la.status || "Unknown", relative: la.relative || "", ts: now,
+        state: String(ps.state || ""), until: Number(ps.until) || 0, desc: String(ps.description || "").slice(0, 60) };
     });
     this.mem.members = members;
     this.mem.status = status;
@@ -559,6 +634,7 @@ export class ChainRoom {
 
   /* ---- queue auto-remove rules (contract §5) ----------------------------- */
   enforceQueueRules(now) {
+    const cooling = this.coolingDown(now);
     this.orderedQueue(true).forEach((q, idx) => {
       const s = q.stats, e = energyNow(q, now);
       if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s, now)) {   // under 25e, no way back
@@ -567,15 +643,20 @@ export class ChainRoom {
       const st = this.mem.status[q.pid];
       if (st && st.status === "Offline") {
         q._offlineSince = q._offlineSince || now;
-        if (idx < 2 && now - q._offlineSince > 5 * 60 * 1000) { delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; } // #1/#2 offline 5 min+
+        // paused while the chain cools down: the queue is for the NEXT chain then
+        if (!cooling && idx < 2 && now - q._offlineSince > 5 * 60 * 1000) { delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; } // #1/#2 offline 5 min+
       } else q._offlineSince = 0;
     });
   }
 
   /* ---- idle wipe (contract §5) ------------------------------------------ */
+  coolingDown(now) {
+    const c = this.mem.chain;
+    return !!(c && !c.current && c.cooldown_until && c.cooldown_until > (now || Date.now()));
+  }
   maybeIdleWipe(now) {
     const live = !!(this.mem.chain && this.mem.chain.current > 0);
-    if (live || Object.keys(this.mem.queue).length) return;
+    if (live || Object.keys(this.mem.queue).length || this.coolingDown(now)) return;
     if (!this.mem.lastChainEndedAt) { this.mem.lastChainEndedAt = now; return; }
     if (now - this.mem.lastChainEndedAt < IDLE_WIPE_MS) return;
     // transient data cleared; settings + member list kept
@@ -638,16 +719,19 @@ export class ChainRoom {
       t: "state", now: Date.now(),
       chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
-      me: { pid, is_leader: !!me.is_leader, phase_ms: this.phaseFor(pid) },
+      me: { pid, is_leader: !!me.is_leader, phase_ms: this.phaseFor(pid),
+            // leaders get the member list for the script's "Assign bonus" picker
+            members: me.is_leader ? Object.keys(this.mem.members).map((k) => ({ pid: Number(k), name: this.mem.members[k].name })) : undefined },
       mode: this.modeOf(), reason: this.reasonOf(),
+      ...this.extras(),
     };
   }
   broadcastDeltas() {
     const now = Date.now();
-    this.broadcast({
+    this.broadcast(Object.assign({
       t: "sync", now, chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
-    });
+    }, this.extras()));
     if (this._pendingHits && this._pendingHits.length) {
       this._pendingHits.forEach((h) => this.broadcast(Object.assign({ t: "hit" }, h, { now })));
       this._pendingHits = [];
@@ -659,16 +743,62 @@ export class ChainRoom {
   }
   sendTo(ws, obj) { try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ } }
 
+  /* ---- turn / bonus / runway / cooldown (Nov 2026, user) - carried in every state + sync --------------------
+   * turn    {up, backup, since, reason}: `up` = who should hit next (#1 who can attack; the assigned bonus hitter
+   *         when the next hit IS the bonus), `backup` = the next one after them. The script tells `up` "you're up"
+   *         and alerts `backup` if no hit lands within config.handoffSeconds of `since` (later of: last hit, up changed).
+   * bonus   {next, warn_from, pid, name, by}: next bonus milestone, from which count to show the heads-up, who's
+   *         assigned (null = nobody).
+   * runway  {banked_hits, regen_per_hour, hits_to_bonus, bonus_reachable, hours}: from the queue's energy now -
+   *         hours = how long the queue alone keeps the chain at the slowest safe pace (null = regen covers it).
+   * cooldown {until} when the chain is cooling down (the queue is for the next chain; offline removal paused).
+   * ----------------------------------------------------------------------------------------------------------- */
+  extras() {
+    const now = Date.now();
+    const c = this.mem.chain || {};
+    const cur = Number(c.current) || 0;
+    const q = this.orderedQueue();
+    const able = q.filter((x) => x.can_hit);
+    const cfg = this.mem.config || CW_DEFAULT_CONFIG;
+    const next = nextBonus(cur);
+    const b = this.mem.bonus && this.mem.bonus.at === next ? this.mem.bonus : null;
+    // who's up: the bonus hitter when the very next hit is the (assigned) bonus, else #1 who can attack
+    let up = able[0] ? able[0].pid : 0, reason = "order";
+    if (b && cur > 0 && cur === next - 1) { up = b.pid; reason = "bonus"; }
+    const backup = (able.find((x) => x.pid !== up) || {}).pid || 0;
+    if (up !== this.mem.turnUp) { this.mem.turnUp = up; this.mem.turnUpAt = now; }
+    const lastHit = cur > 0 && c.expires_at ? c.expires_at - CHAIN_TIMEOUT_S * 1000 : 0;
+    // runway
+    let banked = 0, regen = 0;
+    q.forEach((x) => {
+      if (x.energy != null) banked += Math.floor(x.energy / HIT_ENERGY_COST);
+      const s = x.stats;
+      if (s && Number(s.energyInt) > 0 && (x.energy == null || x.energy < Number(s.energyMax))) regen += (Number(s.energyInc) || 0) * 3600 / Number(s.energyInt) / HIT_ENERGY_COST;
+    });
+    regen = Math.round(regen * 10) / 10;
+    const toBonus = next ? next - cur : 0;
+    return {
+      turn: cur > 0 ? { up, backup, since: Math.max(this.mem.turnUpAt, lastHit), reason } : null,
+      bonus: next ? { next, warn_from: Math.max(1, next - (Number(cfg.bonusWarnHits) || 0)),
+                      pid: b ? b.pid : null, name: b ? b.name : null, by: b ? b.by : null } : null,
+      runway: { banked_hits: banked, regen_per_hour: regen, hits_to_bonus: toBonus, bonus_reachable: banked >= toBonus,
+                hours: regen >= MIN_PACE_HITS_PER_HOUR ? null : Math.round(banked / (MIN_PACE_HITS_PER_HOUR - regen) * 10) / 10 },
+      cooldown: this.coolingDown(now) ? { until: c.cooldown_until } : null,
+    };
+  }
+
   /* ---- views ------------------------------------------------------------ */
   // QUEUE ORDER (Nov 2026, user): most CURRENT energy first (energy bar only - refills / Xanax not counted).
-  // Ties: earlier join first. Members who haven't reported stats yet go last, in join order.
+  // Members who can't attack right now (hospital, jail, travelling/abroad...) go to the back - still in energy order
+  // - until they're Okay again (their `until` time passing counts, no need to wait for the next member read).
+  // Ties: earlier join first. Members who haven't reported stats yet go last within their group, in join order.
   orderedQueue(raw) {
     const now = Date.now();
-    const list = Object.values(this.mem.queue).map((q) => ({ q, e: energyNow(q, now) }))
-      .sort((a, b) => ((b.e == null ? -1 : b.e) - (a.e == null ? -1 : a.e)) || (a.q.joined_at - b.q.joined_at));
+    const list = Object.values(this.mem.queue).map((q) => ({ q, e: energyNow(q, now), ok: canAttack(this.mem.status[q.pid], now) }))
+      .sort((a, b) => ((b.ok ? 1 : 0) - (a.ok ? 1 : 0)) || ((b.e == null ? -1 : b.e) - (a.e == null ? -1 : a.e)) || (a.q.joined_at - b.q.joined_at));
     if (raw) return list.map((x) => x.q);
-    return list.map(({ q, e }) => ({
-      pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e,
+    return list.map(({ q, e, ok }) => ({
+      pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e, can_hit: ok,
       hitting_until: q.hitting_until || 0, stats: q.stats || null, hits: q.hits || 0,
     }));
   }
@@ -689,6 +819,8 @@ export class ChainRoom {
     return {
       topAlertSeconds: c.topAlertSeconds, restAlertSeconds: c.restAlertSeconds, thirdAlertSeconds: c.thirdAlertSeconds,
       firstAlertPrimaryOnly: !!c.firstAlertPrimaryOnly, minChain: c.minChain,
+      handoffSeconds: Number(c.handoffSeconds) || CW_DEFAULT_CONFIG.handoffSeconds,
+      bonusWarnHits: c.bonusWarnHits != null ? Number(c.bonusWarnHits) : CW_DEFAULT_CONFIG.bonusWarnHits,
       edit_url: origin + EDIT_PATH, set_by: c.set_by || "", set_at: c.set_at || 0,
     };
   }
@@ -707,7 +839,9 @@ export class ChainRoom {
     for (const m of body.out || []) await this.onMessage(pid, m);
     await this.save();
     await this.ensureAlarm();   // keep Hub reads going for these devices too
-    return Response.json({ ok: true, in: [this.snapshotMessage(pid)], now: Date.now() });
+    const held = this.mem.notices[pid] || [];
+    if (held.length) { delete this.mem.notices[pid]; await this.save(); }
+    return Response.json({ ok: true, in: [this.snapshotMessage(pid)].concat(held), now: Date.now() });
   }
 
   /* ---- /config : a leader saved new settings on the Hub -> reload + push ---- */
@@ -748,7 +882,7 @@ export class ChainRoom {
     const queue = detail ? this.orderedQueue().map((q) => Object.assign(q, {
       status: this.mem.status[q.pid] || null, connected: this.conns.has(q.pid) || !!this.mem.syncSeen[q.pid],
     })) : undefined;
-    return Response.json({ queue, now,
+    return Response.json({ queue, now, extras: detail ? this.extras() : undefined,
       ok: true, connected: this.conns.size, sync_devices: Object.keys(this.mem.syncSeen).length,
       queued: Object.keys(this.mem.queue).length, chain: this.mem.chain ? this.mem.chain.current : 0,
       retals: this.openRetals().length, members: Object.keys(this.mem.members).length,
@@ -779,6 +913,19 @@ function energyNow(q, now) {
   }
   return Math.max(0, Math.round(e));
 }
+// Can this queued member attack right now? Unknown status counts as yes (don't punish a missing read).
+// Hospital / Jail / Federal jail / mid-flight (Traveling) can't attack. Abroad CAN (they hit targets in that country,
+// which still counts for the chain), so Abroad stays in the normal order.
+const CANT_ATTACK = ["Hospital", "Jail", "Federal", "Traveling", "Fallen"];
+function canAttack(st, now) {
+  if (!st || !st.state || !CANT_ATTACK.includes(st.state)) return true;
+  return !!(st.until && st.until * 1000 <= now);         // hospital / jail time is up, or the plane has landed
+}
+function isRecruit(m) {
+  if (!m) return false;
+  return /^recruit$/i.test(String(m.position || "")) || (m.days != null && Number(m.days) < RECRUIT_DAYS);
+}
+function nextBonus(cur) { return BONUS_HITS.find((b) => b > (Number(cur) || 0)) || 0; }
 function due(last, every, now) { return !!every && now - (last || 0) >= every - 1000; }
 function todayUTC() { return new Date().toISOString().slice(0, 10); }
 function sanitizeStats(s) {
@@ -798,4 +945,28 @@ function canRestoreEnergy(s, now) {
   if (Number(s.drug) - el <= 0) return true;               // drug cooldown clear
   if (Number(s.booster) - el < BOOSTER_CD_CEILING) return true; // booster usable (<24h)
   return false;
+}
+
+/* ----------------------------------------------------------------------------
+ * CHAIN WATCHING SCHEDULE energy check (Nov 2026, user): can this member cover a shift ALONE (one hit every 5 min)?
+ * From their last stats report (`at` = when): energy at the shift start (regen up to max), regen during the shift,
+ * plus what they can restore - the daily refill (+max, if unused, or if the shift is on a later TCT day: refills reset
+ * at 00:00 TCT) and one Xanax (+250, if the drug cooldown is clear by the start). Boosters aren't counted.
+ * The schedule page runs the same formula for its preview (tools/chainwatch_schedule.html cover()).
+ * -> {hits, need, start_e, regen_e, refill_e, xanax_e} or null (no report)
+ * -------------------------------------------------------------------------- */
+export function cwEnergyCover(s, startS, endS) {
+  if (!s || !(Number(s.energyMax) > 0)) return null;
+  const at = Number(s.at) || Date.now(), max = Number(s.energyMax);
+  const inc = Number(s.energyInc) || 5, int = Number(s.energyInt) || 600;
+  const toStart = Math.max(0, startS - at / 1000), dur = Math.max(0, endS - Math.max(startS, at / 1000));
+  let e = Number(s.energyCur) || 0;
+  if (e < max) e = Math.min(max, e + Math.floor(toStart / int) * inc);
+  const regen = Math.floor(dur / int) * inc;
+  const day = (t) => Math.floor(t / 86400);
+  const refill = Number(s.refill) === 1 || day(startS) > day(at / 1000) ? max : 0;
+  const xanax = Number(s.drug) - toStart <= 0 ? 250 : 0;
+  const need = Math.ceil((endS - startS) / 300);
+  return { hits: Math.floor((e + regen + refill + xanax) / HIT_ENERGY_COST), need,
+           start_e: Math.round(e), regen_e: regen, refill_e: refill, xanax_e: xanax };
 }
