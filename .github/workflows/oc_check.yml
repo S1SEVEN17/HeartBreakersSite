@@ -167,3 +167,23 @@ jobs:
             ok=$(python3 -c "import json;d=json.load(open('/tmp/r.json'));print(d.get('ok'), (d.get('error') or '')[:60], 'teams=%s' % len(d.get('teams') or []))" 2>/dev/null)
             echo "plan $code $ok"
           done
+      - name: Chain Watch check (status codes + counts only)
+        run: |
+          # /cw/hello: member 200 (+ token, never printed), unknown pid 403, wrong faction 403; then one /cw/sync snapshot
+          B=https://hb-gate.heartbreakers.workers.dev
+          for body in '{"pid":974757,"faction":51384,"name":"check"}' '{"pid":1,"faction":51384,"name":"x"}' '{"pid":974757,"faction":1,"name":"x"}'; do
+            code=$(curl -s -o /tmp/h.json -w "%{http_code}" -X POST $B/cw/hello -H 'Content-Type: application/json' -d "$body")
+            python3 -c "import json;d=json.load(open('/tmp/h.json'));print('hello', '$code', d.get('ok'), d.get('error') or '', 'leader=%s' % d.get('is_leader'), 'token=%s' % bool(d.get('token')))" 2>/dev/null || echo "hello $code (not json)"
+            [ "$code" = 200 ] && cp /tmp/h.json /tmp/good.json
+          done
+          python3 - <<'PY' > /tmp/sync.json
+          import json; print(json.dumps({"token": json.load(open("/tmp/good.json")).get("token", ""), "out": []}))
+          PY
+          code=$(curl -s -o /tmp/s.json -w "%{http_code}" -X POST $B/cw/sync -H 'Content-Type: application/json' --data @/tmp/sync.json)
+          python3 -c "
+          import json; d=json.load(open('/tmp/s.json')); s=(d.get('in') or [{}])[0]
+          c=s.get('chain') or {}
+          print('sync', '$code', d.get('ok'), s.get('t'), 'chain=%s src=%s' % (c.get('current'), c.get('src')), 'queue=%d' % len(s.get('queue') or []),
+                'retals=%d' % len(s.get('retals') or []), 'mode=%s' % s.get('mode'), 'minChain=%s' % (s.get('config') or {}).get('minChain'),
+                'leader=%s' % (s.get('me') or {}).get('is_leader'))" || echo "sync $code (not json)"
+          rm -f /tmp/h.json /tmp/good.json /tmp/sync.json /tmp/s.json

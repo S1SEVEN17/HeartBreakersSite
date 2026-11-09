@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Chain Watch - Heart Breakers</title>
+<!--
+  CHAIN WATCH SETTINGS (leaders' folder: chainwatch.html, published by generate.py write_optin_pages). The faction's
+  Chain Watch settings: alert times and minimum chain. Saved through the gatekeeper (/l/cw/config -> D1 oc_config
+  'chainwatch', with the leader's name + time) and pushed at once to every member running the Faction Chain Watch
+  script, which shows them view-only. No Torn call from this page. Contract: claude/chainwatch-hub-contract.md §7.
+  Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:720px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card h2{color:var(--gold);font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid #2a1416}
+.row:first-of-type{border-top:0}.row label{flex:1;min-width:0}.row small{display:block;color:var(--sub);font-size:12px}
+input[type=number]{width:96px;background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:7px;padding:9px;font:16px system-ui;text-align:right}
+input[type=checkbox]{width:22px;height:22px;accent-color:var(--red)}
+button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:11px 18px;font:600 15px system-ui;cursor:pointer;min-height:44px}
+button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+.acts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px}
+.msg{min-height:20px;font-size:13px;text-align:right;margin-top:6px}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+.st{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.st div{background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:8px;text-align:center}
+.st b{display:block;color:#fff;font-size:18px}.st span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.note{color:var(--sub);font-size:12px;margin-top:8px}
+</style></head><body>
+__MENU__
+<h1>Chain Watch</h1>
+<div class="sub">Faction settings for the Faction Chain Watch script. Members see them view-only; changes reach every connected script straight away.</div>
+
+<div class="card">
+  <h2>Alerts</h2>
+  <div class="row"><label for="top">1st alert<small>seconds left on the chain timer</small></label><input id="top" type="number" min="10" max="300" inputmode="numeric"></div>
+  <div class="row"><label for="pri">1st alert to the primary hitter only<small>#1 in the queue; everyone gets the later alerts</small></label><input id="pri" type="checkbox"></div>
+  <div class="row"><label for="rest">2nd alert<small>seconds left</small></label><input id="rest" type="number" min="5" max="300" inputmode="numeric"></div>
+  <div class="row"><label for="third">3rd alert<small>seconds left</small></label><input id="third" type="number" min="5" max="300" inputmode="numeric"></div>
+  <div class="row"><label for="min">Minimum chain<small>no alerts below this many hits</small></label><input id="min" type="number" min="0" max="100000" inputmode="numeric"></div>
+  <div class="acts"><button class="alt" id="reset" type="button">Starting values</button><button id="save" type="button">Save</button></div>
+  <div class="msg" id="msg"></div>
+  <div class="note" id="by"></div>
+</div>
+
+<div class="card">
+  <h2>Hub status</h2>
+  <div class="st" id="st"><div><b>…</b><span>loading</span></div></div>
+  <div class="note">Discord chain alerts move to the Hub later; until then they stay as they are.</div>
+</div>
+
+<script>
+const CONF = __CONFIG__;
+const $ = id => document.getElementById(id);
+const FIELDS = {top: "topAlertSeconds", rest: "restAlertSeconds", third: "thirdAlertSeconds", min: "minChain"};
+let defaults = null;
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+function fill(c) {
+  Object.keys(FIELDS).forEach(k => { $(k).value = c[FIELDS[k]]; });
+  $("pri").checked = !!c.firstAlertPrimaryOnly;
+}
+function setBy(c) {
+  $("by").textContent = c.set_at ? `Last changed by ${c.set_by} · ${new Date(c.set_at).toLocaleString()}`
+                                 : `Starting values (set by ${c.set_by || "—"} on the old settings)`;
+}
+function say(t, ok) { $("msg").textContent = t; $("msg").className = "msg " + (ok ? "ok" : "bad"); }
+function showStatus(s) {
+  if (!s) { $("st").innerHTML = `<div><b>—</b><span>not running yet</span></div>`; return; }
+  const box = (v, l) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
+  $("st").innerHTML = box(s.connected + (s.sync_devices ? ` +${s.sync_devices}` : ""), "scripts connected") + box(s.queued, "in queue")
+    + box(s.chain || "—", "chain") + box(s.retals, "open retals")
+    + box(s.mode === "normal" ? "normal" : (s.reason === "daily_limit" ? "fallback" : "slowed"), "mode")
+    + box(Number(s.requests_today || 0).toLocaleString(), "requests today");
+}
+async function load() {
+  try {
+    const r = await fetch("cw/config.json", {cache: "no-store", credentials: "same-origin"});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    defaults = d.defaults; fill(d.config); setBy(d.config); showStatus(d.status);
+  } catch (e) { say("Couldn't load the settings: " + e.message, false); }
+}
+$("reset").onclick = () => { if (defaults) { fill(defaults); say("Starting values filled in - press Save to use them.", true); } };
+$("save").onclick = async () => {
+  const body = {firstAlertPrimaryOnly: $("pri").checked};
+  Object.keys(FIELDS).forEach(k => { body[FIELDS[k]] = Number($(k).value); });
+  $("save").disabled = true; say("Saving…", true);
+  try {
+    const r = await fetch("cw/config", {method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    fill(d.config); setBy(d.config);
+    say(d.pushed ? "Saved - sent to every connected script." : "Saved - scripts pick it up when they connect.", true);
+  } catch (e) { say("Not saved: " + e.message, false); }
+  $("save").disabled = false;
+};
+load();
+setInterval(() => { if (!document.hidden) fetch("cw/config.json", {cache: "no-store", credentials: "same-origin"})
+  .then(r => r.json()).then(d => d.ok && showStatus(d.status)).catch(() => {}); }, 60000);
+</script>
+</body></html>

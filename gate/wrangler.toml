@@ -21,3 +21,13 @@ crons = ["0,15,30,45 * * * *", "7,22,37,52 * * * *", "*/3 * * * *"]   # last: OC
 FACTION_ID = "51384"
 # LEADER_POSITIONS comes from config.json gate.leader_positions (passed by the deploy)
 # Secrets (wrangler secret put, by the Gatekeeper secrets workflow): MEMBER_DIR, LEADER_DIR, SESSION_SECRET (optional)
+
+# Faction Chain Watch (Nov 2026): one ChainRoom Durable Object per faction (gate/chainroom.js). SQLite-backed,
+# which is what the Workers Free plan allows. The migration tag must never change once deployed.
+[[durable_objects.bindings]]
+name = "CHAINROOM"
+class_name = "ChainRoom"
+
+[[migrations]]
+tag = "v-chainwatch-1"
+new_sqlite_classes = ["ChainRoom"]

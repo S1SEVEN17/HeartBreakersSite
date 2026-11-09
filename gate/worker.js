@@ -43,6 +43,8 @@
 // =====================================================================================================
 
 import {ocPlan} from "./oc_planner.js";   // shared OC team planner (also inlined into the OC Management page)
+import {cwRoute, cwStub, CW_DEFAULT_CONFIG} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
+export {ChainRoom} from "./chainroom.js";   // the Durable Object class (wrangler.toml CHAINROOM binding)
 
 const COOKIE = "hb_s";
 const API_COMMENT = "Heart Breakers Hub";        // on every Torn API call the site makes
@@ -210,6 +212,8 @@ export default {
     if (p === "/oc/plan") return ocPlanRoute(env, ctx, req);
     if (p === "/oc/snapshot/read" || p === "/oc/snapshot/write" || p === "/oc/bundle" || p === "/oc/history") return ocFeedRoute(env, ctx, req, p);
     if (p === "/oc/history/stats") return ocHistStats(env);
+    // Faction Chain Watch script (client-reported identity, no key) -> the ChainRoom Durable Object (chainroom.js)
+    if (p.startsWith("/cw/")) return cwRoute(req, env, url);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -238,6 +242,8 @@ export default {
     if (area === "m" && rest === "shared.json") return mySharedData(env, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
+    // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
+    if (area === "l" && rest.startsWith("cw/")) return cwLeaderRoute(env, req, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
     if (area === "l" && rest === "readiness.json") return readiness(env, ctx);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
@@ -1608,4 +1614,44 @@ async function ocAutoPlan(env, crimes, now) {
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
     .bind(JSON.stringify({teams: ocCleanTeams(r.teams), auto: r.stats}), now).run();
+}
+
+// ======================================================================================================
+// FACTION CHAIN WATCH - Leaders Hub settings (Nov 2026, project doc claude/chainwatch-hub-contract.md §7)
+//   GET  /l/cw/config.json -> {config, status}   status = counts only from the ChainRoom (connected, queued, mode...)
+//   POST /l/cw/config      {topAlertSeconds, restAlertSeconds, thirdAlertSeconds, firstAlertPrimaryOnly, minChain}
+//        -> saved to D1 oc_config (env 'prod', k 'chainwatch', by = the signed-in leader) and pushed to every script
+// The script shows these view-only; leaders change them here. No Torn call.
+// ======================================================================================================
+async function cwLeaderRoute(env, req, who, sub) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (!env.OC_DB) return Response.json({ok: false, error: "Hub storage isn't set up yet"}, {status: 503});
+  const room = env.CHAINROOM ? cwStub(env) : null;
+  if (req.method === "GET" && sub === "config.json") {
+    const row = await env.OC_DB.prepare("SELECT v, by, ts FROM oc_config WHERE env = 'prod' AND k = 'chainwatch'").first();
+    let v = {}; try { v = row ? JSON.parse(row.v) : {}; } catch (e) {}
+    const config = Object.assign({}, CW_DEFAULT_CONFIG, v, row ? {set_by: row.by || "", set_at: Number(row.ts) || 0} : {});
+    let status = null;
+    try { if (room) status = await (await room.fetch("https://do/status")).json(); } catch (e) {}
+    return Response.json({ok: true, config, defaults: CW_DEFAULT_CONFIG, status}, H);
+  }
+  if (req.method === "POST" && sub === "config") {
+    let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }
+    const sec = (x, lo, hi) => { const n = Math.round(Number(x)); return Number.isFinite(n) && n >= lo && n <= hi ? n : null; };
+    const v = {topAlertSeconds: sec(b.topAlertSeconds, 10, 300), restAlertSeconds: sec(b.restAlertSeconds, 5, 300),
+               thirdAlertSeconds: sec(b.thirdAlertSeconds, 5, 300), minChain: sec(b.minChain, 0, 100000),
+               firstAlertPrimaryOnly: !!b.firstAlertPrimaryOnly};
+    if (v.topAlertSeconds == null || v.restAlertSeconds == null || v.thirdAlertSeconds == null)
+      return Response.json({ok: false, error: "alert times must be 5-300 seconds (1st alert at least 10)"}, {status: 400});
+    if (!(v.topAlertSeconds > v.restAlertSeconds && v.restAlertSeconds > v.thirdAlertSeconds))
+      return Response.json({ok: false, error: "alerts must go down: 1st > 2nd > 3rd"}, {status: 400});
+    if (v.minChain == null) return Response.json({ok: false, error: "minimum chain must be 0-100000"}, {status: 400});
+    const by = `${who.name} [${who.id}]`, ts = Date.now();
+    await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'chainwatch', ?, ?, ?) " +
+      "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by").bind(JSON.stringify(v), ts, by).run();
+    let pushed = false;
+    try { if (room) pushed = (await (await room.fetch("https://do/config", {method: "POST"})).json()).ok === true; } catch (e) {}
+    return Response.json({ok: true, config: Object.assign({}, v, {set_by: by, set_at: ts}), pushed}, H);
+  }
+  return Response.json({ok: false, error: "not found"}, {status: 404});
 }

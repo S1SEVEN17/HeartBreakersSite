@@ -4028,6 +4028,7 @@ def header_default() -> dict:
                 L("🏠 Leaders Hub", "L:index.html"),
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
                                                         L("⚔️ War readiness", "L:readiness.html"),
+                                                        L("⛓️ Chain Watch", "L:chainwatch.html"),
                                                         L("💰 Paid wars", "M:wars.html#paid")]},
                 {"label": "🕵️ Organized crimes", "items": [L("🕵️ OC Management", "L:oc.html")]},
                 {"label": "👥 Members", "items": [L("🗄️ Armory monitor", "L:armory.html"), L("💪 Member stats", "L:stats.html"),
@@ -4879,7 +4880,7 @@ def homepage_default() -> dict:
     leaders = {"title": "Leaders", "links": link([
         ("🧮", "Payout calculator", "L:payout.html"),
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
-        ("⚔️", "War readiness", "L:readiness.html"),
+        ("⚔️", "War readiness", "L:readiness.html"), ("⛓️", "Chain Watch", "L:chainwatch.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
         ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
@@ -5023,7 +5024,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
-             ("OC Management", "L:oc.html"),
+             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"),
              ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
@@ -5964,6 +5965,8 @@ def write_optin_pages(out: Path):
         conf = {"member_base": member_base(), "gate": gate}
         (lout / "stats.html").write_text(page("member_stats.html", conf, leader_menu("")), encoding="utf-8")
         (lout / "readiness.html").write_text(page("war_readiness.html", conf, leader_menu("")), encoding="utf-8")
+        # Chain Watch settings (Nov 2026): the Faction Chain Watch script's faction settings, saved through the gate
+        (lout / "chainwatch.html").write_text(page("chainwatch_settings.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
 
 
 def optin_saved():
