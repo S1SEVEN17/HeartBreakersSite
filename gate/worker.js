@@ -920,10 +920,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       // Team Builder settings - the gatekeeper's automatic planner uses the same ones (ocAutoPlan)
       const n = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
       v = v && typeof v === "object" ? v : {};
-      v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65), cap: n(v.cap, 50, 100, 85), maxAge: n(v.maxAge, 1, 720, 24),
-           chains: !!v.chains, includeBusy: !!v.includeBusy,
+      v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65), cap: n(v.cap, 50, 100, 85), chains: !!v.chains, includeBusy: !!v.includeBusy,
            // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
-           share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null)};
+           share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null),
+           queueHours: n(v.queueHours, 0, 168, 12)};   // queue members whose current crime is ready within this many hours
     } else {
       if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
       v = {teams: ocCleanTeams(v.teams)};
@@ -1261,7 +1261,7 @@ async function ocSummaries(env, envName) {
                 FROM oc_hist AS h, json_each(h.data, '$.slots') AS j WHERE h.env = ?),
           b AS (SELECT crime, t, pid, rate, ${SUM_BASE_ROLE} AS role FROM s WHERE pid IS NOT NULL AND rate IS NOT NULL),
           r AS (SELECT crime, role, pid, rate, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
-     SELECT crime, role, pid, rate FROM r WHERE n = 1`).bind(envName).all();
+     SELECT crime, role, pid, rate, t FROM r WHERE n = 1`).bind(envName).all();
   const ros = await ocSnapGet(env, envName, "roster");
   const roster = (ros && ros.data) || null;
   const payouts = {};
@@ -1281,7 +1281,7 @@ async function ocSummaries(env, envName) {
     if (roster && roster[String(r.pid)] == null) continue;                 // members who left aren't suggested
     const byRole = memberRates[r.crime] || (memberRates[r.crime] = {});
     (byRole[r.role] || (byRole[r.role] = [])).push({pid: Number(r.pid), name: roster ? roster[String(r.pid)] : "#" + r.pid,
-                                                     rate: Math.round(r.rate)});
+                                                     rate: Math.round(r.rate), t: (Number(r.t) || 0) * 1000});   // t: when (ms) - newest rate wins
   }
   for (const byRole of Object.values(memberRates)) for (const l of Object.values(byRole)) l.sort((a, b) => b.rate - a.rate);
   return {as_of: (Number(top && top.t) || 0) * 1000, window: SUM_WINDOW, payouts, memberRates};
@@ -1359,7 +1359,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, maxAge: 24, chains: false, includeBusy: false, share: null};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12};
 async function ocAutoPlan(env, crimes, now) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -1371,22 +1371,24 @@ async function ocAutoPlan(env, crimes, now) {
   for (const c of (catS.data.organizedcrimes || [])) if (c && c.name)
     catalog[c.name] = {difficulty: c.difficulty ?? null, roles: (c.slots || []).map((sl, i) => (sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1))),
                        prereq: c.prerequisite || null};
-  // rates: live shares (oc_cpr, within maxAge) > the member's rate in a crime they're in now > history (summaries)
+  // rates (Nov 2026): the member's rate in a crime they're in NOW, else the NEWEST of their shared rates (oc_cpr, any
+  // age - ts) and their history rate (summaries, the completion time t). No age limit.
   const {results} = await env.OC_DB.prepare("SELECT player_id, roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ?").bind(Number(env.FACTION_ID)).all();
   const live = new Map();
-  for (const r of results || []) { try { if (now - Number(r.ts) <= opts.maxAge * 3600e3) live.set(String(r.player_id), JSON.parse(r.roles)); } catch (e) {} }
+  for (const r of results || []) { try { live.set(String(r.player_id), {ts: Number(r.ts) || 0, roles: JSON.parse(r.roles)}); } catch (e) {} }
   const inCrime = new Map();
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && typeof sl.checkpoint_pass_rate === "number")
     inCrime.set(`${sl.user.id}|${c.name}|${ocBaseRole((sl.position_info && sl.position_info.label) || sl.position)}`, Math.round(sl.checkpoint_pass_rate));
   const hist = new Map(), S = (sumS && sumS.data) || {};
   for (const [crime, byRole] of Object.entries(S.memberRates || {})) for (const [role, list] of Object.entries(byRole)) for (const m of list)
-    hist.set(`${m.pid}|${crime}|${role}`, m.rate);
+    hist.set(`${m.pid}|${crime}|${role}`, m);
   const rateOf = (pid, crime, label) => {
     const b = ocBaseRole(label), lr = live.get(String(pid)), k = ocFb(crime) + "|" + ocFb(b);
-    if (lr && lr[k] != null) return {rate: lr[k], src: "live"};
     const ic = inCrime.get(`${pid}|${crime}|${b}`); if (ic != null) return {rate: ic, src: "live"};
-    const h = hist.get(`${pid}|${crime}|${b}`); if (h != null) return {rate: h, src: "history"};
-    return null;
+    const sh = lr && lr.roles && lr.roles[k] != null ? {rate: lr.roles[k], src: "live", t: lr.ts} : null;
+    const hm = hist.get(`${pid}|${crime}|${b}`), h = hm ? {rate: hm.rate, src: "history", t: hm.t || 0} : null;
+    if (sh && h) return sh.t >= h.t ? sh : h;                 // the newest wins
+    return sh || h;
   };
   // pay per member per day (Nov 2026, the user's formula): max payout recorded (summaries, items at prices) x the
   // members' share (opts.share if a leader set one, else that crime's recorded payout %, else 80%), ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).

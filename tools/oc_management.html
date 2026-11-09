@@ -24,7 +24,7 @@
   PASS RATES (a member's checkpoint pass rate for one crime + role - the same "Crime|Role" keys as the script):
     live      the OC Optimizer's shared rates (D1, /l/oc/rates.json) + members' rates in the active crimes right now
     history   their latest rate for that crime + role from completed crimes (CFG.hist, rebuilt every full update)
-    Live wins when it's newer than "Shared rates max age"; otherwise history. Members with no rate for a crime + role
+    A rate in a crime they're in now wins; otherwise the NEWEST of shared and history (no age limit, Nov 2026). Members with no rate for a crime + role
     are never placed in it (a rate from an easier crime would overstate what they'd manage).
   BUSY: members already in an active crime are left out unless "Include members already in a crime" is on.
   ENV: always prod (LIVE) - the Test data set was removed when the OC tools went live (Nov 2026). The Worker still
@@ -118,7 +118,7 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, maxAge: 24, share: null}, LS.get("hb_oc_opts", {}));
+const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, share: null, queueHours: 12}, LS.get("hb_oc_opts", {}));
 // settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
 // plan uses the same target / lowest role / cap / chains / busy rules
 let optTimer = null;
@@ -221,14 +221,14 @@ function spawnSummary(teams, sm) {
 
 // the best known rate for member pid in crime + role: live (shared / active crime) when fresh, else history
 function rateOf(pid, crime, pos) {
-  const k = rkey(crime, pos), maxAge = OPT.maxAge * 3600e3;
-  const sh = D.rates[String(pid)];
-  if (sh && sh.roles && sh.roles[k] != null && Date.now() - sh.ts <= maxAge) return {rate: sh.roles[k], src: "live"};
+  // (Nov 2026) the rate in a crime they're in NOW, else the NEWEST of their shared rate (any age) and history rate
+  const k = rkey(crime, pos);
   for (const c of D.active) if (c.name === crime) for (const [p, ps, r] of c.slots || []) if (String(p) === String(pid) && baseRole(ps) === baseRole(pos) && r != null) return {rate: r, src: "live"};
-  const h = (CFG.hist[k] || {})[String(pid)];
-  if (h) return {rate: h[0], src: "history", t: h[1]};
-  if (sh && sh.roles && sh.roles[k] != null) return {rate: sh.roles[k], src: "shared (old)"};
-  return null;
+  const s0 = D.rates[String(pid)], h0 = (CFG.hist[k] || {})[String(pid)];
+  const sh = s0 && s0.roles && s0.roles[k] != null ? {rate: s0.roles[k], src: "live", t: Number(s0.ts) || 0} : null;
+  const h = h0 ? {rate: h0[0], src: "history", t: (Number(h0[1]) || 0) * 1000} : null;   // history time is in seconds
+  if (sh && h) return sh.t >= h.t ? sh : h;
+  return sh || h;
 }
 // everyone (current members) with a rate for this crime + role, best first
 function candidates(crime, pos) {
@@ -534,7 +534,7 @@ function drawBuilder() {
       <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>
       <label title="Above this a member is moved up to a harder crime they can pass (100 = off)">Role cap <input type="number" id="o_cap" min="50" max="100" value="${OPT.cap}">%</label>
       <label title="Members' share of each payout. Empty = each crime's recorded payout %">Members' share <input type="number" id="o_sh" min="0" max="100" placeholder="recorded" value="${OPT.share ?? ""}" style="width:80px">%</label>
-      <label>Shared rates max age <input type="number" id="o_a" min="1" max="720" value="${OPT.maxAge}">h</label>
+      <label title="Plan members whose current crime is ready within this many hours into their next crime (0 = off)">Queue members finishing within <input type="number" id="o_q" min="0" max="168" value="${OPT.queueHours}">h</label>
       <label><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime</label>
       <label><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
     </div>
@@ -556,7 +556,7 @@ function drawBuilder() {
     ${benched.length ? `<h2>Not placed (${benched.length})</h2><div class="bench">${benched.map(p => `<span>${esc(nameOf(p))}</span>`).join("")}</div>` : ""}
   </div>`;
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
-  num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_cap", "cap", 50, 100); num("o_a", "maxAge", 1, 720);
+  num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_cap", "cap", 50, 100); num("o_q", "queueHours", 0, 168);
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
   $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };

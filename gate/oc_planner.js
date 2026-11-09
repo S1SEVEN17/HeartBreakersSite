@@ -12,7 +12,7 @@
 //   * Planning crimes: full - their members are busy until the crime pays out.
 //   * Members left over: "needs spawn" teams for crime TYPES (the pay-per-day optimizer: multi-start greedy +
 //     steal/backfill + upgrades, role cap) - the script and the Hub warn the crime needs to be spawned.
-//   QUEUE (Nov 2026): a member in a PLANNING crime that's ready within opts.queueHours (12) can be QUEUED for their
+//   QUEUE (Nov 2026): a member in a PLANNING crime that's ready within opts.queueHours (default 12, leaders can change it; 0 = off) can be QUEUED for their
 //     next crime - they join it when their current crime pays out. Queued roles carry queued: true + free_at (ms).
 //     Live open slots: only when no free member can fill the crime to the target (fewest queued members, and only
 //     if they're free before the crime expires). Spawn teams: allowed, free members preferred. One slot each.
@@ -63,7 +63,7 @@ export function ocPlan(X) {
   const freeAt = new Map();                                // pid -> ms their current (Planning) crime is ready
   for (const c of inst.values()) if (c.status === "Planning" && c.ready_at)
     for (const sl of c.slots || []) if (sl.user) freeAt.set(Number(sl.user.id), c.ready_at * 1000);
-  const queueable = pid => freeAt.has(Number(pid)) && freeAt.get(Number(pid)) <= NOW + QWIN;
+  const queueable = pid => QWIN > 0 && freeAt.has(Number(pid)) && freeAt.get(Number(pid)) <= NOW + QWIN;   // 0 h = queue off
   const beforeExpiry = (pid, c) => !c || !c.expired_at || freeAt.get(Number(pid)) < c.expired_at * 1000;
   // can this member be planned here? free now, or queueable (and free before the live crime `c` expires)
   const usable = (pid, c) => !busy.has(Number(pid)) || (queueable(pid) && beforeExpiry(pid, c));
