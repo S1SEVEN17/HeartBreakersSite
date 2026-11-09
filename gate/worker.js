@@ -669,14 +669,14 @@ async function ocRoute(env, ctx, req, url, p) {
   let body;
   try { body = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
   if (!body || typeof body !== "object") return ocErr(400, "body must be JSON");
-  if (read) return ocRead(env, ctx, body.env, ocKey(req, body.key));
+  if (read) return ocRead(env, ctx, body.env, ocKey(req, body.key), body);
   return ocWrite(env, ctx, req, body, del);
 }
 
 // every member's shared rates for one env, keyed by player_id (both read routes)
-async function ocRead(env, ctx, envName, key) {
+async function ocRead(env, ctx, envName, key, body) {
     if (!OC_ENVS.has(envName)) return ocErr(400, "env must be test or prod");
-    const id = await ocIdentify(env, ctx, key);
+    const id = await ocCaller(env, ctx, key, body);
     if (id.err) return ocErr(id.status, id.err);
     return ocJson(await ocRatesObj(env, envName));
 }
@@ -696,7 +696,7 @@ async function ocRatesObj(env, envName) {
 // publish (upsert) or delete the CALLER's own row
 async function ocWrite(env, ctx, req, body, del) {
   if (!OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
-  const id = await ocIdentify(env, ctx, ocKey(req, body.key));
+  const id = await ocCaller(env, ctx, ocKey(req, body.key), body);
   if (id.err) return ocErr(id.status, id.err);
   const fid = Number(env.FACTION_ID);
   if (del) {
@@ -735,6 +735,29 @@ function ocKey(req, fallback) {
 }
 
 // key -> {player_id, faction_id, name}, cached 10 min under sha256(key) (the key itself is never stored)
+// WHO IS CALLING (Nov 2026, claude/oc-optimizer-hub-identity-addendum.md - the user's decision): the script never
+// sends its key. It resolves {pid, faction} from Torn itself and sends them; the Hub TRUSTS that identity, scoped to
+// Heart Breakers. Extra (no Torn call): the pid must be on the faction's current roster (the feed's hourly copy) when
+// the Hub has one - leader rights etc. always come from the Hub's own member list, never the client. A body without
+// pid falls back to the old key check (transition only), and no key is ever logged or stored either way.
+async function ocCaller(env, ctx, key, body) {
+  if (body && body.pid != null) {
+    const pid = Number(body.pid), fac = Number(body.faction);
+    if (!Number.isInteger(pid) || pid <= 0) return {status: 400, err: "pid must be your Torn player id"};
+    if (String(fac) !== String(env.FACTION_ID)) return {status: 403, err: "Heart Breakers members only"};
+    let name = "";
+    try {
+      const ros = await ocSnapGet(env, "prod", "roster");
+      const map = ros && ros.data;
+      if (map && Object.keys(map).length) {
+        if (map[String(pid)] == null) return {status: 403, err: "not on the Heart Breakers member list"};
+        name = String(map[String(pid)] || "");
+      }
+    } catch (e) {}
+    return {player_id: pid, faction_id: fac, name};
+  }
+  return ocIdentify(env, ctx, key);
+}
 async function ocIdentify(env, ctx, key) {
   if (!/^[A-Za-z0-9]{16}$/.test(key)) return {status: 401, err: "missing or invalid Torn API key"};
   const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("hb-oc|" + key)))]
@@ -819,7 +842,7 @@ async function ocPlanRoute(env, ctx, req) {
   let body;
   try { body = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
   if (!body || !OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
-  const id = await ocIdentify(env, ctx, ocKey(req, body.key));
+  const id = await ocCaller(env, ctx, ocKey(req, body.key), body);
   if (id.err) return ocErr(id.status, id.err);
   return ocJson(await ocPlanObj(env, body.env, id));
 }
@@ -1062,7 +1085,7 @@ async function ocFeedRoute(env, ctx, req, p) {
   let body;
   try { body = JSON.parse(raw); } catch (e) { return ocErr(400, "body must be JSON"); }
   if (!body || typeof body !== "object" || !OC_ENVS.has(body.env)) return ocErr(400, "env must be test or prod");
-  const id = await ocIdentify(env, ctx, ocKey(req, body.key));
+  const id = await ocCaller(env, ctx, ocKey(req, body.key), body);
   if (id.err) return ocErr(id.status, id.err);
   if (p === "/oc/snapshot/write") return ocFeedWrite(env, body, id);
   if (p === "/oc/history") return ocHistoryPage(env, body);
