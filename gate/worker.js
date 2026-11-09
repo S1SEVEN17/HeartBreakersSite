@@ -1621,7 +1621,8 @@ async function ocAutoPlan(env, crimes, now) {
 
 // ======================================================================================================
 // FACTION CHAIN WATCH - Leaders Hub settings (Nov 2026, project doc claude/chainwatch-hub-contract.md §7)
-//   GET  /l/cw/config.json -> {config, status}   status = counts only from the ChainRoom (connected, queued, mode...)
+//   GET  /l/cw/config.json -> {config, status}   status = counts from the ChainRoom (connected, queued, mode...) +
+//                             status.queue: the queue in order with each member's reported energy / cooldowns / refill
 //   POST /l/cw/config      {topAlertSeconds, restAlertSeconds, thirdAlertSeconds, firstAlertPrimaryOnly, minChain}
 //        -> saved to D1 oc_config (env 'prod', k 'chainwatch', by = the signed-in leader) and pushed to every script
 // The script shows these view-only; leaders change them here. No Torn call.
@@ -1635,7 +1636,7 @@ async function cwLeaderRoute(env, req, who, sub) {
     let v = {}; try { v = row ? JSON.parse(row.v) : {}; } catch (e) {}
     const config = Object.assign({}, CW_DEFAULT_CONFIG, v, row ? {set_by: row.by || "", set_at: Number(row.ts) || 0} : {});
     let status = null;
-    try { if (room) status = await (await room.fetch("https://do/status")).json(); } catch (e) {}
+    try { if (room) status = await (await room.fetch("https://do/status?detail=1")).json(); } catch (e) {}
     return Response.json({ok: true, config, defaults: CW_DEFAULT_CONFIG, status}, H);
   }
   if (req.method === "POST" && sub === "config") {

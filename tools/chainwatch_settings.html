@@ -8,6 +8,9 @@
   Chain Watch settings: alert times and minimum chain. Saved through the gatekeeper (/l/cw/config -> D1 oc_config
   'chainwatch', with the leader's name + time) and pushed at once to every member running the Faction Chain Watch
   script, which shows them view-only. No Torn call from this page. Contract: claude/chainwatch-hub-contract.md §7.
+  QUEUE (Nov 2026): the live Chain Watch queue in the Hub's order - most current energy first - with each member's
+  energy, drug / booster cooldowns and refill as their own script reported them (estimated forward between reports:
+  regen ticks, -25 per hit the Hub saw). Refreshed every 20 s while the page is visible.
   Placeholders: __CONFIG__ ({gate}), __MENU__.
 -->
 <style>
@@ -29,10 +32,25 @@ button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weigh
 .st div{background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:8px;text-align:center}
 .st b{display:block;color:#fff;font-size:18px}.st span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 .note{color:var(--sub);font-size:12px;margin-top:8px}
+.q{display:grid;gap:8px}.qm{background:#1a1012;border:1px solid #2a1416;border-radius:10px;padding:9px 11px}
+.qm.hit{border-color:var(--gold)}.qh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.qh .n{font-weight:700;color:var(--gold);min-width:26px}.qh a{color:#fff;font-weight:600;text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{font-size:11px;padding:2px 8px;border-radius:8px;background:#2a1416;color:var(--sub);white-space:nowrap}
+.pill.g{background:#173117;color:#9be29b}.pill.y{background:#3a2e12;color:var(--gold)}.pill.r{background:#3a1414;color:#f08a84}
+.eb{height:8px;background:#2a1416;border-radius:5px;overflow:hidden;margin:7px 0 6px}.eb u{display:block;height:100%;background:var(--green)}
+.eb u.st{background:var(--gold)}
+.qs{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--sub)}.qs b{color:#ddd;font-weight:600}
+.empty{color:var(--sub);text-align:center;padding:10px}
 </style></head><body>
 __MENU__
 <h1>Chain Watch</h1>
 <div class="sub">Faction settings for the Faction Chain Watch script. Members see them view-only; changes reach every connected script straight away.</div>
+
+<div class="card">
+  <h2>Queue <span class="pill" id="qn"></span></h2>
+  <div class="q" id="q"><div class="empty">Loading…</div></div>
+  <div class="note">Ordered by current energy (most first). Energy and cooldowns come from each member's own Chain Watch script; between its reports the Hub adds regen and takes 25 off for each hit it sees.</div>
+</div>
 
 <div class="card">
   <h2>Alerts</h2>
@@ -67,7 +85,42 @@ function setBy(c) {
                                  : `Starting values (set by ${c.set_by || "—"} on the old settings)`;
 }
 function say(t, ok) { $("msg").textContent = t; $("msg").className = "msg " + (ok ? "ok" : "bad"); }
+// ---- queue (from status.queue; Hub clock = status.now) ----
+let Q = null, QT = 0, QL = 0;   // queue, Hub time it was read, local time it arrived
+const cd = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m ${String(s % 60).padStart(2, "0")}s`; };
+function drawQueue() {
+  if (!Q) return;
+  $("qn").textContent = Q.length ? Q.length + " in queue" : "";
+  if (!Q.length) { $("q").innerHTML = `<div class="empty">Nobody in the queue.</div>`; return; }
+  const hubNow = QT + (Date.now() - QL);
+  $("q").innerHTML = Q.map((m, i) => {
+    const s = m.stats, st = m.status, el = s ? (hubNow - s.at) / 1000 : 0;
+    const left = v => Math.max(0, (Number(v) || 0) - el);
+    const max = s ? Number(s.energyMax) || 0 : 0, e = m.energy;
+    const pct = max ? Math.min(100, Math.round(100 * (e || 0) / max)) : 0;
+    const on = st && st.status, onC = on === "Online" ? "g" : on === "Idle" ? "y" : on ? "r" : "";
+    const hitting = m.hitting_until > hubNow;
+    const drug = s ? left(s.drug) : 0, boost = s ? left(s.booster) : 0;
+    return `<div class="qm${hitting ? " hit" : ""}"><div class="qh"><span class="n">#${i + 1}</span>`
+      + `<a href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(m.pid)}" target="_blank" rel="noopener">${esc(m.name)}</a>`
+      + (hitting ? `<span class="pill y">Hitting now</span>` : "")
+      + (on ? `<span class="pill ${onC}">${esc(on)}</span>` : "")
+      + `<span class="pill${m.connected ? " g" : ""}">${m.connected ? "Script on" : "Script off"}</span></div>`
+      + (s ? `<div class="eb"><u class="${e > max ? "st" : ""}" style="width:${pct}%"></u></div>`
+           + `<div class="qs"><span>Energy <b>${e == null ? "?" : e}/${max}</b></span>`
+           + `<span>Drug <b>${drug > 0 ? cd(drug) : "ready"}</b></span>`
+           + `<span>Booster <b>${boost > 0 ? cd(boost) : "none"}</b></span>`
+           + `<span>Refill <b>${Number(s.refill) === 1 ? "available" : "used"}</b></span>`
+           + `<span>Hits <b>${m.hits || 0}</b></span>`
+           + `<span>Report <b>${cd(el)} ago</b></span></div>`
+         : `<div class="qs"><span>No energy report yet</span><span>Hits <b>${m.hits || 0}</b></span></div>`)
+      + `</div>`;
+  }).join("");
+}
 function showStatus(s) {
+  if (s && Array.isArray(s.queue)) { Q = s.queue; QT = Number(s.now) || Date.now(); QL = Date.now(); drawQueue(); }
+  else if (!s) $("q").innerHTML = `<div class="empty">The queue isn't running yet.</div>`;
   if (!s) { $("st").innerHTML = `<div><b>—</b><span>not running yet</span></div>`; return; }
   const box = (v, l) => `<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`;
   $("st").innerHTML = box(s.connected + (s.sync_devices ? ` +${s.sync_devices}` : ""), "scripts connected") + box(s.queued, "in queue")
@@ -99,7 +152,9 @@ $("save").onclick = async () => {
   $("save").disabled = false;
 };
 load();
+// queue + status every 20 s while visible; the cooldown timers tick every second in between
 setInterval(() => { if (!document.hidden) fetch("cw/config.json", {cache: "no-store", credentials: "same-origin"})
-  .then(r => r.json()).then(d => d.ok && showStatus(d.status)).catch(() => {}); }, 60000);
+  .then(r => r.json()).then(d => d.ok && showStatus(d.status)).catch(() => {}); }, 20000);
+setInterval(() => { if (!document.hidden) drawQueue(); }, 1000);
 </script>
 </body></html>

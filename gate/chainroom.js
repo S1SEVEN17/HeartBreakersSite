@@ -255,7 +255,7 @@ export class ChainRoom {
     if (path === "/ws")       return this.handleWsUpgrade(request, new URL(request.url));
     if (path === "/sync")     return this.handleSync(request);
     if (path === "/config")   return this.handleConfigReload();
-    if (path === "/status")   return this.handleStatus();
+    if (path === "/status")   return this.handleStatus(new URL(request.url).searchParams.get("detail") === "1");
     if (path === "/reading")  return this.handleWebReading(request);
     return new Response("not found", { status: 404 });
   }
@@ -507,7 +507,7 @@ export class ChainRoom {
       if (d) ourHitOn[d] = Math.max(ourHitOn[d] || 0, ended);
     });
 
-    // queued members' landed hits move them to the back of the queue
+    // queued members' landed hits: counted + logged (energy estimate); the queue reorders by energy
     rows.forEach(({ a, ended, res }) => {
       const atkId = String((a.attacker && a.attacker.id) || "");
       const q = this.mem.queue[atkId];
@@ -515,8 +515,9 @@ export class ChainRoom {
       if (!ended || now - ended > 120000) return;               // only fresh hits
       if (q._lastHitTs && ended <= q._lastHitTs) return;        // already counted
       q._lastHitTs = ended;
-      // back of the line (behind everyone, even someone who joined this same millisecond)
-      q.joined_at = Math.max(now, ...Object.values(this.mem.queue).map((x) => x.joined_at + 1));
+      // ENERGY ORDER (Nov 2026, user): the queue is ordered by current energy, so a hit no longer moves the member
+      // to the back - it's logged so their estimated energy drops 25 straight away (until their next stats report).
+      q.hitTimes = (q.hitTimes || []).concat(ended).slice(-20);
       q.hitting_until = 0;
       q.hits = (q.hits || 0) + 1;
       this.queueHit(Number(atkId), q.hits);
@@ -559,8 +560,8 @@ export class ChainRoom {
   /* ---- queue auto-remove rules (contract §5) ----------------------------- */
   enforceQueueRules(now) {
     this.orderedQueue(true).forEach((q, idx) => {
-      const s = q.stats;
-      if (s && (Number(s.energyCur) || 0) < HIT_ENERGY_COST && !canRestoreEnergy(s)) {   // under 25e, no way back
+      const s = q.stats, e = energyNow(q, now);
+      if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s)) {   // under 25e, no way back
         delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; return;
       }
       const st = this.mem.status[q.pid];
@@ -659,11 +660,15 @@ export class ChainRoom {
   sendTo(ws, obj) { try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ } }
 
   /* ---- views ------------------------------------------------------------ */
+  // QUEUE ORDER (Nov 2026, user): most CURRENT energy first (energy bar only - refills / Xanax not counted).
+  // Ties: earlier join first. Members who haven't reported stats yet go last, in join order.
   orderedQueue(raw) {
-    const list = Object.values(this.mem.queue).sort((a, b) => a.joined_at - b.joined_at);
-    if (raw) return list;
-    return list.map((q) => ({
-      pid: q.pid, name: q.name, joined_at: q.joined_at,
+    const now = Date.now();
+    const list = Object.values(this.mem.queue).map((q) => ({ q, e: energyNow(q, now) }))
+      .sort((a, b) => ((b.e == null ? -1 : b.e) - (a.e == null ? -1 : a.e)) || (a.q.joined_at - b.q.joined_at));
+    if (raw) return list.map((x) => x.q);
+    return list.map(({ q, e }) => ({
+      pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e,
       hitting_until: q.hitting_until || 0, stats: q.stats || null, hits: q.hits || 0,
     }));
   }
@@ -735,10 +740,15 @@ export class ChainRoom {
   }
 
   /* ---- /status : counts only (Leaders' settings page + the OC check workflow) ---- */
-  async handleStatus() {
+  async handleStatus(detail) {
     const now = Date.now();
     this.pruneConns(now);
-    return Response.json({
+    // detail=1 (Leaders' Chain Watch page only): the queue in order with each member's reported energy /
+    // cooldowns / refill, online status and whether their script is connected - no keys, nothing from Torn here
+    const queue = detail ? this.orderedQueue().map((q) => Object.assign(q, {
+      status: this.mem.status[q.pid] || null, connected: this.conns.has(q.pid) || !!this.mem.syncSeen[q.pid],
+    })) : undefined;
+    return Response.json({ queue, now,
       ok: true, connected: this.conns.size, sync_devices: Object.keys(this.mem.syncSeen).length,
       queued: Object.keys(this.mem.queue).length, chain: this.mem.chain ? this.mem.chain.current : 0,
       retals: this.openRetals().length, members: Object.keys(this.mem.members).length,
@@ -752,6 +762,23 @@ export class ChainRoom {
 /* ----------------------------------------------------------------------------
  * small helpers
  * -------------------------------------------------------------------------- */
+// A queued member's energy NOW, estimated from their last stats report (scripts send it every 60-180 s): the reported
+// bar, minus 25 for each hit the Hub saw since that report, plus natural regen ticks (only up to max - a stacked bar
+// doesn't regen). null = no report yet.
+function energyNow(q, now) {
+  const s = q && q.stats;
+  if (!s) return null;
+  let e = Number(s.energyCur) || 0;
+  const max = Number(s.energyMax) || 0, at = Number(s.at) || now;
+  e -= HIT_ENERGY_COST * (q.hitTimes || []).filter((t) => t > at).length;
+  const inc = Number(s.energyInc) || 0, int = Number(s.energyInt) || 0, tick = Number(s.energyTick) || 0;
+  if (inc > 0 && int > 0 && e < max) {
+    const el = (now - at) / 1000;
+    const ticks = tick > 0 ? (el >= tick ? 1 + Math.floor((el - tick) / int) : 0) : Math.floor(el / int);
+    e = Math.min(max, e + ticks * inc);
+  }
+  return Math.max(0, Math.round(e));
+}
 function due(last, every, now) { return !!every && now - (last || 0) >= every - 1000; }
 function todayUTC() { return new Date().toISOString().slice(0, 10); }
 function sanitizeStats(s) {
