@@ -294,7 +294,8 @@ const PP_DEFAULT = (() => { const v = Object.values(CFG.values || {}).map(x => x
   return v.length ? v[v.length >> 1] : 100; })();           // typical payout % when a crime's own isn't known
 // (Nov 2026) no minimum completions: any crime with >= 1 successful completion has a value. When the summaries
 // carry the Hub's NET value (valueMax: cash + items at today's price, x members' share) that's used as it is.
-function netOf(crime) { const p = D.sums && D.sums.payouts && D.sums.payouts[crime]; return p && p.valueMax != null ? p.valueMax : null; }
+function netOf(crime, low) { const p = D.sums && D.sums.payouts && D.sums.payouts[crime];
+  return p && p.valueMax != null ? (low ? (p.valueMin ?? p.valueMax) : p.valueMax) : null; }   // low = the worst recorded result
 function grossOf(crime) {
   const S = D.sums && D.sums.payouts;
   if (S) {
@@ -312,16 +313,24 @@ function grossOf(crime) {
 const shareOf = crime => { if (OPT.share != null) return OPT.share;
   const p = D.sums && D.sums.payouts && D.sums.payouts[crime]; if (p && p.ppAvg != null) return p.ppAvg;
   const v = (CFG.values || {})[crime]; return (v && v.pp) ?? PP_DEFAULT; };
-const potRaw = crime => { const n = netOf(crime); return n != null ? n : grossOf(crime) * shareOf(crime) / 100; };
-function valueOf(crime) {
+const potRaw = (crime, low) => { const n = netOf(crime, low); return n != null ? n : grossOf(crime) * shareOf(crime) / 100; };
+function valueOf(crime, low) {
   const s = rolesOf(crime).length || 1, pre = (CFG.catalog[crime] || {}).prereq;
   const fin = Object.keys(CFG.catalog).find(n => (CFG.catalog[n] || {}).prereq === crime);
   if (fin) { const sf = rolesOf(fin).length || 1;
-    return {pot: potRaw(fin) * s / (s + sf), days: s + sf, seats: s, chain: fin}; }
+    return {pot: potRaw(fin, low) * s / (s + sf), days: s + sf, seats: s, chain: fin}; }
   if (pre) { const sp = rolesOf(pre).length || 1;
-    return {pot: potRaw(crime) * s / (s + sp), days: s + sp, seats: s, chain: pre}; }
-  return {pot: potRaw(crime), days: s, seats: s};
+    return {pot: potRaw(crime, low) * s / (s + sp), days: s + sp, seats: s, chain: pre}; }
+  return {pot: potRaw(crime, low), days: s, seats: s};
 }
+// PAY RANGE (Nov 2026): per member per day from the worst to the best recorded result, e.g. "$1.2m-$10.25m"
+const fmt2 = n => n == null ? "-" : n >= 1e9 ? "$" + +(n / 1e9).toFixed(2) + "b" : n >= 1e6 ? "$" + +(n / 1e6).toFixed(2) + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n);
+const eachLow = crime => { const v = valueOf(crime, true); return v.pot / v.days / (rolesOf(crime).length || 1); };
+const payRange = crime => { const hi = eachPay(crime), lo = Math.min(eachLow(crime), hi);
+  return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); };
+// DELAY RECORD (Nov 2026): config.json delays {pid: {n, long, hrs, runs}} - crimes held up in the last 30 days
+const delayTag = pid => { const d = ((D.config || {}).delays || {})[String(pid)];
+  return d && d.n ? `<span class="tag bad" title="Held up ${d.n} crime${d.n === 1 ? "" : "s"} in the last 30 days (${d.hrs} h in total${d.runs ? `, took part in ${d.runs}` : ""}) - the planner counts the likely delay against the crime's pay">⏱ ${d.n} delay${d.n === 1 ? "" : "s"} · ${Math.round(d.hrs)}h</span>` : ""; };
 // teamPay = max payout per day for the team; eachPay = per member per day (what's SHOWN) - same as the script.
 // teamExp = what auto-build RANKS by: that × team success, so among teams that all reach the target the safer,
 //           better-paying ones still win (the target itself is a hard limit either way).
@@ -398,7 +407,7 @@ function autoBuild() {
   const keep = BOARD.teams.filter(t => t.lock);
   const lastRuns = {}; Object.entries(D.config.last_runs || {}).forEach(([k, v]) => { lastRuns[k] = (v || []).map(l => new Set(l)); });
   const r = ocPlan({crimes: D.feed || [], prev: keep, fresh: true, catalog: CFG.catalog, members: CFG.members,
-    rotate: new Set(D.config.rotate || []), lastRuns,
+    rotate: new Set(D.config.rotate || []), lastRuns, delays: D.config.delays || {},
     opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),
     payOf: crime => valueOf(crime), budgetMs: 900});
   BOARD.teams = r.teams;
@@ -565,8 +574,8 @@ function drawBuilder() {
       <button class="gold" id="auto">⚡ Auto-build teams</button>
       <select id="addc">
         ${sugg.length ? `<optgroup label="⭐ Full team ready at ${OPT.target}%+ - best pay first">${sugg.map(x =>
-          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${fmt$(eachPay(x.crime))}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
-        <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${fmt$(eachPay(n))}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
+          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${payRange(x.crime)}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
+        <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${payRange(n)}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
       <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to Live</button>
     </div>
@@ -586,7 +595,7 @@ function drawBuilder() {
   $("auto").onclick = () => { autoBuild(); draw(); };
   // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
   $("add").onclick = () => { const x = suggBy.get($("addc").value);
-    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${fmt$(eachPay(x.crime))}/day each at ${Math.round(teamAvg(x.team))}%.`); }
+    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${payRange(x.crime)}/day each at ${Math.round(teamAvg(x.team))}%.`); }
     else addTeam($("addc").value);
     draw(); };
   $("clr").onclick = () => { if (!confirm("Remove every unlocked team from the board?")) return; BOARD.teams = BOARD.teams.filter(t => t.lock); saveBoard(); draw(); };
@@ -605,7 +614,7 @@ function teamCard(t) {
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
     const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
     const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
-    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r)}${r.existing ? '<span class="tag">in the crime</span>' : ""}
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r)}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
@@ -616,7 +625,7 @@ function teamCard(t) {
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
     <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
-      return p == null ? "" : v.pot ? `💰 ${fmt$(eachPay(t.crime))}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
+      return p == null ? "" : v.pot ? `💰 ${payRange(t.crime)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
         : "💰 no pay data yet"; })()}</div>
     ${t.kind === "live" ? "" : spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;

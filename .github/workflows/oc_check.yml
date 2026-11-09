@@ -91,7 +91,7 @@ jobs:
           # counts only: teams live / spawn, members placed, when + by whom it last changed (auto or a leader's Deploy)
           cd w
           npx wrangler d1 execute hb-oc --remote --json --command \
-            "SELECT ts, CASE WHEN by LIKE 'auto%' THEN 'auto (Hub)' ELSE 'a leader' END AS who, v, (SELECT data FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats') AS stats FROM oc_config WHERE env = 'prod' AND k = 'plan'" > plan.json 2>/dev/null || exit 0
+            "SELECT ts, CASE WHEN by LIKE 'auto%' THEN 'auto (Hub)' ELSE 'a leader' END AS who, v, (SELECT data FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats') AS stats, (SELECT data FROM oc_snap WHERE env = 'hub' AND ds = 'delay-stats') AS dl FROM oc_config WHERE env = 'prod' AND k = 'plan'" > plan.json 2>/dev/null || exit 0
           python3 - <<'PY'
           import json, time
           d = json.load(open("plan.json")); rows = d[0]["results"] if isinstance(d, list) else d.get("results", [])
@@ -102,7 +102,10 @@ jobs:
                 f"last change {(time.time() * 1000 - r['ts']) / 60000:.0f} min ago by {r['who']}" + (f" · planner {v['auto'].get('ms')} ms" if v.get('auto') else ""))
           # recruiting crimes the planner left open and why (crime names + rates only - no member names or IDs)
           ss = json.loads(r.get("stats") or "null") or {}
+          dl = json.loads(r.get("dl") or "null") or {}
+          print(f"  delay record: {len(dl)} members held up a crime in 30 days, {sum(1 for x in dl.values() if x.get('long'))} for 2h+")
           print(f"  script data: pay per day for {len(ss.get('pay_day') or {})} crimes, required items for {sum(len(x) for x in (ss.get('items') or {}).values())} roles")
+          print(f"  pay ranges for {len(ss.get('pay_day_min') or {})} crimes")
           for k in (json.loads(r.get("stats") or "null") or {}).get("rotation") or []:
               print(f"  rotation: {k.get('crime')} - pool {k.get('pool')} for {k.get('seats')} seats, up to {k.get('max')} at once, {k.get('live')} recruiting now")
           for k in (json.loads(r.get("stats") or "null") or v.get("auto") or {}).get("skipped") or []:

@@ -866,14 +866,16 @@ async function ocPlanObj(env, envName, id) {
   //   spawned      instances exist but none has an open slot (full / planning)
   // pay per member per day + required items per role, from the planner's latest stats (every 3 min) - Nov 2026
   const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
-  const payDay = (ps && ps.data && ps.data.pay_day) || {}, items = (ps && ps.data && ps.data.items) || {};
+  const payDay = (ps && ps.data && ps.data.pay_day) || {}, payMin = (ps && ps.data && ps.data.pay_day_min) || {}, items = (ps && ps.data && ps.data.items) || {};
   const rotSet = new Set(cfg.rotate || []);
   const teams = teamsCfg.length ? teamsCfg.map(t => {
     const inst = (crimes || []).filter(c => c && (t.crime_id ? String(c.id) === String(t.crime_id) : c.name === t.crime) && (c.status === "Recruiting" || c.status === "Planning"));
     const open = inst.some(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user));
     return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
             kind: t.kind || "spawn", crime_id: t.crime_id || null,
-            pay_day: payDay[t.crime] ?? null,                 // per member per day (the planner's figure)
+            pay_day: payDay[t.crime] ?? null,                 // per member per day (the planner's figure = the best recorded)
+            pay_day_min: payMin[t.crime] ?? null,             // ... the worst recorded - shown as a range "min-max"
+            pay_day_max: payDay[t.crime] ?? null,
             rotation: rotSet.has(t.crime),                    // a crime leaders rotate
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), slot: r.position, pid: Number(r.pid),
@@ -940,6 +942,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
     if (sub === "config.json") { const c = await ocConfig(env, envName);
       c.last_runs = await ocLastRuns(env, envName, c.rotate).catch(() => ({}));   // for the page's Auto-build (rotation mix rule)
+      c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
       return Response.json(c, H); }
     const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
       .bind(envName, Number(env.FACTION_ID)).all();
@@ -1479,6 +1482,42 @@ async function ocBackfill(env, now, ENVS) {
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
 const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12};
+// DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
+// same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
+// part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
+//   {pid: {n: crimes delayed, long: delayed 2 h+, hrs: total hours they held crimes up, runs: crimes completed}}
+// The planner turns that into the hours of delay they're likely to cause per crime (hrs / runs) and charges it
+// against the crime's pay (a crime held up h hours pays everyone in it h hours later).
+const DELAY_DAYS = 30;
+async function ocDelayStats(env, now) {
+  const cur = await ocSnapGet(env, "hub", "delay-stats").catch(() => null);
+  if (cur && now - Number(cur.as_of) < 3600e3) return cur.data || {};
+  const out = {};
+  try {
+    const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/data/crime_delays.json?ref=main`,
+                          {headers: Object.assign(ghHeaders(env), {Accept: "application/vnd.github.raw"})});
+    if (!r.ok) return (cur && cur.data) || {};
+    const log = await r.json(), t0 = now / 1000 - DELAY_DAYS * 86400, seen = {};
+    for (const e of log.delays || []) {
+      if (!e || Number(e.start) < t0) continue;
+      const pid = String(e.member), mins = e.minutes != null ? Number(e.minutes) : Math.max(0, (now / 1000 - Number(e.start)) / 60);
+      const o = out[pid] || (out[pid] = {n: 0, long: 0, hrs: 0, runs: 0});
+      const k = pid + "|" + e.crime;                       // one crime counts once, however many reasons
+      if (!seen[k]) { seen[k] = mins; o.n++; o.hrs += mins / 60; if (mins >= 120) o.long++; }
+      else if (mins > seen[k]) { o.hrs += (mins - seen[k]) / 60; if (seen[k] < 120 && mins >= 120) o.long++; seen[k] = mins; }
+    }
+    const {results} = await env.OC_DB.prepare(
+      `SELECT json_extract(j.value, '$.user.id') AS pid, COUNT(*) AS runs FROM oc_hist AS h, json_each(h.data, '$.slots') AS j
+       WHERE h.env = 'prod' AND h.executed_at >= ? AND json_extract(j.value, '$.user.id') IS NOT NULL GROUP BY pid`)
+      .bind(Math.floor(now / 1000 - DELAY_DAYS * 86400)).all();
+    for (const x of results || []) { const pid = String(x.pid); if (out[pid]) out[pid].runs = Number(x.runs) || 0; }
+    for (const o of Object.values(out)) o.hrs = Math.round(o.hrs * 10) / 10;
+  } catch (e) { return (cur && cur.data) || {}; }
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'delay-stats', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(out)).run();
+  return out;
+}
+
 async function ocAutoPlan(env, crimes, now) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -1513,24 +1552,27 @@ async function ocAutoPlan(env, crimes, now) {
   // members' share (opts.share if a leader set one, else that crime's recorded payout %, else 80%), ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).
   // pot here = this crime's seats' share, so pot ÷ days ÷ seats = per member per day - the same figure the page and script show
   const prices = (priS && priS.data) || {};
-  const gross = n => { const p = (S.payouts || {})[n]; if (!p || !(p.samples > 0)) return 0;
-    if (p.valueMax != null) return p.valueMax;              // net + items, worked out in the summaries (Nov 2026)
+  const gross = (n, low) => { const p = (S.payouts || {})[n]; if (!p || !(p.samples > 0)) return 0;
+    if (p.valueMax != null) return low ? (p.valueMin ?? p.valueMax) : p.valueMax;   // net + items (summaries, Nov 2026); low = the worst result
     let iv = 0; Object.keys(p.items || {}).forEach(id => { iv += (p.items[id] || 0) * (Number((prices[id] || {}).price) || 0); });
     return ((p.moneyMax || 0) + iv) * (opts.share != null ? opts.share : (p.ppAvg ?? 80)) / 100; };
   const seats = n => (catalog[n] || {roles: []}).roles.length || 1;
-  const payOf = n => {
+  const payOf = (n, low) => {
     const s = seats(n), pre = (catalog[n] || {}).prereq, fin = Object.keys(catalog).find(x => catalog[x].prereq === n);
-    if (fin) { const sf = seats(fin); return {pot: gross(fin) * s / (s + sf), days: s + sf}; }
-    if (pre) { const sp = seats(pre); return {pot: gross(n) * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
-    return {pot: gross(n), days: s};
+    if (fin) { const sf = seats(fin); return {pot: gross(fin, low) * s / (s + sf), days: s + sf}; }
+    if (pre) { const sp = seats(pre); return {pot: gross(n, low) * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
+    return {pot: gross(n, low), days: s};
   };
+  const delays = await ocDelayStats(env, now).catch(() => ({}));
   const lastRuns = {};
   for (const [k, v] of Object.entries(await ocLastRuns(env, "prod", cfg.rotate || []).catch(() => ({})))) lastRuns[k] = v.map(l => new Set(l));
   const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
-                    rotate: new Set(cfg.rotate || []), lastRuns, rateOf, payOf, budgetMs: 0, now});
+                    rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now});
   // for the script (Nov 2026): pay per member per day of every planned crime + each catalog role's required item
-  r.stats.pay_day = {}; r.stats.items = {};
-  for (const t of r.teams) { const p = payOf(t.crime); r.stats.pay_day[t.crime] = p.days ? Math.round(p.pot / p.days / seats(t.crime)) : 0; }
+  r.stats.pay_day = {}; r.stats.pay_day_min = {}; r.stats.items = {};
+  for (const t of r.teams) { const p = payOf(t.crime), q = payOf(t.crime, true);
+    r.stats.pay_day[t.crime] = p.days ? Math.round(p.pot / p.days / seats(t.crime)) : 0;            // best recorded
+    r.stats.pay_day_min[t.crime] = q.days ? Math.round(q.pot / q.days / seats(t.crime)) : 0; }      // worst recorded
   for (const c of (catS.data.organizedcrimes || [])) if (c && c.name && r.teams.some(t => t.crime === c.name)) {
     const m = {}; (c.slots || []).forEach((sl, i) => { const it = sl.required_item; if (it && it.id)
       m[(sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1))] = {id: it.id, name: it.name || null}; });
