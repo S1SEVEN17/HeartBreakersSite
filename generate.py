@@ -4638,8 +4638,17 @@ function fail(e){if(e.code===5){back=now()+60;return}
   if(BADKEY.includes(e.code)){store.set("");NOWERR="Torn didn't accept that key ("+e.message+"). Try another Public key."}
   else NOWERR="Couldn't reach Torn just now - retrying."}
 async function getChain(){if(!store.get()||now()<back)return;try{const t=now(),c=((await torn("chain")).chain)||{};
-    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR="";lastOk=now()}
+    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR="";lastOk=now();
+    shareChain(c,t)}
   catch(e){fail(e)}nowCards()}
+// Chain Watch (Nov 2026): this reading is recycled for the Hub's Chain Watch queue timer - the NUMBERS only (never the
+// key), only during a live chain, and only when Torn's data changed (its ~30 s cache repeats itself) -> ~2 a minute.
+let lastShare=null;
+function shareChain(c,t){const cur=+c.current||0,to=+c.timeout||0;if(!(cur>0&&to>0&&to<=300))return;
+  const left=to>1e9?to-t:to,exp=t+left;if(lastShare&&lastShare.c===cur&&Math.abs(lastShare.e-exp)<=2)return;
+  lastShare={c:cur,e:exp};
+  fetch("/m/cw/reading",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({current:cur,max:+c.max||0,timeout:Math.round(left),cooldown:+c.cooldown||0,modifier:c.modifier==null?null:+c.modifier})}).catch(()=>{})}
 async function getWar(){if(!store.get()||now()<back)return;try{let w=((await torn("wars")).wars||{}).ranked;if(Array.isArray(w))w=w[0];
     const t=now();WAR=null;
     if(w&&w.factions&&!(w.end&&w.end<=t)){const F=Array.isArray(w.factions)?w.factions:Object.entries(w.factions).map(([id,f])=>Object.assign({id},f));
@@ -4648,7 +4657,7 @@ async function getWar(){if(!store.get()||now()<back)return;try{let w=((await tor
     NOWERR=""}catch(e){fail(e)}nowCards()}
 function keyForm(){return `<div class="keyc"><b>⚡ Live war and chain</b><br>Add your Torn <b>Public</b> API key to see the ranked war countdown and the chain timer here.`
   +`<form id="hbKeyF"><input id="hbKey" type="password" autocomplete="off" maxlength="16" placeholder="16-character Public key"><button>Save</button></form>`
-  +`<small>Stored locally in this browser only - never sent to the site - and used only for your own requests to Torn (faction chain and wars, Public access, comment "Heart Breakers Hub"). Shared with: nobody. Remove it any time from the Me menu or by signing out. `
+  +`<small>Stored locally in this browser only - never sent to the site - and used only for your own requests to Torn (faction chain and wars, Public access, comment "Heart Breakers Hub"). The key is shared with nobody; during a live chain the chain count and timer it reads (numbers only) also help the Hub's Chain Watch queue timer. Remove it any time from the Me menu or by signing out. `
   +`<a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Get a key</a></small>${NOWERR?`<small class="err">${esc(NOWERR)}</small>`:""}</div>`}
 // the war + chain cards (redrawn every second for the timers)
 function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;

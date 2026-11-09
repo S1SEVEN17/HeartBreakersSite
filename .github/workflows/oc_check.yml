@@ -189,3 +189,5 @@ jobs:
                 'retals=%d' % len(s.get('retals') or []), 'mode=%s' % s.get('mode'), 'minChain=%s' % (s.get('config') or {}).get('minChain'),
                 'leader=%s' % (s.get('me') or {}).get('is_leader'))" || echo "sync $code (not json)"
           rm -f /tmp/h.json /tmp/good.json /tmp/sync.json /tmp/s.json
+          # homepage "Right Now" chain readings: signed-in members only (expect 401 here, no pass)
+          echo "homepage reading without sign-in: $(curl -s -o /dev/null -w '%{http_code}' -X POST $B/m/cw/reading -H 'Content-Type: application/json' -d '{"current":10,"timeout":200}')"

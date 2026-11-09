@@ -240,6 +240,9 @@ export default {
     if (area === "m" && (rest === "optin" || rest === "optin.json")) return optinRoute(env, req, who);
     // "View my shared data" (My data & sharing): everything the signed-in member shares, and with whom
     if (area === "m" && rest === "shared.json") return mySharedData(env, who);
+    // Hub homepage "Right Now" card: its chain reading (read in the member's browser with their own key - the key
+    // never comes here) recycled for the Chain Watch queue's timer (chainroom.js /reading, shorten-only)
+    if (area === "m" && rest === "cw/reading") return cwReading(env, req, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
@@ -1654,4 +1657,18 @@ async function cwLeaderRoute(env, req, who, sub) {
     return Response.json({ok: true, config: Object.assign({}, v, {set_by: by, set_at: ts}), pushed}, H);
   }
   return Response.json({ok: false, error: "not found"}, {status: 404});
+}
+
+// POST /m/cw/reading {current, max, timeout, cooldown, modifier} - signed-in members only (pid from the sign-in).
+// Torn V2 faction/chain as the homepage read it; numbers only. No Torn call here.
+async function cwReading(env, req, who) {
+  if (req.method !== "POST") return Response.json({ok: false, error: "POST only"}, {status: 405});
+  if (!env.CHAINROOM) return Response.json({ok: false, error: "chain watch isn't set up"}, {status: 503});
+  let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }
+  const n = x => (Number.isFinite(Number(x)) ? Number(x) : 0);
+  const reading = {pid: Number(who.id), current: n(b.current), max: n(b.max), timeout: n(b.timeout), cooldown: n(b.cooldown),
+                   modifier: b.modifier == null ? null : n(b.modifier)};
+  if (!(reading.current > 0 && reading.timeout > 0 && reading.timeout <= 300)) return Response.json({ok: true, used: false});
+  const r = await cwStub(env).fetch("https://do/reading", {method: "POST", body: JSON.stringify(reading)});
+  return Response.json(await r.json(), {headers: {"Cache-Control": "no-store"}});
 }

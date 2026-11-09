@@ -256,6 +256,7 @@ export class ChainRoom {
     if (path === "/sync")     return this.handleSync(request);
     if (path === "/config")   return this.handleConfigReload();
     if (path === "/status")   return this.handleStatus();
+    if (path === "/reading")  return this.handleWebReading(request);
     return new Response("not found", { status: 404 });
   }
 
@@ -712,6 +713,27 @@ export class ChainRoom {
     return Response.json({ ok: true, config: this.publicConfig() });
   }
 
+  /* ---- /reading : a chain reading from the Hub homepage's "Right Now" card (Nov 2026) ----------------------
+   * Members with the Hub homepage open read faction/chain with their OWN Public key in their browser every 15 s
+   * (the key never leaves that browser). worker.js /m/cw/reading forwards the reading here (signed-in members only,
+   * the pid comes from the site's sign-in, not the client). Recycled as a script-style reading: the same
+   * shorten-only rule (§3) applies, it never starts the room's read loop, and the page only sends it during a live
+   * chain when Torn's data actually changed (~2 a minute per open page).
+   * ------------------------------------------------------------------------------------------------------- */
+  async handleWebReading(request) {
+    let b = {};
+    try { b = await request.json(); } catch (e) { /* ignore */ }
+    const changed = this.applyScriptChain({
+      current: b.current, max: b.max, timeout: b.timeout, cooldown: b.cooldown, modifier: b.modifier,
+    });
+    const day = todayUTC();
+    if (this.mem.webDay !== day) { this.mem.webDay = day; this.mem.webReadings = 0; }
+    this.mem.webReadings = (this.mem.webReadings || 0) + 1;
+    await this.save();
+    if (changed) this.broadcastDeltas();
+    return Response.json({ ok: true, used: changed });
+  }
+
   /* ---- /status : counts only (Leaders' settings page + the OC check workflow) ---- */
   async handleStatus() {
     const now = Date.now();
@@ -722,6 +744,7 @@ export class ChainRoom {
       retals: this.openRetals().length, members: Object.keys(this.mem.members).length,
       mode: this.modeOf(), reason: this.reasonOf(), requests_today: this.mem.usageCount,
       alarm: (await this.storage.getAlarm()) != null, last_error: this.mem.lastErr || "",
+      homepage_readings_today: this.mem.webDay === todayUTC() ? this.mem.webReadings || 0 : 0,
     });
   }
 }
