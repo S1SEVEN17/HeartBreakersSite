@@ -72,7 +72,13 @@ const BONUS_HITS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 5
 const CHAIN_TIMEOUT_S = 300;              // every hit resets the chain timer to 5 minutes
 const MIN_PACE_HITS_PER_HOUR = 12;        // the slowest pace that keeps a chain alive (1 hit / 5 min)
 const CONFIRM_READ_GAP_MS = 10000;        // a higher count from a script -> one confirming Hub read, at most every 10 s
-const RECRUIT_DAYS = 3;                   // Torn: members can't add chain hits during their first 72 h (Recruit)
+const RECRUIT_DAYS = 3;
+// HUB-SENT ALERTS (Nov 2026, user): the Hub times every chain alert itself (it knows the timer to the second) and
+// pushes {t:"alert"} to the members it's for - a background tab still gets a WebSocket message at once, while a
+// script's own timers can be throttled to once a minute. "I'm hitting" PAUSES alerts until a hit lands or the flag
+// runs out (45 s). The script shows / sounds them per the member's own alert choices.
+const ALERT_EARLY_MS = 400;               // fire an alert this much before its exact second (network time)
+const TEST_ALERT_GAP_MS = 5000;           // "Test my alerts" at most once per 5 s per member                   // Torn: members can't add chain hits during their first 72 h (Recruit)
 // STORED-KEY CHAIN READS (away/opt-in addendum, Nov 2026): members who turned on "Chain timer (during live chains)"
 const OPTIN_KEY_GAP_MS = 30000;           // each member's key at most once per 30 s (<= 2 calls/min)
 const OPTIN_TICK_MS = 15000;              // live chain + usable opt-in keys: the alarm also ticks between Hub reads
@@ -392,8 +398,18 @@ export class ChainRoom {
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
         break;
       case "hitting": {
+        // "I'm hitting" also PAUSES every chain alert for everyone until a hit lands or the flag runs out (45 s)
         const q = this.mem.queue[pid];
         if (q) { q.hitting_until = msg.on ? Date.now() + HITTING_FLAG_MS : 0; changed = true; }
+        if (q && !msg.on) await this.ensureAlertAlarm();   // paused alerts may be due straight away
+        break;
+      }
+      case "test_alert": {   // "Test my alerts": the full path - script -> Hub -> back to this member only
+        const now = Date.now(), last = (this._testAt = this._testAt || {})[pid] || 0;
+        if (now - last < TEST_ALERT_GAP_MS) break;
+        this._testAt[pid] = now;
+        this.notify(pid, { t: "alert", kind: "test", test: true, stage: 0, seconds: 0, now,
+          chain: (this.mem.chain && this.mem.chain.current) || 0, text: "Test alert from the Hub - if you can see / hear this, your alerts work." });
         break;
       }
       case "retal": changed = this.doRetalAction(pid, msg); break;
@@ -403,6 +419,7 @@ export class ChainRoom {
       await this.save();
       this.broadcastDeltas();
       if (t === "join") await this.ensureAlarm();
+      if (t === "chain") await this.ensureAlertAlarm();    // a shorter timer can bring an alert forward
     }
   }
 
@@ -616,13 +633,17 @@ export class ChainRoom {
     this.expireRetals(now);
     this.enforceQueueRules(now);
     this.maybeIdleWipe(now);
+    this.checkAlerts(now);
     this.updateLevel();
     await this.save();
     this.broadcastDeltas();
 
     let base = Math.min(READ_MS.chain[stateKey] || 120000, READ_MS.attacks[stateKey] || 120000, READ_MS.members[stateKey] || 120000);
     if (optinNext) base = Math.min(base, optinNext);       // tick between Hub reads while opt-in keys can help
-    await this.storage.setAlarm(now + Math.max(5000, base) * mult);
+    let next = now + Math.max(5000, base) * mult;
+    const al = this.nextAlertAt(now);                      // an alert due before the next read: wake up for it
+    if (al && al < next) next = Math.max(now + 250, al);
+    await this.storage.setAlarm(next);
   }
 
   /* ---- STORED-KEY CHAIN READS (away/opt-in addendum §2, contract §4) -------------------------------------------
@@ -845,6 +866,7 @@ export class ChainRoom {
   }
   broadcastDeltas() {
     const now = Date.now();
+    try { this.checkAlerts(now); } catch (e) { /* alerts must never break a sync */ }
     const base = Object.assign({
       t: "sync", now, chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
@@ -866,6 +888,86 @@ export class ChainRoom {
     for (const [pid, c] of this.conns) { try { c.ws.send(s); } catch (e) { this.conns.delete(pid); } }
   }
   sendTo(ws, obj) { try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ } }
+
+  /* ---- HUB-SENT ALERTS (Nov 2026, user) ------------------------------------------------------------------------
+   * One "lap" = one chain count: when the count goes up (a hit landed) every stage is armed again.
+   *   timer   stage 1..3 at config top/rest/third seconds left - stage 1 to the member who's UP only when
+   *           firstAlertPrimaryOnly, else (and stages 2..3) to everyone in the queue who can act
+   *   up      "you're up" - once, to the member who becomes UP
+   *   backup  to the BACKUP when no hit has landed config.handoffSeconds after `turn.since`
+   * Nothing below minChain. Paused (held, not dropped) while anyone's "I'm hitting" flag is on - when it runs out
+   * without a hit, the alerts that came due are sent at once. Away / can't-attack members get no timer alerts.
+   * Message: {t:"alert", kind:"timer"|"up"|"backup"|"test", stage, seconds (threshold), remaining_ms, expires_at,
+   *           chain, now, paused?:false} - sent only to the members it's for (sync devices: held for their next sync).
+   * ------------------------------------------------------------------------------------------------------------- */
+  alertStages() {
+    const c = this.mem.config || CW_DEFAULT_CONFIG;
+    return [Number(c.topAlertSeconds), Number(c.restAlertSeconds), Number(c.thirdAlertSeconds)]
+      .map((v, i) => ({ stage: i + 1, sec: Math.floor(v) || 0 })).filter((x) => x.sec > 0).sort((a, b) => b.sec - a.sec);
+  }
+  alertPausedBy(now) {
+    const q = Object.values(this.mem.queue).find((x) => x.hitting_until > now);
+    return q ? { pid: q.pid, name: q.name, until: q.hitting_until } : null;
+  }
+  alertLap() {
+    const c = this.mem.chain, cur = (c && c.current) || 0;
+    if (!this.mem.alertLap || this.mem.alertLap.count !== cur) this.mem.alertLap = { count: cur, sent: [], backup: false };
+    return this.mem.alertLap;
+  }
+  // when the next alert is due (ms) - so the alarm wakes up exactly then; null = nothing pending
+  nextAlertAt(now) {
+    const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
+    if (!c || !(c.current > 0) || !c.expires_at || c.current < (Number(cfg.minChain) || 0)) return null;
+    const p = this.alertPausedBy(now);
+    if (p) return p.until + 50;                            // resume check when the "I'm hitting" flag runs out
+    const lap = this.alertLap();
+    let t = null;
+    for (const s of this.alertStages()) if (!lap.sent.includes(s.stage)) { const at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS; if (t == null || at < t) t = at; }
+    const ex = this.extras(), turn = ex.turn;
+    if (turn && turn.backup && !lap.backup) { const at = turn.since + (Number(cfg.handoffSeconds) || 120) * 1000; if (t == null || at < t) t = at; }
+    return t != null && t < c.expires_at ? Math.max(t, now) : null;
+  }
+  async ensureAlertAlarm() {
+    const at = this.nextAlertAt(Date.now());
+    if (at == null) return;
+    const cur = await this.storage.getAlarm();
+    if (cur == null || at < cur) await this.storage.setAlarm(Math.max(Date.now() + 100, at));
+  }
+  sendAlert(pids, msg) {
+    for (const pid of new Set(pids)) if (pid) this.notify(Number(pid), Object.assign({ t: "alert" }, msg));
+  }
+  checkAlerts(now) {
+    const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
+    if (!c || !(c.current > 0) || !c.expires_at) return;
+    const ex = this.extras(), turn = ex.turn;
+    // "you're up" - once per change of who's up (also below minChain: it costs nothing and helps a chain start)
+    if (turn && turn.up && this.mem.alertUpSent !== turn.up) {
+      this.mem.alertUpSent = turn.up;
+      this.sendAlert([turn.up], { kind: "up", stage: 0, seconds: 0, chain: c.current, expires_at: c.expires_at,
+        remaining_ms: c.expires_at - now, reason: turn.reason, now });
+    }
+    if (c.current < (Number(cfg.minChain) || 0) || c.expires_at <= now) return;
+    if (this.alertPausedBy(now)) return;                   // "I'm hitting": held until a hit lands or it runs out
+    const lap = this.alertLap(), left = c.expires_at - now;
+    // who a timer alert goes to: queued members who can act (not away, not in hospital / jail / flying)
+    const able = this.orderedQueue().filter((x) => x.can_hit && !x.away).map((x) => x.pid);
+    for (const s of this.alertStages()) {
+      if (lap.sent.includes(s.stage) || left > s.sec * 1000 + ALERT_EARLY_MS) continue;
+      lap.sent.push(s.stage);
+      // the most urgent stage reached wins if several came due at once (e.g. after a pause) - only that one is sent
+      const due = this.alertStages().filter((x) => !lap.sent.includes(x.stage) && left <= x.sec * 1000 + ALERT_EARLY_MS);
+      if (due.length) continue;
+      const first = s.stage === this.alertStages()[0].stage;
+      const to = first && cfg.firstAlertPrimaryOnly && turn && turn.up ? [turn.up] : able;
+      this.sendAlert(to, { kind: "timer", stage: s.stage, seconds: s.sec, chain: c.current, expires_at: c.expires_at,
+        remaining_ms: left, now });
+    }
+    if (turn && turn.backup && !lap.backup && now >= turn.since + (Number(cfg.handoffSeconds) || 120) * 1000) {
+      lap.backup = true;
+      this.sendAlert([turn.backup], { kind: "backup", stage: 0, seconds: Number(cfg.handoffSeconds) || 120, chain: c.current,
+        expires_at: c.expires_at, remaining_ms: left, up: turn.up, now });
+    }
+  }
 
   /* ---- turn / bonus / runway / cooldown (Nov 2026, user) - carried in every state + sync --------------------
    * turn    {up, backup, since, reason}: `up` = who should hit next (#1 who can attack; the assigned bonus hitter
@@ -908,6 +1010,8 @@ export class ChainRoom {
       runway: { banked_hits: banked, regen_per_hour: regen, hits_to_bonus: toBonus, bonus_reachable: banked >= toBonus,
                 hours: regen >= MIN_PACE_HITS_PER_HOUR ? null : Math.round(banked / (MIN_PACE_HITS_PER_HOUR - regen) * 10) / 10 },
       cooldown: this.coolingDown(now) ? { until: c.cooldown_until } : null,
+      // alerts paused by "I'm hitting" {pid, name, until} or null
+      alerts_paused: this.alertPausedBy(now),
     };
   }
 
