@@ -1054,6 +1054,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.last_runs = await ocLastRuns(env, envName, c.rotate).catch(() => ({}));   // for the page's Auto-build (rotation mix rule)
       c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
       c.reconfigured = ((await ocSnapGet(env, "hub", "plan:reconfigured").catch(() => null)) || {}).data || null;   // last reconfigure
+      c.auto_run = Number(((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).as_of) || null;     // last automatic run (ms)
       return Response.json(c, H); }
     const {results} = await env.OC_DB.prepare("SELECT c.player_id, c.name, c.roles, c.ts, t.t AS rt FROM oc_cpr c LEFT JOIN oc_cpr_t t " +
       "ON t.env = c.env AND t.faction_id = c.faction_id AND t.player_id = c.player_id WHERE c.env = ? AND c.faction_id = ?")
@@ -1119,7 +1120,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            queueHours: n(v.queueHours, 0, 168, 12),    // queue members whose current crime is ready within this many hours
            // AUTOMATIC (Nov 2026): the Hub keeps the live plan up to date every 3 minutes (default on); off = the plan
            // only changes when a leader deploys one
-           auto: v.auto !== false};
+           auto: v.auto !== false,
+           // AUTOMATIC TIMER (Nov 2026): how often the Hub re-plans, in minutes - 3 (the Worker timer's own beat) to 60
+           autoMinutes: Math.round(n(v.autoMinutes, 3, 60, 3))};
     } else {
       if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
       v = {teams: ocCleanTeams(v.teams)};
@@ -1597,7 +1600,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12, auto: true};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3};
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
@@ -1645,6 +1648,13 @@ async function ocAutoPlan(env, crimes, now) {
   // AUTOMATIC off (OC Management setting): the Hub leaves the deployed plan exactly as leaders deployed it
   // (the last stats - pay per day, items - stay as they were, so the script keeps showing them)
   if (opts.auto === false) return;
+  // AUTOMATIC TIMER: the Worker's timer beats every 3 minutes (the crimes feed is still read every beat); the plan is
+  // only rebuilt when opts.autoMinutes have passed since the last automatic run (plan:stats is written every run)
+  const every = Math.max(3, Math.min(60, Number(opts.autoMinutes) || 3)) * 60000;
+  if (every > 180000) {
+    const last = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
+    if (last && now - Number(last.as_of) < every - 30000) return;
+  }
   const [ros, catS, sumS, priS] = await Promise.all([ocSnapGet(env, "prod", "roster"), ocSnapGet(env, "prod", "catalog"),
                                                      ocSnapGet(env, "prod", "summaries"), ocSnapGet(env, "prod", "prices")]);
   const members = (ros && ros.data) || null;
