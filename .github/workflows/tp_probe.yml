@@ -1,0 +1,16 @@
+name: tornprobability probe (temporary)
+on: workflow_dispatch
+permissions: {contents: read}
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          B=https://tornprobability.com:3000
+          echo "== spec"; curl -s -m 20 $B/api-docs/swagger-ui-init.js | python3 -c "
+          import sys,re,json
+          s=sys.stdin.read(); m=re.search(r'\"swaggerDoc\":\s*(\{.*?\})\s*,\s*\"customOptions\"', s, re.S)
+          d=json.loads(m.group(1)) if m else None
+          print(json.dumps(d, indent=1)[:9000] if d else s[:3000])"
+          echo "== scenarios"; curl -s -m 20 $B/api/GetSupportedScenarios | head -c 1500; echo
+          echo "== weights (Stage Fright)"; curl -s -m 20 $B/api/GetRoleWeights | python3 -c "import sys,json;d=json.load(sys.stdin);print(json.dumps(d.get('StageFright'))); print(len(d),'crimes')"
