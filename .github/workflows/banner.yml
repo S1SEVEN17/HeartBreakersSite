@@ -133,6 +133,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TORN_API_KEY: ${{ secrets.TORN_API_KEY }}      # -> Worker secret HUB_TORN_KEY (OC data feed pull)
           DISCORD_WEBHOOK_CHAINS: ${{ secrets.DISCORD_WEBHOOK_CHAINS }}   # -> Worker secret CW_DISCORD_WEBHOOK (chain watch shift pings)
+          TP_API_KEY: ${{ secrets.TP_API_KEY }}      # -> Worker secret TP_API_KEY (tornprobability.com CalculateSuccess; optional)
         run: tools/deploy_site.sh
 
       - name: Save site fingerprint

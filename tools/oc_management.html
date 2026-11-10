@@ -241,7 +241,31 @@ function candidates(crime, pos) {
 }
 const rolesOf = crime => ((CFG.catalog[crime] || {}).roles || []);
 const diffOf = crime => (CFG.catalog[crime] || {}).difficulty;
-const teamAvg = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); return r.length ? r.reduce((a, x) => a + x.rate, 0) / r.length : null; };
+// ROLE WEIGHTS (Nov 2026, tornprobability.com via the Hub - config.json weights): team success = the WEIGHTED average
+// of its members' rates, the same as the planner (gate/oc_planner.js wOf). No weights for a crime = plain average.
+const tpK = v => String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+function roleW(crime, label) {
+  const W = D.config.weights; if (!W) return 1;
+  const e = Object.entries(W).find(([k]) => tpK(k) === tpK(crime)); if (!e) return 1;
+  const m = {}; Object.entries(e[1] || {}).forEach(([r, v]) => { m[tpK(r)] = Math.max(0, Number(v) || 0); });
+  const look = l => { const k = tpK(l); return m[k] ?? (/\d+$/.test(k) ? m[k.replace(/\d+$/, "")] : undefined); };   // "Enforcer #1" = "Enforcer"
+  const roles = rolesOf(crime), all = roles.map(look);
+  if (!roles.length || all.some(v => v == null)) return 1;
+  const mean = all.reduce((a, v) => a + v, 0) / all.length;
+  return mean > 0 ? (look(label) ?? mean) / mean : 1;
+}
+const teamAvg = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); if (!r.length) return null;
+  const ws = r.reduce((a, x) => a + roleW(t.crime, x.position), 0); return ws > 0 ? r.reduce((a, x) => a + x.rate * roleW(t.crime, x.position), 0) / ws : null; };
+// the calculated success chance (tornprobability.com CalculateSuccess, worked out by the Hub for full teams) or null
+function teamSuccess(t) {
+  const N = D.config.tp_names, S = D.config.success; if (!N || !S) return null;
+  const e = Object.entries(N).find(([k]) => tpK(k) === tpK(t.crime)); if (!e) return null;
+  const ps = Object.keys(e[1]).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))).map(p => tpK(e[1][p]));
+  const same = (pos, k) => { const q = tpK(pos); return q === k || q.replace(/\d+$/, "") === k; };
+  const vals = ps.map(k => { const r = t.roles.find(x => same(x.position, k)); return r && r.pid != null && r.rate != null ? Math.round(r.rate) : null; });
+  if (vals.some(v => v == null)) return null;
+  const h = S[e[0] + "|" + vals.join(",")]; return h ? Math.round(h.s * 1000) / 10 : null;
+}
 const teamMin = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); return r.length ? Math.min(...r.map(x => x.rate)) : null; };
 const usedIds = (except) => { const s = new Set(); BOARD.teams.forEach(t => { if (t === except) return; t.roles.forEach(r => { if (r.pid != null) s.add(+r.pid); }); }); return s; };
 const uid = () => "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
@@ -410,7 +434,7 @@ function autoBuild() {
   const r = ocPlan({crimes: D.feed || [], prev: keep, fresh: true, catalog: CFG.catalog, members: CFG.members,
     rotate: new Set(D.config.rotate || []), lastRuns, delays: D.config.delays || {},
     opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),
-    payOf: crime => valueOf(crime), budgetMs: 900});
+    payOf: crime => valueOf(crime), budgetMs: 900, weights: D.config.weights || null});
   BOARD.teams = r.teams;
   saveBoard();
   const busy = busyMap(), busyN = Object.keys(CFG.members).filter(p => busy[p]).length, total = Object.keys(CFG.members).length;
@@ -739,7 +763,7 @@ function drawDeployed() {
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
-      <span class="sr ${col(av)}">${av == null ? "-" : Math.round(av) + "%"}</span></div>
+      <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       ${t.kind === "live" ? "" : spawnHtml(sm && sm.get(t.id))}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");

@@ -196,6 +196,10 @@ jobs:
               if t.get('crime_id'): b[0] += 1; b[2].add(t['crime_id'])
               else: b[1] += 1
           dup = any(len(v[2]) != v[0] for v in by.values())
+          import time
+          w = d.get('weights_at'); tw = [t.get('success_weighted') for t in d.get('teams') or [] if t.get('success_weighted') is not None]
+          print('weights:', ('fetched %.1f h ago' % ((time.time()*1000 - w) / 3600e3)) if w else 'none yet', '| teams with weighted success:', len(tw),
+                '| with calculated success:', sum(1 for t in d.get('teams') or [] if t.get('success')))
           print('binding:', '; '.join('%s live %d spawn %d' % (k, v[0], v[1]) for k, v in sorted(by.items())), '| shared ids:', dup)
           PY
       - name: Chain Watch check (status codes + counts only)

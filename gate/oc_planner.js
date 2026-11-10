@@ -52,6 +52,11 @@
 //   MIX: best rates win, but a pool member who sat out the latest completed run gets priority, so nobody who
 //   qualifies sits out two runs in a row. While no instance is recruiting, pool members get normal crimes.
 //   fresh     true = ignore prev (except locked teams) - the page's "Auto-build" from scratch
+//   weights   ROLE WEIGHTS (Nov 2026, tornprobability.com GetRoleWeights): {CrimeKey: {RoleKey: weight}} - how much each
+//             role's pass rate moves the crime's success. Team success = the WEIGHTED average of its members' rates
+//             (each role's weight / the crime's mean weight), used for the target, the expected pay and every fill.
+//             Keys are matched letters-and-digits only, case-insensitive ("Stage Fright"/"StageFright",
+//             "Muscle #1"/"Muscle1"). A crime with no weights falls back to the plain average.
 //   reshuffle true = RECONFIGURE (Nov 2026, the user's rule): someone took a slot that was reserved for another member,
 //             so every RESERVATION is planned again from scratch for the most efficient placement - members already
 //             in crimes, leaders' replacements and 🔒 locked teams stay; open-slot reservations, queued members and
@@ -68,6 +73,24 @@ export function ocPlan(X) {
   const rolesOf = n => (cat[n] || {}).roles || [];
   const diffOf = n => (cat[n] || {}).difficulty ?? null;
   const rateOf = (pid, crime, label) => X.rateOf(pid, crime, label);
+  // ---- role weights (normalised so a crime's mean role weight = 1; missing = 1 = plain average) ----
+  const wkey = v => String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const WT = {};
+  Object.keys(X.weights || {}).forEach(c => { const m = {}; Object.keys(X.weights[c] || {}).forEach(r => { m[wkey(r)] = Number(X.weights[c][r]) || 0; }); WT[wkey(c)] = m; });
+  const wCache = new Map();
+  const wOf = (crime, label) => {
+    const k = crime + "|" + label; if (wCache.has(k)) return wCache.get(k);
+    const m = WT[wkey(crime)], roles = rolesOf(crime);
+    let w = 1;
+    if (m && roles.length) {
+      // exact role name, else without a trailing number ("Enforcer #1" -> "Enforcer")
+      const raw = l => { const k = wkey(l); let v = m[k]; if (v == null && /\d+$/.test(k)) v = m[k.replace(/\d+$/, "")]; return v == null ? null : Math.max(0, v); };
+      const all = roles.map(raw);
+      if (all.every(v => v != null)) { const mean = all.reduce((a, v) => a + v, 0) / all.length; w = mean > 0 ? (raw(label) ?? mean) / mean : 1; }
+    }
+    wCache.set(k, w); return w;
+  };
+  const wSum = (crime, roles) => roles.reduce((a, r) => a + (r.rate || 0) * wOf(crime, r.position), 0);
   const clock = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const t0 = clock();
 
@@ -129,8 +152,10 @@ export function ocPlan(X) {
   const delayHrs = pid => { const d = (X.delays || {})[String(pid)]; return d && d.hrs ? d.hrs / Math.max(1, d.runs || 0, d.n || 0) : 0; };
   const delayCost = (pid, crime) => { const h = delayHrs(pid); if (!h) return 0; const v = X.payOf(crime);
     return v && v.days ? (v.pot / v.days) * h / (24 * v.days) : 0; };
-  const avgOf = roles => { const r = roles.filter(x => x.pid != null && x.rate != null); return r.length ? r.reduce((a, x) => a + x.rate, 0) / r.length : null; };
-  const expPay = t => { const a = avgOf(t.roles); return a == null ? 0 : payDay(t.crime) * a / 100; };
+  // team success = the WEIGHTED average of the members' rates (role weights above)
+  const avgOf = (roles, crime) => { const r = roles.filter(x => x.pid != null && x.rate != null); if (!r.length) return null;
+    const ws = r.reduce((a, x) => a + wOf(crime, x.position), 0); return ws > 0 ? wSum(crime, r) / ws : null; };
+  const expPay = t => { const a = avgOf(t.roles, t.crime); return a == null ? 0 : payDay(t.crime) * a / 100; };
 
   // ---- 1. keep what's still valid ----
   const teams = [], assigned = new Set();                  // pids planned somewhere (not counting `existing`)
@@ -200,14 +225,16 @@ export function ocPlan(X) {
 
   // ---- B&B: best members for some open slots of one crime ----
   //   slots [{label}], fixedSum / n = the rates already in the crime; pool = [{pid, soft}] (soft = in a spawn team)
-  //   maximise sum(score) with (fixedSum + sum rates) / n >= target; each rate >= minRole, not capped
+  //   maximise sum(score) with (fixedSum + sum WEIGHTED rates) / n >= target; each rate >= minRole, not capped
+  //   (fixedSum = the weighted sum of the rates already in it; scores get the weighted rate - a member's share of
+  //   the team's success, so a strong member counts for more in a heavy role)
   function fillSlots(crime, slots, fixedSum, n, pool, scoreOf, nodeCap) {
     const need = O.target * n - fixedSum - 1e-9;
     const cands = slots.map(s => {
-      const all = [];
+      const all = [], w = wOf(crime, s.label);
       pool.forEach(p => { const r = rateOf(p.pid, crime, s.label); if (r && r.rate >= O.minRole && !capped(p.pid, crime, r.rate))
-        all.push({pid: p.pid, rate: r.rate, src: r.src, sc: scoreOf(p, r.rate)}); });
-      const bySc = all.slice().sort((a, b) => b.sc - a.sc), byRt = all.slice().sort((a, b) => b.rate - a.rate);
+        all.push({pid: p.pid, rate: r.rate, wr: r.rate * w, src: r.src, sc: scoreOf(p, r.rate * w)}); });
+      const bySc = all.slice().sort((a, b) => b.sc - a.sc), byRt = all.slice().sort((a, b) => b.wr - a.wr);
       const lim = slots.length >= 5 ? 7 : 10, out = [], seen = new Set();
       for (const x of bySc.slice(0, lim).concat(byRt.slice(0, lim))) if (!seen.has(x.pid)) { seen.add(x.pid); out.push(x); }
       return out.sort((a, b) => b.sc - a.sc);
@@ -215,7 +242,7 @@ export function ocPlan(X) {
     if (cands.some(c => !c.length)) return null;
     const order = slots.map((_, i) => i).sort((a, b) => cands[a].length - cands[b].length);
     const maxSc = order.map((_, j) => order.slice(j).reduce((s, i) => s + cands[i][0].sc, 0));
-    const maxRt = order.map((_, j) => order.slice(j).reduce((s, i) => s + Math.max(...cands[i].map(c => c.rate)), 0));
+    const maxRt = order.map((_, j) => order.slice(j).reduce((s, i) => s + Math.max(...cands[i].map(c => c.wr)), 0));
     let best = null, bestSc = -Infinity, nodes = 0;
     const pick = new Array(slots.length), used = new Set();
     (function dfs(j, sc, rt) {
@@ -223,7 +250,7 @@ export function ocPlan(X) {
       if (sc + (maxSc[j] || 0) <= bestSc || rt + (maxRt[j] || 0) < need) return;
       if (j === order.length) { bestSc = sc; best = pick.slice(); return; }
       const i = order[j];
-      for (const c of cands[i]) { if (used.has(c.pid)) continue; used.add(c.pid); pick[i] = c; dfs(j + 1, sc + c.sc, rt + c.rate); used.delete(c.pid); }
+      for (const c of cands[i]) { if (used.has(c.pid)) continue; used.add(c.pid); pick[i] = c; dfs(j + 1, sc + c.sc, rt + c.wr); used.delete(c.pid); }
     })(0, 0, 0);
     return best;
   }
@@ -297,7 +324,7 @@ export function ocPlan(X) {
     if (!open.length) continue;
     const fixed = roles.filter(r => r.pid != null);
     if (fixed.some(r => r.rate == null)) { skip(c, "a member in it has no known rate"); continue; }         // someone in it has no known rate - can't judge the success
-    const fixedSum = fixed.reduce((a, r) => a + r.rate, 0);
+    const fixedSum = wSum(c.name, fixed);                   // weighted (role weights)
     const pool = freePool().concat(softPool());
     const k = payDay(c.name) / roles.length / 100;     // a member's pay per day here = k x their rate
     let best = null;
@@ -341,7 +368,7 @@ export function ocPlan(X) {
     if (t.kind !== "spawn" || t.lock) continue;
     const open = t.roles.map((r, i) => r.pid == null ? i : -1).filter(i => i >= 0);
     if (!open.length) continue;
-    const fixed = t.roles.filter(r => r.pid != null), fixedSum = fixed.reduce((a, r) => a + (r.rate || 0), 0);
+    const fixed = t.roles.filter(r => r.pid != null), fixedSum = wSum(t.crime, fixed);
     const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p)).map(pid => ({pid, soft: false}));
     const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => rate - (busy.has(p.pid) ? 3 : 0) - delayCost(p.pid, t.crime) / Math.max(1e-9, payDay(t.crime) / t.roles.length / 100), 20000);   // delay cost in rate points
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
@@ -350,7 +377,7 @@ export function ocPlan(X) {
   for (let i = teams.length - 1; i >= 0; i--) {
     const t = teams[i];
     if (t.kind !== "spawn" || t.lock) continue;
-    const a = avgOf(t.roles);
+    const a = avgOf(t.roles, t.crime);
     if (t.roles.some(r => r.pid == null) || a == null || a < O.target) { t.roles.forEach(r => { if (r.pid != null) assigned.delete(Number(r.pid)); }); teams.splice(i, 1); }
   }
   // new spawn teams: the pay-per-day optimizer (as the page's Auto-build did) over crime TYPES not recruiting now
@@ -395,12 +422,12 @@ export function ocPlan(X) {
   // step 2 of the spawn optimizer (changes made + free in place): steal / backfill, then upgrades
   function improve(made, free, order) {
     const where = () => { const m = new Map(); made.forEach((t, ti) => t.roles.forEach((r, ri) => m.set(r.pid, [ti, ri]))); return m; };
-    const teamPayWith = (t, ri, rate) => { const rr = t.roles.map((x, i) => i === ri ? {pid: 1, rate} : x); return {crime: t.crime, roles: rr}; };
+    const teamPayWith = (t, ri, rate) => { const rr = t.roles.map((x, i) => i === ri ? {position: x.position, pid: 1, rate} : x); return {crime: t.crime, roles: rr}; };
     const backfill = (t, ri, not) => {
       let b = null;
       free.forEach(pid => { if (not && not.has(pid)) return;
         const r = rateOf(pid, t.crime, t.roles[ri].position); if (!r || r.rate < O.minRole || capped(pid, t.crime, r.rate)) return;
-        const tt = teamPayWith(t, ri, r.rate); if (avgOf(tt.roles) < O.target) return;
+        const tt = teamPayWith(t, ri, r.rate); if (avgOf(tt.roles, tt.crime) < O.target) return;
         const pay = expPay(tt); if (!b || pay > b.pay) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay}; });
       return b;
     };
@@ -426,7 +453,7 @@ export function ocPlan(X) {
         }
         const before = snap.reduce((s, roles, i) => s + expPay({crime: made[i].crime, roles}), 0);
         const after = made.reduce((s, t) => s + expPay(t), 0) + expPay(nt);
-        if (ok && made.every(t => avgOf(t.roles) >= O.target) && after + 1 > before) { made.push(nt); changed = true; }
+        if (ok && made.every(t => avgOf(t.roles, t.crime) >= O.target) && after + 1 > before) { made.push(nt); changed = true; }
         else { made.forEach((t, i) => t.roles = snap[i]); free.clear(); freeSnap.forEach(p => free.add(p)); }
       }
       made.forEach(t => t.roles.forEach((r, ri) => {
@@ -448,7 +475,7 @@ export function ocPlan(X) {
   const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
   const changed = sig(teams) !== sig(X.prev || []);
   return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
-    pay: teams.reduce((s, t) => s + (avgOf(t.roles) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
+    pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
     rotation: Object.keys(poolOf).map(n => ({crime: n, pool: poolOf[n].size, seats: rolesOf(n).length,
       max: Math.max(1, Math.floor(poolOf[n].size / (rolesOf(n).length || 1))),
       live: [...ROT_ON].filter(id => (inst.get(id) || {}).name === n).length}))}};

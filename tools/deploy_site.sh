@@ -70,3 +70,14 @@ if [ -n "${DISCORD_WEBHOOK_CHAINS:-}" ]; then
   fi
   rm -f "$RUNNER_TEMP/secret.log"
 fi
+
+# ---- tornprobability.com (Nov 2026): the CalculateSuccess key (X-API-KEY), optional - without it the Hub uses the
+# role weights only. Copied from the GitHub secret TP_API_KEY into a Worker secret (stdin, yes/no only).
+if [ -n "${TP_API_KEY:-}" ]; then
+  if printf '%s' "$TP_API_KEY" | tr -d '[:space:]' | npx wrangler secret put TP_API_KEY -c "$CFG" > "$RUNNER_TEMP/secret.log" 2>&1; then
+    echo "tornprobability key: set"
+  else
+    echo "::warning::tornprobability key: couldn't set the Worker secret (success chances stay off)"
+  fi
+  rm -f "$RUNNER_TEMP/secret.log"
+fi

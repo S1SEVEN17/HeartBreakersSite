@@ -272,6 +272,8 @@ export default {
     ctx.waitUntil(Promise.all(runs.map(([wf, inputs]) => dispatch(env, wf, inputs))));
     // Chain timer opt-ins -> the Chain Watch room every 15 minutes (leavers / deleted keys drop out; 1 GitHub read)
     if (!event.cron.startsWith("7,")) ctx.waitUntil(cwOptinSync(env, null));
+    // role weights + role names (tornprobability.com) - once a day
+    if (!event.cron.startsWith("7,")) ctx.waitUntil(tpWeightsRefresh(env).catch(() => {}));
   },
 };
 
@@ -972,6 +974,8 @@ async function ocPlanObj(env, envName, id) {
   const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
   const payDay = (ps && ps.data && ps.data.pay_day) || {}, payMin = (ps && ps.data && ps.data.pay_day_min) || {}, items = (ps && ps.data && ps.data.items) || {};
   const rotSet = new Set(cfg.rotate || []);
+  const tpRow = await ocSnapGet(env, "hub", "tp:weights").catch(() => null), tpWts = (tpRow && tpRow.data) || null;
+  const tpNames = tpWts ? tpWts.names : null, tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
   const teams = teamsCfg.length ? teamsCfg.map(t0 => {
     const b = bound.get(t0.id);
     const t = b ? Object.assign({}, t0, {kind: "live", crime_id: b.c.id}) : t0;
@@ -983,6 +987,10 @@ async function ocPlanObj(env, envName, id) {
             pay_day_min: payMin[t.crime] ?? null,             // ... the worst recorded - shown as a range "min-max"
             pay_day_max: payDay[t.crime] ?? null,
             rotation: rotSet.has(t.crime),                    // a crime leaders rotate
+            // ROLE WEIGHTS (Nov 2026): the team's weighted success (role-weighted average of its members' rates) and,
+            // when the Hub has a tornprobability.com key, the calculated success chance (null = not available)
+            success_weighted: tpWeighted(tpWts, t.crime, (t.roles || []).filter(r => r.pid != null && r.rate != null)),
+            success: tpSucc ? tpSuccessOf(tpSucc, tpNames, t.crime, t.roles || []) : null,
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position),
               // bound team: the exact slot in ITS instance (the seat they're in, or the open seat for their role)
@@ -1014,7 +1022,8 @@ async function ocPlanObj(env, envName, id) {
       sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null}))
       .sort((a, b) => (a.sharing - b.sharing) || a.name.localeCompare(b.name));
   }
-  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing};
+  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing,
+          weights_at: tpRow ? Number(tpRow.as_of) || null : null};   // when the role weights were last fetched (null = none yet)
 }
 function ocSpawnState(crimes, snap, crime, position) {
   if (!crimes) return {recruiting: null, role_open: null, spawn_needed: null};
@@ -1055,6 +1064,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
       c.reconfigured = ((await ocSnapGet(env, "hub", "plan:reconfigured").catch(() => null)) || {}).data || null;   // last reconfigure
       c.auto_run = Number(((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).as_of) || null;     // last automatic run (ms)
+      const tpw = await ocSnapGet(env, "hub", "tp:weights").catch(() => null);
+      c.weights = (tpw && tpw.data && tpw.data.weights) || null;                                                     // role weights
+      c.tp_names = (tpw && tpw.data && tpw.data.names) || null;                                                      // role order
+      c.success = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;               // team success (CalculateSuccess)
       return Response.json(c, H); }
     const {results} = await env.OC_DB.prepare("SELECT c.player_id, c.name, c.roles, c.ts, t.t AS rt FROM oc_cpr c LEFT JOIN oc_cpr_t t " +
       "ON t.env = c.env AND t.faction_id = c.faction_id AND t.player_id = c.player_id WHERE c.env = ? AND c.faction_id = ?")
@@ -1722,7 +1735,9 @@ async function ocAutoPlan(env, crimes, now) {
                   took: {pid: took, name: members[String(took)] || ""}});
     }
   }
-  const r = ocPlan({crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []),
+  let tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null);   // role weights (tornprobability.com)
+  if (!tpW) { await tpWeightsRefresh(env, true).catch(() => {}); tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null); }   // first run
+  const r = ocPlan({crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                     rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now,
                     reshuffle: moves.length > 0});
   if (moves.length) {
@@ -1745,6 +1760,7 @@ async function ocAutoPlan(env, crimes, now) {
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
     .bind(now, JSON.stringify(r.stats)).run().catch(() => {});
+  await tpSuccessForTeams(env, r.teams).catch(() => {});   // exact success for full teams (needs TP_API_KEY)
   if (!r.changed) return;
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
@@ -1906,4 +1922,81 @@ async function ocCprTimes(env, envName, pid, keys, now) {
     await env.OC_DB.prepare("INSERT INTO oc_cpr_t (env, faction_id, player_id, t) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET t = excluded.t").bind(envName, Number(env.FACTION_ID), Number(pid), JSON.stringify(t)).run();
   } catch (e) { /* the member's last-share time is the fallback */ }
+}
+
+
+// ======================================================================================================
+// ROLE WEIGHTS + SUCCESS (Nov 2026, the user: tornprobability.com). Free endpoints, once a day:
+//   GetRoleWeights {CrimeKey: {RoleKey: weight}} - how much each role moves the crime's success (the planner's
+//   weighted team success), GetRoleNames {"Crime": {P1: "Role 1", ...}} - the role order CalculateSuccess expects.
+// CalculateSuccess (POST {scenario, parameters: [rate per role, P1..Pn]}, header X-API-KEY) needs a key: Worker
+// secret TP_API_KEY (GitHub secret TP_API_KEY). Without it the exact success chance is simply not shown.
+// Stored in oc_snap hub 'tp:weights' {weights, names} and 'tp:success' {"Crime|r1,r2,...": {s, f, at}}.
+// ======================================================================================================
+const TP_BASE = "https://tornprobability.com:3000/api";
+const tpKey = v => String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+async function tpWeightsRefresh(env, force) {
+  if (!env.OC_DB) return;
+  const cur = await ocSnapGet(env, "hub", "tp:weights").catch(() => null);
+  if (!force && cur && Date.now() - Number(cur.as_of) < 24 * 3600e3) return;
+  const [w, n] = await Promise.all([fetch(TP_BASE + "/GetRoleWeights", {headers: {Accept: "application/json"}}).then(r => r.json()),
+                                    fetch(TP_BASE + "/GetRoleNames", {headers: {Accept: "application/json"}}).then(r => r.json())]);
+  if (!w || typeof w !== "object" || !Object.keys(w).length) return;
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'tp:weights', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+    .bind(Date.now(), JSON.stringify({weights: w, names: n && typeof n === "object" ? n : null})).run();
+}
+// weighted success of the filled roles (%, 1 decimal) - same normalisation as the planner (mean role weight = 1)
+function tpWeighted(tp, crime, roles) {
+  if (!roles.length) return null;
+  const m = tp && tp.weights ? Object.entries(tp.weights).find(([k]) => tpKey(k) === tpKey(crime)) : null;
+  const wm = {}; if (m) Object.entries(m[1] || {}).forEach(([r, v]) => { wm[tpKey(r)] = Math.max(0, Number(v) || 0); });
+  let a = 0, ws = 0;
+  const look = l => { const k = tpKey(l); return wm[k] ?? (/\d+$/.test(k) ? wm[k.replace(/\d+$/, "")] : undefined); };
+  roles.forEach(r => { const w = m ? (look(r.position) ?? 1) : 1; a += w * r.rate; ws += w; });
+  return ws > 0 ? Math.round(a / ws * 10) / 10 : null;
+}
+// the parameter order for CalculateSuccess: the crime's roles P1..Pn (GetRoleNames) matched to our slot labels
+function tpOrder(names, crime, roles) {
+  const e = names ? Object.entries(names).find(([k]) => tpKey(k) === tpKey(crime)) : null;
+  if (!e) return null;
+  const ps = Object.keys(e[1]).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))).map(p => tpKey(e[1][p]));
+  const same = (pos, k) => { const q = tpKey(pos); return q === k || q.replace(/\d+$/, "") === k; };   // "Enforcer #1" = "Enforcer"
+  const out = ps.map(k => { const r = roles.find(x => same(x.position, k)); return r && r.pid != null && r.rate != null ? Math.round(r.rate) : null; });
+  return out.every(v => v != null) ? {scenario: e[0], params: out} : null;
+}
+function tpSuccessOf(succ, names, crime, roles) {
+  const o = tpOrder(names, crime, roles); if (!o) return null;
+  const h = succ[o.scenario + "|" + o.params.join(",")];
+  return h ? {chance: Math.round(h.s * 1000) / 10, fail: h.f != null ? Math.round(h.f * 1000) / 10 : null} : null;
+}
+// exact success for every FULL team in the plan (one call per new crime + rates combination, at most 20 a run)
+async function tpSuccessForTeams(env, teams) {
+  if (!env.TP_API_KEY || !env.OC_DB) return;
+  const tp = ((await ocSnapGet(env, "hub", "tp:weights").catch(() => null)) || {}).data;
+  if (!tp || !tp.names) return;
+  const cur = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || {};
+  let calls = 0, added = 0;
+  for (const t of teams || []) {
+    const o = tpOrder(tp.names, t.crime, t.roles || []); if (!o) continue;
+    const k = o.scenario + "|" + o.params.join(",");
+    if (cur[k] || calls >= 20) continue;
+    calls++;
+    try {
+      // tornprobability.com CalculateSuccess - the Hub's key in the header (never in the address)
+      const r = await fetch(TP_BASE + "/CalculateSuccess", {method: "POST",
+        headers: {"Content-Type": "application/json", Accept: "application/json", "X-API-KEY": String(env.TP_API_KEY).trim()},
+        body: JSON.stringify({scenario: o.scenario, parameters: o.params})});
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (typeof d.successChance === "number") { cur[k] = {s: d.successChance, f: d.failureChance ?? null, at: Date.now()}; added++; }
+    } catch (e) { /* next run */ }
+  }
+  if (!added) return;
+  // keep the newest 2000 combinations
+  const keys = Object.keys(cur).sort((a, b) => cur[b].at - cur[a].at).slice(0, 2000), keep = {};
+  keys.forEach(k => { keep[k] = cur[k]; });
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'tp:success', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+    .bind(Date.now(), JSON.stringify(keep)).run();
 }
