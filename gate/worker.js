@@ -245,6 +245,7 @@ export default {
     if (area === "m" && rest === "cw/reading") return cwReading(env, req, who);
     // Chain Watching Schedule (members sign up for chain watch shifts; leaders can remove anyone's)
     if (area === "m" && (rest === "cw/schedule.json" || rest === "cw/schedule")) return cwSchedule(env, req, url, who);
+    if (area === "m" && rest === "cw/live.json") return cwLive(env);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
@@ -1829,10 +1830,11 @@ async function cwReading(env, req, who) {
 
 // ======================================================================================================
 // CHAIN WATCHING SCHEDULE (Nov 2026, user; contract §10). Members Hub page chainwatch-schedule.html.
-//   GET    /m/cw/schedule.json -> {now, shifts: [...] (now -> 7 days), me: {pid, name, leader, mine, stats}}
-//   POST   /m/cw/schedule {start (epoch s, on the hour), hours 1-6, role primary|backup|backup2}
+//   GET    /m/cw/schedule.json -> {now, slot_s 1800, ahead_s 48 h, shifts: [...] (now -> 48 h), me: {pid, name, leader, mine, stats}}
+//   POST   /m/cw/schedule {start (epoch s, on :00/:30), minutes 30-360 (or hours 0.5-6), role primary|backup|backup2}
+//   GET    /m/cw/live.json -> the room's live board (chain, turn, bonus, runway, queue)
 //   DELETE /m/cw/schedule?id=  (your own; leaders: anyone's)
-// Rules: whole hours (TCT); up to 7 days ahead; each role once per hour; ONE registration per member until it ends.
+// Rules: 30-minute slots (TCT), 30 min - 6 h; up to 48 hours ahead; each role once per slot; ONE registration per member.
 // The energy check (cwEnergyCover) uses the member's last Chain Watch script report, else their war-readiness reading
 // (opt-in) - stored with the shift as est_hits / need_hits. No Torn call here.
 // ======================================================================================================
@@ -1841,6 +1843,15 @@ async function cwMyStats(env, pid) {
   let st = null;
   try { if (env.CHAINROOM) st = (await (await cwStub(env).fetch(`https://do/laststats?pid=${pid}`)).json()).stats || null; } catch (e) {}
   return cwStatsFor(env, pid, st);
+}
+// GET /m/cw/live.json (signed-in members): the room's live board for the schedule page - chain count / timer /
+// cooldown, who's up, bonus, runway and the queue. No Torn call (the room's own reading); polled every 30 s.
+async function cwLive(env) {
+  if (!env.CHAINROOM) return Response.json({ok: false, error: "Chain Watch isn't set up yet"}, {status: 503});
+  try {
+    const d = await (await cwStub(env).fetch("https://do/board")).json();
+    return Response.json(d, {headers: {"Cache-Control": "no-store"}});
+  } catch (e) { return Response.json({ok: false, error: "Chain Watch room unavailable"}, {status: 502}); }
 }
 async function cwPokeRoom(env) {   // tell every connected script about the change
   try { if (env.CHAINROOM) await cwStub(env).fetch("https://do/schedule-changed", {method: "POST"}); } catch (e) {}
@@ -1851,12 +1862,12 @@ async function cwSchedule(env, req, url, who) {
   const nowS = Math.floor(Date.now() / 1000), pid = Number(who.id);
   if (req.method === "GET") {
     const shifts = await cwShiftRows(env);
-    return Response.json({ok: true, now: nowS, roles: CW_ROLES, max_hours: CW_MAX_HOURS, ahead_s: CW_AHEAD_S, shifts,
+    return Response.json({ok: true, now: nowS, roles: CW_ROLES, max_hours: CW_MAX_HOURS, ahead_s: CW_AHEAD_S, slot_s: 1800, shifts,
       me: {pid, name: who.name, leader: !!who.leader, mine: shifts.find(x => Number(x.pid) === pid) || null, stats: await cwMyStats(env, pid)}}, H);
   }
   if (req.method === "POST") {
     let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }
-    const r = await cwShiftAdd(env, pid, who.name, b.start, b.hours, b.role, await cwMyStats(env, pid));
+    const r = await cwShiftAdd(env, pid, who.name, b.start, b.hours, b.role, await cwMyStats(env, pid), b.minutes);
     if (!r.ok) return Response.json({ok: false, error: r.error}, {status: r.status || 400});
     await cwPokeRoom(env);
     return Response.json({ok: true, cover: r.cover}, H);

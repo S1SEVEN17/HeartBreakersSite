@@ -229,3 +229,4 @@ jobs:
           echo "homepage reading without sign-in: $(curl -s -o /dev/null -w '%{http_code}' -X POST $B/m/cw/reading -H 'Content-Type: application/json' -d '{"current":10,"timeout":200}')"
           # Chain Watching Schedule: signed-in members only (expect 401 here)
           echo "schedule without sign-in: $(curl -s -o /dev/null -w '%{http_code}' $B/m/cw/schedule.json)"
+          echo "live board without sign-in: $(curl -s -o /dev/null -w '%{http_code}' $B/m/cw/live.json)"

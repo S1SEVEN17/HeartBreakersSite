@@ -300,6 +300,7 @@ export class ChainRoom {
       await this.save();
       return Response.json({ ok: true, count: Object.keys(next).length });
     }
+    if (path === "/board") return this.handleBoard();   // members' schedule page: live chain + queue (no Torn call)
     if (path === "/laststats") {   // schedule page: one member's last stats report (worker.js, signed-in member's own)
       const pid = Number(new URL(request.url).searchParams.get("pid"));
       return Response.json({ ok: true, stats: this.mem.lastStats[pid] || null });
@@ -467,7 +468,7 @@ export class ChainRoom {
     let r;
     if (t === "shift_add") {
       r = await cwShiftAdd(this.env, pid, m.name || (this.conns.get(pid) || {}).name || "Unknown", msg.start, msg.hours, msg.role,
-                           await cwStatsFor(this.env, pid, this.mem.lastStats[pid]));
+                           await cwStatsFor(this.env, pid, this.mem.lastStats[pid]), msg.minutes);
     } else if (t === "shift_remove") {
       if (!m.is_leader) r = { ok: false, error: "Only leaders can remove other members' shifts." };
       else r = await cwShiftDelete(this.env, msg.id, pid, true);
@@ -487,7 +488,9 @@ export class ChainRoom {
     const rows = this.sched || [];
     const mine = rows.find((x) => Number(x.pid) === Number(pid));
     return {
-      shifts: rows.map((x) => ({ id: x.id, pid: x.pid, name: x.name, start: x.start_at, hours: Math.round((x.end_at - x.start_at) / 3600),
+      shifts: rows.map((x) => ({ id: x.id, pid: x.pid, name: x.name, start: x.start_at,
+                                hours: Math.round((x.end_at - x.start_at) / 1800) / 2,   // half-hour steps (0.5, 1, 1.5 ...)
+                                minutes: Math.round((x.end_at - x.start_at) / 60),
                                 role: x.role, est_hits: x.est_hits, need_hits: x.need_hits })),
       mine: mine ? mine.id : null,
     };
@@ -629,7 +632,7 @@ export class ChainRoom {
 
     // ---- housekeeping ----
     // schedule: drop ended shifts once an hour passes (shifts end on whole hours) - 1 D1 read
-    if (this.sched && Math.floor(now / 3600000) !== Math.floor(this.schedAt / 3600000)) await this.reloadSchedule(true);
+    if (this.sched && Math.floor(now / 1800000) !== Math.floor(this.schedAt / 1800000)) await this.reloadSchedule(true);   // shifts end on :00 / :30
     this.expireRetals(now);
     this.enforceQueueRules(now);
     this.maybeIdleWipe(now);
@@ -1103,6 +1106,22 @@ export class ChainRoom {
   }
 
   /* ---- /status : counts only (Leaders' settings page + the OC check workflow) ---- */
+  // /board (Nov 10 2026, user: "more information on the chain watching schedule page - who's currently scheduled,
+  // who's next, stats"): what the room already holds, for the members' schedule page. Same data every script in the
+  // queue already gets over the socket (names, energy estimate, can-attack) - no keys, no full stats, no Torn call.
+  handleBoard() {
+    const now = Date.now();
+    this.pruneConns(now);
+    const c = this.mem.chain || null, x = this.extras();
+    const queue = this.orderedQueue().map((q) => ({ pid: q.pid, name: q.name, energy: q.energy, can_hit: q.can_hit,
+      away: q.away, hits: q.hits, connected: this.conns.has(q.pid) || !!this.mem.syncSeen[q.pid] }));
+    return Response.json({ ok: true, now,
+      chain: c ? { current: Number(c.current) || 0, max: Number(c.max) || 0, expires_at: c.expires_at || 0, as_of: c.as_of || 0,
+                   cooldown_until: this.coolingDown(now) ? c.cooldown_until : 0 } : null,
+      turn: x.turn, bonus: x.bonus, runway: x.runway, alerts_paused: x.alerts_paused,
+      queue, connected: this.conns.size });
+  }
+
   async handleStatus(detail) {
     const now = Date.now();
     this.pruneConns(now);
@@ -1208,7 +1227,9 @@ export function cwEnergyCover(s, startS, endS) {
  * shift_remove, handled by the ChainRoom). D1 table cw_shift. No Torn call.
  * ========================================================================== */
 export const CW_ROLES = { primary: "Primary", backup: "Backup", backup2: "2nd backup" };
-export const CW_MAX_HOURS = 6, CW_AHEAD_S = 7 * 86400;
+// Nov 10 2026 (user): the calendar is at most 48 hours ahead, in 30-minute slots (shifts start on :00 / :30 TCT and
+// last 30 min - 6 h in 30-minute steps)
+export const CW_MAX_HOURS = 6, CW_AHEAD_S = 48 * 3600, CW_SLOT_S = 1800;
 
 // every shift that hasn't ended, inside the 7-day window
 export async function cwShiftRows(env) {
@@ -1238,16 +1259,19 @@ export async function cwStatsFor(env, pid, scriptStats) {
 }
 
 // sign up -> {ok, cover} or {ok:false, error, status}
-export async function cwShiftAdd(env, pid, name, start, hours, role, stats) {
+// hours may be in half-hour steps (0.5 ... 6); `minutes` (30 ... 360) is accepted too
+export async function cwShiftAdd(env, pid, name, start, hours, role, stats, minutes) {
   const nowS = Math.floor(Date.now() / 1000);
-  start = Math.floor(Number(start)); hours = Math.floor(Number(hours)); role = String(role || "");
+  start = Math.floor(Number(start)); role = String(role || "");
+  const slots = minutes != null && minutes !== "" ? Math.round(Number(minutes) / 30) : Math.round(Number(hours) * 2);   // 30-minute slots
   const no = (error, status) => ({ ok: false, error, status: status || 400 });
   if (!CW_ROLES[role]) return no("Pick a role: Primary, Backup or 2nd backup.");
-  if (!(hours >= 1 && hours <= CW_MAX_HOURS)) return no(`Shifts are 1-${CW_MAX_HOURS} hours.`);
-  if (!Number.isFinite(start) || start % 3600) return no("Shifts start on the hour (TCT).");
-  const end = start + hours * 3600;
+  if (!(slots >= 1 && slots <= CW_MAX_HOURS * 2) || Math.abs((minutes != null && minutes !== "" ? Number(minutes) / 30 : Number(hours) * 2) - slots) > 1e-6)
+    return no(`Shifts are 30 minutes to ${CW_MAX_HOURS} hours, in 30-minute steps.`);
+  if (!Number.isFinite(start) || start % CW_SLOT_S) return no("Shifts start on the hour or half hour (TCT).");
+  const end = start + slots * CW_SLOT_S;
   if (end <= nowS) return no("That time has already passed.");
-  if (start < nowS - 3600 || start > nowS + CW_AHEAD_S) return no("Pick a time within the next 7 days.");
+  if (start < nowS - CW_SLOT_S || start > nowS + CW_AHEAD_S) return no("Pick a time within the next 48 hours.");
   const mine = await env.OC_DB.prepare("SELECT id FROM cw_shift WHERE pid = ? AND end_at > ?").bind(pid, nowS).first();
   if (mine) return no("You already have a chain watch shift - one at a time. Cancel it first to pick another.", 409);
   const clash = await env.OC_DB.prepare("SELECT name, start_at, end_at FROM cw_shift WHERE role = ? AND start_at < ? AND end_at > ? LIMIT 1")
@@ -1255,7 +1279,7 @@ export async function cwShiftAdd(env, pid, name, start, hours, role, stats) {
   if (clash) return no(`${CW_ROLES[role]} is already taken by ${clash.name} for part of that time.`, 409);
   const cover = cwEnergyCover(stats, start, end);
   await env.OC_DB.prepare("INSERT INTO cw_shift (pid, name, role, start_at, end_at, created, est_hits, need_hits) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(pid, name, role, start, end, Date.now(), cover ? cover.hits : null, cover ? cover.need : hours * 12).run();
+    .bind(pid, name, role, start, end, Date.now(), cover ? cover.hits : null, cover ? cover.need : Math.ceil((end - start) / 300)).run();
   return { ok: true, cover };
 }
 

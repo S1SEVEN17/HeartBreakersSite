@@ -5,12 +5,14 @@
 <title>Chain Watching Schedule - Heart Breakers</title>
 <!--
   CHAIN WATCHING SCHEDULE (members' folder: chainwatch-schedule.html, published by generate.py write_optin_pages).
-  Members sign up for chain watch shifts: whole hours in TCT, 1-6 hours, up to 7 days ahead, as Primary, Backup or
-  2nd backup (each role once per hour). ONE registration per member until it ends. The Hub pings everyone in the
+  Members sign up for chain watch shifts: 30-minute slots in TCT (start on :00 / :30), 30 min - 6 h long, up to
+  48 hours ahead (Nov 10 2026, user), as Primary, Backup or 2nd backup (each role once per slot). ONE registration per member until it ends. The Hub pings everyone in the
   chains Discord channel when their shift starts (worker.js cwShiftAlerts). Leaders can remove anyone's shift.
   Energy check: can you cover the shift ALONE (1 hit every 5 min)? From your last Chain Watch script report, else
   your War readiness reading - same formula as the Hub (gate/chainroom.js cwEnergyCover; keep the two in step).
-  Data: /m/cw/schedule.json (GET), /m/cw/schedule (POST {start, hours, role} / DELETE ?id=). No Torn call here.
+  Data: /m/cw/schedule.json (GET), /m/cw/schedule (POST {start, minutes, role} / DELETE ?id=), and the live board
+  /m/cw/live.json (chain, who's up, queue - the Chain Watch room's own reading, every 30 s). No Torn call here.
+  "Right now" / "Coming up" / "Stats" cards (Nov 10 2026, user: who's on, who's next, stats).
   Placeholders: __CONFIG__ ({gate}), __MENU__.
 -->
 <style>
@@ -33,35 +35,51 @@ button.x{background:none;border:1px solid #3a1414;color:#f08a84;padding:4px 10px
 .chk small{color:var(--sub);display:block;margin-top:3px}
 .day{margin-top:12px}.day h3{font-size:13px;color:#fff;margin:0 0 6px;display:flex;justify-content:space-between}
 .day h3 span{color:var(--sub);font-weight:400}
-.gw{position:relative;padding-top:16px}
+/* each TCT day = two half-day bars (00-12, 12-24) of 24 thirty-minute cells - stays tappable on phones */
+.gw{position:relative;padding-top:16px;margin-top:2px}
 .grid{display:grid;grid-template-columns:repeat(24,1fr);gap:2px}
-/* "Current" marker (Nov 2026): a yellow-orange vertical line through today's bar at the current TCT time + label */
+/* "Current" marker (Nov 2026): a yellow-orange vertical line through the bar at the current TCT time + label */
 .cur{position:absolute;top:0;bottom:-2px;width:2px;background:#f5a623;box-shadow:0 0 4px #f5a623;pointer-events:none;transform:translateX(-1px);z-index:2}
 .cur b{position:absolute;top:0;left:50%;transform:translateX(-50%);font-size:10px;line-height:14px;font-weight:700;color:#100a0b;background:#f5a623;border-radius:4px;padding:0 4px;white-space:nowrap}
 .cur.r b{left:auto;right:0;transform:none}.cur.l b{left:0;transform:none}
 .pill.c{background:#f5a623;color:#100a0b;font-weight:700}
-.grid i{height:22px;border-radius:3px;background:#22151a;cursor:pointer;position:relative}
+.grid i{height:24px;border-radius:3px;background:#22151a;cursor:pointer;position:relative}
 .grid i.p{background:#2e6b2e}.grid i.b{background:#6b5a20}.grid i.past{opacity:.35;cursor:default}
+.grid i.out{background:#140c0d;cursor:default;opacity:.5}
 .grid i.sel{outline:2px solid var(--gold)}
-.hrs{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:9px;color:var(--sub);text-align:center;margin-top:2px}
+.hrs{display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:9px;color:var(--sub);text-align:left;margin-top:2px}
 .list{margin-top:6px;display:grid;gap:5px}
 .sh{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:7px 10px;font-size:13px}
 .sh.me{border-color:var(--gold)}.sh .t{color:#fff;font-weight:600;min-width:108px}.sh .n{flex:1;min-width:0}
+.sh .r{min-width:84px;color:var(--sub);font-size:12px}
 .pill{font-size:11px;padding:2px 8px;border-radius:8px;background:#2a1416;color:var(--sub);white-space:nowrap}
 .pill.p{background:#173117;color:#9be29b}.pill.b{background:#3a2e12;color:var(--gold)}.pill.w{background:#3a1414;color:#f08a84}
 .key{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--sub);margin-top:6px}
 .key i{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-2px;margin-right:4px}
 .note{color:var(--sub);font-size:12px;margin-top:8px}
+.live{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:10px}
+.live div{background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:8px 10px}
+.live b{display:block;color:#fff;font-size:18px}.live span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.live b.bad{color:var(--red)}.live b.warn{color:#f5a623}.live b.good{color:var(--green)}
+.sec{font-size:12px;color:var(--sub);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 5px}
+.open{color:#f08a84}
+.bar{height:8px;background:#22151a;border-radius:5px;overflow:hidden;margin-top:5px}.bar i{display:block;height:100%;background:#2e6b2e}
 </style></head><body>
 __MENU__
 <h1>Chain Watching Schedule</h1>
 <div class="sub">Sign up to watch the chain. Times are TCT (Torn time). The Hub pings you in Discord when your shift starts.</div>
 
+<div class="card" id="nowCard"><h2>Right now</h2><div id="nowBody">Loading…</div></div>
+
 <div class="card" id="mine"><h2>Your shift</h2><div id="mineBody">Loading…</div></div>
 
+<div class="card"><h2>Coming up</h2><div id="nextBody">Loading…</div></div>
+
+<div class="card"><h2>Stats · next 48 hours</h2><div id="statsBody">Loading…</div></div>
+
 <div class="card">
-  <h2>Schedule · next 7 days</h2>
-  <div class="key"><span><i style="background:#2e6b2e"></i>Primary covered</span><span><i style="background:#6b5a20"></i>Backup only</span><span><i style="background:#22151a"></i>Open</span><span>Tap an hour to pick it.</span></div>
+  <h2>Schedule · next 48 hours</h2>
+  <div class="key"><span><i style="background:#2e6b2e"></i>Primary covered</span><span><i style="background:#6b5a20"></i>Backup only</span><span><i style="background:#22151a"></i>Open</span><span>Each block is 30 minutes. Tap one to pick it.</span></div>
   <div id="days"></div>
 </div>
 
@@ -69,13 +87,21 @@ __MENU__
 const CONF = __CONFIG__;
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-let D = null, pick = null, touched = false;   // schedule data; the hour picked on the grid (epoch s); form in use
+let D = null, L = null, pick = null, touched = false;   // schedule data; live board; the slot picked on the grid (epoch s); form in use
+const SLOT = 1800;                                      // 30-minute slots (the Hub sends slot_s too)
 const ROLE_CLASS = {primary: "p", backup: "b", backup2: "b"};
-const hh = t => String(new Date(t * 1000).getUTCHours()).padStart(2, "0") + ":00";
+const pad = n => String(n).padStart(2, "0");
+const hh = t => { const d = new Date(t * 1000); return pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()); };
 const dayKey = t => Math.floor(t / 86400);
 const dayName = t => new Date(t * 1000).toLocaleDateString(undefined, {weekday: "short", month: "short", day: "numeric", timeZone: "UTC"});
 const local = t => new Date(t * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
 const ago = ms => { const m = Math.round(ms / 60000); return m < 60 ? m + " min" : m < 1440 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " d"; };
+const span = s => { s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h}h${m ? " " + m + "m" : ""}` : m ? `${m}m` : `${s}s`; };
+const len = m => m % 60 ? (m >= 60 ? `${Math.floor(m / 60)}h 30m` : "30 min") : `${m / 60} h`;
+const nowS = () => Math.floor(Date.now() / 1000);
+const prof = (pid, name) => `<a href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(pid)}" target="_blank" rel="noopener" style="color:#fff">${esc(name)}</a>`;
+const winEnd = () => D.now + D.ahead_s;                 // the last bookable moment (48 h ahead)
 
 // Same formula as gate/chainroom.js cwEnergyCover - can you cover start..end ALONE (1 hit every 5 min)?
 function cover(s, startS, endS) {
@@ -99,93 +125,191 @@ function coverHtml(c, s) {
   return `<div class="chk ${ok ? "ok" : "warn"}">${ok ? "✅ <b>Enough energy to cover it alone</b>" : `⚠️ <b>Covers about ${c.hits} of ${c.need} hits alone</b> - fine with others hitting too, short if you're the only one`}`
     + ` (${c.hits} hits possible, 1 every 5 min needs ${c.need}).<small>Energy: ${parts}. From your ${s.src === "readiness" ? "War readiness reading" : "Chain Watch script report"} ${ago(Date.now() - Number(s.at))} ago; boosters not counted.</small></div>`;
 }
+const energyPill = x => x.est_hits == null ? `<span class="pill">energy ?</span>`
+  : x.need_hits && x.est_hits < x.need_hits ? `<span class="pill w" title="Their energy covers about ${x.est_hits} of ${x.need_hits} hits alone">⚠ ${x.est_hits}/${x.need_hits} hits</span>`
+  : `<span class="pill p">✓ energy</span>`;
+const onAt = t => D.shifts.filter(x => x.start_at <= t && x.end_at > t);
+
+/* ---- RIGHT NOW: live chain (room's reading) + who's on duty per the schedule + who's up in the queue ---- */
+function renderNow() {
+  if (!D) return;
+  const t = nowS(), duty = onAt(t), q = (L && L.queue) || [], qBy = {};
+  q.forEach((x, i) => qBy[x.pid] = Object.assign({pos: i + 1}, x));
+  let tiles = "";
+  if (L && L.ok) {
+    const c = L.chain, cur = c ? c.current : 0, left = c && cur > 0 && c.expires_at ? (c.expires_at - Date.now()) / 1000 : 0;
+    const cool = c && c.cooldown_until > Date.now() ? (c.cooldown_until - Date.now()) / 1000 : 0;
+    tiles += `<div><span>Chain</span><b>${cur ? cur.toLocaleString() : "—"}</b></div>`;
+    tiles += cur ? `<div><span>Timer</span><b class="${left < 60 ? "bad" : left < 120 ? "warn" : "good"}" id="liveTimer" data-exp="${c.expires_at}">${span(left)}</b></div>`
+      : `<div><span>${cool ? "Cooldown" : "Status"}</span><b>${cool ? span(cool) : "No chain"}</b></div>`;
+    if (cur && L.bonus) tiles += `<div><span>Next bonus</span><b>${L.bonus.next.toLocaleString()}</b><span style="text-transform:none">${L.bonus.next - cur} hits${L.bonus.name ? " · " + esc(L.bonus.name) : ""}</span></div>`;
+    tiles += `<div><span>In queue</span><b>${q.length}</b><span style="text-transform:none">${q.filter(x => x.can_hit && !x.away).length} can hit</span></div>`;
+    if (cur && L.runway) tiles += `<div><span>Banked hits</span><b>${L.runway.banked_hits}</b><span style="text-transform:none">${L.runway.hours != null ? "≈" + L.runway.hours + " h at 1 hit / 5 min" : "regen keeps up"}</span></div>`;
+  }
+  const nameOf = pid => (qBy[pid] || {}).name || pid;
+  let turn = "";
+  if (L && L.turn && L.turn.up) turn = `<div class="sec">Queue</div><div class="sh"><span class="r">Up now</span><span class="n">${prof(L.turn.up, nameOf(L.turn.up))}${L.turn.reason === "bonus" ? " (bonus hit)" : ""}</span>`
+    + (qBy[L.turn.up] && qBy[L.turn.up].energy != null ? `<span class="pill">${qBy[L.turn.up].energy} E</span>` : "") + `</div>`
+    + (L.turn.backup ? `<div class="sh"><span class="r">Backup</span><span class="n">${prof(L.turn.backup, nameOf(L.turn.backup))}</span>`
+      + (qBy[L.turn.backup] && qBy[L.turn.backup].energy != null ? `<span class="pill">${qBy[L.turn.backup].energy} E</span>` : "") + `</div>` : "");
+  if (L && L.alerts_paused) turn += `<div class="note">🔕 Alerts paused - ${esc(L.alerts_paused.name || "someone")} is hitting.</div>`;
+  // on duty: each role, from the schedule, with how they're doing in the live queue
+  const rows = Object.keys(D.roles).map(role => {
+    const x = duty.find(s => s.role === role);
+    if (!x) return `<div class="sh"><span class="r">${esc(D.roles[role])}</span><span class="n open">Open${role === "primary" ? " - nobody is watching" : ""}</span></div>`;
+    const lq = qBy[x.pid];
+    const live = !L ? "" : lq ? `<span class="pill ${lq.can_hit && !lq.away ? "p" : "w"}">#${lq.pos} in queue${lq.away ? " · away" : !lq.can_hit ? " · can't hit" : ""}</span>`
+      + (lq.energy != null ? `<span class="pill">${lq.energy} E</span>` : "") + (lq.connected ? "" : `<span class="pill w">script off</span>`)
+      : `<span class="pill w">not in queue</span>`;
+    return `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>`
+      + `<span class="pill">until ${hh(x.end_at)} · ${span(x.end_at - t)} left</span>${live}</div>`;
+  }).join("");
+  $("nowBody").innerHTML = (tiles ? `<div class="live">${tiles}</div>` : (L && !L.ok ? `<div class="note">Live chain info unavailable right now.</div>` : ""))
+    + `<div class="sec">On duty (schedule)</div><div class="list">${rows}</div>${turn}`;
+}
+
+/* ---- COMING UP: the next shift per role, the next hand-over and the next open Primary slot ---- */
+function renderNext() {
+  const t = nowS();
+  const rows = Object.keys(D.roles).map(role => {
+    const x = D.shifts.filter(s => s.role === role && s.start_at > t).sort((a, b) => a.start_at - b.start_at)[0];
+    return x ? `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>`
+      + `<span class="pill">${dayKey(x.start_at) === dayKey(t) ? "" : dayName(x.start_at) + " "}${hh(x.start_at)}–${hh(x.end_at)}</span><span class="pill c">in ${span(x.start_at - t)}</span>${energyPill(x)}</div>`
+      : `<div class="sh"><span class="r">${esc(D.roles[role])}</span><span class="n open">Nobody signed up</span></div>`;
+  }).join("");
+  // the next slot (from now) with no Primary, and how long that gap runs
+  const s0 = Math.floor(t / SLOT) * SLOT;
+  let gap = null, gapEnd = null;
+  for (let s = s0; s < winEnd(); s += SLOT) {
+    const has = onAt(Math.max(s, t)).some(x => x.role === "primary");
+    if (gap == null && !has) gap = s;
+    else if (gap != null && has) { gapEnd = s; break; }
+  }
+  const gapTxt = gap == null ? `<span style="color:var(--green)">Primary is covered for the whole 48 hours 🎉</span>`
+    : gap <= t ? `<span class="open">No Primary right now</span>${gapEnd ? ` - next one at ${hh(gapEnd)} TCT (in ${span(gapEnd - t)})` : " - none signed up in the next 48 hours"}`
+    : `Next open Primary slot: <b>${dayKey(gap) === dayKey(t) ? "" : dayName(gap) + " "}${hh(gap)} TCT</b> (in ${span(gap - t)})${gapEnd ? `, open until ${hh(gapEnd)}` : ", open from then on"}`;
+  $("nextBody").innerHTML = `<div class="list">${rows}</div><div class="chk">${gapTxt}</div>`;
+}
+
+/* ---- STATS: next 48 hours, in 30-minute slots ---- */
+function renderStats() {
+  const t = nowS(), s0 = Math.floor(t / SLOT) * SLOT;
+  let slots = 0, prim = 0, any = 0, full = 0;
+  for (let s = s0; s < s0 + D.ahead_s; s += SLOT) {           // exactly 96 half-hour slots
+    const on = onAt(Math.max(s, t)); slots++;
+    if (on.some(x => x.role === "primary")) prim++;
+    if (on.length) any++;
+    if (Object.keys(D.roles).every(r => on.some(x => x.role === r))) full++;
+  }
+  const pct = n => slots ? Math.round(n / slots * 100) : 0;
+  const people = new Set(D.shifts.map(x => x.pid)).size;
+  const short = D.shifts.filter(x => x.est_hits != null && x.need_hits && x.est_hits < x.need_hits).length;
+  const unknown = D.shifts.filter(x => x.est_hits == null).length;
+  const hrs = role => D.shifts.filter(x => x.role === role).reduce((a, x) => a + (Math.min(x.end_at, winEnd()) - Math.max(x.start_at, t)), 0) / 3600;
+  const bar = (label, n) => `<div style="margin-top:8px;font-size:13px">${label}: <b style="color:#fff">${pct(n)}%</b> <span style="color:var(--sub)">(${(n / 2).toFixed(1).replace(/\.0$/, "")} of ${(slots / 2).toFixed(1).replace(/\.0$/, "")} h)</span><div class="bar"><i style="width:${pct(n)}%"></i></div></div>`;
+  $("statsBody").innerHTML = `<div class="live">`
+    + `<div><span>Shifts</span><b>${D.shifts.length}</b></div><div><span>Watchers</span><b>${people}</b></div>`
+    + `<div><span>Primary open</span><b class="${slots - prim ? "warn" : "good"}">${span((slots - prim) * SLOT)}</b></div>`
+    + `<div><span>Short on energy</span><b class="${short ? "warn" : "good"}">${short}</b>${unknown ? `<span style="text-transform:none">${unknown} unknown</span>` : ""}</div></div>`
+    + bar("Primary covered", prim) + bar("Anyone watching", any) + bar("All three roles", full)
+    + `<div class="note">Hours signed up: ${Object.keys(D.roles).map(r => `${esc(D.roles[r])} ${hrs(r).toFixed(1).replace(/\.0$/, "")} h`).join(" · ")}.</div>`;
+}
 
 function render() {
   const now = D.now, me = D.me, mine = me.mine;
   // ---- your shift / sign-up form ----
   if (mine) {
-    const s = me.stats;
+    const s = me.stats, live = mine.start_at <= nowS();
     $("mineBody").innerHTML = `<div class="sh me"><span class="t">${dayName(mine.start_at)} ${hh(mine.start_at)}–${hh(mine.end_at)}</span>`
-      + `<span class="pill ${ROLE_CLASS[mine.role]}">${esc(D.roles[mine.role])}</span><span class="n">${local(mine.start_at)}–${local(mine.end_at)} your time</span>`
+      + `<span class="pill ${ROLE_CLASS[mine.role]}">${esc(D.roles[mine.role])}</span>`
+      + `<span class="pill c">${live ? "On now · " + span(mine.end_at - nowS()) + " left" : "Starts in " + span(mine.start_at - nowS())}</span>`
+      + `<span class="n">${local(mine.start_at)}–${local(mine.end_at)} your time</span>`
       + `<button class="x" data-del="${mine.id}">Cancel</button></div>` + coverHtml(cover(s, mine.start_at, mine.end_at), s)
       + `<div class="note">One shift at a time - cancel this one to pick another.</div>`;
   } else {
-    const days = [], start0 = Math.floor(now / 3600) * 3600;
-    for (let d = 0; d <= 7; d++) { const t = (dayKey(now) + d) * 86400; if (t < now + D.ahead_s) days.push(t); }
-    const p = pick || start0;
+    const days = [];
+    for (let k = dayKey(now); k * 86400 < winEnd(); k++) days.push(k * 86400);
+    const p = pick || Math.floor(now / SLOT) * SLOT;
     $("mineBody").innerHTML = `<div class="f">`
       + `<label>Day (TCT)<select id="fDay">${days.map(t => `<option value="${t}"${dayKey(p) === dayKey(t) ? " selected" : ""}>${dayName(t)}</option>`).join("")}</select></label>`
-      + `<label>Start (TCT)<select id="fHour"></select></label>`
-      + `<label>Hours<select id="fHrs">${Array.from({length: D.max_hours}, (_, i) => `<option>${i + 1}</option>`).join("")}</select></label>`
+      + `<label>Start (TCT)<select id="fStart"></select></label>`
+      + `<label>Length<select id="fLen">${Array.from({length: D.max_hours * 2}, (_, i) => (i + 1) * 30).map(m => `<option value="${m}"${m === 60 ? " selected" : ""}>${len(m)}</option>`).join("")}</select></label>`
       + `<label>Role<select id="fRole">${Object.keys(D.roles).map(k => `<option value="${k}">${esc(D.roles[k])}</option>`).join("")}</select></label></div>`
       + `<div id="fChk"></div><div class="acts"><button id="fGo" type="button">Sign up</button></div><div class="msg" id="fMsg"></div>`;
-    const hours = () => {
+    const starts = () => {
       const day = Number($("fDay").value), cur = pick && dayKey(pick) === dayKey(day) ? pick : null;
-      $("fHour").innerHTML = Array.from({length: 24}, (_, h) => day + h * 3600).filter(t => t + 3600 > now)
+      $("fStart").innerHTML = Array.from({length: 48}, (_, i) => day + i * SLOT).filter(t => t + SLOT > now && t <= winEnd())
         .map(t => `<option value="${t}"${cur === t ? " selected" : ""}>${hh(t)} (${local(t)} yours)</option>`).join("");
       preview();
     };
-    $("fDay").onchange = () => { pick = null; touched = true; hours(); };
-    ["fHour", "fHrs", "fRole"].forEach(id => $(id).onchange = () => { touched = true; preview(); });
+    $("fDay").onchange = () => { pick = null; touched = true; starts(); };
+    ["fStart", "fLen", "fRole"].forEach(id => $(id).onchange = () => { touched = true; preview(); });
     $("fGo").onclick = signUp;
-    hours();
+    starts();
   }
-  // ---- 7-day grid + shift list ----
-  const byDay = {};
-  for (let d = 0; d <= 7; d++) byDay[dayKey(now) + d] = [];
-  D.shifts.forEach(x => { for (let t = x.start_at; t < x.end_at; t += 3600) if (byDay[dayKey(t)]) byDay[dayKey(t)].push(x); });
-  $("days").innerHTML = Object.keys(byDay).map(Number).filter(k => k * 86400 < now + D.ahead_s).map(k => {
-    const base = k * 86400, cells = [];
-    for (let h = 0; h < 24; h++) {
-      const t = base + h * 3600, on = D.shifts.filter(x => x.start_at <= t && x.end_at > t);
-      const cls = on.some(x => x.role === "primary") ? "p" : on.length ? "b" : "";
-      const tip = on.length ? on.map(x => `${D.roles[x.role]}: ${x.name}`).join(" · ") : "Open";
-      const isNow = t <= now && now < t + 3600;
-      cells.push(`<i class="${cls}${t + 3600 <= now ? " past" : ""}${pick === t ? " sel" : ""}" data-t="${t}" title="${hh(t)} TCT${isNow ? " (current)" : ""} - ${esc(tip)}"></i>`);
+  renderNow(); renderNext(); renderStats();
+  // ---- 48-hour grid (30-minute cells, two half-day bars per TCT day) + shift list ----
+  const out = [];
+  for (let k = dayKey(now); k * 86400 < winEnd(); k++) {
+    const base = k * 86400, bars = [];
+    for (let half = 0; half < 2; half++) {
+      const hb = base + half * 43200;
+      if (hb + 43200 <= now) continue;                                                 // the half of today already gone
+      if (hb >= winEnd()) continue;                                                    // past the 48-hour window
+      const cells = [];
+      for (let i = 0; i < 24; i++) {
+        const t = hb + i * SLOT, on = onAt(t), outW = t > winEnd();
+        const cls = outW ? "out" : on.some(x => x.role === "primary") ? "p" : on.length ? "b" : "";
+        const tip = outW ? "Beyond 48 hours" : on.length ? on.map(x => `${D.roles[x.role]}: ${x.name}`).join(" · ") : "Open";
+        const isNow = t <= now && now < t + SLOT;
+        cells.push(`<i class="${cls}${t + SLOT <= now ? " past" : ""}${pick === t ? " sel" : ""}" data-t="${t}" title="${hh(t)}–${hh(t + SLOT)} TCT${isNow ? " (current)" : ""} - ${esc(tip)}"></i>`);
+      }
+      const hasNow = hb <= now && now < hb + 43200;
+      bars.push(`<div class="gw"${hasNow ? ` data-hb="${hb}"` : ""}>${hasNow ? `<div class="cur" id="curMark"><b>Current</b></div>` : ""}<div class="grid">${cells.join("")}</div></div>`
+        + `<div class="hrs">${Array.from({length: 24}, (_, i) => `<span>${i % 4 ? "" : pad(half * 12 + i / 2) + ":00"}</span>`).join("")}</div>`);
     }
-    const list = D.shifts.filter(x => dayKey(x.start_at) === k).map(x => {
-      const short = x.est_hits != null && x.need_hits && x.est_hits < x.need_hits;
+    if (!bars.length) continue;
+    const dayShifts = D.shifts.filter(x => dayKey(x.start_at) === k || (x.start_at < base && x.end_at > base && k === dayKey(now)));
+    const list = dayShifts.map(x => {
       const live = x.start_at <= now && now < x.end_at;
       return `<div class="sh${x.pid === me.pid ? " me" : ""}"><span class="t">${hh(x.start_at)}–${hh(x.end_at)}</span>`
         + (live ? `<span class="pill c">Current</span>` : "")
         + `<span class="pill ${ROLE_CLASS[x.role]}">${esc(D.roles[x.role])}</span>`
-        + `<span class="n"><a href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(x.pid)}" target="_blank" rel="noopener" style="color:#fff">${esc(x.name)}</a></span>`
-        + (x.est_hits == null ? `<span class="pill">energy ?</span>` : short ? `<span class="pill w" title="Their energy covers about ${x.est_hits} of ${x.need_hits} hits alone">⚠ ${x.est_hits}/${x.need_hits} hits</span>` : `<span class="pill p">✓ energy</span>`)
+        + `<span class="n">${prof(x.pid, x.name)}</span>` + energyPill(x)
         + (me.leader && x.pid !== me.pid ? `<button class="x" data-del="${x.id}" title="Remove (leaders)">Remove</button>` : "") + `</div>`;
     }).join("");
-    const today = k === dayKey(now);
-    return `<div class="day"><h3>${dayName(base)}${today ? " · today" : ""}<span>${byDay[k].length ? "" : "nobody yet"}</span></h3>`
-      + `<div class="gw"${today ? ` data-day="${base}"` : ""}>${today ? `<div class="cur" id="curMark"><b>Current</b></div>` : ""}<div class="grid">${cells.join("")}</div></div>`
-      + `<div class="hrs">${Array.from({length: 24}, (_, h) => `<span>${h % 3 ? "" : h}</span>`).join("")}</div><div class="list">${list}</div></div>`;
-  }).join("");
+    out.push(`<div class="day"><h3>${dayName(base)}${k === dayKey(now) ? " · today" : ""}<span>${dayShifts.length ? dayShifts.length + " shift" + (dayShifts.length > 1 ? "s" : "") : "nobody yet"}</span></h3>`
+      + bars.join("") + `<div class="list">${list}</div></div>`);
+  }
+  $("days").innerHTML = out.join("");
   placeCurrent();
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => del(Number(b.dataset.del)));
   document.querySelectorAll(".grid i[data-t]").forEach(c => c.onclick = () => {
     const t = Number(c.dataset.t);
-    if (t + 3600 <= D.now || D.me.mine) return;
+    if (t + SLOT <= D.now || t > winEnd() || D.me.mine) return;
     pick = t; touched = true; render(); $("mine").scrollIntoView({behavior: "smooth", block: "start"});
   });
 }
-// the "Current" marker: positioned at the current TCT time across today's 24-hour bar (moved every 30 s)
+// the "Current" marker: positioned at the current TCT time across the current half-day bar (moved every 30 s)
 function placeCurrent() {
   const m = $("curMark"); if (!m) return;
-  const base = Number(m.parentNode.dataset.day), t = Date.now() / 1000;
-  if (t >= base + 86400) { load(); return; }              // a new TCT day started - redraw the schedule
-  const pct = Math.max(0, Math.min(100, (t - base) / 864));
+  const hb = Number(m.parentNode.dataset.hb), t = Date.now() / 1000;
+  if (t >= hb + 43200) { load(); return; }                // the next half-day started - redraw the schedule
+  const pct = Math.max(0, Math.min(100, (t - hb) / 432));
   m.style.left = pct + "%";
   m.className = "cur" + (pct > 92 ? " r" : pct < 8 ? " l" : "");
   m.title = "Current time: " + new Date(t * 1000).toISOString().slice(11, 16) + " TCT";
 }
 function preview() {
-  const start = Number($("fHour").value), hrs = Number($("fHrs").value), role = $("fRole").value, end = start + hrs * 3600;
+  const start = Number($("fStart").value), mins = Number($("fLen").value), role = $("fRole").value, end = start + mins * 60;
   const clash = D.shifts.find(x => x.role === role && x.start_at < end && x.end_at > start);
   $("fChk").innerHTML = (clash ? `<div class="chk warn">⚠️ <b>${esc(D.roles[role])}</b> is already taken by ${esc(clash.name)} for part of that time (${hh(clash.start_at)}–${hh(clash.end_at)}).</div>` : "")
     + coverHtml(cover(D.me.stats, start, end), D.me.stats);
-  $("fGo").disabled = !!clash;
+  $("fGo").disabled = !!clash || !start;
 }
 function say(t, ok) { const m = $("fMsg"); if (m) { m.textContent = t; m.className = "msg " + (ok ? "ok" : "bad"); } }
 async function signUp() {
-  const body = {start: Number($("fHour").value), hours: Number($("fHrs").value), role: $("fRole").value};
+  const body = {start: Number($("fStart").value), minutes: Number($("fLen").value), role: $("fRole").value};
   $("fGo").disabled = true; say("Signing you up…", true);
   try {
     const r = await fetch("cw/schedule", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
@@ -212,9 +336,22 @@ async function load() {
     D = d; render();
   } catch (e) { $("mineBody").textContent = "Couldn't load the schedule: " + e.message; }
 }
-load();
-// pick up other members' sign-ups every 2 minutes while the page is visible (not while you're filling the form)
+// live board (chain, who's up, queue) - the Chain Watch room's own reading, no Torn call
+async function loadLive() {
+  try {
+    const r = await fetch("cw/live.json", {cache: "no-store", credentials: "same-origin"});
+    L = await r.json();
+  } catch (e) { L = {ok: false}; }
+  renderNow();
+}
+load().then(loadLive);
+// other members' sign-ups every 2 minutes (not while you're filling the form); live board every 30 s; timers every second
 setInterval(() => { if (!document.hidden && !touched) load(); }, 120000);
-setInterval(() => { if (!document.hidden) placeCurrent(); }, 30000);
+setInterval(() => { if (!document.hidden) { placeCurrent(); loadLive(); if (D) { renderNext(); renderStats(); } } }, 30000);
+setInterval(() => {
+  const el = $("liveTimer"); if (!el || document.hidden) return;
+  const left = (Number(el.dataset.exp) - Date.now()) / 1000;
+  el.textContent = span(left); el.className = left < 60 ? "bad" : left < 120 ? "warn" : "good";
+}, 1000);
 </script>
 </body></html>
