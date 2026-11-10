@@ -227,7 +227,8 @@ function rateOf(pid, crime, pos) {
   const k = rkey(crime, pos);
   for (const c of D.active) if (c.name === crime) for (const [p, ps, r] of c.slots || []) if (String(p) === String(pid) && baseRole(ps) === baseRole(pos) && r != null) return {rate: r, src: "live"};
   const s0 = D.rates[String(pid)], h0 = (CFG.hist[k] || {})[String(pid)];
-  const sh = s0 && s0.roles && s0.roles[k] != null ? {rate: s0.roles[k], src: "live", t: Number(s0.ts) || 0} : null;
+  // when THIS role's rate was read (rates.json t, Nov 2026), else the member's last share - the newest rate wins
+  const sh = s0 && s0.roles && s0.roles[k] != null ? {rate: s0.roles[k], src: "live", t: Number((s0.t || {})[k]) || Number(s0.ts) || 0} : null;
   const h = h0 ? {rate: h0[0], src: "history", t: (Number(h0[1]) || 0) * 1000} : null;   // history time is in seconds
   if (sh && h) return sh.t >= h.t ? sh : h;
   return sh || h;

@@ -74,3 +74,15 @@ CREATE TABLE IF NOT EXISTS cw_shift (
 );
 CREATE INDEX IF NOT EXISTS idx_cw_shift_time ON cw_shift (start_at, end_at);
 CREATE INDEX IF NOT EXISTS idx_cw_shift_pid ON cw_shift (pid, end_at);
+
+-- NEWEST RATE PER CRIME/ROLE (Nov 2026, the user's rule: only the newest rate for each crime/role counts). oc_cpr keeps
+-- ONE ts per member, so an old role looked as new as the last share. This keeps WHEN each role's rate was last read:
+--   t = JSON {"Crime|Role": ms}  (worker.js ocCprTimes; written by script shares and opt-in reads, read by the planner
+--   and OC Management to compare against history rates). Rows without a key fall back to oc_cpr.ts.
+CREATE TABLE IF NOT EXISTS oc_cpr_t (
+  env        TEXT    NOT NULL,
+  faction_id INTEGER NOT NULL,
+  player_id  INTEGER NOT NULL,
+  t          TEXT    NOT NULL,
+  PRIMARY KEY (env, faction_id, player_id)
+);

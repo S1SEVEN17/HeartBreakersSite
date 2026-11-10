@@ -430,8 +430,9 @@ const OC_OPTIN_PER_RUN = 10;
 const ocBaseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();   // "Muscle #2" -> "Muscle"
 const ocFb = x => String(x == null ? "" : x).replace(/[.$#\[\]/\x00-\x1f]/g, "_").trim();     // the script's fbKey
 async function ocCprDrop(env, id) {
-  if (env.OC_DB) await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
-    .bind(Number(env.FACTION_ID), Number(id)).run();
+  if (!env.OC_DB) return;
+  await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Number(env.FACTION_ID), Number(id)).run();
+  await env.OC_DB.prepare("DELETE FROM oc_cpr_t WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Number(env.FACTION_ID), Number(id)).run().catch(() => {});
 }
 // -> {roles: n} | {bad: true} (key gone) | {err}
 async function ocPullMember(env, id, name, key) {
@@ -456,6 +457,7 @@ async function ocPullMember(env, id, name, key) {
       "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
       "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
       .bind(Number(env.FACTION_ID), Number(id), String(name || "").slice(0, 40), JSON.stringify(Object.assign(old, roles)), Date.now()).run();
+    await ocCprTimes(env, "prod", Number(id), Object.keys(roles));    // these roles were read just now
     return {roles: n, changed};
   }
   return {roles: 0, changed: 0};
@@ -470,6 +472,7 @@ async function ocOptinPull(env, now, crimes) {
   if (roster && Object.keys(roster).length > 10) {
     const ids = Object.keys(roster).map(Number).filter(Boolean);
     await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
+    await env.OC_DB.prepare(`DELETE FROM oc_cpr_t WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run().catch(() => {});
   }
   const st0 = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
   const st = {seen: Array.isArray(st0.seen) ? st0.seen : [], pending: Array.isArray(st0.pending) ? st0.pending : []};
@@ -734,6 +737,7 @@ async function ocWrite(env, ctx, req, body, del) {
   const fid = Number(env.FACTION_ID);
   if (del) {
     await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = ? AND faction_id = ? AND player_id = ?").bind(body.env, fid, id.player_id).run();
+    await env.OC_DB.prepare("DELETE FROM oc_cpr_t WHERE env = ? AND faction_id = ? AND player_id = ?").bind(body.env, fid, id.player_id).run().catch(() => {});
     return ocJson({ok: true});
   }
   // roles: {"Crime|Role": integer 0-100}; anything else is refused (bad data never reaches the table)
@@ -754,10 +758,17 @@ async function ocWrite(env, ctx, req, body, del) {
   if (last && now - Number(last.ts) < OC_WRITE_GAP_MS) return ocJson({ok: true, throttled: true});
   // name: Torn's name for the key (the body's name is only a fallback) - nobody can label a row as someone else
   const name = String(id.name || body.name || "").slice(0, 40);
+  // NEWEST PER ROLE (Nov 2026): merged over what's stored - the roles in this share replace their old values, roles
+  // it doesn't include keep theirs (a share only covers the crimes the script could see) - and each shared role's
+  // time is recorded (oc_cpr_t), so only the newest rate for each crime/role ever counts.
+  const cur = await env.OC_DB.prepare("SELECT roles FROM oc_cpr WHERE env = ? AND faction_id = ? AND player_id = ?")
+    .bind(body.env, fid, id.player_id).first();
+  let old = {}; try { old = cur ? JSON.parse(cur.roles) || {} : {}; } catch (e) {}
   await env.OC_DB.prepare(
     "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES (?, ?, ?, ?, json(?), ?) " +
     "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
-    .bind(body.env, fid, id.player_id, name, JSON.stringify(clean), now).run();
+    .bind(body.env, fid, id.player_id, name, JSON.stringify(Object.assign(old, clean)), now).run();
+  await ocCprTimes(env, body.env, id.player_id, Object.keys(clean), now);
   return ocJson({ok: true});
 }
 
@@ -1001,10 +1012,12 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
       c.reconfigured = ((await ocSnapGet(env, "hub", "plan:reconfigured").catch(() => null)) || {}).data || null;   // last reconfigure
       return Response.json(c, H); }
-    const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
+    const {results} = await env.OC_DB.prepare("SELECT c.player_id, c.name, c.roles, c.ts, t.t AS rt FROM oc_cpr c LEFT JOIN oc_cpr_t t " +
+      "ON t.env = c.env AND t.faction_id = c.faction_id AND t.player_id = c.player_id WHERE c.env = ? AND c.faction_id = ?")
       .bind(envName, Number(env.FACTION_ID)).all();
     const out = {};
-    for (const r of results || []) { let roles = {}; try { roles = JSON.parse(r.roles); } catch (e) {} out[String(r.player_id)] = {name: r.name, ts: r.ts, roles}; }
+    for (const r of results || []) { let roles = {}, t = {}; try { roles = JSON.parse(r.roles); } catch (e) {} try { t = r.rt ? JSON.parse(r.rt) : {}; } catch (e) {}
+      out[String(r.player_id)] = {name: r.name, ts: r.ts, t, roles}; }   // t: {"Crime|Role": ms} when each role was read
     return Response.json(out, H);
   }
   // GET /l/oc/crimes.json?env= -> the feed's crimes {as_of, crimes} (recruiting + planning, every 3 min) - the
@@ -1599,9 +1612,11 @@ async function ocAutoPlan(env, crimes, now) {
                        prereq: c.prerequisite || null};
   // rates (Nov 2026): the member's rate in a crime they're in NOW, else the NEWEST of their shared rates (oc_cpr, any
   // age - ts) and their history rate (summaries, the completion time t). No age limit.
-  const {results} = await env.OC_DB.prepare("SELECT player_id, roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ?").bind(Number(env.FACTION_ID)).all();
+  const {results} = await env.OC_DB.prepare("SELECT c.player_id, c.roles, c.ts, t.t AS rt FROM oc_cpr c LEFT JOIN oc_cpr_t t " +
+    "ON t.env = c.env AND t.faction_id = c.faction_id AND t.player_id = c.player_id WHERE c.env = 'prod' AND c.faction_id = ?").bind(Number(env.FACTION_ID)).all();
   const live = new Map();
-  for (const r of results || []) { try { live.set(String(r.player_id), {ts: Number(r.ts) || 0, roles: JSON.parse(r.roles)}); } catch (e) {} }
+  for (const r of results || []) { try { let rt = {}; try { rt = r.rt ? JSON.parse(r.rt) : {}; } catch (e) {}
+    live.set(String(r.player_id), {ts: Number(r.ts) || 0, t: rt, roles: JSON.parse(r.roles)}); } catch (e) {} }
   const inCrime = new Map();
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && typeof sl.checkpoint_pass_rate === "number")
     inCrime.set(`${sl.user.id}|${c.name}|${ocBaseRole((sl.position_info && sl.position_info.label) || sl.position)}`, Math.round(sl.checkpoint_pass_rate));
@@ -1611,7 +1626,8 @@ async function ocAutoPlan(env, crimes, now) {
   const rateOf = (pid, crime, label) => {
     const b = ocBaseRole(label), lr = live.get(String(pid)), k = ocFb(crime) + "|" + ocFb(b);
     const ic = inCrime.get(`${pid}|${crime}|${b}`); if (ic != null) return {rate: ic, src: "live"};
-    const sh = lr && lr.roles && lr.roles[k] != null ? {rate: lr.roles[k], src: "live", t: lr.ts} : null;
+    // the time THIS role's rate was read (oc_cpr_t), else the member's last share (older rows)
+    const sh = lr && lr.roles && lr.roles[k] != null ? {rate: lr.roles[k], src: "live", t: (lr.t && lr.t[k]) || lr.ts} : null;
     const hm = hist.get(`${pid}|${crime}|${b}`), h = hm ? {rate: hm.rate, src: "history", t: hm.t || 0} : null;
     if (sh && h) return sh.t >= h.t ? sh : h;                 // the newest wins
     return sh || h;
@@ -1821,4 +1837,20 @@ async function cwShiftAlerts(env) {
     } catch (e) { continue; }
     await env.OC_DB.prepare(`UPDATE cw_shift SET notified = 1 WHERE id IN (${rows.map(() => "?").join(",")})`).bind(...rows.map(r => r.id)).run();
   }
+}
+
+// NEWEST RATE PER CRIME/ROLE (Nov 2026): record when each of a member's roles was last read (oc_cpr_t, JSON
+// {"Crime|Role": ms}) - by script shares and opt-in OC reads. The planner / OC Management compare THAT time with the
+// history rate's completion time, so the newest rate for each crime/role wins and older ones never count.
+async function ocCprTimes(env, envName, pid, keys, now) {
+  if (!keys || !keys.length) return;
+  now = now || Date.now();
+  try {
+    const row = await env.OC_DB.prepare("SELECT t FROM oc_cpr_t WHERE env = ? AND faction_id = ? AND player_id = ?")
+      .bind(envName, Number(env.FACTION_ID), Number(pid)).first();
+    let t = {}; try { t = row ? JSON.parse(row.t) || {} : {}; } catch (e) {}
+    keys.forEach(k => { t[k] = now; });
+    await env.OC_DB.prepare("INSERT INTO oc_cpr_t (env, faction_id, player_id, t) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET t = excluded.t").bind(envName, Number(env.FACTION_ID), Number(pid), JSON.stringify(t)).run();
+  } catch (e) { /* the member's last-share time is the fallback */ }
 }
