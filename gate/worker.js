@@ -1760,7 +1760,7 @@ async function ocAutoPlan(env, crimes, now) {
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
     .bind(now, JSON.stringify(r.stats)).run().catch(() => {});
-  await tpSuccessForTeams(env, r.teams).catch(() => {});   // exact success for full teams (needs TP_API_KEY)
+  await tpSuccessForTeams(env, r.teams).catch(() => {});   // exact success chance for every full team (cached per combination)
   if (!r.changed) return;
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
@@ -1929,8 +1929,10 @@ async function ocCprTimes(env, envName, pid, keys, now) {
 // ROLE WEIGHTS + SUCCESS (Nov 2026, the user: tornprobability.com). Free endpoints, once a day:
 //   GetRoleWeights {CrimeKey: {RoleKey: weight}} - how much each role moves the crime's success (the planner's
 //   weighted team success), GetRoleNames {"Crime": {P1: "Role 1", ...}} - the role order CalculateSuccess expects.
-// CalculateSuccess (POST {scenario, parameters: [rate per role, P1..Pn]}, header X-API-KEY) needs a key: Worker
-// secret TP_API_KEY (GitHub secret TP_API_KEY). Without it the exact success chance is simply not shown.
+// CalculateSuccess (POST {scenario, parameters: [rate per role, P1..Pn]}) answers WITHOUT a key (the user's test,
+// Nov 10 2026). The scenario name is case-sensitive ("Break the Bank", not "Break The Bank") - we always send the
+// name exactly as GetRoleNames gives it. If a key is ever needed: GitHub secret TP_API_KEY -> Worker secret, sent as
+// the X-API-KEY header (never in the address).
 // Stored in oc_snap hub 'tp:weights' {weights, names} and 'tp:success' {"Crime|r1,r2,...": {s, f, at}}.
 // ======================================================================================================
 const TP_BASE = "https://tornprobability.com:3000/api";
@@ -1972,7 +1974,7 @@ function tpSuccessOf(succ, names, crime, roles) {
 }
 // exact success for every FULL team in the plan (one call per new crime + rates combination, at most 20 a run)
 async function tpSuccessForTeams(env, teams) {
-  if (!env.TP_API_KEY || !env.OC_DB) return;
+  if (!env.OC_DB) return;
   const tp = ((await ocSnapGet(env, "hub", "tp:weights").catch(() => null)) || {}).data;
   if (!tp || !tp.names) return;
   const cur = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || {};
@@ -1984,8 +1986,10 @@ async function tpSuccessForTeams(env, teams) {
     calls++;
     try {
       // tornprobability.com CalculateSuccess - the Hub's key in the header (never in the address)
-      const r = await fetch(TP_BASE + "/CalculateSuccess", {method: "POST",
-        headers: {"Content-Type": "application/json", Accept: "application/json", "X-API-KEY": String(env.TP_API_KEY).trim()},
+      const h = {"Content-Type": "application/json", Accept: "application/json"};
+      if (env.TP_API_KEY) h["X-API-KEY"] = String(env.TP_API_KEY).trim();   // only if one is ever required
+      // API: Heart Breakers Hub - OC team success (tornprobability.com CalculateSuccess)
+      const r = await fetch(TP_BASE + "/CalculateSuccess", {method: "POST", headers: h,
         body: JSON.stringify({scenario: o.scenario, parameters: o.params})});
       if (!r.ok) continue;
       const d = await r.json();
