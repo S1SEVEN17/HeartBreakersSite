@@ -775,9 +775,9 @@ export class ChainRoom {
     if (live || Object.keys(this.mem.queue).length || this.coolingDown(now)) return;
     if (!this.mem.lastChainEndedAt) { this.mem.lastChainEndedAt = now; return; }
     if (now - this.mem.lastChainEndedAt < IDLE_WIPE_MS) return;
-    // transient data cleared; settings + member list kept
+    // transient data cleared; settings + member list kept. The chain reading is KEPT - it's the Hub's latest
+    // Torn read (clearing it here wiped every fresh idle-time reading straight after it was taken).
     this.mem.queue = {}; this.mem.status = {}; this.mem.retals = {};
-    if (this.mem.chain && !this.mem.chain.cooldown) this.mem.chain = null;
   }
 
   /* ---- self-governor (§8) ----------------------------------------------- */
