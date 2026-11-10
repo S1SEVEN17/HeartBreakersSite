@@ -65,7 +65,6 @@ __MENU__
   <div class="row"><label for="rest">2nd alert<small>seconds left · goes to #1 and #2</small></label><input id="rest" type="number" min="5" max="300" inputmode="numeric"></div>
   <div class="row"><label for="third">3rd alert<small>seconds left · goes to everyone in the queue</small></label><input id="third" type="number" min="5" max="300" inputmode="numeric"></div>
   <div class="row"><label for="min">Minimum chain<small>no alerts below this many hits</small></label><input id="min" type="number" min="0" max="100000" inputmode="numeric"></div>
-  <div class="row"><label for="hand">Backup alert<small>alert the backup (#2) if whoever's up hasn't hit within this many seconds</small></label><input id="hand" type="number" min="30" max="280" inputmode="numeric"></div>
   <div class="row"><label for="bwarn">Bonus heads-up<small>warn the queue this many hits before a bonus (0 = off)</small></label><input id="bwarn" type="number" min="0" max="50" inputmode="numeric"></div>
   <div class="acts"><button class="alt" id="reset" type="button">Starting values</button><button id="save" type="button">Save</button></div>
   <div class="msg" id="msg"></div>
@@ -82,7 +81,7 @@ __MENU__
 const CONF = __CONFIG__;
 const $ = id => document.getElementById(id);
 const FIELDS = {top: "topAlertSeconds", rest: "restAlertSeconds", third: "thirdAlertSeconds", min: "minChain",
-                hand: "handoffSeconds", bwarn: "bonusWarnHits"};
+                bwarn: "bonusWarnHits"};   // (backup alert removed Nov 10 2026)
 let defaults = null;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 function fill(c) {

@@ -96,8 +96,8 @@ export const CW_DEFAULT_CONFIG = {
   thirdAlertSeconds: 30,
   firstAlertPrimaryOnly: true,
   minChain: 25,
-  // Nov 2026 (user): alert the backup (#2) when #1 hasn't hit within this many seconds of being up
-  handoffSeconds: 120,
+  // (handoffSeconds / the "backup alert" was REMOVED Nov 10 2026, user: "Delete this. The normal alerts should
+  //  suffice." - alert 2 already reaches #1 and #2. An old saved value is ignored and no longer sent to scripts.)
   // Nov 2026 (user): bonus heads-up this many hits before a bonus milestone
   bonusWarnHits: 5,
   set_by: "Chris5295 [974757]",
@@ -901,7 +901,7 @@ export class ChainRoom {
    *   timer   stage 1..3 at config top/rest/third seconds left - stage 1 to the member who's UP only when
    *           firstAlertPrimaryOnly, else (and stages 2..3) to everyone in the queue who can act
    *   up      "you're up" - once, to the member who becomes UP
-   *   backup  to the BACKUP when no hit has landed config.handoffSeconds after `turn.since`
+   *   (backup - removed Nov 10 2026, user: the normal alerts suffice; alert 2 goes to #1 and #2)
    * Nothing below minChain. Paused (held, not dropped) while anyone's "I'm hitting" flag is on - when it runs out
    * without a hit, the alerts that came due are sent at once. Away / can't-attack members get no timer alerts.
    * Message: {t:"alert", kind:"timer"|"up"|"backup"|"test", stage, seconds (threshold), remaining_ms, expires_at,
@@ -918,7 +918,7 @@ export class ChainRoom {
   }
   alertLap() {
     const c = this.mem.chain, cur = (c && c.current) || 0;
-    if (!this.mem.alertLap || this.mem.alertLap.count !== cur) this.mem.alertLap = { count: cur, sent: [], backup: false };
+    if (!this.mem.alertLap || this.mem.alertLap.count !== cur) this.mem.alertLap = { count: cur, sent: [] };
     return this.mem.alertLap;
   }
   // when the next alert is due (ms) - so the alarm wakes up exactly then; null = nothing pending
@@ -930,8 +930,6 @@ export class ChainRoom {
     const lap = this.alertLap();
     let t = null;
     for (const s of this.alertStages()) if (!lap.sent.includes(s.stage)) { const at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS; if (t == null || at < t) t = at; }
-    const ex = this.extras(), turn = ex.turn;
-    if (turn && turn.backup && !lap.backup) { const at = turn.since + (Number(cfg.handoffSeconds) || 120) * 1000; if (t == null || at < t) t = at; }
     return t != null && t < c.expires_at ? Math.max(t, now) : null;
   }
   async ensureAlertAlarm() {
@@ -977,17 +975,12 @@ export class ChainRoom {
       this.sendAlert(to, { kind: "timer", stage: s.stage, seconds: s.sec, chain: c.current, expires_at: c.expires_at,
         remaining_ms: left, now });
     }
-    if (turn && turn.backup && !lap.backup && now >= turn.since + (Number(cfg.handoffSeconds) || 120) * 1000) {
-      lap.backup = true;
-      this.sendAlert([turn.backup], { kind: "backup", stage: 0, seconds: Number(cfg.handoffSeconds) || 120, chain: c.current,
-        expires_at: c.expires_at, remaining_ms: left, up: turn.up, now });
-    }
   }
 
   /* ---- turn / bonus / runway / cooldown (Nov 2026, user) - carried in every state + sync --------------------
    * turn    {up, backup, since, reason}: `up` = who should hit next (#1 who can attack; the assigned bonus hitter
-   *         when the next hit IS the bonus), `backup` = the next one after them. The script tells `up` "you're up"
-   *         and alerts `backup` if no hit lands within config.handoffSeconds of `since` (later of: last hit, up changed).
+   *         when the next hit IS the bonus), `backup` = the next one after them (#2 - gets alert 2 with #1).
+   *         `since` = later of: last hit, up changed.
    * bonus   {next, warn_from, pid, name, by}: next bonus milestone, from which count to show the heads-up, who's
    *         assigned (null = nobody).
    * runway  {banked_hits, regen_per_hour, hits_to_bonus, bonus_reachable, hours}: from the queue's energy now -
@@ -1062,7 +1055,6 @@ export class ChainRoom {
     return {
       topAlertSeconds: c.topAlertSeconds, restAlertSeconds: c.restAlertSeconds, thirdAlertSeconds: c.thirdAlertSeconds,
       firstAlertPrimaryOnly: !!c.firstAlertPrimaryOnly, minChain: c.minChain,
-      handoffSeconds: Number(c.handoffSeconds) || CW_DEFAULT_CONFIG.handoffSeconds,
       bonusWarnHits: c.bonusWarnHits != null ? Number(c.bonusWarnHits) : CW_DEFAULT_CONFIG.bonusWarnHits,
       edit_url: origin + EDIT_PATH, set_by: c.set_by || "", set_at: c.set_at || 0,
     };

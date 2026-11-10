@@ -1775,7 +1775,7 @@ async function ocAutoPlan(env, crimes, now) {
 //   GET  /l/cw/config.json -> {config, status}   status = counts from the ChainRoom (connected, queued, mode...) +
 //                             status.queue: the queue in order with each member's reported energy / cooldowns / refill
 //   POST /l/cw/config      {topAlertSeconds, restAlertSeconds, thirdAlertSeconds, firstAlertPrimaryOnly, minChain,
-//                           handoffSeconds, bonusWarnHits}
+//                           bonusWarnHits}
 //        -> saved to D1 oc_config (env 'prod', k 'chainwatch', by = the signed-in leader) and pushed to every script
 // The script shows these view-only; leaders change them here. No Torn call.
 // ======================================================================================================
@@ -1798,8 +1798,7 @@ async function cwLeaderRoute(env, req, who, sub) {
                thirdAlertSeconds: sec(b.thirdAlertSeconds, 5, 300), minChain: sec(b.minChain, 0, 100000),
                firstAlertPrimaryOnly: !!b.firstAlertPrimaryOnly,
                // Nov 2026: backup alert (#2 if #1 hasn't hit within N s of being up) + bonus heads-up (N hits before)
-               handoffSeconds: sec(b.handoffSeconds, 30, 280), bonusWarnHits: sec(b.bonusWarnHits, 0, 50)};
-    if (v.handoffSeconds == null) return Response.json({ok: false, error: "backup alert must be 30-280 seconds"}, {status: 400});
+               bonusWarnHits: sec(b.bonusWarnHits, 0, 50)};   // (backup alert / handoffSeconds removed Nov 10 2026)
     if (v.bonusWarnHits == null) return Response.json({ok: false, error: "bonus heads-up must be 0-50 hits before"}, {status: 400});
     if (v.topAlertSeconds == null || v.restAlertSeconds == null || v.thirdAlertSeconds == null)
       return Response.json({ok: false, error: "alert times must be 5-300 seconds (1st alert at least 10)"}, {status: 400});
