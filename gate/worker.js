@@ -246,6 +246,8 @@ export default {
     // Chain Watching Schedule (members sign up for chain watch shifts; leaders can remove anyone's)
     if (area === "m" && (rest === "cw/schedule.json" || rest === "cw/schedule")) return cwSchedule(env, req, url, who);
     if (area === "m" && rest === "cw/live.json") return cwLive(env);
+    // Scripts directory (scripts.html): every member reads the listings; leaders add / edit / remove them
+    if (area === "m" && (rest === "scripts.json" || rest === "scripts")) return scriptsRoute(env, req, url, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
@@ -1826,6 +1828,62 @@ async function cwReading(env, req, who) {
   if (!(reading.current > 0 && reading.timeout > 0 && reading.timeout <= 300)) return Response.json({ok: true, used: false});
   const r = await cwStub(env).fetch("https://do/reading", {method: "POST", body: JSON.stringify(reading)});
   return Response.json(await r.json(), {headers: {"Cache-Control": "no-store"}});
+}
+
+// ======================================================================================================
+// SCRIPTS DIRECTORY (Nov 10 2026, user: "a section in the hub for users to navigate through to find the scripts.
+// Leaders should be able to add/remove scripts and create listings/descriptions for them.")
+//   GET    /m/scripts.json  -> {scripts: [...] (A-Z), me: {leader}}            every signed-in member
+//   POST   /m/scripts {id?, name, summary, description, install_url, version}  leaders: add (no id) / edit (id)
+//   DELETE /m/scripts?id=                                                       leaders: remove
+// D1 hub_script. Listing text + links only (no code hosted). Links must be https://. No Torn call.
+const SCRIPT_LIMITS = {name: 80, summary: 200, description: 6000, install_url: 500, version: 30, count: 200};
+async function scriptsRoute(env, req, url, who) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  const bad = (error, status) => Response.json({ok: false, error}, {status: status || 400});
+  if (!env.OC_DB) return bad("Hub storage isn't set up yet", 503);
+  if (req.method === "GET") {
+    let rows = [];
+    try {
+      rows = (await env.OC_DB.prepare("SELECT id, name, summary, description, install_url, version, updated, updated_by FROM hub_script " +
+        "ORDER BY name COLLATE NOCASE").all()).results || [];
+    } catch (e) { rows = []; }                                // table not there yet (first deploy)
+    return Response.json({ok: true, scripts: rows, me: {leader: !!who.leader}}, H);
+  }
+  if (!who.leader) return bad("Only leaders can change the scripts list.", 403);
+  if (req.method === "DELETE") {
+    const id = Number(url.searchParams.get("id"));
+    if (!(id > 0)) return bad("Which script?");
+    const r = await env.OC_DB.prepare("DELETE FROM hub_script WHERE id = ?").bind(id).run();
+    if (!(r && r.meta && r.meta.changes)) return bad("That script isn't listed any more.", 404);
+    return Response.json({ok: true}, H);
+  }
+  if (req.method === "POST") {
+    let b; try { b = await req.json(); } catch (e) { return bad("bad request"); }
+    const txt = (k) => String(b[k] == null ? "" : b[k]).replace(/\r\n?/g, "\n").trim();
+    const v = {name: txt("name"), summary: txt("summary").replace(/\s*\n\s*/g, " "), description: txt("description"),
+               install_url: txt("install_url"), version: txt("version")};
+    if (!v.name) return bad("Give the script a name.");
+    for (const k of Object.keys(v)) if (v[k].length > SCRIPT_LIMITS[k]) return bad(`${k.replace("_", " ")} is too long (max ${SCRIPT_LIMITS[k]} characters).`);
+    if (v.install_url) {
+      let u = null; try { u = new URL(v.install_url); } catch (e) { u = null; }
+      if (!u || u.protocol !== "https:") return bad("The install link must be a full https:// address.");
+      v.install_url = u.toString();
+    }
+    const now = Date.now(), id = Number(b.id) || 0;
+    if (id) {
+      const r = await env.OC_DB.prepare("UPDATE hub_script SET name = ?, summary = ?, description = ?, install_url = ?, version = ?, updated = ?, updated_by = ? WHERE id = ?")
+        .bind(v.name, v.summary, v.description, v.install_url, v.version, now, String(who.name || ""), id).run();
+      if (!(r && r.meta && r.meta.changes)) return bad("That script isn't listed any more.", 404);
+      return Response.json({ok: true, id}, H);
+    }
+    const n = await env.OC_DB.prepare("SELECT COUNT(*) AS n FROM hub_script").first();
+    if (n && Number(n.n) >= SCRIPT_LIMITS.count) return bad(`The list is full (${SCRIPT_LIMITS.count} scripts).`);
+    const r = await env.OC_DB.prepare("INSERT INTO hub_script (name, summary, description, install_url, version, created, updated, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(v.name, v.summary, v.description, v.install_url, v.version, now, now, String(who.name || "")).run();
+    return Response.json({ok: true, id: r && r.meta ? r.meta.last_row_id : null}, H);
+  }
+  return bad("not allowed", 405);
 }
 
 // ======================================================================================================

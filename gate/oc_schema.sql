@@ -96,3 +96,17 @@ CREATE TABLE IF NOT EXISTS oc_cpr_t (
   t          TEXT    NOT NULL,
   PRIMARY KEY (env, faction_id, player_id)
 );
+
+-- SCRIPTS DIRECTORY (Nov 10 2026, user): the members' Hub page scripts.html lists the faction's userscripts; leaders
+-- add / edit / remove the listings there (worker.js scriptsRoute). Only listing text + links - no code is hosted.
+CREATE TABLE IF NOT EXISTS hub_script (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL,
+  summary     TEXT NOT NULL DEFAULT '',   -- one line under the name
+  description TEXT NOT NULL DEFAULT '',   -- the full listing (plain text; line breaks and https links kept)
+  install_url TEXT NOT NULL DEFAULT '',   -- https only (Greasy Fork page, .user.js, ...)
+  version     TEXT NOT NULL DEFAULT '',
+  created     INTEGER NOT NULL,           -- epoch ms
+  updated     INTEGER NOT NULL,           -- epoch ms
+  updated_by  TEXT NOT NULL DEFAULT ''    -- leader's Torn name
+);

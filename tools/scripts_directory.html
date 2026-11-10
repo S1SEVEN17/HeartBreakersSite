@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Scripts - Heart Breakers</title>
+<!--
+  SCRIPTS DIRECTORY (members' folder: scripts.html, published by generate.py write_optin_pages). Nov 10 2026, user:
+  "Lets create a section in the hub for users to navigate through to find the scripts. Leaders should be able to
+  add/remove scripts and create listings/descriptions for them."
+  Every signed-in member browses / searches the listings. Leaders (whoami leader) get Add / Edit / Remove on the same
+  page. Listing = name, version, one-line summary, full description (plain text; line breaks and https links kept),
+  install link (https only). The Hub hosts no code - the install link points wherever the script lives.
+  Data: /m/scripts.json (GET), /m/scripts (POST {id?, name, summary, description, install_url, version} /
+  DELETE ?id=) - worker.js scriptsRoute, D1 hub_script. No Torn call. Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:820px}
+h1{color:var(--red);font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card h2{color:var(--gold);font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px}
+input,textarea{width:100%;background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:7px;padding:10px;font:15px system-ui;min-height:42px}
+textarea{min-height:160px;resize:vertical;line-height:1.45}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub);margin-top:8px}
+label small{color:#6f6f72}
+button,.btn{background:var(--red);color:#fff;border:0;border-radius:8px;padding:10px 16px;font:600 15px system-ui;cursor:pointer;min-height:44px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+button.alt,.btn.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+button.x{background:none;border:1px solid #3a1414;color:#f08a84;padding:4px 12px;min-height:36px;font-size:13px;font-weight:400}
+button.e{background:none;border:1px solid #4a3a18;color:var(--gold);padding:4px 12px;min-height:36px;font-size:13px;font-weight:400}
+.top{display:flex;gap:8px;align-items:center;margin-bottom:12px}.top input{flex:1}
+.acts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px}
+.msg{min-height:20px;font-size:13px;margin-top:6px}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+.s{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.s .hd{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.s .nm{flex:1;min-width:0}
+.s .nm b{color:#fff;font-size:16px;word-break:break-word}
+.s .sm{color:#cfcfd1;font-size:13px;margin-top:3px;word-break:break-word}
+.pill{font-size:11px;padding:2px 8px;border-radius:8px;background:#3a2e12;color:var(--gold);white-space:nowrap;margin-left:6px;vertical-align:2px}
+.s details{margin-top:8px}.s summary{cursor:pointer;color:var(--gold);font-size:13px;min-height:32px;display:flex;align-items:center}
+.desc{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.5;background:#1a1012;border:1px solid #2a1416;border-radius:9px;padding:10px 12px;margin-top:6px}
+.desc a,.s a.lk{color:var(--gold)}
+.meta{color:var(--sub);font-size:11px;margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.meta .tools{display:flex;gap:6px}
+.empty{color:var(--sub);text-align:center;padding:20px 0}
+.count{color:var(--sub);font-size:12px;margin:-4px 0 10px}
+</style></head><body>
+__MENU__
+<h1>Scripts</h1>
+<div class="sub">The faction's userscripts for Torn. Tap a script for details, then Install.</div>
+
+<div class="top"><input id="q" type="search" placeholder="Search scripts…" autocomplete="off">
+  <button id="addBtn" type="button" style="display:none">+ Add</button></div>
+<div class="card" id="formCard" style="display:none"><h2 id="formTitle">Add a script</h2><div id="formBody"></div></div>
+<div class="count" id="count"></div>
+<div id="list"><div class="empty">Loading…</div></div>
+
+<script>
+const CONF = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let D = null, editing = null;   // listings; the script being edited (null = adding)
+const when = ms => new Date(ms).toLocaleDateString(undefined, {month: "short", day: "numeric", year: "numeric"});
+// description: plain text - escaped, line breaks kept (pre-wrap), https links made clickable
+const rich = t => esc(t).replace(/https:\/\/[^\s<>"]+/g, u => {
+  const tail = (u.match(/[).,!?:;]+$/) || [""])[0], href = tail ? u.slice(0, -tail.length) : u;
+  return `<a href="${href}" target="_blank" rel="noopener noreferrer">${href}</a>${tail}`;
+});
+const host = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch (e) { return ""; } };
+
+function render() {
+  const q = $("q").value.trim().toLowerCase(), leader = D.me.leader;
+  const list = D.scripts.filter(x => !q || [x.name, x.summary, x.description].join(" ").toLowerCase().includes(q));
+  $("count").textContent = D.scripts.length ? (q ? `${list.length} of ${D.scripts.length} scripts` : `${D.scripts.length} script${D.scripts.length > 1 ? "s" : ""}`) : "";
+  $("list").innerHTML = list.length ? list.map(x => `<div class="s">`
+    + `<div class="hd"><div class="nm"><b>${esc(x.name)}</b>${x.version ? `<span class="pill">v${esc(x.version.replace(/^v/i, ""))}</span>` : ""}`
+    + (x.summary ? `<div class="sm">${esc(x.summary)}</div>` : "") + `</div>`
+    + (x.install_url ? `<a class="btn" href="${esc(x.install_url)}" target="_blank" rel="noopener noreferrer" title="Opens ${esc(host(x.install_url))}">Install</a>` : "")
+    + `</div>`
+    + (x.description ? `<details><summary>Details</summary><div class="desc">${rich(x.description)}</div></details>` : "")
+    + `<div class="meta"><span>${x.install_url ? esc(host(x.install_url)) + " · " : ""}updated ${when(x.updated)}${leader && x.updated_by ? " by " + esc(x.updated_by) : ""}</span>`
+    + (leader ? `<span class="tools"><button class="e" data-edit="${x.id}">Edit</button><button class="x" data-del="${x.id}">Remove</button></span>` : "")
+    + `</div></div>`).join("")
+    : `<div class="empty">${D.scripts.length ? "No scripts match that search." : "No scripts listed yet." + (leader ? " Tap + Add to list the first one." : "")}</div>`;
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openForm(D.scripts.find(x => x.id === Number(b.dataset.edit))));
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => del(Number(b.dataset.del)));
+}
+
+// ---- leaders: add / edit form ----
+function openForm(x) {
+  editing = x || null;
+  $("formTitle").textContent = x ? "Edit " + x.name : "Add a script";
+  $("formBody").innerHTML = `<label>Name<input id="fName" maxlength="80" value="${esc(x ? x.name : "")}"></label>`
+    + `<label>Version <small>optional, e.g. 1.4.0</small><input id="fVer" maxlength="30" value="${esc(x ? x.version : "")}"></label>`
+    + `<label>Short description <small>one line, shown under the name</small><input id="fSum" maxlength="200" value="${esc(x ? x.summary : "")}"></label>`
+    + `<label>Install link <small>https:// - Greasy Fork page, .user.js file, etc.</small><input id="fUrl" type="url" inputmode="url" maxlength="500" placeholder="https://" value="${esc(x ? x.install_url : "")}"></label>`
+    + `<label>Full listing <small>what it does, how to use it, PDA notes… line breaks and https links are kept</small><textarea id="fDesc" maxlength="6000">${esc(x ? x.description : "")}</textarea></label>`
+    + `<div class="acts"><button class="alt" id="fCancel" type="button">Cancel</button><button id="fSave" type="button">${x ? "Save changes" : "Add script"}</button></div><div class="msg" id="fMsg"></div>`;
+  $("formCard").style.display = "";
+  $("fCancel").onclick = closeForm;
+  $("fSave").onclick = save;
+  $("formCard").scrollIntoView({behavior: "smooth", block: "start"});
+  $("fName").focus();
+}
+function closeForm() { editing = null; $("formCard").style.display = "none"; $("formBody").innerHTML = ""; }
+function say(t, ok) { const m = $("fMsg"); if (m) { m.textContent = t; m.className = "msg " + (ok ? "ok" : "bad"); } }
+async function save() {
+  const body = {name: $("fName").value, version: $("fVer").value, summary: $("fSum").value, install_url: $("fUrl").value, description: $("fDesc").value};
+  if (editing) body.id = editing.id;
+  if (!body.name.trim()) return say("Give the script a name.", false);
+  $("fSave").disabled = true; say("Saving…", true);
+  try {
+    const r = await fetch("scripts", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    closeForm(); await load();
+  } catch (e) { say("Not saved: " + e.message, false); $("fSave").disabled = false; }
+}
+async function del(id) {
+  const x = D.scripts.find(s => s.id === id);
+  if (!confirm(`Remove "${x ? x.name : "this script"}" from the list?`)) return;
+  try {
+    const r = await fetch("scripts?id=" + id, {method: "DELETE", credentials: "same-origin"});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    if (editing && editing.id === id) closeForm();
+    await load();
+  } catch (e) { alert("Couldn't remove it: " + e.message); }
+}
+async function load() {
+  try {
+    const r = await fetch("scripts.json", {cache: "no-store", credentials: "same-origin"});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+    D = d;
+    $("addBtn").style.display = D.me.leader ? "" : "none";
+    render();
+  } catch (e) { $("list").innerHTML = `<div class="empty">Couldn't load the scripts: ${esc(e.message)}</div>`; }
+}
+$("q").oninput = () => { if (D) render(); };
+$("addBtn").onclick = () => openForm(null);
+load();
+</script>
+</body></html>

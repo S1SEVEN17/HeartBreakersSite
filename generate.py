@@ -4024,7 +4024,7 @@ def member_out(out: Path) -> Path:
 def header_default() -> dict:
     L = lambda label, link: {"label": label, "link": link}
     return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("👥 Members", "M:members.html"),
-                        L("⛓️ Chain watch", "M:chainwatch-schedule.html")],
+                        L("⛓️ Chain watch", "M:chainwatch-schedule.html"), L("🧩 Scripts", "M:scripts.html")],
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🏠 Leaders Hub", "L:index.html"),
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
@@ -4887,7 +4887,8 @@ def homepage_default() -> dict:
     grow = {"title": "Grow", "links": link([("🏋️", "Gym", "M:gym.html"), ("📈", "Gym history", "M:gym-history.html"),
                                             ("🕵️", "Organized crimes", "M:crimes.html")])}
     faction = {"title": "Faction", "links": link([("👥", "Members", "M:members.html"), ("💰", "Paid wars", "M:wars.html#paid"),
-                                                  ("📰", "Latest recap", "M:newsletter.html"), ("🗂️", "Recap archive", "M:recaps.html")])}
+                                                  ("📰", "Latest recap", "M:newsletter.html"), ("🗂️", "Recap archive", "M:recaps.html"),
+                                                  ("🧩", "Scripts", "M:scripts.html")])}
     leaders = {"title": "Leaders", "links": link([
         ("🧮", "Payout calculator", "L:payout.html"),
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
@@ -5031,7 +5032,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
              ("Leaders Hub", "L:index.html"), ("Armory Monitor", "L:armory.html"),
              ("Profile layout (default)", "L:profile-default.html"),
-             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
+             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("Scripts directory", "M:scripts.html"), ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
@@ -5973,6 +5974,8 @@ def write_optin_pages(out: Path):
     (member_out(out) / "my-data.html").write_text(page("optin_settings.html", {"gate": gate}, site_menu("")), encoding="utf-8")
     # Chain Watching Schedule (Nov 2026): members sign up for chain watch shifts (gatekeeper /m/cw/schedule)
     (member_out(out) / "chainwatch-schedule.html").write_text(page("chainwatch_schedule.html", {"gate": gate}, site_menu("")), encoding="utf-8")
+    # Scripts directory (Nov 10 2026): the faction's userscripts; leaders edit the listings on the same page (/m/scripts)
+    (member_out(out) / "scripts.html").write_text(page("scripts_directory.html", {"gate": gate}, site_menu("")), encoding="utf-8")
     if leader_dir():
         lout = out / leader_dir()
         conf = {"member_base": member_base(), "gate": gate}
