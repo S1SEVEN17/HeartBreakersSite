@@ -6,7 +6,8 @@
 <!--
   CHAIN WATCHING SCHEDULE (members' folder: chainwatch-schedule.html, published by generate.py write_optin_pages).
   Members sign up for chain watch shifts: 30-minute slots in TCT (start on :00 / :30), 30 min - 6 h long, up to
-  48 hours ahead (Nov 10 2026, user), as Primary, Backup or 2nd backup (each role once per slot). ONE registration per member until it ends. The Hub pings everyone in the
+  48 hours ahead (Nov 10 2026, user), as Primary, Backup or 2nd backup (each role once per slot).
+  Up to 2 shifts per member at once (Nov 10 2026, user), never two roles in the same slot (own shifts can't overlap). ONE registration per member until it ends. The Hub pings everyone in the
   chains Discord channel when their shift starts (worker.js cwShiftAlerts). Leaders can remove anyone's shift.
   Energy check: can you cover the shift ALONE (1 hit every 5 min)? From your last Chain Watch script report, else
   your War readiness reading - same formula as the Hub (gate/chainroom.js cwEnergyCover; keep the two in step).
@@ -71,7 +72,7 @@ __MENU__
 
 <div class="card" id="nowCard"><h2>Right now</h2><div id="nowBody">Loading…</div></div>
 
-<div class="card" id="mine"><h2>Your shift</h2><div id="mineBody">Loading…</div></div>
+<div class="card" id="mine"><h2>Your shifts</h2><div id="mineBody">Loading…</div></div>
 
 <div class="card"><h2>Coming up</h2><div id="nextBody">Loading…</div></div>
 
@@ -216,26 +217,32 @@ function renderStats() {
 }
 
 function render() {
-  const now = D.now, me = D.me, mine = me.mine;
-  // ---- your shift / sign-up form ----
-  if (mine) {
+  const now = D.now, me = D.me, maxN = D.max_shifts || 2;
+  const mineAll = me.mine_all || (me.mine ? [me.mine] : []);
+  // ---- your shifts (up to 2) + the sign-up form while you have room for another ----
+  const mineHtml = mineAll.map(mine => {
     const s = me.stats, live = mine.start_at <= nowS();
-    $("mineBody").innerHTML = `<div class="sh me"><span class="t">${dayName(mine.start_at)} ${hh(mine.start_at)}–${hh(mine.end_at)}</span>`
+    return `<div class="sh me" style="margin-top:6px"><span class="t">${dayName(mine.start_at)} ${hh(mine.start_at)}–${hh(mine.end_at)}</span>`
       + `<span class="pill ${ROLE_CLASS[mine.role]}">${esc(D.roles[mine.role])}</span>`
       + `<span class="pill c">${live ? "On now · " + span(mine.end_at - nowS()) + " left" : "Starts in " + span(mine.start_at - nowS())}</span>`
       + `<span class="n">${local(mine.start_at)}–${local(mine.end_at)} your time</span>`
-      + `<button class="x" data-del="${mine.id}">Cancel</button></div>` + coverHtml(cover(s, mine.start_at, mine.end_at), s)
-      + `<div class="note">One shift at a time - cancel this one to pick another.</div>`;
+      + `<button class="x" data-del="${mine.id}">Cancel</button></div>` + coverHtml(cover(s, mine.start_at, mine.end_at), s);
+  }).join("");
+  const full = mineAll.length >= maxN;
+  const limitNote = `<div class="note">${full ? `You have ${maxN} shifts - the most at once. Cancel one to pick another.`
+    : `You can hold up to ${maxN} shifts at once (${mineAll.length} now), one role per time slot.`}</div>`;
+  if (full) {
+    $("mineBody").innerHTML = mineHtml + limitNote;
   } else {
     const days = [];
     for (let k = dayKey(now); k * 86400 < winEnd(); k++) days.push(k * 86400);
     const p = pick || Math.floor(now / SLOT) * SLOT;
-    $("mineBody").innerHTML = `<div class="f">`
+    $("mineBody").innerHTML = mineHtml + (mineAll.length ? `<div class="sec" style="margin-top:12px">Add another shift</div>` : "") + `<div class="f">`
       + `<label>Day (TCT)<select id="fDay">${days.map(t => `<option value="${t}"${dayKey(p) === dayKey(t) ? " selected" : ""}>${dayName(t)}</option>`).join("")}</select></label>`
       + `<label>Start (TCT)<select id="fStart"></select></label>`
       + `<label>Length<select id="fLen">${Array.from({length: D.max_hours * 2}, (_, i) => (i + 1) * 30).map(m => `<option value="${m}"${m === 60 ? " selected" : ""}>${len(m)}</option>`).join("")}</select></label>`
       + `<label>Role<select id="fRole">${Object.keys(D.roles).map(k => `<option value="${k}">${esc(D.roles[k])}</option>`).join("")}</select></label></div>`
-      + `<div id="fChk"></div><div class="acts"><button id="fGo" type="button">Sign up</button></div><div class="msg" id="fMsg"></div>`;
+      + `<div id="fChk"></div><div class="acts"><button id="fGo" type="button">Sign up</button></div><div class="msg" id="fMsg"></div>` + limitNote;
     const starts = () => {
       const day = Number($("fDay").value), cur = pick && dayKey(pick) === dayKey(day) ? pick : null;
       $("fStart").innerHTML = Array.from({length: 48}, (_, i) => day + i * SLOT).filter(t => t + SLOT > now && t <= winEnd())
@@ -286,7 +293,7 @@ function render() {
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => del(Number(b.dataset.del)));
   document.querySelectorAll(".grid i[data-t]").forEach(c => c.onclick = () => {
     const t = Number(c.dataset.t);
-    if (t + SLOT <= D.now || t > winEnd() || D.me.mine) return;
+    if (t + SLOT <= D.now || t > winEnd() || (D.me.mine_all || []).length >= (D.max_shifts || 2)) return;
     pick = t; touched = true; render(); $("mine").scrollIntoView({behavior: "smooth", block: "start"});
   });
 }
@@ -302,10 +309,13 @@ function placeCurrent() {
 }
 function preview() {
   const start = Number($("fStart").value), mins = Number($("fLen").value), role = $("fRole").value, end = start + mins * 60;
-  const clash = D.shifts.find(x => x.role === role && x.start_at < end && x.end_at > start);
-  $("fChk").innerHTML = (clash ? `<div class="chk warn">⚠️ <b>${esc(D.roles[role])}</b> is already taken by ${esc(clash.name)} for part of that time (${hh(clash.start_at)}–${hh(clash.end_at)}).</div>` : "")
+  // one role per time slot: your own shifts can't overlap; and each role once per slot across members
+  const own = (D.me.mine_all || []).find(x => x.start_at < end && x.end_at > start);
+  const clash = !own && D.shifts.find(x => x.role === role && x.start_at < end && x.end_at > start);
+  $("fChk").innerHTML = (own ? `<div class="chk warn">⚠️ You're already <b>${esc(D.roles[own.role])}</b> for part of that time (${hh(own.start_at)}–${hh(own.end_at)}) - one role per time slot.</div>` : "")
+    + (clash ? `<div class="chk warn">⚠️ <b>${esc(D.roles[role])}</b> is already taken by ${esc(clash.name)} for part of that time (${hh(clash.start_at)}–${hh(clash.end_at)}).</div>` : "")
     + coverHtml(cover(D.me.stats, start, end), D.me.stats);
-  $("fGo").disabled = !!clash || !start;
+  $("fGo").disabled = !!own || !!clash || !start;
 }
 function say(t, ok) { const m = $("fMsg"); if (m) { m.textContent = t; m.className = "msg " + (ok ? "ok" : "bad"); } }
 async function signUp() {
@@ -319,7 +329,7 @@ async function signUp() {
   } catch (e) { say("Not signed up: " + e.message, false); $("fGo").disabled = false; }
 }
 async function del(id) {
-  const own = D.me.mine && D.me.mine.id === id;
+  const own = (D.me.mine_all || []).some(x => x.id === id);
   if (!confirm(own ? "Cancel your chain watch shift?" : "Remove this member's shift?")) return;
   try {
     const r = await fetch("cw/schedule?id=" + id, {method: "DELETE", credentials: "same-origin"});

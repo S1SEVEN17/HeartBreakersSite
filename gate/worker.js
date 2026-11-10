@@ -43,7 +43,7 @@
 // =====================================================================================================
 
 import {ocPlan} from "./oc_planner.js";   // shared OC team planner (also inlined into the OC Management page)
-import {cwRoute, cwStub, CW_DEFAULT_CONFIG, CW_ROLES, CW_MAX_HOURS, CW_AHEAD_S, cwShiftRows, cwStatsFor, cwShiftAdd, cwShiftDelete} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
+import {cwRoute, cwStub, CW_DEFAULT_CONFIG, CW_ROLES, CW_MAX_HOURS, CW_MAX_SHIFTS, CW_AHEAD_S, cwShiftRows, cwStatsFor, cwShiftAdd, cwShiftDelete} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
 export {ChainRoom} from "./chainroom.js";   // the Durable Object class (wrangler.toml CHAINROOM binding)
 
 const COOKIE = "hb_s";
@@ -1834,7 +1834,7 @@ async function cwReading(env, req, who) {
 //   POST   /m/cw/schedule {start (epoch s, on :00/:30), minutes 30-360 (or hours 0.5-6), role primary|backup|backup2}
 //   GET    /m/cw/live.json -> the room's live board (chain, turn, bonus, runway, queue)
 //   DELETE /m/cw/schedule?id=  (your own; leaders: anyone's)
-// Rules: 30-minute slots (TCT), 30 min - 6 h; up to 48 hours ahead; each role once per slot; ONE registration per member.
+// Rules: 30-minute slots (TCT), 30 min - 6 h; up to 48 hours ahead; each role once per slot; up to 2 shifts per member, never two roles in the same slot.
 // The energy check (cwEnergyCover) uses the member's last Chain Watch script report, else their war-readiness reading
 // (opt-in) - stored with the shift as est_hits / need_hits. No Torn call here.
 // ======================================================================================================
@@ -1863,7 +1863,9 @@ async function cwSchedule(env, req, url, who) {
   if (req.method === "GET") {
     const shifts = await cwShiftRows(env);
     return Response.json({ok: true, now: nowS, roles: CW_ROLES, max_hours: CW_MAX_HOURS, ahead_s: CW_AHEAD_S, slot_s: 1800, shifts,
-      me: {pid, name: who.name, leader: !!who.leader, mine: shifts.find(x => Number(x.pid) === pid) || null, stats: await cwMyStats(env, pid)}}, H);
+      max_shifts: CW_MAX_SHIFTS,
+      me: {pid, name: who.name, leader: !!who.leader, mine: shifts.find(x => Number(x.pid) === pid) || null,
+           mine_all: shifts.filter(x => Number(x.pid) === pid), stats: await cwMyStats(env, pid)}}, H);
   }
   if (req.method === "POST") {
     let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }

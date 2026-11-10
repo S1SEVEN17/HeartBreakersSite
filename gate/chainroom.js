@@ -483,16 +483,19 @@ export class ChainRoom {
     try { this.sched = this.env.OC_DB ? await cwShiftRows(this.env) : []; this.schedAt = Date.now(); if (dirty) this.schedDirty = true; }
     catch (e) { /* keep the last copy */ }
   }
-  // the addendum's payload: {shifts: [{id, pid, name, start, hours, role, est_hits, need_hits}], mine}
+  // the addendum's payload: {shifts: [{id, pid, name, start, hours, minutes, role, est_hits, need_hits}], mine, mine_ids, max_shifts}
   schedulePayload(pid) {
     const rows = this.sched || [];
-    const mine = rows.find((x) => Number(x.pid) === Number(pid));
+    const mineAll = rows.filter((x) => Number(x.pid) === Number(pid));   // up to CW_MAX_SHIFTS, earliest first
+    const mine = mineAll[0];
     return {
       shifts: rows.map((x) => ({ id: x.id, pid: x.pid, name: x.name, start: x.start_at,
                                 hours: Math.round((x.end_at - x.start_at) / 1800) / 2,   // half-hour steps (0.5, 1, 1.5 ...)
                                 minutes: Math.round((x.end_at - x.start_at) / 60),
                                 role: x.role, est_hits: x.est_hits, need_hits: x.need_hits })),
-      mine: mine ? mine.id : null,
+      mine: mine ? mine.id : null,                 // earliest (kept for older scripts)
+      mine_ids: mineAll.map((x) => x.id),           // Nov 10 2026: all of this member's shifts (max 2)
+      max_shifts: CW_MAX_SHIFTS,
     };
   }
 
@@ -1230,6 +1233,9 @@ export const CW_ROLES = { primary: "Primary", backup: "Backup", backup2: "2nd ba
 // Nov 10 2026 (user): the calendar is at most 48 hours ahead, in 30-minute slots (shifts start on :00 / :30 TCT and
 // last 30 min - 6 h in 30-minute steps)
 export const CW_MAX_HOURS = 6, CW_AHEAD_S = 48 * 3600, CW_SLOT_S = 1800;
+// Nov 10 2026 (user): a member may hold up to 2 shifts at once, and never two roles in the same 30-minute slot
+// (their own shifts can't overlap)
+export const CW_MAX_SHIFTS = 2;
 
 // every shift that hasn't ended, inside the 7-day window
 export async function cwShiftRows(env) {
@@ -1272,8 +1278,11 @@ export async function cwShiftAdd(env, pid, name, start, hours, role, stats, minu
   const end = start + slots * CW_SLOT_S;
   if (end <= nowS) return no("That time has already passed.");
   if (start < nowS - CW_SLOT_S || start > nowS + CW_AHEAD_S) return no("Pick a time within the next 48 hours.");
-  const mine = await env.OC_DB.prepare("SELECT id FROM cw_shift WHERE pid = ? AND end_at > ?").bind(pid, nowS).first();
-  if (mine) return no("You already have a chain watch shift - one at a time. Cancel it first to pick another.", 409);
+  const mine = (await env.OC_DB.prepare("SELECT id, role, start_at, end_at FROM cw_shift WHERE pid = ? AND end_at > ?").bind(pid, nowS).all()).results || [];
+  if (mine.length >= CW_MAX_SHIFTS)
+    return no(`You already have ${CW_MAX_SHIFTS} chain watch shifts - that's the most at once. Cancel one to pick another.`, 409);
+  const own = mine.find((x) => x.start_at < end && x.end_at > start);   // one role per slot: own shifts can't overlap
+  if (own) return no(`You're already ${CW_ROLES[own.role] || own.role} for part of that time - one role per time slot.`, 409);
   const clash = await env.OC_DB.prepare("SELECT name, start_at, end_at FROM cw_shift WHERE role = ? AND start_at < ? AND end_at > ? LIMIT 1")
     .bind(role, end, start).first();
   if (clash) return no(`${CW_ROLES[role]} is already taken by ${clash.name} for part of that time.`, 409);
