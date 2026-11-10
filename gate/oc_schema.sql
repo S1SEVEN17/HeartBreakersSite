@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS cw_shift (
 );
 CREATE INDEX IF NOT EXISTS idx_cw_shift_time ON cw_shift (start_at, end_at);
 CREATE INDEX IF NOT EXISTS idx_cw_shift_pid ON cw_shift (pid, end_at);
+-- Chain Watch schedule Discord pings (Nov 10 2026, user): each "shift starting" message's Discord id, so the Hub
+-- deletes it once the slot ends (end_at = the latest end among the shifts in that message). Kept separately from
+-- cw_shift so a cancelled shift doesn't lose its message. Only the message id - never the webhook URL.
+CREATE TABLE IF NOT EXISTS cw_ping (
+  msg_id   TEXT PRIMARY KEY,
+  end_at   INTEGER NOT NULL,          -- epoch s: delete the message once this has passed
+  created  INTEGER NOT NULL,          -- epoch ms
+  tries    INTEGER NOT NULL DEFAULT 0 -- failed delete attempts (given up after 20)
+);
+CREATE INDEX IF NOT EXISTS idx_cw_ping_end ON cw_ping (end_at);
 
 -- NEWEST RATE PER CRIME/ROLE (Nov 2026, the user's rule: only the newest rate for each crime/role counts). oc_cpr keeps
 -- ONE ts per member, so an old role looked as new as the last share. This keeps WHEN each role's rate was last read:

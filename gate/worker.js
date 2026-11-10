@@ -1886,9 +1886,37 @@ async function cwSchedule(env, req, url, who) {
 // (Worker secret CW_DISCORD_WEBHOOK, copied from the DISCORD_WEBHOOK_CHAINS GitHub secret; never logged).
 // Mentions: the member's linked Discord account (Torn /v2/user/{id}/discord on the Hub key, 1 call each, not
 // saved), else "Name [ID]" (the user's rule for unknown Discord users).
+// The chains webhook URL (secret, never logged) + an optional suffix ("?wait=true", "/messages/{id}").
+function cwHookUrl(env, suffix) {
+  const u = new URL(String(env.CW_DISCORD_WEBHOOK).trim());
+  const extra = suffix || "";
+  if (extra.startsWith("?")) { new URLSearchParams(extra.slice(1)).forEach((v, k) => u.searchParams.set(k, v)); return u.toString(); }
+  u.pathname = u.pathname.replace(/\/$/, "") + extra;
+  return u.toString();
+}
+// SELF-DELETING SHIFT PINGS (Nov 10 2026, user): once a ping's time slot has ended (the latest end among the shifts
+// in that message), delete the Discord message with the same webhook (DELETE /webhooks/{id}/{token}/messages/{msg}).
+// Runs with cwShiftAlerts on the 3-minute timer, so a message goes within ~3 min of its slot ending. Already gone
+// (404) counts as done; other failures retry on the next run, up to 20 tries. Counts only - nothing logged.
+async function cwPingCleanup(env, nowS) {
+  let rows = [];
+  try {
+    rows = (await env.OC_DB.prepare("SELECT msg_id, tries FROM cw_ping WHERE end_at <= ? ORDER BY end_at LIMIT 10").bind(nowS).all()).results || [];
+  } catch (e) { return; }                                  // table not there yet (first deploy)
+  for (const r of rows) {
+    let done = false;
+    try {
+      const res = await fetch(cwHookUrl(env, `/messages/${encodeURIComponent(r.msg_id)}`), {method: "DELETE"});
+      done = res.ok || res.status === 404;
+    } catch (e) { done = false; }
+    if (done || Number(r.tries) >= 19) await env.OC_DB.prepare("DELETE FROM cw_ping WHERE msg_id = ?").bind(r.msg_id).run().catch(() => {});
+    else await env.OC_DB.prepare("UPDATE cw_ping SET tries = tries + 1 WHERE msg_id = ?").bind(r.msg_id).run().catch(() => {});
+  }
+}
 async function cwShiftAlerts(env) {
   if (!env.OC_DB || !env.CW_DISCORD_WEBHOOK) return;
   const nowS = Math.floor(Date.now() / 1000);
+  await cwPingCleanup(env, nowS);                          // delete pings whose time slot has ended
   const {results} = await env.OC_DB.prepare("SELECT id, pid, name, role, start_at, end_at FROM cw_shift " +
     "WHERE notified = 0 AND start_at <= ? AND start_at > ? AND end_at > ? ORDER BY start_at").bind(nowS + 180, nowS - 600, nowS).all();
   if (!results || !results.length) return;
@@ -1912,8 +1940,16 @@ async function cwShiftAlerts(env) {
     const body = {content: `⛓️ **Chain watch shift ${Number(st) > nowS ? "starting" : "started"} <t:${st}:R>** (<t:${st}:t>)\n${lines.join("\n")}`,
                   allowed_mentions: {users}};
     try {
-      const res = await fetch(String(env.CW_DISCORD_WEBHOOK).trim(), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      // ?wait=true -> Discord returns the message (its id), so it can be deleted when the slot ends
+      const res = await fetch(cwHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       if (!res.ok) continue;                               // try again on the next run
+      let msgId = null;
+      try { const m = await res.json(); msgId = m && /^\d+$/.test(String(m.id)) ? String(m.id) : null; } catch (e) { msgId = null; }
+      if (msgId) {
+        const endAt = Math.max(...rows.map(r => Number(r.end_at)));
+        await env.OC_DB.prepare("INSERT OR REPLACE INTO cw_ping (msg_id, end_at, created, tries) VALUES (?, ?, ?, 0)")
+          .bind(msgId, endAt, Date.now()).run().catch(() => {});
+      }
     } catch (e) { continue; }
     await env.OC_DB.prepare(`UPDATE cw_shift SET notified = 1 WHERE id IN (${rows.map(() => "?").join(",")})`).bind(...rows.map(r => r.id)).run();
   }
