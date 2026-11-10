@@ -270,6 +270,8 @@ export default {
     const runs = event.cron.startsWith("7,") ? [["chainwatch.yml", {}]]
       : [["crimes.yml", {}]].concat(minute === 0 ? [["banner.yml", {scheduled: "1"}]] : []);
     ctx.waitUntil(Promise.all(runs.map(([wf, inputs]) => dispatch(env, wf, inputs))));
+    // Chain timer opt-ins -> the Chain Watch room every 15 minutes (leavers / deleted keys drop out; 1 GitHub read)
+    if (!event.cron.startsWith("7,")) ctx.waitUntil(cwOptinSync(env, null));
   },
 };
 
@@ -401,7 +403,20 @@ async function tornUser(key, selections) {
   const r = await fetch(`https://api.torn.com/user/?selections=${selections}&key=${encodeURIComponent(key)}&comment=${encodeURIComponent(API_COMMENT)}`);
   return r.json();
 }
-const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready, oc: !!e.oc, since: e.since, updated: e.updated} : {opted: false};
+const publicEntry = e => e ? {opted: true, bs: e.bs, ws: e.ws, ready: !!e.ready, oc: !!e.oc, cw: !!e.cw, since: e.since, updated: e.updated} : {opted: false};
+// CHAIN TIMER OPT-IN (Nov 2026, claude/chainwatch-away-and-optin-addendum.md): members with cw on -> the Chain Watch
+// room gets their ENCRYPTED key ({pid: sealed}) and may read faction/chain with it during a live chain, <= 2 calls/min,
+// only while their own script isn't connected (chainroom.js readChainWithMemberKey). Sent on every opt-in save and
+// re-synced every 15 minutes (so leavers / deleted keys drop out).
+async function cwOptinSync(env, data) {
+  if (!env.CHAINROOM) return;
+  try {
+    if (!data) data = (await readOptin(env, false)).data;
+    const members = {};
+    Object.keys(data.members || {}).forEach(i => { const e = data.members[i]; if (e && e.cw && e.k) members[i] = e.k; });
+    await cwStub(env).fetch("https://do/cw-optin", {method: "POST", body: JSON.stringify({members})});
+  } catch (e) { /* next sync */ }
+}
 // OC PASS RATES WITH THE STORED KEY (Nov 2026, My data & sharing "🕵️ OC pass rates"): the member's opt-in key
 // (the same encrypted key as their stats) reads THEIR checkpoint pass rates - v2 user/organizedcrimes: only the open
 // roles of recruiting crimes carry the key owner's rate - into oc_cpr (prod), exactly like the OC Optimizer script's
@@ -519,7 +534,7 @@ async function mySharedData(env, who) {
   try {
     const {data} = await readOptin(env, true);
     const e = data.members[id];
-    out.optin = e ? {bs: e.bs, ws: e.ws, ready: !!e.ready, oc: !!e.oc, since: e.since, updated: e.updated, key_stored: !!e.k} : null;
+    out.optin = e ? {bs: e.bs, ws: e.ws, ready: !!e.ready, oc: !!e.oc, cw: !!e.cw, since: e.since, updated: e.updated, key_stored: !!e.k} : null;
     if (e && (e.bs !== "off" || e.ws !== "off")) {
       const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/data/optin_stats.json?ref=main`,
                             {headers: Object.assign(ghHeaders(env), {Accept: "application/vnd.github.raw"})});
@@ -558,15 +573,17 @@ async function optinRoute(env, req, who) {
     if (req.method === "DELETE") {
       await writeOptin(env, id, () => null, `Opt-in data deleted ${tag}`);
       await ocCprDrop(env, id);
+      await cwOptinSync(env, null);
       return Response.json({opted: false}, H);
     }
     if (req.method !== "PUT") return new Response("Method not allowed", {status: 405});
     const j = await req.json().catch(() => null);
     if (!j) return new Response("Bad request", {status: 400});
-    const bs = SHARE.includes(j.bs) ? j.bs : "off", ws = SHARE.includes(j.ws) ? j.ws : "off", ready = !!j.ready, oc = !!j.oc;
-    if (bs === "off" && ws === "off" && !ready && !oc) {
+    const bs = SHARE.includes(j.bs) ? j.bs : "off", ws = SHARE.includes(j.ws) ? j.ws : "off", ready = !!j.ready, oc = !!j.oc, cw = !!j.cw;
+    if (bs === "off" && ws === "off" && !ready && !oc && !cw) {
       await writeOptin(env, id, () => null, `Opt-in turned off ${tag}`);
       await ocCprDrop(env, id);
+      await cwOptinSync(env, null);
       return Response.json({opted: false}, H);
     }
     let sealed = null;
@@ -586,7 +603,7 @@ async function optinRoute(env, req, who) {
     await writeOptin(env, id, cur => {
       if (!cur && !sealed) { missing = true; return null; }
       sealedNow = sealed || cur.k;
-      return {k: sealedNow, bs, ws, ready, oc, since: cur ? cur.since : now, updated: now};
+      return {k: sealedNow, bs, ws, ready, oc, cw, since: cur ? cur.since : now, updated: now};
     }, `Opt-in settings saved ${tag}`);
     if (missing) return new Response("Add your Limited API key first.", {status: 400});
     // OC pass rates: read straight away when turned on (Nov 2026: on opting in), then whenever the Hub finds a NEW
@@ -594,7 +611,8 @@ async function optinRoute(env, req, who) {
     let ocNote = null;
     if (oc) ocNote = await ocPullMember(env, id, who.name, await openKey(env, sealedNow)).catch(() => null);
     else await ocCprDrop(env, id);
-    return Response.json(Object.assign(publicEntry({bs, ws, ready, oc, since: now, updated: now}), {oc_now: ocNote}), H);
+    await cwOptinSync(env, (await readOptin(env, false)).data);   // Chain timer on/off reaches the room at once
+    return Response.json(Object.assign(publicEntry({bs, ws, ready, oc, cw, since: now, updated: now}), {oc_now: ocNote}), H);
   } catch (e) {
     return new Response(e.message || "Something went wrong", {status: 502});
   }

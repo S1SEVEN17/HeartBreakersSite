@@ -18,6 +18,9 @@
   OC PASS RATES (Nov 2026): a fourth option on the SAME stored key - oc: true -> the gatekeeper reads the member's
   OC checkpoint pass rates with their encrypted key (only when the Hub finds a new crime - ocOptinPull in gate/worker.js, Nov 2026) into
   the shared rates the OC Management Team Builder and the OC Optimizer script use.
+  CHAIN TIMER (Nov 2026, claude/chainwatch-away-and-optin-addendum.md): a fifth option, cw: true -> the Chain Watch
+  room may read faction/chain with the member's stored key during a live chain only, <= 2 calls/min, only while their
+  own Chain Watch script isn't connected (gate/chainroom.js readChainWithMemberKey). Off by default.
   KEY: ONE key for everything on this page, stored on the Hub encrypted ("Your key" panel says so plainly); the
   "How your key and data are used" disclosure is part of the sharing panel.
   VIEW MY SHARED DATA: GET /m/shared.json (gate/worker.js mySharedData) - everything the member shares, who sees it,
@@ -86,15 +89,17 @@ __MENU__
     <div class="seg" data-k="ready"><button data-v="false">Off</button><button data-v="true">Leaders</button></div></div>
   <div class="opt"><div class="t"><b>🕵️ OC pass rates</b><span>Your checkpoint pass rate per organized crime role - read whenever the Hub finds a new crime, so leaders' Team Builder and the OC Optimizer script can put you in the roles you pass best</span></div>
     <div class="seg" data-k="oc"><button data-v="false">Off</button><button data-v="true">On</button></div></div>
+  <div class="opt"><div class="t"><b>⛓️ Chain timer (during live chains)</b><span>Lets the Hub read the faction chain with your stored key during a live chain, only when your own Chain Watch script isn't connected, to keep the shared timer alive. Chain reads only; never your personal data; at most ~2 calls/min.</span></div>
+    <div class="seg" data-k="cw"><button data-v="false">Off</button><button data-v="true">On</button></div></div>
   <div class="btns"><button class="go" id="save">Save</button><button class="del" id="del">Delete my key and all my data</button></div>
   <div id="msg"></div>
   <div class="how"><h3>📜 How your key and data are used</h3>
   <table>
-    <tr><td>Key storage</td><td><span class="badge hub">🔒 Stored on the Hub (encrypted)</span><br>Used only for automation (battle / work stats once a day at 00:00 TCT, OC pass rates whenever the Hub finds a new crime, and war readiness once a minute only while a leader has the War readiness page open) · never shared or shown</td></tr>
+    <tr><td>Key storage</td><td><span class="badge hub">🔒 Stored on the Hub (encrypted)</span><br>Used only for automation (battle / work stats once a day at 00:00 TCT, OC pass rates whenever the Hub finds a new crime, war readiness once a minute only while a leader has the War readiness page open, and - if you turn on the chain timer - the faction chain at most ~2 times a minute during a live chain while your own Chain Watch script isn't connected) · never shared or shown</td></tr>
     <tr><td>Key access level</td><td>Limited Access</td></tr>
     <tr><td>Data storage</td><td>Persistent - until you delete it here, turn everything off, leave Heart Breakers, or your key stops existing</td></tr>
     <tr><td>Data sharing</td><td>Your choice per item: <b>faction leaders</b> only, or <b>faction members</b>. War readiness: leaders only. OC pass rates: <b>faction leaders</b> (OC Management) and <b>faction members using the OC Optimizer script</b> (its role suggestions show your name and rate). Never outside the faction</td></tr>
-    <tr><td>Purpose of use</td><td>Tracking your battle and work stat gains, war readiness for faction leaders' war planning, and building organized crime teams with the best pass rate in every role</td></tr>
+    <tr><td>Purpose of use</td><td>Tracking your battle and work stat gains, war readiness for faction leaders' war planning, building organized crime teams with the best pass rate in every role, and keeping the faction's shared chain timer accurate (chain timer: faction chain only - nothing about you is read or saved)</td></tr>
   </table>
   <ul>
     <li><b>Delete any time:</b> "Delete my key and all my data" removes your key at once and your saved stats with the next update.</li>
@@ -107,7 +112,7 @@ __MENU__
 <script>
 const CFG = __CONFIG__;
 const $ = id => document.getElementById(id);
-let S = {bs: "off", ws: "off", ready: "false", oc: "false"}, opted = false;
+let S = {bs: "off", ws: "off", ready: "false", oc: "false", cw: "false"}, opted = false;
 const day = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric"}) : "";
 function seg() { document.querySelectorAll(".seg").forEach(g => g.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(S[g.dataset.k])))); }
 document.querySelectorAll(".seg").forEach(g => g.addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return; S[g.dataset.k] = b.dataset.v; seg(); }));
@@ -120,7 +125,7 @@ function status(o) {
   $("keyl").innerHTML = opted ? "Replace your key (optional)" : "Torn API key with <b>Limited Access</b>";
   $("del").style.display = opted ? "" : "none";
   $("k1s").textContent = opted ? "Stored ✓" : "None";
-  if (opted) S = {bs: o.bs || "off", ws: o.ws || "off", ready: String(!!o.ready), oc: String(!!o.oc)};
+  if (opted) S = {bs: o.bs || "off", ws: o.ws || "off", ready: String(!!o.ready), oc: String(!!o.oc), cw: String(!!o.cw)};
   seg();
 }
 const say = (t, ok) => { $("msg").textContent = t; $("msg").className = ok ? "ok" : "err"; };
@@ -133,10 +138,10 @@ async function call(method, body) {
 }
 $("save").onclick = async () => {
   const key = $("key").value.trim();
-  if (!opted && !key && (S.bs !== "off" || S.ws !== "off" || S.ready === "true" || S.oc === "true")) return say("Add your Limited API key first.");
+  if (!opted && !key && (S.bs !== "off" || S.ws !== "off" || S.ready === "true" || S.oc === "true" || S.cw === "true")) return say("Add your Limited API key first.");
   if (key && !/^[A-Za-z0-9]{16}$/.test(key)) return say("That doesn't look like a Torn API key (16 letters/numbers).");
   say("Checking with Torn and saving…", true);
-  try { const o = await call("PUT", {key: key || undefined, bs: S.bs, ws: S.ws, ready: S.ready === "true", oc: S.oc === "true"}); $("key").value = "";
+  try { const o = await call("PUT", {key: key || undefined, bs: S.bs, ws: S.ws, ready: S.ready === "true", oc: S.oc === "true", cw: S.cw === "true"}); $("key").value = "";
     status(o);
     // (Nov 2026) read straight away on opting in, then on the schedule: stats 00:00 TCT, OC rates on each new crime
     const ocTxt = !o.oc ? "" : o.oc_now && o.oc_now.roles ? ` OC pass rates shared (${o.oc_now.roles} role${o.oc_now.roles === 1 ? "" : "s"}) - updated whenever the Hub finds a new crime.`
@@ -146,7 +151,7 @@ $("save").onclick = async () => {
 };
 $("del").onclick = async () => {
   if (!confirm("Delete your key and all your saved stats? This can't be undone.")) return;
-  try { status(await call("DELETE")); S = {bs: "off", ws: "off", ready: "false", oc: "false"}; seg(); say("Deleted ✓ - your key is gone now; saved stats go with the next update.", true); }
+  try { status(await call("DELETE")); S = {bs: "off", ws: "off", ready: "false", oc: "false", cw: "false"}; seg(); say("Deleted ✓ - your key is gone now; saved stats go with the next update.", true); }
   catch (e) { say(e.message); }
 };
 const ago = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : day(t / 1000); };
@@ -188,6 +193,8 @@ async function showViewer() {
   sec.push(`<div class="sec"><h4>🕵️ Organized crime pass rates</h4><div class="who">Shared with: ${oc ? "<b>Faction leaders</b> (OC Management) and <b>faction members using the OC Optimizer script</b>" : "nobody (not sharing)"}${oc && !(o && o.oc) ? " · <i>shared from the OC Optimizer script</i>" : ""}</div>` +
     (oc ? `<div class="muted" style="margin-bottom:4px">Last shared ${ago(oc.ts)} · ${ks.length} role${ks.length === 1 ? "" : "s"}</div><div class="vscroll"><table class="vt"><tr><th>Crime</th><th>Role</th><th>Pass rate</th></tr>` +
       ks.map(k => { const [c, r] = k.split("|"); return `<tr><td>${esc(c)}</td><td>${esc(r)}</td><td>${oc.roles[k]}%</td></tr>`; }).join("") + "</table></div>" : "") + "</div>");
+  // Chain timer: nothing is saved or shared - only faction chain readings feed the shared timer
+  sec.push(`<div class="sec"><h4>⛓️ Chain timer</h4><div class="who">${o && o.cw ? "<b>On</b> - during live chains your key may read the faction chain (~2 a minute at most) while your Chain Watch script isn't connected. Nothing about you is read or saved." : "Off - your key is never used for chain watch."}</div></div>`);
   if (o) sec.push(`<div class="sec muted">Opted in since ${day(o.since)} · settings last changed ${day(o.updated)}</div>`);
   v.innerHTML = sec.join("");
 }

@@ -73,6 +73,10 @@ const CHAIN_TIMEOUT_S = 300;              // every hit resets the chain timer to
 const MIN_PACE_HITS_PER_HOUR = 12;        // the slowest pace that keeps a chain alive (1 hit / 5 min)
 const CONFIRM_READ_GAP_MS = 10000;        // a higher count from a script -> one confirming Hub read, at most every 10 s
 const RECRUIT_DAYS = 3;                   // Torn: members can't add chain hits during their first 72 h (Recruit)
+// STORED-KEY CHAIN READS (away/opt-in addendum, Nov 2026): members who turned on "Chain timer (during live chains)"
+const OPTIN_KEY_GAP_MS = 30000;           // each member's key at most once per 30 s (<= 2 calls/min)
+const OPTIN_TICK_MS = 15000;              // live chain + usable opt-in keys: the alarm also ticks between Hub reads
+const OPTIN_BAD_KEY_MS = 6 * 3600 * 1000; // a key Torn refuses is skipped this long
 
 // Free-plan self-governor (§8): incoming DO requests per UTC day (100k free).
 const DAILY_DO_REQUEST_SOFT = 70000;      // 70% -> "degraded": timers doubled
@@ -236,6 +240,10 @@ export class ChainRoom {
       turnUp: 0, turnUpAt: 0,// who's up (#1 eligible) and since when (for the backup alert)
       lastStats: {},         // pid -> the member's last stats report (kept after they leave the queue - schedule check)
       notices: {},           // pid -> [messages] waiting for a /cw/sync device
+      cwOptin: {},           // pid -> ENCRYPTED stored key (sealed by worker.js; opened only for a chain read)
+      cwOptinUsed: {},       // pid -> last time their key read the chain (ms)
+      cwOptinBad: {},        // pid -> when Torn refused their key (skipped for 6 h)
+      optinReads: 0, optinDay: "",
     }, saved || {});
     // Chain Watching Schedule (script addendum): kept in memory only, re-read from D1 when it changes / hourly
     this.sched = null; this.schedAt = 0; this.schedDirty = false;
@@ -275,6 +283,16 @@ export class ChainRoom {
     if (path === "/schedule-changed") {   // the Hub page changed a shift -> re-read + push to every script
       await this.reloadSchedule(true); this.broadcastDeltas();
       return Response.json({ ok: true });
+    }
+    if (path === "/cw-optin") {   // worker.js: the full list of "Chain timer" opt-ins {pid: sealed key} (save + every 15 min)
+      let b = {}; try { b = await request.json(); } catch (e) { /* ignore */ }
+      const list = b && b.members && typeof b.members === "object" ? b.members : {};
+      const next = {};
+      Object.keys(list).forEach((p) => { if (Number(p) > 0 && typeof list[p] === "string" && list[p]) next[Number(p)] = list[p]; });
+      this.mem.cwOptin = next;
+      Object.keys(this.mem.cwOptinBad).forEach((p) => { if (!next[p]) delete this.mem.cwOptinBad[p]; });
+      await this.save();
+      return Response.json({ ok: true, count: Object.keys(next).length });
     }
     if (path === "/laststats") {   // schedule page: one member's last stats report (worker.js, signed-in member's own)
       const pid = Number(new URL(request.url).searchParams.get("pid"));
@@ -364,6 +382,12 @@ export class ChainRoom {
       // CHAIN WATCHING SCHEDULE from the script (addendum): same rules as the Hub page (cwShiftAdd / cwShiftDelete)
       case "shift_add": case "shift_cancel": case "shift_remove": changed = await this.doShift(pid, t, msg); break;
       case "join": changed = this.doJoin(pid, msg); break;
+      // AWAY (addendum, Nov 2026): stay in the queue but don't get picked as up / backup until back
+      case "away": {
+        const q = this.mem.queue[pid];
+        if (q && !!msg.on !== !!q.away) { q.away = !!msg.on; q._offlineSince = 0; changed = true; }
+        break;
+      }
       case "leave":
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
         break;
@@ -399,7 +423,7 @@ export class ChainRoom {
     this.mem.queue[pid] = {
       pid,
       name: m.name || (this.conns.get(pid) && this.conns.get(pid).name) || "Unknown",
-      joined_at: Date.now(), hitting_until: 0,
+      joined_at: Date.now(), hitting_until: 0, away: false,
       stats: msg.stats ? sanitizeStats(msg.stats) : (this.mem.lastStats[pid] || null), hits: 0,
     };
     if (msg.stats) this.mem.lastStats[pid] = this.mem.queue[pid].stats;
@@ -559,8 +583,9 @@ export class ChainRoom {
     const mult = this.mem.level >= 1 ? 2 : 1;
 
     // ---- Hub Torn reads, each on its own cadence (API: Heart Breakers Hub - Chain Watch) ----
+    let hubChainRead = false;
     if (due(this.mem._chainAt, READ_MS.chain[stateKey] * mult, now)) {
-      this.mem._chainAt = now;
+      this.mem._chainAt = now; hubChainRead = true;
       const d = await this.tornGet("faction/chain");
       if (d && d.chain) this.applyHubChain(d.chain);
     }
@@ -573,6 +598,14 @@ export class ChainRoom {
     if (READ_MS.members[stateKey] && due(this.mem.membersAt, READ_MS.members[stateKey] * mult, now)) {
       await this.readMembers(now);
     }
+    // ---- stored-key chain reads (opt-in "Chain timer (during live chains)") - live chain only, one key per tick,
+    //      each key <= 2 calls/min, never a member whose own script is connected
+    let optinNext = 0;
+    if (live && this.mem.level < 2) {
+      const pick = this.nextOptinKey(now);
+      if (pick && !hubChainRead) await this.readChainWithMemberKey(pick, now);   // between the Hub's own reads
+      if (this.nextOptinKey(now + OPTIN_TICK_MS)) optinNext = OPTIN_TICK_MS;
+    }
 
     // ---- housekeeping ----
     // schedule: drop ended shifts once an hour passes (shifts end on whole hours) - 1 D1 read
@@ -584,8 +617,44 @@ export class ChainRoom {
     await this.save();
     this.broadcastDeltas();
 
-    const base = Math.min(READ_MS.chain[stateKey] || 120000, READ_MS.attacks[stateKey] || 120000, READ_MS.members[stateKey] || 120000);
+    let base = Math.min(READ_MS.chain[stateKey] || 120000, READ_MS.attacks[stateKey] || 120000, READ_MS.members[stateKey] || 120000);
+    if (optinNext) base = Math.min(base, optinNext);       // tick between Hub reads while opt-in keys can help
     await this.storage.setAlarm(now + Math.max(5000, base) * mult);
+  }
+
+  /* ---- STORED-KEY CHAIN READS (away/opt-in addendum §2, contract §4) -------------------------------------------
+   * Members who turned on "Chain timer (during live chains)" on My data & sharing. Their key is kept ENCRYPTED here
+   * (sealed by worker.js) and opened only for one faction/chain read: during a live chain, at most once per 30 s per
+   * key, and only while that member's own Chain Watch script isn't connected. The reading is applied exactly like a
+   * script reading (shorten-only + confirmed-hit refresh). Never starts the read loop (only runs inside it).
+   * ------------------------------------------------------------------------------------------------------------- */
+  nextOptinKey(now) {
+    const ids = Object.keys(this.mem.cwOptin || {}).map(Number).filter((p) =>
+      this.mem.members[p]                                            // still in the faction
+      && !this.conns.has(p) && !this.mem.syncSeen[p]                 // their own script isn't connected
+      && !(this.mem.cwOptinBad[p] && now - this.mem.cwOptinBad[p] < OPTIN_BAD_KEY_MS)
+      && now - (this.mem.cwOptinUsed[p] || 0) >= OPTIN_KEY_GAP_MS);   // <= 2 calls/min per key
+    if (!ids.length) return 0;
+    ids.sort((a, b) => (this.mem.cwOptinUsed[a] || 0) - (this.mem.cwOptinUsed[b] || 0));   // least recently used
+    return ids[0];
+  }
+  async readChainWithMemberKey(pid, now) {
+    this.mem.cwOptinUsed[pid] = now;
+    let key;
+    try { key = await openSealedKey(this.env, this.mem.cwOptin[pid]); } catch (e) { this.mem.cwOptinBad[pid] = now; return; }
+    try {
+      // API: Heart Breakers Hub - Chain Watch (faction/chain with the member's opted-in key, Authorization header)
+      const base = this.env.TORN_API_BASE || "https://api.torn.com";
+      const res = await fetch(`${base}/v2/faction/chain?comment=${encodeURIComponent(TORN_COMMENT)}`,
+        { headers: { Authorization: "ApiKey " + key, Accept: "application/json" } });
+      const d = await res.json();
+      key = null;
+      if (d && d.error) { if ([2, 10, 13, 16, 18].includes(Number(d.error.code))) this.mem.cwOptinBad[pid] = now; return; }
+      const day = todayUTC();
+      if (this.mem.optinDay !== day) { this.mem.optinDay = day; this.mem.optinReads = 0; }
+      this.mem.optinReads++;
+      if (d && d.chain) this.applyScriptChain(d.chain);
+    } catch (e) { /* network - try again next tick */ }
   }
 
   /* ---- member list: names, leader rights, online status of queued members (1 call) ---- */
@@ -685,7 +754,7 @@ export class ChainRoom {
         delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; return;
       }
       const st = this.mem.status[q.pid];
-      if (st && st.status === "Offline") {
+      if (st && st.status === "Offline" && !q.away) {   // away = a soft pause: no offline removal
         q._offlineSince = q._offlineSince || now;
         // paused while the chain cools down: the queue is for the NEXT chain then
         if (!cooling && idx < 2 && now - q._offlineSince > 5 * 60 * 1000) { delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; } // #1/#2 offline 5 min+
@@ -810,7 +879,7 @@ export class ChainRoom {
     const c = this.mem.chain || {};
     const cur = Number(c.current) || 0;
     const q = this.orderedQueue();
-    const able = q.filter((x) => x.can_hit);
+    const able = q.filter((x) => x.can_hit && !x.away);   // up / backup: can attack AND not away
     const cfg = this.mem.config || CW_DEFAULT_CONFIG;
     const next = nextBonus(cur);
     const b = this.mem.bonus && this.mem.bonus.at === next ? this.mem.bonus : null;
@@ -850,7 +919,7 @@ export class ChainRoom {
       .sort((a, b) => ((b.ok ? 1 : 0) - (a.ok ? 1 : 0)) || ((b.e == null ? -1 : b.e) - (a.e == null ? -1 : a.e)) || (a.q.joined_at - b.q.joined_at));
     if (raw) return list.map((x) => x.q);
     return list.map(({ q, e, ok }) => ({
-      pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e, can_hit: ok,
+      pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e, can_hit: ok, away: !!q.away,
       hitting_until: q.hitting_until || 0, stats: q.stats || null, hits: q.hits || 0,
     }));
   }
@@ -942,6 +1011,8 @@ export class ChainRoom {
       mode: this.modeOf(), reason: this.reasonOf(), requests_today: this.mem.usageCount,
       alarm: (await this.storage.getAlarm()) != null, last_error: this.mem.lastErr || "",
       homepage_readings_today: this.mem.webDay === todayUTC() ? this.mem.webReadings || 0 : 0,
+      optin_keys: Object.keys(this.mem.cwOptin || {}).length,
+      optin_reads_today: this.mem.optinDay === todayUTC() ? this.mem.optinReads || 0 : 0,
     });
   }
 }
@@ -1090,4 +1161,19 @@ export async function cwShiftDelete(env, id, pid, isLeader) {
   if (Number(row.pid) !== Number(pid) && !isLeader) return { ok: false, error: "You can only cancel your own shift - leaders can remove others'.", status: 403 };
   await env.OC_DB.prepare("DELETE FROM cw_shift WHERE id = ?").bind(row.id).run();
   return { ok: true };
+}
+
+/* ----------------------------------------------------------------------------
+ * Open a member's stored key - the SAME scheme as worker.js optinKey/openKey (AES-256-GCM, key =
+ * sha256(MEMBER_DIR|LEADER_DIR|hb-optin), base64url of iv + ciphertext). Only ever held in a local variable for one
+ * request; never stored, logged or sent anywhere but Torn.
+ * -------------------------------------------------------------------------- */
+async function openSealedKey(env, sealed) {
+  const raw = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${env.MEMBER_DIR}|${env.LEADER_DIR}|hb-optin`));
+  const k = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"]);
+  const b = String(sealed).replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b + "===".slice((b.length + 3) % 4));
+  const all = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.slice(0, 12) }, k, all.slice(12));
+  return new TextDecoder().decode(pt).trim();
 }
