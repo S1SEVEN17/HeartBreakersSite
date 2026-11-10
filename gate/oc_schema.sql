@@ -110,3 +110,14 @@ CREATE TABLE IF NOT EXISTS hub_script (
   updated     INTEGER NOT NULL,           -- epoch ms
   updated_by  TEXT NOT NULL DEFAULT ''    -- leader's Torn name
 );
+
+-- CHAIN WATCH SHIFT ATTENDANCE (Nov 10 2026, user): per shift, time the watcher spent in the queue (not away) and
+-- their landed hits during it - written by the ChainRoom while the shift runs. No row for an ended shift = the room
+-- never saw them in the queue (missed). Removed with the shift when it's cancelled / removed.
+CREATE TABLE IF NOT EXISTS cw_att (
+  shift_id    INTEGER PRIMARY KEY,      -- cw_shift.id
+  in_queue_s  INTEGER NOT NULL DEFAULT 0,
+  hits        INTEGER NOT NULL DEFAULT 0,
+  first_in    INTEGER,                  -- epoch s: first time in the queue during the shift
+  updated     INTEGER NOT NULL          -- epoch ms
+);

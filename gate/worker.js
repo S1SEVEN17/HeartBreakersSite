@@ -845,7 +845,7 @@ async function ocIdentify(env, ctx, key) {
 // teams; the script asks POST /oc/plan for what applies to the CALLER.
 //   D1 oc_config (env, k, v JSON, ts, by):  k = 'disabled' ["Crime", ...]   k = 'plan' {teams: [...], ...}
 //   POST /oc/plan {key, env}   (script; key in the body, checked like /oc/cpr)
-//        -> {ok:true, disabled:[...], assignment: null | {crime, position, team, rate, difficulty, deployed}, plan_ts}
+//        -> {ok:true, disabled:[...], assignment: null | {crime, position, team, rate, difficulty, deployed, key, by, ...}, plan_ts}
 //        Only the caller's OWN assignment is returned - nobody else's.
 //   Leaders (pass cookie, /l/oc/...):
 //     GET  /l/oc/config.json?env=   -> {disabled, plan, disabled_ts, plan_ts, disabled_by, plan_by}
@@ -958,6 +958,14 @@ async function ocPlanObj(env, envName, id) {
   //   recruiting   a Recruiting instance of the crime has at least one open slot
   //   role_open    a Recruiting instance has the member's role (base role, "#n" ignored) open
   //   spawn_needed !role_open -> the script warns "this crime needs to be spawned"
+  // ASSIGNMENT NOTICES (Nov 10 2026, user: "Tell the user through the script. This can also happen when leadership
+  // build teams."): `key` changes whenever the member's assignment changes (crime / exact slot / instance / queued),
+  // whoever built it - so the script can show "New OC assignment" / "Your OC assignment changed" once per change.
+  // `by` = who built the plan: "Automatic" (the Hub's planner) or the leader who deployed it on OC Management.
+  if (assignment) {
+    assignment.key = [assignment.crime, assignment.position, assignment.crime_id || "", assignment.queued ? "q" : ""].join("|");
+    assignment.by = /^auto/i.test(String(cfg.plan_by || "")) ? "Automatic" : String(cfg.plan_by || "");
+  }
   if (assignment) Object.assign(assignment, assignment.crime_id
     ? (() => { const c = (crimes || []).find(x => String(x.id) === String(assignment.crime_id));
         const open = !!(c && c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user && ((sl.position_info && sl.position_info.label) || sl.position) === assignment.position));
@@ -1913,6 +1921,30 @@ async function cwLive(env) {
 async function cwPokeRoom(env) {   // tell every connected script about the change
   try { if (env.CHAINROOM) await cwStub(env).fetch("https://do/schedule-changed", {method: "POST"}); } catch (e) {}
 }
+// SHIFT ATTENDANCE (Nov 10 2026, user) - ended shifts of the last 30 days with what the ChainRoom recorded (D1 cw_att):
+//   kept   = in the queue (not away) for at least half the shift
+//   partly = in the queue for some of it
+//   missed = never in the queue (no cw_att row = the room never saw them queued)
+// -> {days: 30, members: [{pid, name, shifts, kept, partly, missed, hits, queue_s, shift_s}] (most shifts first),
+//     recent: [{id, pid, name, role, start, end, in_queue_s, hits, status}] (newest 25)}
+async function cwAttendance(env, nowS) {
+  let rows = [];
+  try {
+    rows = (await env.OC_DB.prepare("SELECT s.id, s.pid, s.name, s.role, s.start_at, s.end_at, a.in_queue_s, a.hits FROM cw_shift s " +
+      "LEFT JOIN cw_att a ON a.shift_id = s.id WHERE s.end_at <= ? AND s.end_at > ? ORDER BY s.end_at DESC LIMIT 500")
+      .bind(nowS, nowS - 30 * 86400).all()).results || [];
+  } catch (e) { return {days: 30, members: [], recent: []}; }   // cw_att not there yet (first deploy)
+  const by = {}, recent = [];
+  for (const r of rows) {
+    const len = Math.max(1, r.end_at - r.start_at), q = Number(r.in_queue_s) || 0;
+    const status = q >= len / 2 ? "kept" : q > 0 ? "partly" : "missed";
+    const m = by[r.pid] || (by[r.pid] = {pid: Number(r.pid), name: r.name, shifts: 0, kept: 0, partly: 0, missed: 0, hits: 0, queue_s: 0, shift_s: 0});
+    m.shifts++; m[status]++; m.hits += Number(r.hits) || 0; m.queue_s += Math.min(q, len); m.shift_s += len;
+    if (recent.length < 25) recent.push({id: r.id, pid: Number(r.pid), name: r.name, role: r.role, start: r.start_at, end: r.end_at,
+                                         in_queue_s: q, hits: Number(r.hits) || 0, status});
+  }
+  return {days: 30, members: Object.values(by).sort((a, b) => b.shifts - a.shifts || b.kept - a.kept), recent};
+}
 async function cwSchedule(env, req, url, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
   if (!env.OC_DB) return Response.json({ok: false, error: "Hub storage isn't set up yet"}, {status: 503});
@@ -1922,7 +1954,8 @@ async function cwSchedule(env, req, url, who) {
     return Response.json({ok: true, now: nowS, roles: CW_ROLES, max_hours: CW_MAX_HOURS, ahead_s: CW_AHEAD_S, slot_s: 1800, shifts,
       max_shifts: CW_MAX_SHIFTS,
       me: {pid, name: who.name, leader: !!who.leader, mine: shifts.find(x => Number(x.pid) === pid) || null,
-           mine_all: shifts.filter(x => Number(x.pid) === pid), stats: await cwMyStats(env, pid)}}, H);
+           mine_all: shifts.filter(x => Number(x.pid) === pid), stats: await cwMyStats(env, pid)},
+      attendance: await cwAttendance(env, nowS)}, H);
   }
   if (req.method === "POST") {
     let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }

@@ -251,6 +251,9 @@ export class ChainRoom {
       cwOptinUsed: {},       // pid -> last time their key read the chain (ms)
       cwOptinBad: {},        // pid -> when Torn refused their key (skipped for 6 h)
       optinReads: 0, optinDay: "",
+      shiftNudged: {},       // shift id -> when the "your shift has started" nudge went out (Nov 10 2026)
+      att: {},               // shift id -> {s, hits, first, lastHit, dirty} attendance while the shift runs (Nov 10 2026)
+      attTick: 0, attFlushAt: 0,
     }, saved || {});
     // Chain Watching Schedule (script addendum): kept in memory only, re-read from D1 when it changes / hourly
     this.sched = null; this.schedAt = 0; this.schedDirty = false;
@@ -500,6 +503,100 @@ export class ChainRoom {
     };
   }
 
+  /* ---- SHIFT START NUDGE (Nov 10 2026, user: "Start shift nudge") -------------------------------------------------
+   * When a scheduled watcher's shift is running and they're here (script connected / syncing) but NOT in the queue,
+   * the Hub sends them ONE alert per shift:
+   *   {t:"alert", kind:"shift_start", stage:0, shift:{id, role, role_name, start, end}, text, now}
+   * The script sounds / notifies it like the other alerts and shows "Join the queue". A member who wasn't here when
+   * the shift started gets it when they connect (while the shift still runs). Already queued at the start = no
+   * nudge. The room wakes at the shift's start for members who are here, so it lands on time.
+   * ------------------------------------------------------------------------------------------------------------- */
+  shiftNudges(now) {
+    if (!this.sched) return;
+    const nowS = Math.floor(now / 1000), live = new Set(this.sched.map((x) => String(x.id)));
+    Object.keys(this.mem.shiftNudged).forEach((id) => { if (!live.has(id)) delete this.mem.shiftNudged[id]; });
+    for (const x of this.sched) {
+      if (x.start_at > nowS || x.end_at <= nowS || this.mem.shiftNudged[x.id]) continue;
+      const pid = Number(x.pid);
+      if (this.mem.queue[pid]) { this.mem.shiftNudged[x.id] = now; continue; }   // already in the queue - nothing to say
+      if (!this.conns.has(pid) && !this.mem.syncSeen[pid]) continue;              // not here yet - when they connect
+      this.mem.shiftNudged[x.id] = now;
+      const roleName = CW_ROLES[x.role] || x.role;
+      const t = (s) => new Date(s * 1000).toISOString().slice(11, 16);
+      this.notify(pid, { t: "alert", kind: "shift_start", stage: 0, now,
+        shift: { id: x.id, role: x.role, role_name: roleName, start: x.start_at, end: x.end_at },
+        text: `Your chain watch shift has started (${roleName}, ${t(x.start_at)}-${t(x.end_at)} TCT) - join the queue.` });
+    }
+  }
+  nextShiftNudgeAt(now) {
+    if (!this.sched) return null;
+    let at = null;
+    for (const x of this.sched) {
+      const ms = x.start_at * 1000, pid = Number(x.pid);
+      if (ms <= now || this.mem.shiftNudged[x.id] || this.mem.queue[pid]) continue;
+      if (!this.conns.has(pid) && !this.mem.syncSeen[pid]) continue;
+      if (at == null || ms < at) at = ms;
+    }
+    return at;
+  }
+
+  /* ---- SHIFT ATTENDANCE (Nov 10 2026, user: "Shift attendance") --------------------------------------------------
+   * For each running shift: seconds the watcher spent in the queue (not away) and their landed hits during the
+   * shift. Kept in mem.att, written to D1 cw_att every 5 min and when the shift ends (one upsert per shift). The
+   * schedule page turns it into kept (in the queue >= half the shift) / partly / missed (never in the queue - also
+   * when the room never saw them, i.e. no cw_att row). Counted only while the room runs - it runs whenever anyone
+   * (incl. the watcher) has Chain Watch open, so a watcher who's there is always counted.
+   * ------------------------------------------------------------------------------------------------------------- */
+  trackAttendance(now) {
+    const last = this.mem.attTick || now;
+    this.mem.attTick = now;
+    if (!this.sched) return;
+    const dt = Math.max(0, Math.min(now - last, 300000)) / 1000;   // gap since the last tick (max 5 min)
+    const nowS = now / 1000;
+    for (const x of this.sched) {
+      if (x.start_at > nowS || x.end_at <= nowS - dt) continue;     // not running during this gap
+      const q = this.mem.queue[Number(x.pid)];
+      if (!q || q.away) continue;
+      const a = this.mem.att[x.id] || (this.mem.att[x.id] = { s: 0, hits: 0, first: 0, lastHit: 0, end: x.end_at, dirty: true });
+      // only the part of the gap inside the shift
+      const from = Math.max(nowS - dt, x.start_at, (Number(q.joined_at) || 0) / 1000), to = Math.min(nowS, x.end_at);
+      if (to > from) { a.s += to - from; a.dirty = true; }
+      if (!a.first) { a.first = Math.floor(Math.max(Number(q.joined_at) / 1000 || nowS, x.start_at)); a.dirty = true; }
+    }
+  }
+  attendanceHits(rows, FAC, facOf) {
+    if (!this.sched || !this.sched.length) return;
+    rows.forEach(({ a, ended, res }) => {
+      if (!ended || facOf(a.attacker) !== FAC || FAIL_RESULTS.includes(res)) return;
+      const pid = Number((a.attacker && a.attacker.id) || 0), es = ended / 1000;
+      const x = this.sched.find((r) => Number(r.pid) === pid && r.start_at <= es && es < r.end_at);
+      if (!x) return;
+      const at = this.mem.att[x.id] || (this.mem.att[x.id] = { s: 0, hits: 0, first: 0, lastHit: 0, end: x.end_at, dirty: true });
+      if (ended <= at.lastHit) return;                             // already counted (rows are oldest first)
+      at.lastHit = ended; at.hits++; at.dirty = true;
+    });
+  }
+  async flushAttendance(now, force) {
+    const ids = Object.keys(this.mem.att);
+    if (!ids.length || !this.env.OC_DB) return;
+    const nowS = now / 1000, due = force || now - (this.mem.attFlushAt || 0) >= 300000;
+    const write = ids.filter((id) => this.mem.att[id].dirty && (due || this.mem.att[id].end <= nowS));
+    if (write.length) {
+      this.mem.attFlushAt = now;
+      for (const id of write) {
+        const a = this.mem.att[id];
+        try {
+          await this.env.OC_DB.prepare("INSERT INTO cw_att (shift_id, in_queue_s, hits, first_in, updated) VALUES (?, ?, ?, ?, ?) " +
+            "ON CONFLICT (shift_id) DO UPDATE SET in_queue_s = excluded.in_queue_s, hits = excluded.hits, first_in = excluded.first_in, updated = excluded.updated")
+            .bind(Number(id), Math.round(a.s), a.hits, a.first || null, now).run();
+          a.dirty = false;
+        } catch (e) { /* table not there yet - next flush */ }
+      }
+    }
+    // ended + written: forget it
+    ids.forEach((id) => { const a = this.mem.att[id]; if (a.end <= nowS && !a.dirty) delete this.mem.att[id]; });
+  }
+
   /* ---- a message for one member (WebSocket now, or held for their next /cw/sync) ---- */
   notify(pid, obj) {
     const c = this.conns.get(pid);
@@ -603,7 +700,7 @@ export class ChainRoom {
     this.countUsage();
     const now = Date.now();
     this.pruneConns(now);
-    if (!this.present(now)) { await this.save(); return; } // nobody here: the loop stops; a connect re-arms it
+    if (!this.present(now)) { this.mem.attTick = 0; await this.flushAttendance(now, true); await this.save(); return; } // nobody here: the loop stops; a connect re-arms it
 
     const live = !!(this.mem.chain && this.mem.chain.current > 0);
     const stateKey = live ? "live" : (Object.keys(this.mem.queue).length ? "queued" : "idle");
@@ -637,6 +734,10 @@ export class ChainRoom {
     // ---- housekeeping ----
     // schedule: drop ended shifts once an hour passes (shifts end on whole hours) - 1 D1 read
     if (this.sched && Math.floor(now / 1800000) !== Math.floor(this.schedAt / 1800000)) await this.reloadSchedule(true);   // shifts end on :00 / :30
+    if (this.sched == null) await this.reloadSchedule(false);
+    this.shiftNudges(now);                                 // "your shift has started - join the queue"
+    this.trackAttendance(now);                             // time in the queue during each running shift
+    await this.flushAttendance(now);
     this.expireRetals(now);
     this.enforceQueueRules(now);
     this.maybeIdleWipe(now);
@@ -650,6 +751,8 @@ export class ChainRoom {
     let next = now + Math.max(5000, base) * mult;
     const al = this.nextAlertAt(now);                      // an alert due before the next read: wake up for it
     if (al && al < next) next = Math.max(now + 250, al);
+    const ns = this.nextShiftNudgeAt(now);                 // a present member's shift starting before then: wake for it
+    if (ns && ns < next) next = Math.max(now + 250, ns);
     await this.storage.setAlarm(next);
   }
 
@@ -741,6 +844,9 @@ export class ChainRoom {
       q.hits = (q.hits || 0) + 1;
       this.queueHit(Number(atkId), q.hits);
     });
+
+    // SHIFT ATTENDANCE (Nov 10 2026): landed hits by a scheduled watcher during their own shift (queued or not)
+    this.attendanceHits(rows, FAC, facOf);
 
     // incoming enemy hits become retal targets (5-min window)
     const next = {};
@@ -1301,6 +1407,7 @@ export async function cwShiftDelete(env, id, pid, isLeader) {
   if (!row) return { ok: false, error: id ? "That shift isn't on the schedule any more." : "You don't have a chain watch shift.", status: 404 };
   if (Number(row.pid) !== Number(pid) && !isLeader) return { ok: false, error: "You can only cancel your own shift - leaders can remove others'.", status: 403 };
   await env.OC_DB.prepare("DELETE FROM cw_shift WHERE id = ?").bind(row.id).run();
+  await env.OC_DB.prepare("DELETE FROM cw_att WHERE shift_id = ?").bind(row.id).run().catch(() => {});   // its attendance too
   return { ok: true };
 }
 

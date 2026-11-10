@@ -14,6 +14,8 @@
   Data: /m/cw/schedule.json (GET), /m/cw/schedule (POST {start, minutes, role} / DELETE ?id=), and the live board
   /m/cw/live.json (chain, who's up, queue - the Chain Watch room's own reading, every 30 s). No Torn call here.
   "Right now" / "Coming up" / "Stats" cards (Nov 10 2026, user: who's on, who's next, stats).
+  "Attendance · last 30 days" card + a reliability pill by each watcher's name (Nov 10 2026, user: shift attendance)
+  from schedule.json `attendance` (kept = in the queue at least half the shift, partly, missed).
   Placeholders: __CONFIG__ ({gate}), __MENU__.
 -->
 <style>
@@ -78,6 +80,8 @@ __MENU__
 
 <div class="card"><h2>Stats · next 48 hours</h2><div id="statsBody">Loading…</div></div>
 
+<div class="card"><h2>Attendance · last 30 days</h2><div id="attBody">Loading…</div></div>
+
 <div class="card">
   <h2>Schedule · next 48 hours</h2>
   <div class="key"><span><i style="background:#2e6b2e"></i>Primary covered</span><span><i style="background:#6b5a20"></i>Backup only</span><span><i style="background:#22151a"></i>Open</span><span>Each block is 30 minutes. Tap one to pick it.</span></div>
@@ -130,6 +134,26 @@ const energyPill = x => x.est_hits == null ? `<span class="pill">energy ?</span>
   : x.need_hits && x.est_hits < x.need_hits ? `<span class="pill w" title="Their energy covers about ${x.est_hits} of ${x.need_hits} hits alone">⚠ ${x.est_hits}/${x.need_hits} hits</span>`
   : `<span class="pill p">✓ energy</span>`;
 const onAt = t => D.shifts.filter(x => x.start_at <= t && x.end_at > t);
+// SHIFT ATTENDANCE: a watcher's record over the last 30 days ("4/5 kept"), shown by their name
+const attOf = pid => ((D.attendance && D.attendance.members) || []).find(m => m.pid === Number(pid));
+const relPill = pid => { const m = attOf(pid); if (!m) return `<span class="pill" title="No ended shifts in the last 30 days">new</span>`;
+  const cls = m.kept / m.shifts >= 0.8 ? "p" : m.kept / m.shifts >= 0.5 ? "b" : "w";
+  return `<span class="pill ${cls}" title="Last 30 days: ${m.kept} kept, ${m.partly} partly, ${m.missed} missed · ${m.hits} hits">${m.kept}/${m.shifts} kept</span>`; };
+
+function renderAtt() {
+  const A = D.attendance || {members: [], recent: []};
+  if (!A.members.length) { $("attBody").innerHTML = `<div class="note">No finished shifts in the last 30 days yet. A shift counts as <b>kept</b> when the watcher was in the queue for at least half of it.</div>`; return; }
+  const ST = {kept: ["p", "Kept"], partly: ["b", "Partly"], missed: ["w", "Missed"]};
+  const rows = A.members.map(m => `<div class="sh${m.pid === D.me.pid ? " me" : ""}"><span class="n">${prof(m.pid, m.name)}</span>`
+    + `<span class="pill p">${m.kept} kept</span>` + (m.partly ? `<span class="pill b">${m.partly} partly</span>` : "") + (m.missed ? `<span class="pill w">${m.missed} missed</span>` : "")
+    + `<span class="pill" title="Time in the queue during their shifts">${Math.round(m.queue_s / Math.max(1, m.shift_s) * 100)}% in queue</span><span class="pill">${m.hits} hits</span></div>`).join("");
+  const rec = A.recent.map(x => `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="t">${dayName(x.start)} ${hh(x.start)}–${hh(x.end)}</span>`
+    + `<span class="pill ${ROLE_CLASS[x.role] || ""}">${esc(D.roles[x.role] || x.role)}</span><span class="n">${prof(x.pid, x.name)}</span>`
+    + `<span class="pill ${ST[x.status][0]}">${ST[x.status][1]}</span><span class="pill">${span(x.in_queue_s)} queued · ${x.hits} hits</span></div>`).join("");
+  $("attBody").innerHTML = `<div class="list">${rows}</div>`
+    + `<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--gold);font-size:13px;min-height:32px">Recent shifts</summary><div class="list" style="margin-top:6px">${rec}</div></details>`
+    + `<div class="note">Kept = in the queue (not away) for at least half the shift · Partly = some of it · Missed = never in the queue. Counted by the Hub while Chain Watch is open.</div>`;
+}
 
 /* ---- RIGHT NOW: live chain (room's reading) + who's on duty per the schedule + who's up in the queue ---- */
 function renderNow() {
@@ -162,7 +186,7 @@ function renderNow() {
     const live = !L ? "" : lq ? `<span class="pill ${lq.can_hit && !lq.away ? "p" : "w"}">#${lq.pos} in queue${lq.away ? " · away" : !lq.can_hit ? " · can't hit" : ""}</span>`
       + (lq.energy != null ? `<span class="pill">${lq.energy} E</span>` : "") + (lq.connected ? "" : `<span class="pill w">script off</span>`)
       : `<span class="pill w">not in queue</span>`;
-    return `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>`
+    return `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>${relPill(x.pid)}`
       + `<span class="pill">until ${hh(x.end_at)} · ${span(x.end_at - t)} left</span>${live}</div>`;
   }).join("");
   $("nowBody").innerHTML = (tiles ? `<div class="live">${tiles}</div>` : (L && !L.ok ? `<div class="note">Live chain info unavailable right now.</div>` : ""))
@@ -174,7 +198,7 @@ function renderNext() {
   const t = nowS();
   const rows = Object.keys(D.roles).map(role => {
     const x = D.shifts.filter(s => s.role === role && s.start_at > t).sort((a, b) => a.start_at - b.start_at)[0];
-    return x ? `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>`
+    return x ? `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>${relPill(x.pid)}`
       + `<span class="pill">${dayKey(x.start_at) === dayKey(t) ? "" : dayName(x.start_at) + " "}${hh(x.start_at)}–${hh(x.end_at)}</span><span class="pill c">in ${span(x.start_at - t)}</span>${energyPill(x)}</div>`
       : `<div class="sh"><span class="r">${esc(D.roles[role])}</span><span class="n open">Nobody signed up</span></div>`;
   }).join("");
@@ -254,7 +278,7 @@ function render() {
     $("fGo").onclick = signUp;
     starts();
   }
-  renderNow(); renderNext(); renderStats();
+  renderNow(); renderNext(); renderStats(); renderAtt();
   // ---- 48-hour grid (30-minute cells, two half-day bars per TCT day) + shift list ----
   const out = [];
   for (let k = dayKey(now); k * 86400 < winEnd(); k++) {
@@ -282,7 +306,7 @@ function render() {
       return `<div class="sh${x.pid === me.pid ? " me" : ""}"><span class="t">${hh(x.start_at)}–${hh(x.end_at)}</span>`
         + (live ? `<span class="pill c">Current</span>` : "")
         + `<span class="pill ${ROLE_CLASS[x.role]}">${esc(D.roles[x.role])}</span>`
-        + `<span class="n">${prof(x.pid, x.name)}</span>` + energyPill(x)
+        + `<span class="n">${prof(x.pid, x.name)}</span>` + relPill(x.pid) + energyPill(x)
         + (me.leader && x.pid !== me.pid ? `<button class="x" data-del="${x.id}" title="Remove (leaders)">Remove</button>` : "") + `</div>`;
     }).join("");
     out.push(`<div class="day"><h3>${dayName(base)}${k === dayKey(now) ? " · today" : ""}<span>${dayShifts.length ? dayShifts.length + " shift" + (dayShifts.length > 1 ? "s" : "") : "nobody yet"}</span></h3>`
