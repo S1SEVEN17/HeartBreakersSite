@@ -55,7 +55,8 @@ const READ_MS = {
 const MEMBERS_HELLO_MAX_AGE_MS = 10 * 60 * 1000; // a hello re-reads the member list only if it's older than this
 
 const RETAL_WINDOW_MS = 5 * 60 * 1000;    // a retaliation is open for 5 min after the enemy's hit
-const HITTING_FLAG_MS = 45000;            // "I'm hitting now" lasts this long then auto-clears
+const HITTING_FLAG_MS = 20000;            // "I'm hitting now" lasts this long then auto-clears (was 45 s; 20 s per the
+                                          // alerts addendum UPDATE, Nov 10 2026 - the script uses 20 s too)
 const CALL_TTL_MS = 90000;                // a "called" retal lapses if not taken
 const SCRIPT_READING_FRESH_MS = 35000;    // a script reading younger than this beats the Hub's (cached) read
 const IDLE_WIPE_MS = 5 * 60 * 1000;       // chain ended + queue empty this long => clear transient data
@@ -76,7 +77,7 @@ const RECRUIT_DAYS = 3;
 // HUB-SENT ALERTS (Nov 2026, user): the Hub times every chain alert itself (it knows the timer to the second) and
 // pushes {t:"alert"} to the members it's for - a background tab still gets a WebSocket message at once, while a
 // script's own timers can be throttled to once a minute. "I'm hitting" PAUSES alerts until a hit lands or the flag
-// runs out (45 s). The script shows / sounds them per the member's own alert choices.
+// runs out (20 s). The script shows / sounds them per the member's own alert choices.
 const ALERT_EARLY_MS = 400;               // fire an alert this much before its exact second (network time)
 const TEST_ALERT_GAP_MS = 5000;           // "Test my alerts" at most once per 5 s per member                   // Torn: members can't add chain hits during their first 72 h (Recruit)
 // STORED-KEY CHAIN READS (away/opt-in addendum, Nov 2026): members who turned on "Chain timer (during live chains)"
@@ -399,7 +400,7 @@ export class ChainRoom {
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
         break;
       case "hitting": {
-        // "I'm hitting" also PAUSES every chain alert for everyone until a hit lands or the flag runs out (45 s)
+        // "I'm hitting" also PAUSES every chain alert for everyone until a hit lands or the flag runs out (20 s)
         const q = this.mem.queue[pid];
         if (q) { q.hitting_until = msg.on ? Date.now() + HITTING_FLAG_MS : 0; changed = true; }
         if (q && !msg.on) await this.ensureAlertAlarm();   // paused alerts may be due straight away
@@ -963,8 +964,16 @@ export class ChainRoom {
       // the most urgent stage reached wins if several came due at once (e.g. after a pause) - only that one is sent
       const due = this.alertStages().filter((x) => !lap.sent.includes(x.stage) && left <= x.sec * 1000 + ALERT_EARLY_MS);
       if (due.length) continue;
-      const first = s.stage === this.alertStages()[0].stage;
-      const to = first && cfg.firstAlertPrimaryOnly && turn && turn.up ? [turn.up] : able;
+      // RECIPIENTS BY QUEUE POSITION (alerts addendum UPDATE, Nov 10 2026, user):
+      //   alert 1 -> #1 only (who's up; config.firstAlertPrimaryOnly - off = everyone, as before)
+      //   alert 2 -> #1 and #2 only (who's up + backup)      alert 3 -> everyone in the queue who can act
+      // #1 / #2 = turn.up / turn.backup (the assigned bonus hitter is #1 when the next hit is the bonus);
+      // away / hospital / jail / flying members are never #1 / #2 and never in `able`.
+      const idx = this.alertStages().findIndex((x) => x.stage === s.stage);
+      const top = turn ? [turn.up, turn.backup].filter(Boolean) : [];
+      const to = idx === 0 ? (cfg.firstAlertPrimaryOnly && top.length ? top.slice(0, 1) : able)
+               : idx === 1 ? (top.length ? top : able)
+               : able;
       this.sendAlert(to, { kind: "timer", stage: s.stage, seconds: s.sec, chain: c.current, expires_at: c.expires_at,
         remaining_ms: left, now });
     }
