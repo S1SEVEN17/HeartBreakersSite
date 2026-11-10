@@ -562,7 +562,10 @@ export class ChainRoom {
    * THE ALARM — the single self-scheduled loop. NEVER setInterval.
    * ==================================================================== */
   async ensureAlarm() {
-    if ((await this.storage.getAlarm()) == null) await this.storage.setAlarm(Date.now() + 1000);
+    const at = await this.storage.getAlarm(), soon = Date.now() + 1000;
+    // no alarm yet, or the room has no chain reading at all (after an idle wipe) and the next tick is far off:
+    // read straight away so a member who just connected doesn't wait up to 2 minutes for the first timer
+    if (at == null || (!this.mem.chain && at > soon + 4000)) await this.storage.setAlarm(soon);
   }
 
   present(now) {
