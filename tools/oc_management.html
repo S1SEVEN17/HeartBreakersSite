@@ -560,14 +560,14 @@ function drawBuilder() {
       Anyone above the <b>role cap</b> in a crime is moved up to a harder crime they can pass (placed back only if no harder team can use them). Pay =
       max reward recorded (last 100 completions, items at market price) × payout % ÷ planning days - the same figure members see in the script. Auto-build also weighs team success. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
     ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
-      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Tick <b>Include members already in a crime</b> to plan their next crime.</div>` : ""}
+      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Members whose crime is ready within ${OPT.queueHours} h are queued for their next one automatically; tick <b>Include members already in a crime</b> to draft further ahead (the live plan won't reserve those).</div>` : ""}
     <div class="opts">
       <label>Target team success <input type="number" id="o_t" min="1" max="100" value="${OPT.target}">%</label>
       <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>
       <label title="Above this a member is moved up to a harder crime they can pass (100 = off)">Role cap <input type="number" id="o_cap" min="50" max="100" value="${OPT.cap}">%</label>
       <label title="Members' share of each payout. Empty = each crime's recorded payout %">Members' share <input type="number" id="o_sh" min="0" max="100" placeholder="recorded" value="${OPT.share ?? ""}" style="width:80px">%</label>
       <label title="Plan members whose current crime is ready within this many hours into their next crime (0 = off)">Queue members finishing within <input type="number" id="o_q" min="0" max="168" value="${OPT.queueHours}">h</label>
-      <label><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime</label>
+      <label title="Drafts on this board only - the live plan never reserves slots for members already in a crime unless they're queued (their crime is ready within the queue window)"><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime (draft only)</label>
       <label><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
     </div>
     <div class="bar" style="justify-content:flex-start;margin-top:10px">
@@ -736,7 +736,7 @@ function drawDeployed() {
       ${t.kind === "live" ? "" : spawnHtml(sm && sm.get(t.id))}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
-  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every 3 minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
+  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every 3 minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Slots are only reserved for members who haven't joined a crime or are queued (their crime is ready within ${OPT.queueHours} h) - members already in a crime stay where they are. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (free and queued members only) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${joined}</b><span>Joined</span></div><div><b>${total - joined}</b><span>Not yet</span></div></div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
     ${spawnSummary(plan.teams, sm)}

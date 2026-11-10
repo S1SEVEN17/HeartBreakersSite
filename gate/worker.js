@@ -1581,6 +1581,11 @@ async function ocDelayStats(env, now) {
 async function ocAutoPlan(env, crimes, now) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
+  // RESERVATIONS RULE (Nov 2026, the user): the live plan only reserves slots for members who haven't joined a crime,
+  // or who meet the QUEUE criteria (their Planning crime is ready within opts.queueHours, or a rotated crime's
+  // join-order deadline). "Include members already in a crime" is for leaders' drafts on the page only - never here.
+  // Members already in a crime are never moved by a reconfigure either (they're `existing` in their crime).
+  opts.includeBusy = false;
   // AUTOMATIC off (OC Management setting): the Hub leaves the deployed plan exactly as leaders deployed it
   // (the last stats - pay per day, items - stay as they were, so the script keeps showing them)
   if (opts.auto === false) return;

@@ -17,6 +17,10 @@
 //     Live open slots: only when no free member can fill the crime to the target (fewest queued members, and only
 //     if they're free before the crime expires). Spawn teams: allowed, free members preferred. One slot each.
 //     When their crime completes the next run drops the flag and it's a normal assignment (Join in the script).
+//   RESERVATIONS (Nov 2026, the user's rule): slots are only reserved for members who haven't joined a crime, or who
+//     meet the queue criteria above (or a rotated crime's join-order deadline). The live plan (gate/worker.js
+//     ocAutoPlan) always runs with includeBusy off; includeBusy is only for leaders' drafts on the page.
+//     A reconfigure (X.reshuffle) only moves those reservations - members in a crime stay where they are.
 //   STABILITY (fully automatic, re-run every 3 min): an assignment only changes when it stops being valid -
 //     the member joined something else / left the faction, someone else took the slot, or the crime is gone.
 //     New open slots are filled; nothing valid is reshuffled. A spawn team whose crime starts recruiting is
