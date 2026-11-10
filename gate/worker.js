@@ -999,6 +999,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (sub === "config.json") { const c = await ocConfig(env, envName);
       c.last_runs = await ocLastRuns(env, envName, c.rotate).catch(() => ({}));   // for the page's Auto-build (rotation mix rule)
       c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
+      c.reconfigured = ((await ocSnapGet(env, "hub", "plan:reconfigured").catch(() => null)) || {}).data || null;   // last reconfigure
       return Response.json(c, H); }
     const {results} = await env.OC_DB.prepare("SELECT player_id, name, roles, ts FROM oc_cpr WHERE env = ? AND faction_id = ?")
       .bind(envName, Number(env.FACTION_ID)).all();
@@ -1059,7 +1060,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65), cap: n(v.cap, 50, 100, 85), chains: !!v.chains, includeBusy: !!v.includeBusy,
            // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
            share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null),
-           queueHours: n(v.queueHours, 0, 168, 12)};   // queue members whose current crime is ready within this many hours
+           queueHours: n(v.queueHours, 0, 168, 12),    // queue members whose current crime is ready within this many hours
+           // AUTOMATIC (Nov 2026): the Hub keeps the live plan up to date every 3 minutes (default on); off = the plan
+           // only changes when a leader deploys one
+           auto: v.auto !== false};
     } else {
       if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
       v = {teams: ocCleanTeams(v.teams)};
@@ -1537,7 +1541,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12, auto: true};
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
@@ -1577,6 +1581,9 @@ async function ocDelayStats(env, now) {
 async function ocAutoPlan(env, crimes, now) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
+  // AUTOMATIC off (OC Management setting): the Hub leaves the deployed plan exactly as leaders deployed it
+  // (the last stats - pay per day, items - stay as they were, so the script keeps showing them)
+  if (opts.auto === false) return;
   const [ros, catS, sumS, priS] = await Promise.all([ocSnapGet(env, "prod", "roster"), ocSnapGet(env, "prod", "catalog"),
                                                      ocSnapGet(env, "prod", "summaries"), ocSnapGet(env, "prod", "prices")]);
   const members = (ros && ros.data) || null;
@@ -1622,8 +1629,35 @@ async function ocAutoPlan(env, crimes, now) {
   const delays = await ocDelayStats(env, now).catch(() => ({}));
   const lastRuns = {};
   for (const [k, v] of Object.entries(await ocLastRuns(env, "prod", cfg.rotate || []).catch(() => ({})))) lastRuns[k] = v.map(l => new Set(l));
-  const r = ocPlan({crimes, prev: ((cfg.plan || {}).teams) || [], catalog, members, opts, disabled: new Set(cfg.disabled || []),
-                    rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now});
+  // RECONFIGURE (Nov 2026, the user's rule): a slot reserved for one member was taken by SOMEONE ELSE -> every
+  // reservation is planned again (ocPlan reshuffle), so the bumped member gets a new spot and everyone queued is in
+  // the most efficient place. (A leader's replacement - the old member still sitting in the slot - doesn't count.)
+  const prevTeams = ((cfg.plan || {}).teams) || [];
+  const byId = new Map(crimes.map(c => [String(c.id), c]));
+  const moves = [];
+  for (const t of prevTeams) {
+    if (!t || !t.crime_id) continue;
+    const c = byId.get(String(t.crime_id)); if (!c) continue;
+    const slotUser = new Map((c.slots || []).map(sl => [(sl.position_info && sl.position_info.label) || sl.position || "", sl.user ? Number(sl.user.id) : null]));
+    for (const r0 of t.roles || []) {
+      if (r0.pid == null || r0.existing) continue;                              // only RESERVATIONS (not yet joined)
+      const took = slotUser.get(r0.position);
+      if (took == null || took === Number(r0.pid)) continue;                   // still open, or the right member joined
+      if (r0.replaces && Number(r0.replaces.pid) === took) continue;           // the member a leader is replacing
+      moves.push({crime: c.name, crime_id: c.id, position: r0.position, planned: {pid: Number(r0.pid), name: r0.name || members[String(r0.pid)] || ""},
+                  took: {pid: took, name: members[String(took)] || ""}});
+    }
+  }
+  const r = ocPlan({crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []),
+                    rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now,
+                    reshuffle: moves.length > 0});
+  if (moves.length) {
+    r.stats.reconfigured = {at: now, moves};
+    // kept for OC Management's Deployed tab ("Reconfigured ... - X took Y's spot") until the next one
+    await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:reconfigured', ?, ?, 'hub') " +
+      "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+      .bind(now, JSON.stringify({at: now, moves})).run().catch(() => {});
+  }
   // for the script (Nov 2026): pay per member per day of every planned crime + each catalog role's required item
   r.stats.pay_day = {}; r.stats.pay_day_min = {}; r.stats.items = {};
   for (const t of r.teams) { const p = payOf(t.crime), q = payOf(t.crime, true);

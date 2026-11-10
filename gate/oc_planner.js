@@ -48,6 +48,10 @@
 //   MIX: best rates win, but a pool member who sat out the latest completed run gets priority, so nobody who
 //   qualifies sits out two runs in a row. While no instance is recruiting, pool members get normal crimes.
 //   fresh     true = ignore prev (except locked teams) - the page's "Auto-build" from scratch
+//   reshuffle true = RECONFIGURE (Nov 2026, the user's rule): someone took a slot that was reserved for another member,
+//             so every RESERVATION is planned again from scratch for the most efficient placement - members already
+//             in crimes, leaders' replacements and 🔒 locked teams stay; open-slot reservations, queued members and
+//             (unlocked) spawn teams are dropped and filled again by the steps below. (gate/worker.js ocAutoPlan)
 // =====================================================================================================
 export const baseRole = l => String(l || "").replace(/#\s*\d+/g, "").replace(/\s+/g, " ").trim();
 const slotLabel = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
@@ -148,7 +152,8 @@ export function ocPlan(X) {
                   rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : ((rateOf(pid, c.name, label) || {}).rate ?? null), src: "in crime"};
         }
         // open slot: keep the planned member while they're still free, still here and not planned elsewhere
-        if (o.pid != null && !o.existing && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid))) {
+        // (RECONFIGURE: dropped - planned again below; locked teams keep theirs)
+        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid))) {
           const k = Object.assign({}, o, {joined: false}); delete k.replaces; return k;   // the old member has left: a normal open slot now
         }
         return {position: label, pid: null, name: "", rate: null};
@@ -158,6 +163,7 @@ export function ocPlan(X) {
       claimed.add(String(c.id));
       teams.push(t);
     } else {
+      if (X.reshuffle && !t.lock) continue;                // RECONFIGURE: unlocked spawn teams are planned again
       t.kind = "spawn"; t.crime_id = null;
       t.roles = (t.roles || []).map(r => (r.pid != null && (roster[String(r.pid)] == null || (!usable(r.pid) && !O.includeBusy) || assigned.has(Number(r.pid))))
         ? Object.assign({}, r, {pid: null, name: "", rate: null, src: null}) : r);
