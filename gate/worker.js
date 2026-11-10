@@ -898,14 +898,51 @@ async function ocPlanObj(env, envName, id) {
   const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = ? AND ds = 'crimes'").bind(envName).first();
   let crimes = null;
   try { crimes = snap ? JSON.parse(snap.data) : null; } catch (e) { crimes = null; }
+  // BIND TO LIVE INSTANCES (Nov 2026, claude/oc-optimizer-hub-liveteam-crimeid-addendum.md): a deployed team with no
+  // crime_id whose crime already has live (Recruiting / Planning) instances is sent BOUND to one of them - 1:1, no two
+  // teams share an instance - so the script can mark its seats on the right crime card. Teams left over (more teams
+  // than instances) stay spawn with crime_id null. Done when the plan is sent (the stored plan isn't changed, so it
+  // also works while Automatic is off). Best fit first: most of the team already seated in the instance, then most of
+  // its roles open there, then the lowest instance id.
+  const bound = new Map();                                 // team id -> {c: instance, slot: {pid: exact slot label}}
+  if (crimes) {
+    const live = crimes.filter(c => c && (c.status === "Recruiting" || c.status === "Planning"));
+    const used = new Set(teamsCfg.filter(t => t.crime_id).map(t => String(t.crime_id)));
+    const lab = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
+    const fit = (t, c) => {   // -> {seated, open, slot}
+      const slot = {}, taken = new Set(); let seated = 0, open = 0;
+      const ms = (t.roles || []).filter(r => r.pid != null);
+      for (const r of ms) { const sl = (c.slots || []).find(x => x.user && Number(x.user.id) === Number(r.pid));
+        if (sl) { slot[r.pid] = lab(sl); taken.add(lab(sl)); seated++; } }
+      for (const r of ms) { if (slot[r.pid]) continue;
+        const free = (c.slots || []).filter(x => !x.user && !taken.has(lab(x)) && ocBaseRole(lab(x)) === ocBaseRole(r.position));
+        const sl = free.find(x => lab(x) === r.position) || free[0];
+        if (sl) { slot[r.pid] = lab(sl); taken.add(lab(sl)); open++; } }
+      return {seated, open, slot};
+    };
+    const byCrime = {};
+    teamsCfg.filter(t => !t.crime_id && t.crime).forEach(t => (byCrime[t.crime] = byCrime[t.crime] || []).push(t));
+    for (const [crime, ts] of Object.entries(byCrime)) {
+      const pool = live.filter(c => c.name === crime && !used.has(String(c.id)));
+      const pairs = [];
+      ts.forEach(t => pool.forEach(c => { const f = fit(t, c); pairs.push({t, c, f}); }));
+      pairs.sort((a, b) => (b.f.seated - a.f.seated) || (b.f.open - a.f.open) || (Number(a.c.id) - Number(b.c.id)));
+      for (const p of pairs) {
+        if (bound.has(p.t.id) || used.has(String(p.c.id))) continue;
+        bound.set(p.t.id, {c: p.c, slot: p.f.slot}); used.add(String(p.c.id));
+      }
+    }
+  }
   let assignment = null;
   for (const t of teamsCfg) {
     for (const r of (t.roles || [])) {
       if (Number(r.pid) === Number(id.player_id)) {
         if (r.existing) continue;                           // already in that crime in Torn - nothing to do
-        assignment = {crime: t.crime, position: r.position, team: t.id, rate: r.rate ?? null,
+        const b = bound.get(t.id);                          // a spawn team sent bound to a live instance (above)
+        if (b && (b.c.slots || []).some(x => x.user && Number(x.user.id) === Number(r.pid))) continue;   // already seated there
+        assignment = {crime: t.crime, position: (b && b.slot[r.pid]) || r.position, team: t.id, rate: r.rate ?? null,
                       difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
-                      kind: t.kind || "spawn", crime_id: t.crime_id || null,   // live: join THIS crime id + exact slot
+                      kind: b ? "live" : (t.kind || "spawn"), crime_id: b ? b.c.id : (t.crime_id || null),   // live: join THIS crime id + exact slot
                       queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
                       replaces: r.replaces || null};   // the slot is still held by this member until they leave   // QUEUE: join after the current crime pays out
       }
@@ -935,7 +972,9 @@ async function ocPlanObj(env, envName, id) {
   const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
   const payDay = (ps && ps.data && ps.data.pay_day) || {}, payMin = (ps && ps.data && ps.data.pay_day_min) || {}, items = (ps && ps.data && ps.data.items) || {};
   const rotSet = new Set(cfg.rotate || []);
-  const teams = teamsCfg.length ? teamsCfg.map(t => {
+  const teams = teamsCfg.length ? teamsCfg.map(t0 => {
+    const b = bound.get(t0.id);
+    const t = b ? Object.assign({}, t0, {kind: "live", crime_id: b.c.id}) : t0;
     const inst = (crimes || []).filter(c => c && (t.crime_id ? String(c.id) === String(t.crime_id) : c.name === t.crime) && (c.status === "Recruiting" || c.status === "Planning"));
     const open = inst.some(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user));
     return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
@@ -945,9 +984,13 @@ async function ocPlanObj(env, envName, id) {
             pay_day_max: payDay[t.crime] ?? null,
             rotation: rotSet.has(t.crime),                    // a crime leaders rotate
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
-            members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position), slot: r.position, pid: Number(r.pid),
+            members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position),
+              // bound team: the exact slot in ITS instance (the seat they're in, or the open seat for their role)
+              slot: (b && b.slot[r.pid]) || r.position, pid: Number(r.pid),
               name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
-              existing: !!r.existing, joined: !!r.joined, queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
+              existing: !!r.existing || !!(b && (b.c.slots || []).some(x => x.user && Number(x.user.id) === Number(r.pid))),
+              joined: !!r.joined || !!(b && (b.c.slots || []).some(x => x.user && Number(x.user.id) === Number(r.pid))),
+              queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
               replaces: r.replaces || null,
               item: (items[t.crime] || {})[r.position] || null}))};   // required item {id, name} for this role, or null   // replaces {pid, name}: a leader is swapping out the member in this slot
   }) : null;

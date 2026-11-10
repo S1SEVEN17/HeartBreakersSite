@@ -166,7 +166,19 @@ jobs:
             code=$(curl -s -o /tmp/r.json -w "%{http_code}" -X POST $B/oc/plan -H 'Content-Type: application/json' -d "$body")
             ok=$(python3 -c "import json;d=json.load(open('/tmp/r.json'));print(d.get('ok'), (d.get('error') or '')[:60], 'teams=%s' % len(d.get('teams') or []))" 2>/dev/null)
             echo "plan $code $ok"
+            [ "$code" = 200 ] && cp /tmp/r.json /tmp/plan_ok.json
           done
+          # live-instance binding (crime-id addendum): per crime, teams bound to an instance vs instances vs left as spawn
+          python3 - <<'PY'
+          import json, collections
+          d = json.load(open('/tmp/plan_ok.json')); by = collections.defaultdict(lambda: [0, 0, set()])
+          for t in d.get('teams') or []:
+              b = by[t['crime']]
+              if t.get('crime_id'): b[0] += 1; b[2].add(t['crime_id'])
+              else: b[1] += 1
+          dup = any(len(v[2]) != v[0] for v in by.values())
+          print('binding:', '; '.join('%s live %d spawn %d' % (k, v[0], v[1]) for k, v in sorted(by.items())), '| shared ids:', dup)
+          PY
       - name: Chain Watch check (status codes + counts only)
         run: |
           # /cw/hello: member 200 (+ token, never printed), unknown pid 403, wrong faction 403; then one /cw/sync snapshot
