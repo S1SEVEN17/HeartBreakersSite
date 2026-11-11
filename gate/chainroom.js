@@ -92,6 +92,7 @@ const OPTIN_TICK_MS = 15000;              // live chain + usable opt-in keys: th
 const OPTIN_BAD_KEY_MS = 6 * 3600 * 1000; // a key Torn refuses is skipped this long
 
 // Free-plan self-governor (§8): incoming DO requests per UTC day (100k free).
+const WS_MESSAGE_WEIGHT = 1 / 20;          // Cloudflare bills 20 incoming WebSocket messages as 1 request
 const DAILY_DO_REQUEST_SOFT = 70000;      // 70% -> "degraded": timers doubled
 const DAILY_DO_REQUEST_HARD = 90000;      // 90% -> scripts fall back to their own reads
 
@@ -357,7 +358,7 @@ export class ChainRoom {
   /* ---- hibernation callbacks ---------------------------------------------- */
   async webSocketMessage(ws, raw) {
     await this.ensureLoaded();
-    this.countUsage();
+    this.countUsage(WS_MESSAGE_WEIGHT);   // billed 20:1
     const meta = ws.deserializeAttachment() || {};
     const pid = meta.pid;
     if (!pid) return;
@@ -932,11 +933,15 @@ export class ChainRoom {
   }
 
   /* ---- self-governor (§8) ----------------------------------------------- */
-  countUsage() {
+  // Counted the way Cloudflare bills Durable Object requests (Nov 10 2026, user: "Fix the counter"): an HTTP request
+  // or an alarm = 1, an incoming WebSocket message = 1/20 (Cloudflare's 20:1 ratio; protocol pings via the auto-
+  // response are free and never reach here). Before this, every socket message counted as 1, so heartbeats / readings
+  // could trip "degraded" while real billed usage was a few percent.
+  countUsage(weight) {
     if (!this.mem) return;
     const day = todayUTC();
     if (this.mem.usageDay !== day) { this.mem.usageDay = day; this.mem.usageCount = 0; }
-    this.mem.usageCount++;
+    this.mem.usageCount += weight == null ? 1 : weight;
   }
   modeOf() { return this.mem.level >= 1 ? "degraded" : "normal"; }
   reasonOf() { return this.mem.level >= 2 ? "daily_limit" : this.mem.level === 1 ? "near_daily_limit" : ""; }
@@ -1310,7 +1315,7 @@ export class ChainRoom {
       ok: true, connected: this.conns.size, sync_devices: Object.keys(this.mem.syncSeen).length,
       queued: Object.keys(this.mem.queue).length, chain: this.mem.chain ? this.mem.chain.current : 0,
       retals: this.openRetals().length, members: Object.keys(this.mem.members).length,
-      mode: this.modeOf(), reason: this.reasonOf(), requests_today: this.mem.usageCount,
+      mode: this.modeOf(), reason: this.reasonOf(), requests_today: Math.round(this.mem.usageCount),
       alarm: (await this.storage.getAlarm()) != null, last_error: this.mem.lastErr || "",
       homepage_readings_today: this.mem.webDay === todayUTC() ? this.mem.webReadings || 0 : 0,
       optin_keys: Object.keys(this.mem.cwOptin || {}).length,
