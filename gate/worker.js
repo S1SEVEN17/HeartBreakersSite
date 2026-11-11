@@ -441,6 +441,14 @@ async function sxRoute(env, ctx, req) {
 //   battle stats / work stats: "off" | "leaders" | "faction" - read by the script ONCE A DAY (the first time it runs
 //                               after 00:00 TCT - user's choice), sent with op "share_push" {bs: [day, str, def, spd, dex],
 //                               ws: [day, man, int, end]}; kept as a daily series (SX_SHARE_DAYS) like data/optin_stats.json
+//   OC pass rates / chain timer (added Nov 11 2026, user: "share the same stats from the hub script as is allowed from
+//                               the HUB site"):
+//     oc: the script reads ITS OWN v2 user/organizedcrimes only when the Hub has found a NEW crime (share_ping gives
+//         oc_tag = the Hub's crime list signature; a changed tag = read once) - the Hub's rule for stored keys - and
+//         sends [[crime, role label, rate], ...] -> oc_cpr (same rows as the OC Optimizer / Hub-key sharing).
+//     cw: during a LIVE chain, when this member isn't connected in Chain Watch, share_ping says want_chain; the
+//         script then reads v2 faction/chain with its own key every 30 s (<= 2 calls/min, like the Hub's stored-key
+//         reads) and sends the reading -> the Chain Watch room (shorten-only, exactly like a script reading).
 //   war readiness:             true / false - read by the script ONLY WHILE A LEADER WATCHES (user's choice): the script
 //                               asks every 2 min (op "share_ping" -> {want_ready}); want_ready = a leader opened War
 //                               Readiness (site page or the script's Ready tab) in the last SX_WATCH_MS; then it reads
@@ -460,6 +468,9 @@ async function sxShareTable(env) {
   if (SX_SHARE_READY || !env.OC_DB) return;
   await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS sx_share (pid INTEGER PRIMARY KEY, name TEXT, bs TEXT NOT NULL DEFAULT 'off', " +
     "ws TEXT NOT NULL DEFAULT 'off', ready INTEGER NOT NULL DEFAULT 0, bs_s TEXT, ws_s TEXT, rd TEXT, rd_at INTEGER, since INTEGER, updated INTEGER)").run();
+  // oc / cw columns (added after the table first existed) - "duplicate column" errors are fine
+  await env.OC_DB.prepare("ALTER TABLE sx_share ADD COLUMN oc INTEGER NOT NULL DEFAULT 0").run().catch(() => {});
+  await env.OC_DB.prepare("ALTER TABLE sx_share ADD COLUMN cw INTEGER NOT NULL DEFAULT 0").run().catch(() => {});
   SX_SHARE_READY = true;
 }
 async function sxShareRow(env, pid) {
@@ -478,7 +489,7 @@ async function sxShareOp(env, who, op, b) {
   if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
   const pid = Number(who.id), now = Date.now();
   let row = await sxShareRow(env, pid);
-  const settings = r => ({bs: r ? r.bs : "off", ws: r ? r.ws : "off", ready: !!(r && r.ready)});
+  const settings = r => ({bs: r ? r.bs : "off", ws: r ? r.ws : "off", ready: !!(r && r.ready), oc: !!(r && r.oc), cw: !!(r && r.cw)});
   if (op === "share_get") {
     const bs = sxJ(row && row.bs_s, []), ws = sxJ(row && row.ws_s, []);
     return sxJson({ok: true, settings: settings(row), since: row ? row.since : null,
@@ -486,22 +497,43 @@ async function sxShareOp(env, who, op, b) {
   }
   if (op === "share_set") {
     const lv = v => SX_LEVELS.includes(v) ? v : "off";
-    const bs = lv(b.bs), ws = lv(b.ws), ready = b.ready ? 1 : 0;
-    if (bs === "off" && ws === "off" && !ready) {            // everything off = nothing kept
-      await env.OC_DB.prepare("DELETE FROM sx_share WHERE pid = ?").bind(pid).run();
-      return sxJson({ok: true, settings: {bs, ws, ready: false}});
+    const bs = lv(b.bs), ws = lv(b.ws), ready = b.ready ? 1 : 0, oc = b.oc ? 1 : 0, cw = b.cw ? 1 : 0;
+    // OC pass rates turned off here: their shared rates go too - unless they still share them with a Hub key
+    if (row && row.oc && !oc) {
+      const {data} = await readOptin(env, false).catch(() => ({data: {members: {}}}));
+      if (!((data.members || {})[String(pid)] || {}).oc) await ocCprDrop(env, String(pid)).catch(() => {});
     }
-    await env.OC_DB.prepare("INSERT INTO sx_share (pid, name, bs, ws, ready, since, updated) VALUES (?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT (pid) DO UPDATE SET name = excluded.name, bs = excluded.bs, ws = excluded.ws, ready = excluded.ready, updated = excluded.updated, " +
+    if (bs === "off" && ws === "off" && !ready && !oc && !cw) {            // everything off = nothing kept
+      await env.OC_DB.prepare("DELETE FROM sx_share WHERE pid = ?").bind(pid).run();
+      return sxJson({ok: true, settings: {bs, ws, ready: false, oc: false, cw: false}});
+    }
+    await env.OC_DB.prepare("INSERT INTO sx_share (pid, name, bs, ws, ready, oc, cw, since, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT (pid) DO UPDATE SET name = excluded.name, bs = excluded.bs, ws = excluded.ws, ready = excluded.ready, oc = excluded.oc, cw = excluded.cw, updated = excluded.updated, " +
       // a part turned off: its readings go too
       "bs_s = CASE WHEN excluded.bs = 'off' THEN NULL ELSE sx_share.bs_s END, ws_s = CASE WHEN excluded.ws = 'off' THEN NULL ELSE sx_share.ws_s END, " +
       "rd = CASE WHEN excluded.ready = 0 THEN NULL ELSE sx_share.rd END, rd_at = CASE WHEN excluded.ready = 0 THEN NULL ELSE sx_share.rd_at END")
-      .bind(pid, who.name, bs, ws, ready, now, now).run();
-    return sxJson({ok: true, settings: {bs, ws, ready: !!ready}});
+      .bind(pid, who.name, bs, ws, ready, oc, cw, now, now).run();
+    return sxJson({ok: true, settings: {bs, ws, ready: !!ready, oc: !!oc, cw: !!cw}});
   }
   if (op === "share_ping") {
-    const w = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'sx_ready_watch'").first().catch(() => null);
-    return sxJson({ok: true, want_ready: !!(row && row.ready && w && now - Number(w.ts) < SX_WATCH_MS), settings: settings(row)});
+    const out = {ok: true, settings: settings(row), want_ready: false, want_chain: false, oc_tag: null};
+    if (row && row.ready) {
+      const w = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'sx_ready_watch'").first().catch(() => null);
+      out.want_ready = !!(w && now - Number(w.ts) < SX_WATCH_MS);
+    }
+    if (row && row.oc) {                     // the Hub's crime list signature - changes when it finds a NEW crime
+      const st = ((await ocSnapGet(env, "hub", "oc-optin").catch(() => null)) || {data: {}}).data || {};
+      const seen = (Array.isArray(st.seen) ? st.seen : []).map(Number).filter(Boolean);
+      out.oc_tag = seen.length ? Math.max(...seen) + ":" + seen.length : "none";
+    }
+    if (row && row.cw && env.CHAINROOM) {    // a live chain, and this member isn't connected in Chain Watch
+      try {
+        const bd = await (await cwStub(env).fetch("https://do/board")).json();
+        const c = bd && bd.chain, mine = (bd.queue || []).find(q => Number(q.pid) === pid);
+        out.want_chain = !!(c && c.current > 0 && c.expires_at > now && !(mine && mine.connected));
+      } catch (e) { /* room busy - next ping */ }
+    }
+    return sxJson(out);
   }
   // share_push: only the parts this member turned on; numbers only
   if (!row) return sxJson({ok: false, error: "Sharing from the script is off."}, 400);
@@ -522,7 +554,19 @@ async function sxShareOp(env, who, op, b) {
                 last: num0(b.rd.last)};
     sets.push("rd = ?", "rd_at = ?"); vals.push(JSON.stringify(rd), now);
   }
-  if (!sets.length) return sxJson({ok: true, saved: 0});
+  let extra = 0;
+  if (row.oc && Array.isArray(b.oc)) {
+    const roles = {};
+    b.oc.slice(0, 200).forEach(x => { if (Array.isArray(x) && x.length === 3 && Number.isFinite(Number(x[2])))
+      roles[ocFb(x[0]) + "|" + ocFb(ocBaseRole(x[1]))] = Math.max(0, Math.min(100, Math.round(Number(x[2])))); });
+    if (Object.keys(roles).length) { await ocStoreRates(env, pid, who.name, roles); extra++; }
+  }
+  if (row.cw && b.chain && typeof b.chain === "object" && env.CHAINROOM) {
+    // the same checks + room call as the homepage's chain readings (cwReading): shorten-only in the room
+    const r = await cwReading(env, new Request("https://sx.local/", {method: "POST", body: JSON.stringify(b.chain)}), who);
+    extra += (await r.json().catch(() => ({}))).used ? 1 : 0;
+  }
+  if (!sets.length) return sxJson({ok: true, saved: extra});
   await env.OC_DB.prepare(`UPDATE sx_share SET ${sets.join(", ")}, name = ? WHERE pid = ?`).bind(...vals, who.name, pid).run();
   return sxJson({ok: true, saved: sets.length});
 }
@@ -560,7 +604,7 @@ async function sxExport(env, req) {
 async function sxShareOwn(env, id) {
   const r = await sxShareRow(env, id).catch(() => null);
   if (!r) return null;
-  return {bs: r.bs, ws: r.ws, ready: !!r.ready, since: r.since, stats: {bs: sxJ(r.bs_s, []), ws: sxJ(r.ws_s, [])},
+  return {bs: r.bs, ws: r.ws, ready: !!r.ready, oc: !!r.oc, cw: !!r.cw, since: r.since, stats: {bs: sxJ(r.bs_s, []), ws: sxJ(r.ws_s, [])},
           rd: r.rd ? Object.assign({at: Math.floor(Number(r.rd_at) / 1000)}, sxJ(r.rd, {})) : null};
 }
 
@@ -699,6 +743,11 @@ async function ocPullMember(env, id, name, key) {
     if (sl.user || typeof sl.checkpoint_pass_rate !== "number") continue;
     roles[ocFb(c.name) + "|" + ocFb(ocBaseRole((sl.position_info && sl.position_info.label) || sl.position))] = Math.round(sl.checkpoint_pass_rate);
   }
+  return ocStoreRates(env, id, name, roles);
+}
+// store a member's pass rates {"Crime|Role": rate} into oc_cpr (shared by the Hub-key read above and the Hub script's
+// sharing - SCRIPT SHARING "OC pass rates")
+async function ocStoreRates(env, id, name, roles) {
   const n = Object.keys(roles).length;
   if (n) {
     // merge over what's stored; only written (and ts moved on) when a rate is new or different

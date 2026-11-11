@@ -160,6 +160,8 @@ CREATE TABLE IF NOT EXISTS sx_share (
   bs      TEXT    NOT NULL DEFAULT 'off',   -- battle stats: off | leaders | faction
   ws      TEXT    NOT NULL DEFAULT 'off',   -- work stats:   off | leaders | faction
   ready   INTEGER NOT NULL DEFAULT 0,       -- war readiness on
+  oc      INTEGER NOT NULL DEFAULT 0,       -- OC pass rates on (rates go to oc_cpr)
+  cw      INTEGER NOT NULL DEFAULT 0,       -- chain timer readings during live chains on
   bs_s    TEXT,                             -- JSON [[day, str, def, spd, dex], ...] once a day
   ws_s    TEXT,                             -- JSON [[day, man, int, end], ...]
   rd      TEXT,                             -- JSON latest readiness reading
