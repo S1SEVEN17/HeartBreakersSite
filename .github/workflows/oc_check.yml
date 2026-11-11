@@ -274,3 +274,8 @@ jobs:
           echo "schedule without sign-in: $(curl -s -o /dev/null -w '%{http_code}' $B/m/cw/schedule.json)"
           echo "live board without sign-in: $(curl -s -o /dev/null -w '%{http_code}' $B/m/cw/live.json)"
           echo "scripts list without sign-in: $(curl -s -o /dev/null -w '%{http_code}' $B/m/scripts.json)"
+          # Heart Breakers Hub userscript (/sx): no link code / a bad one -> 401; script-link page is leaders only (302/401)
+          echo "hub script without code: $(curl -s -o /dev/null -w '%{http_code}' -X POST $B/sx -H 'Content-Type: application/json' -d '{"op":"whoami"}')"
+          echo "hub script bad code: $(curl -s -o /dev/null -w '%{http_code}' -X POST $B/sx -H 'Content-Type: application/json' -d '{"op":"whoami","code":"hbsx1.1.0.1.x"}')"
+          echo "hub script GET: $(curl -s -o /dev/null -w '%{http_code}' $B/sx)"
+          echo "script link page without sign-in: $(curl -s -o /dev/null -w '%{http_code}' $B/l/script-link.html)"
