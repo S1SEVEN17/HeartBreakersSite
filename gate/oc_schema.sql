@@ -151,3 +151,19 @@ CREATE TABLE IF NOT EXISTS rc_recruit (
   removed_by  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rc_recruit_upd ON rc_recruit (removed_at, updated);
+
+-- Heart Breakers Hub script: sharing FROM THE SCRIPT (Nov 11 2026) - the member's key stays on their device; only the
+-- readings arrive here. One row per member; everything off = row deleted. (The Worker also creates it on first use.)
+CREATE TABLE IF NOT EXISTS sx_share (
+  pid     INTEGER PRIMARY KEY,
+  name    TEXT,
+  bs      TEXT    NOT NULL DEFAULT 'off',   -- battle stats: off | leaders | faction
+  ws      TEXT    NOT NULL DEFAULT 'off',   -- work stats:   off | leaders | faction
+  ready   INTEGER NOT NULL DEFAULT 0,       -- war readiness on
+  bs_s    TEXT,                             -- JSON [[day, str, def, spd, dex], ...] once a day
+  ws_s    TEXT,                             -- JSON [[day, man, int, end], ...]
+  rd      TEXT,                             -- JSON latest readiness reading
+  rd_at   INTEGER,                          -- ms
+  since   INTEGER,
+  updated INTEGER
+);

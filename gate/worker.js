@@ -221,6 +221,7 @@ export default {
     if (p.startsWith("/rc/")) return rcScriptRoute(env, req, p);
     // Heart Breakers Hub userscript (leaders, in Torn): its own session (op "hello") instead of the pass cookie
     if (p === "/sx") return sxRoute(env, ctx, req);
+    if (p === "/sx/export") return sxExport(env, req);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -351,6 +352,7 @@ async function ghProxy(env, req, who, path) {
 //                                                  readiness, opted-in members) - LEADERS. Same handlers as the site.
 //     op "gh"   {method: "GET"|"PUT", path, ref?, body?}  -> the leaders' save route - LEADERS (ghProxy: same allowed
 //                                                             paths - config.json, data/payouts/, data/panels/)
+//     op "share_get" / "share_set" / "share_push" / "share_ping"  -> sharing FROM THE SCRIPT (see SCRIPT SHARING)
 // Every call re-checks: session signature + not expired + STILL a current member (the Hub's member list); leader
 // rights come from that list's position, never from the script - a demoted leader loses them at once.
 // =====================================================================================================
@@ -410,6 +412,8 @@ async function sxRoute(env, ctx, req) {
     return new Response(r.body, {status: 200, headers: {...SX_CORS, "Content-Type": "application/json"}});
   }
   if (op === "mine") return sxPass(await mine(env, who));
+  // sharing from the script (the member's own key stays on their device) - see SCRIPT SHARING below
+  if (op === "share_get" || op === "share_set" || op === "share_push" || op === "share_ping") return sxShareOp(env, who, op, b);
   if (op === "live") {
     const what = String(b.what || ""), u = new URL("https://sx.local/"), get = new Request(u.toString());
     if (what === "board") return sxPass(await cwLive(env));
@@ -427,6 +431,137 @@ async function sxRoute(env, ctx, req) {
     return sxPass(await ghProxy(env, inner, who, path));
   }
   return sxJson({ok: false, error: "unknown op"}, 400);
+}
+
+// =====================================================================================================
+// SCRIPT SHARING (Nov 11 2026, user: "Allow users to share their same data from the hub, but via the script. This is
+// only updated when the script is active and their key is only saved locally to their device, which some users might
+// find safer than uploading to the Hub.") - the same three things as My data & sharing, but the Hub never gets a key:
+// the member's Heart Breakers Hub script reads Torn with its own key and sends only the readings.
+//   battle stats / work stats: "off" | "leaders" | "faction" - read by the script ONCE A DAY (the first time it runs
+//                               after 00:00 TCT - user's choice), sent with op "share_push" {bs: [day, str, def, spd, dex],
+//                               ws: [day, man, int, end]}; kept as a daily series (SX_SHARE_DAYS) like data/optin_stats.json
+//   war readiness:             true / false - read by the script ONLY WHILE A LEADER WATCHES (user's choice): the script
+//                               asks every 2 min (op "share_ping" -> {want_ready}); want_ready = a leader opened War
+//                               Readiness (site page or the script's Ready tab) in the last SX_WATCH_MS; then it reads
+//                               and sends every minute (op "share_push" {rd: {...}}).
+// Storage: D1 sx_share (one row per member; everything off = row deleted). Used by:
+//   - War Readiness (readiness() merges script readings - newest of Hub-key / script reading per member)
+//   - the site build: GET /sx/export (header X-HB-Export = sha256(MEMBER_DIR|LEADER_DIR|hb-sx-export) - only the update
+//     workflow has those) -> generate.py merges the stats into db/private.json, db/optin_shared.json and Member stats
+//   - "View my shared data" (out.script)
+// =====================================================================================================
+const SX_SHARE_DAYS = 400;                 // daily stats kept (same as the Hub's OPTIN_KEEP_DAYS)
+const SX_WATCH_MS = 150000;                // a leader opened War Readiness this recently -> scripts send readiness
+const SX_READY_MAX_MS = 10 * 60000;        // script readiness readings older than this aren't shown
+let SX_SHARE_READY = false, SX_WATCH_WRITTEN = 0;
+const SX_LEVELS = ["off", "leaders", "faction"];
+async function sxShareTable(env) {
+  if (SX_SHARE_READY || !env.OC_DB) return;
+  await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS sx_share (pid INTEGER PRIMARY KEY, name TEXT, bs TEXT NOT NULL DEFAULT 'off', " +
+    "ws TEXT NOT NULL DEFAULT 'off', ready INTEGER NOT NULL DEFAULT 0, bs_s TEXT, ws_s TEXT, rd TEXT, rd_at INTEGER, since INTEGER, updated INTEGER)").run();
+  SX_SHARE_READY = true;
+}
+async function sxShareRow(env, pid) {
+  await sxShareTable(env);
+  return env.OC_DB.prepare("SELECT * FROM sx_share WHERE pid = ?").bind(Number(pid)).first();
+}
+const sxJ = (t, d) => { try { return t ? JSON.parse(t) : d; } catch (e) { return d; } };
+// a leader is looking at War Readiness (site page / script Ready tab): remembered in D1 so every Worker sees it
+async function sxReadyWatched(env) {
+  if (!env.OC_DB || Date.now() - SX_WATCH_WRITTEN < 30000) return;
+  SX_WATCH_WRITTEN = Date.now();
+  await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'sx_ready_watch', '1', ?, 'hub') " +
+    "ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts").bind(Date.now()).run().catch(() => {});
+}
+async function sxShareOp(env, who, op, b) {
+  if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
+  const pid = Number(who.id), now = Date.now();
+  let row = await sxShareRow(env, pid);
+  const settings = r => ({bs: r ? r.bs : "off", ws: r ? r.ws : "off", ready: !!(r && r.ready)});
+  if (op === "share_get") {
+    const bs = sxJ(row && row.bs_s, []), ws = sxJ(row && row.ws_s, []);
+    return sxJson({ok: true, settings: settings(row), since: row ? row.since : null,
+                   last: {bs: bs.length ? bs[bs.length - 1][0] : null, ws: ws.length ? ws[ws.length - 1][0] : null, rd_at: row ? row.rd_at : null}});
+  }
+  if (op === "share_set") {
+    const lv = v => SX_LEVELS.includes(v) ? v : "off";
+    const bs = lv(b.bs), ws = lv(b.ws), ready = b.ready ? 1 : 0;
+    if (bs === "off" && ws === "off" && !ready) {            // everything off = nothing kept
+      await env.OC_DB.prepare("DELETE FROM sx_share WHERE pid = ?").bind(pid).run();
+      return sxJson({ok: true, settings: {bs, ws, ready: false}});
+    }
+    await env.OC_DB.prepare("INSERT INTO sx_share (pid, name, bs, ws, ready, since, updated) VALUES (?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT (pid) DO UPDATE SET name = excluded.name, bs = excluded.bs, ws = excluded.ws, ready = excluded.ready, updated = excluded.updated, " +
+      // a part turned off: its readings go too
+      "bs_s = CASE WHEN excluded.bs = 'off' THEN NULL ELSE sx_share.bs_s END, ws_s = CASE WHEN excluded.ws = 'off' THEN NULL ELSE sx_share.ws_s END, " +
+      "rd = CASE WHEN excluded.ready = 0 THEN NULL ELSE sx_share.rd END, rd_at = CASE WHEN excluded.ready = 0 THEN NULL ELSE sx_share.rd_at END")
+      .bind(pid, who.name, bs, ws, ready, now, now).run();
+    return sxJson({ok: true, settings: {bs, ws, ready: !!ready}});
+  }
+  if (op === "share_ping") {
+    const w = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'sx_ready_watch'").first().catch(() => null);
+    return sxJson({ok: true, want_ready: !!(row && row.ready && w && now - Number(w.ts) < SX_WATCH_MS), settings: settings(row)});
+  }
+  // share_push: only the parts this member turned on; numbers only
+  if (!row) return sxJson({ok: false, error: "Sharing from the script is off."}, 400);
+  const day = new Date(now).toISOString().slice(0, 10);
+  const cutoff = new Date(now - SX_SHARE_DAYS * 864e5).toISOString().slice(0, 10);
+  const nums = (a, n) => Array.isArray(a) && a.length === n ? a.map(x => Math.max(0, Math.round(Number(x) || 0))) : null;
+  const sets = [], vals = [];
+  const series = (old, vals_) => sxJ(old, []).filter(x => x[0] !== day && x[0] >= cutoff).concat([[day].concat(vals_)]);
+  if (row.bs !== "off" && b.bs) { const v = nums(b.bs.slice(1), 4); if (v) { sets.push("bs_s = ?"); vals.push(JSON.stringify(series(row.bs_s, v))); } }
+  if (row.ws !== "off" && b.ws) { const v = nums(b.ws.slice(1), 3); if (v) { sets.push("ws_s = ?"); vals.push(JSON.stringify(series(row.ws_s, v))); } }
+  if (row.ready && b.rd && typeof b.rd === "object") {
+    const bar = x => x && typeof x === "object" ? {cur: num0(x.cur), max: num0(x.max), full: num0(x.full)} : null;
+    const cd = b.rd.cd || {}, st = b.rd.status || {};
+    const rd = {energy: bar(b.rd.energy), nerve: bar(b.rd.nerve), happy: bar(b.rd.happy), life: bar(b.rd.life),
+                cd: {drug: num0(cd.drug), booster: num0(cd.booster), medical: num0(cd.medical)},
+                refill: b.rd.refill == null ? null : !!b.rd.refill,
+                status: {state: String(st.state || "").slice(0, 20), desc: String(st.desc || "").slice(0, 120), until: num0(st.until)},
+                last: num0(b.rd.last)};
+    sets.push("rd = ?", "rd_at = ?"); vals.push(JSON.stringify(rd), now);
+  }
+  if (!sets.length) return sxJson({ok: true, saved: 0});
+  await env.OC_DB.prepare(`UPDATE sx_share SET ${sets.join(", ")}, name = ? WHERE pid = ?`).bind(...vals, who.name, pid).run();
+  return sxJson({ok: true, saved: sets.length});
+}
+function num0(v) { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.round(n) : 0; }
+// script readiness rows for War Readiness (fresh readings of current members who share readiness)
+async function sxReadyRows(env, members) {
+  if (!env.OC_DB) return [];
+  await sxShareTable(env).catch(() => {});
+  const rows = (await env.OC_DB.prepare("SELECT pid, name, rd, rd_at FROM sx_share WHERE ready = 1 AND rd_at > ?")
+    .bind(Date.now() - SX_READY_MAX_MS).all().catch(() => ({results: []}))).results || [];
+  return rows.filter(r => !members || members.has(Number(r.pid))).map(r => {
+    const m = (members && members.get(Number(r.pid))) || {};
+    return Object.assign({id: Number(r.pid), name: m.name || r.name, position: m.position, via: "script", at: Math.floor(Number(r.rd_at) / 1000)}, sxJ(r.rd, {}));
+  });
+}
+// GET /sx/export (the update workflow only) -> {members: {pid: {bs: {share, s}, ws: {share, s}, ready}}} - numbers only
+async function sxExport(env, req) {
+  const want = [...new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${env.MEMBER_DIR}|${env.LEADER_DIR}|hb-sx-export`)))]
+    .map(x => x.toString(16).padStart(2, "0")).join("");
+  if (!env.MEMBER_DIR || req.headers.get("X-HB-Export") !== want) return new Response("Not found", {status: 404});
+  const out = {members: {}};
+  if (env.OC_DB) {
+    await sxShareTable(env).catch(() => {});
+    const rows = (await env.OC_DB.prepare("SELECT pid, bs, ws, ready, bs_s, ws_s, since FROM sx_share").all().catch(() => ({results: []}))).results || [];
+    rows.forEach(r => {
+      const x = {ready: !!r.ready, since: r.since};
+      if (r.bs !== "off") x.bs = {share: r.bs, s: sxJ(r.bs_s, [])};
+      if (r.ws !== "off") x.ws = {share: r.ws, s: sxJ(r.ws_s, [])};
+      out.members[String(r.pid)] = x;
+    });
+  }
+  return Response.json(out, {headers: {"Cache-Control": "no-store"}});
+}
+// what the member shares from the script, for "View my shared data"
+async function sxShareOwn(env, id) {
+  const r = await sxShareRow(env, id).catch(() => null);
+  if (!r) return null;
+  return {bs: r.bs, ws: r.ws, ready: !!r.ready, since: r.since, stats: {bs: sxJ(r.bs_s, []), ws: sxJ(r.ws_s, [])},
+          rd: r.rd ? Object.assign({at: Math.floor(Number(r.rd_at) / 1000)}, sxJ(r.rd, {})) : null};
 }
 
 // ---------- a member's own private figures ----------
@@ -671,6 +806,7 @@ async function mySharedData(env, who) {
            status: row.status ? row.status.desc : null, at: c.v.at};
     }
   } catch (x) { out.optin_err = "couldn't read your opt-in settings right now"; }
+  if (env.OC_DB) out.script = await sxShareOwn(env, id).catch(() => null);     // shared from the Hub script (no key)
   if (env.OC_DB) {
     const r = await env.OC_DB.prepare("SELECT roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
       .bind(Number(env.FACTION_ID), Number(id)).first();
@@ -749,7 +885,26 @@ async function readinessCached(env) {
   if (s && s.data) READY_CACHE = {t: Number(s.as_of) || 0, v: s.data};
   return READY_CACHE;
 }
+// War Readiness = the Hub-key readings (readinessHub) + readings members' scripts sent (SCRIPT SHARING) - per member
+// the newest one is shown. Opening it also tells sharing scripts a leader is watching (sxReadyWatched).
 async function readiness(env, ctx) {
+  await sxReadyWatched(env);
+  const base = await (await readinessHub(env, ctx)).json();
+  const members = await currentMembers(env, ctx).catch(() => null);
+  const sx = await sxReadyRows(env, members).catch(() => []);
+  if (!sx.length) return Response.json(base, {headers: {"Cache-Control": "no-store"}});
+  const at = Number(base.at) || Math.floor(Date.now() / 1000), rows = (base.members || []).slice();
+  for (const r of sx) {
+    // cooldowns are "seconds left" at the reading - move them to the page's reading time
+    const shift = at - r.at;
+    r.cd = Object.fromEntries(Object.entries(r.cd || {}).map(([k, v]) => [k, Math.max(0, v - shift)]));
+    const i = rows.findIndex(x => String(x.id) === String(r.id));
+    if (i < 0) rows.push(r);
+    else if (rows[i].err || r.at >= at) rows[i] = r;           // the script's reading is newer (or the Hub's failed)
+  }
+  return Response.json(Object.assign({}, base, {members: rows}), {headers: {"Cache-Control": "no-store"}});
+}
+async function readinessHub(env, ctx) {
   const H = {headers: {"Cache-Control": "no-store"}};
   if (env.OC_DB) { const s = await ocSnapGet(env, "hub", "readiness").catch(() => null); if (s && s.data) READY_CACHE = {t: Number(s.as_of) || 0, v: s.data}; }
   if (READY_CACHE.v && Date.now() - READY_CACHE.t < 60e3) return Response.json(READY_CACHE.v, H);
@@ -1959,6 +2114,21 @@ async function cwReading(env, req, who) {
 //   DELETE /m/scripts?id=                                                       leaders: remove
 // D1 hub_script. Listing text + links only (no code hosted). Links must be https://. No Torn call.
 const SCRIPT_LIMITS = {name: 80, summary: 200, description: 6000, install_url: 500, version: 30, count: 200};
+// Greasy Fork script info from an install link (greasyfork.org/scripts/<id>-... or update.greasyfork.org/scripts/<id>/...)
+// -> {id, name, version, description, updated (ms), code_url, url, installs, daily} or null. Cached 1 h by Cloudflare.
+async function gfInfo(u) {
+  const m = /^https:\/\/(?:update\.)?(?:greasyfork|sleazyfork)\.org\/(?:[a-z-]+\/)?scripts\/(\d+)/i.exec(String(u || ""));
+  if (!m) return null;
+  try {
+    const r = await fetch(`https://greasyfork.org/scripts/${m[1]}.json`, {cf: {cacheTtl: 3600, cacheEverything: true},
+                                                                          headers: {"User-Agent": "HB Hub (scripts directory)"}});
+    if (!r.ok) return null;
+    const j = await r.json();
+    return {id: Number(m[1]), name: j.name, version: j.version, description: j.description,
+            updated: j.code_updated_at ? Date.parse(j.code_updated_at) : null, code_url: j.code_url, url: j.url,
+            installs: j.total_installs, daily: j.daily_installs};
+  } catch (e) { return null; }
+}
 async function scriptsRoute(env, req, url, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
   const bad = (error, status) => Response.json({ok: false, error}, {status: status || 400});
@@ -1969,6 +2139,17 @@ async function scriptsRoute(env, req, url, who) {
       rows = (await env.OC_DB.prepare("SELECT id, name, summary, description, install_url, version, updated, updated_by FROM hub_script " +
         "ORDER BY name COLLATE NOCASE").all()).results || [];
     } catch (e) { rows = []; }                                // table not there yet (first deploy)
+    // GREASY FORK (Nov 11 2026, user: "Scripts should pull the greasyfork information for their name, version numbers,
+    // etc. These should stay updated even when an update is made."): a listing whose install link is on Greasy Fork
+    // shows Greasy Fork's current name / version / description / last update / install link (read through
+    // Cloudflare's cache, at most once an hour per script). The leader's own summary is kept when there is one.
+    rows = await Promise.all(rows.map(async r => {
+      const g = await gfInfo(r.install_url);
+      if (!g) return r;
+      return Object.assign({}, r, {name: g.name || r.name, version: g.version || r.version, summary: r.summary || g.description,
+        install_url: g.code_url || r.install_url, updated: g.updated || r.updated, updated_by: g.updated ? "Greasy Fork" : r.updated_by,
+        gf: {id: g.id, url: g.url, installs: g.installs, daily: g.daily}});
+    }));
     return Response.json({ok: true, scripts: rows, me: {leader: !!who.leader}}, H);
   }
   if (!who.leader) return bad("Only leaders can change the scripts list.", 403);

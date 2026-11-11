@@ -5729,6 +5729,45 @@ def update_armory_log(key: str, founded: int = 0):
           f"{len(log['events'])} kept · read back to {since}{' (complete)' if log.get('done') else ''}")
 
 
+ARMORY_LOANS_PATH = ROOT / "data" / "armory_loans.json"
+
+
+def update_armory_loans(key: str):
+    """Full runs (Nov 11 2026, user: Armory "Currently Loaned: Armor / Weapons / Temps / etc"): who has which faction
+    armory items on loan RIGHT NOW - ONE Torn call per full update (faction key, v1 armor / weapons / temporary /
+    utilities - the same selections the Faction Armory Tracker script reads). -> data/armory_loans.json
+    {"at": time, "members": {id: {"Weapons": [names], "Armor": [...], "Temporary": [...], "Utilities": [...]}}}"""
+    import time
+    if not key:
+        return
+    try:
+        url = (f"https://api.torn.com/faction/?selections=armor,weapons,temporary,utilities&key={urllib.parse.quote(key)}"
+               f"&comment={urllib.parse.quote(API_COMMENT)}")
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "HB Hub"}), timeout=30) as r:
+            d = json.loads(r.read().decode())
+    except Exception as ex:                       # never print the URL (it has the key)
+        print(f"Armory loans: not read ({type(ex).__name__})")
+        return
+    if d.get("error"):
+        print(f"Armory loans: Torn error {d['error'].get('code')}")
+        return
+    out = {}
+    for sel, cat in (("weapons", "Weapons"), ("armor", "Armor"), ("temporary", "Temporary"), ("utilities", "Utilities")):
+        items = d.get(sel) or []
+        for it in (items.values() if isinstance(items, dict) else items):
+            if not isinstance(it, dict):
+                continue
+            lt = it.get("loaned_to")
+            ids = ([x.get("id") if isinstance(x, dict) else x for x in lt] if isinstance(lt, list)
+                   else str(lt).split(",") if lt not in (None, "", 0, "0") else [])
+            for x in ids:
+                x = str(x).strip()
+                if x and x != "0":
+                    out.setdefault(x, {}).setdefault(cat, []).append(it.get("name") or "?")
+    ARMORY_LOANS_PATH.write_text(json.dumps({"at": int(time.time()), "members": out}, separators=(",", ":")) + "\n", encoding="utf-8")
+    print(f"Armory loans: {sum(len(v) for m in out.values() for v in m.values())} items loaned to {len(out)} members")
+
+
 def armory_data(db: dict) -> dict:
     """Usage per member from data/armory_log.json: by month and all time, by category and by item.
       {"cats", "items": [names], "item_cat": [category per item], "oldest", "done", "months": [YYYY-MM newest first],
@@ -5754,7 +5793,12 @@ def armory_data(db: dict) -> dict:
         d_[str(it)] = d_.get(str(it), 0) + cnt
         recent.setdefault(str(mid), []).append([t, it, cnt, kind])     # events are in time order
     recent = {i: r[-ARMORY_RECENT:][::-1] for i, r in recent.items()}
-    return {"cats": ARMORY_CATS, "member_cats": ARMORY_MEMBER_CATS, "items": log.get("items", []),
+    try:
+        loans = json.loads(ARMORY_LOANS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        loans = {}
+    return {"loans": loans.get("members", {}), "loans_at": loans.get("at"),     # currently loaned (update_armory_loans)
+            "cats": ARMORY_CATS, "member_cats": ARMORY_MEMBER_CATS, "items": log.get("items", []),
             "item_cat": item_cat,
             "oldest": log.get("oldest"), "done": bool(log.get("done")), "months": sorted(months, reverse=True),
             "faction": fac,
@@ -6078,11 +6122,48 @@ def optin_publish(out: Path, opt: dict, st: dict) -> dict:
             if e.get(part, "off") != "off":
                 x[part] = {"share": e[part], "s": rec.get(part, [])}
         full[i] = x
+    # SCRIPT SHARING (Nov 11 2026): what members share from the Heart Breakers Hub script (their key stays on their
+    # device; the script sends readings once a day) - merged in: a part only shared from the script uses the script's
+    # setting; shared both ways = one series (same day: the script's reading).
+    for i, e in sx_export().items():
+        x = full.setdefault(i, {"ready": False, "since": int(e.get("since") or 0) // 1000 or None})
+        x["ready"] = bool(x.get("ready") or e.get("ready"))
+        for part in ("bs", "ws"):
+            if part not in e:
+                continue
+            if part in x:
+                byday = {r[0]: r for r in x[part]["s"]}
+                byday.update({r[0]: r for r in e[part].get("s") or []})
+                x[part]["s"] = [byday[d] for d in sorted(byday)]
+            else:
+                x[part] = {"share": e[part]["share"], "s": e[part].get("s") or [], "via": "script"}
+    for i, x in full.items():
         sh = {p: x[p] for p in ("bs", "ws") if p in x and x[p]["share"] == "faction"}
         if sh:
             shared[i] = sh
     _jdump(member_out(out) / "db" / "optin_shared.json", {"members": shared})
     return full
+
+
+def sx_export() -> dict:
+    """Stats members share from the Heart Breakers Hub script (gatekeeper GET /sx/export, D1 sx_share):
+    {member id: {bs: {share, s}, ws: {share, s}, ready, since}}. Proven with sha256(MEMBER_DIR|LEADER_DIR|hb-sx-export) -
+    secrets only this workflow and the gatekeeper have. Numbers only, never a key. {} when the gate is off / unreachable."""
+    import hashlib
+    g_ = gate_cfg()
+    if not g_:
+        return {}
+    tok = hashlib.sha256(f'{os.environ.get("MEMBER_DIR", "")}|{os.environ.get("LEADER_DIR", "")}|hb-sx-export'.encode()).hexdigest()
+    try:
+        req = urllib.request.Request(g_["url"].rstrip("/") + "/sx/export", headers={"X-HB-Export": tok, "User-Agent": "HB Hub build"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.loads(r.read().decode())
+        m = d.get("members") or {}
+        print(f"Script sharing: {len(m)} member(s)")
+        return m
+    except Exception as ex:
+        print(f"Script sharing: not read ({type(ex).__name__})")
+        return {}
 
 
 def write_monitor(out: Path, db: dict, cfg: dict = None):
@@ -6145,9 +6226,21 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
                     "report": f"{mb}reports/chain-{c['id']}.html", "img": f"{mb}reports/chain-{c['id']}.png"}
                    for c in db["chains"]["chains"][-30:][::-1]
                    if REPORTS_DIR.exists() and (REPORTS_DIR / f"chain-{c['id']}.json").exists()]
+        # News tab sections (Nov 11 2026, user: "Latest, Newsletters, Chain Reports, War Reports, etc."): up to 30 of each
+        every = _hub_latest_items(mb, 30)
+        by_kind = {k: [x for x in every if x["kind"] == k] for k in ("newsletter", "war", "chain", "recap")}
+        payouts_ = []
+        for w in wars_:
+            if w["payout"]:
+                stem = rec[str(w["id"])]
+                payouts_.append({"t": w["end"], "url": w["payout"], "img": f"{mb}payouts/{stem}.png",
+                                 "title": f"War payout - vs {w.get('opponent') or '?'}", "sub": datetime.fromtimestamp(w["end"], timezone.utc).strftime("%b %d, %Y"),
+                                 "kind": "payout"})
         _jdump(member_out(out) / "db" / "script_feed.json", {"generated": md["generated"], "member_base": mb.rstrip("/"),
-                                                  "latest": _hub_latest_items(mb, 8), "wars": wars_, "chains": chains_,
-                                                  "recaps": recaps_})
+                                                  "latest": every[:8], "newsletters": by_kind["newsletter"],
+                                                  "war_reports": by_kind["war"], "chain_reports": by_kind["chain"],
+                                                  "recap_items": by_kind["recap"], "payouts": payouts_,
+                                                  "wars": wars_, "chains": chains_, "recaps": recaps_})
         (lout / "db" / "script_feed.json").unlink(missing_ok=True)      # its old place (leaders' folder)
     except Exception as e_:                       # never break the site build over the script feed
         print("Hub script feed skipped:", e_)
@@ -10893,6 +10986,7 @@ def main():
         update_armory_log(api_key, int(datetime.now(timezone.utc).timestamp()) - int(_b.get("days_old") or 0) * 86400
                           if _b.get("days_old") else 0)
         #   ^ armory usage: everything new, then older months a few pages at a time back to the faction's founding
+        update_armory_loans(api_key)              # who has which armory items on loan now (1 call)
     db_ = write_databases(out, raw, cfg)          # shared data layer (db/*.json)
     write_profiles(out, db_)
     write_profile_layouts(out, cfg)               # profile layouts (members' own + the leaders' default) + editors

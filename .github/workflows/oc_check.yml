@@ -289,4 +289,6 @@ jobs:
           echo "hub script armory: $(sx '"op":"read","area":"l","path":"db/armory.json"')  payout cfg: $(sx '"op":"read","area":"l","path":"db/payout_cfg.json"')  payout index: $(sx '"op":"read","area":"l","path":"payout_data/index.json"')"
           echo "hub script mine: $(sx '"op":"mine"')  board: $(sx '"op":"live","what":"board"')  schedule: $(sx '"op":"live","what":"schedule"')  scripts: $(sx '"op":"live","what":"scripts"')  config: $(sx '"op":"gh","method":"GET","path":"config.json","ref":"main"')"
           echo "hub script bad path: $(sx '"op":"read","area":"m","path":"../x.json"')"
+          echo "hub script share_get: $(sx '"op":"share_get"')  share_ping: $(sx '"op":"share_ping"')  export without proof: $(curl -s -o /dev/null -w '%{http_code}' $B/sx/export)"
+          echo "hub script scripts from Greasy Fork: $(sx '"op":"live","what":"scripts"' >/dev/null; python3 -c "import json; d=json.load(open('/tmp/sx.json')); print(sum(1 for x in d.get('scripts',[]) if x.get('gf')), 'of', len(d.get('scripts',[])))" 2>/dev/null)"
           rm -f /tmp/sx.json
