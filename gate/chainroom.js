@@ -1023,7 +1023,7 @@ export class ChainRoom {
    * One "lap" = one chain count: when the count goes up (a hit landed) every stage is armed again.
    *   timer   stage 1..3 at config top/rest/third seconds left - stage 1 to the member who's UP only when
    *           firstAlertPrimaryOnly, else (and stages 2..3) to everyone in the queue who can act
-   *   up      "you're up" - once, to the member who becomes UP
+   *   up      "you're up" - once, to the member who becomes UP (not below minChain either - Nov 10 2026)
    *   (backup - removed Nov 10 2026, user: the normal alerts suffice; alert 2 goes to #1 and #2)
    * Nothing below minChain. Alerts 1 & 2 are paused (held, not dropped) while anyone's "I'm hitting" flag is on -
    * when it runs out without a hit, the most urgent one that came due is sent; ALERT 3 AND PANIC ARE NEVER HELD
@@ -1074,8 +1074,11 @@ export class ChainRoom {
     const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
     if (!c || !(c.current > 0) || !c.expires_at) return;
     const ex = this.extras(), turn = ex.turn;
-    // "you're up" - once per change of who's up (also below minChain: it costs nothing and helps a chain start)
-    if (turn && turn.up && this.mem.alertUpSent !== turn.up) {
+    // "you're up" - once per change of who's up. NOT below minChain (Nov 10 2026, user: "NO alerts should go out
+    // before the set minimum chain, even the 'You're up' alerts"). Whoever is up when the chain reaches the minimum
+    // gets it then.
+    const belowMin = c.current < (Number(cfg.minChain) || 0);
+    if (turn && turn.up && !belowMin && this.mem.alertUpSent !== turn.up) {
       this.mem.alertUpSent = turn.up;
       this.sendAlert([turn.up], { kind: "up", stage: 0, seconds: 0, chain: c.current, expires_at: c.expires_at,
         remaining_ms: c.expires_at - now, reason: turn.reason, now });
