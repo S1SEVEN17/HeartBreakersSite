@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Link Torn script - Heart Breakers</title>
+<!--
+  LINK TORN SCRIPT (leaders' folder: script-link.html). Nov 11 2026, user: a userscript to use the Hub from inside Torn
+  (leaders only, view + leader actions). Torn's page can't use the Hub's sign-in, so the "Heart Breakers Hub" script
+  is linked with a code made here: GET /l/sx/link -> {code, exp} (signed, 30 days, no Torn key). Paste it into the
+  script's settings (⚙). "Sign out all my linked scripts" = POST /l/sx/revoke (every code this leader made stops).
+  Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:720px}
+h1{color:var(--red);font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card h2{color:var(--gold);font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px}
+button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:11px 16px;font:600 15px system-ui;cursor:pointer;min-height:44px}
+button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+textarea{width:100%;min-height:90px;background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:8px;padding:10px;font:13px monospace;margin:8px 0;word-break:break-all}
+.acts{display:flex;gap:8px;flex-wrap:wrap}.msg{font-size:13px;margin-top:8px;color:var(--gold)}
+ol{margin:6px 0 0 18px;padding:0;line-height:1.6;color:#cfcfd1}
+</style></head><body>
+__MENU__
+<h1>Link Torn script</h1>
+<div class="sub">The Heart Breakers Hub script (leaders) - use the Hub from inside Torn</div>
+<div class="card"><h2>1 · Make a link code</h2>
+  <ol><li>Tap <b>Make link code</b>, then <b>Copy</b>.</li>
+      <li>In Torn, open the Hub script (its launcher icon) → ⚙ → paste the code → Save.</li>
+      <li>The code lasts 30 days. Make a new one any time; old ones keep working until they run out.</li></ol>
+  <div class="acts" style="margin-top:10px"><button id="mk" type="button">Make link code</button></div>
+  <textarea id="code" readonly placeholder="Your link code appears here" style="display:none"></textarea>
+  <div class="acts"><button id="cp" class="alt" type="button" style="display:none">📋 Copy</button></div>
+  <div class="msg" id="m1"></div>
+  <p style="color:var(--sub);font-size:12px">The code lets the script act as you on the Hub (leaders' data and saves). Keep it to yourself - no Torn key is in it,
+  and it stops working the moment you're no longer a leader.</p></div>
+<div class="card"><h2>2 · Lost a device?</h2>
+  <p style="color:#cfcfd1;font-size:14px;margin:0 0 10px">Signs out every Hub script you've linked, on every device. Make a new code afterwards.</p>
+  <button id="rv" class="alt" type="button">Sign out all my linked scripts</button><div class="msg" id="m2"></div></div>
+<script>
+const CONF = __CONFIG__;
+const $ = id => document.getElementById(id);
+$("mk").onclick = async () => {
+  $("m1").textContent = "Making a code…";
+  try {
+    const r = await fetch("sx/link", {cache: "no-store", credentials: "same-origin"});
+    const d = await r.json(); if (!d.ok) throw new Error(d.error || r.status);
+    $("code").value = d.code; $("code").style.display = ""; $("cp").style.display = "";
+    $("m1").textContent = "Valid until " + new Date(d.exp).toLocaleDateString(undefined, {month: "short", day: "numeric", year: "numeric"}) + ".";
+  } catch (e) { $("m1").textContent = "Couldn't make a code: " + e.message; }
+};
+$("cp").onclick = () => { $("code").select(); (navigator.clipboard ? navigator.clipboard.writeText($("code").value) : Promise.reject())
+  .then(() => $("m1").textContent = "Copied ✓", () => { document.execCommand("copy"); $("m1").textContent = "Copied ✓"; }); };
+$("rv").onclick = async () => {
+  if (!confirm("Sign out every Hub script you've linked?")) return;
+  try { const r = await fetch("sx/revoke", {method: "POST", credentials: "same-origin"}); const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status); $("m2").textContent = "Done ✓ - every linked script is signed out."; $("code").value = ""; }
+  catch (e) { $("m2").textContent = "Couldn't sign out: " + e.message; }
+};
+</script>
+</body></html>

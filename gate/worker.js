@@ -22,6 +22,7 @@
 //   /l/oc/*           leaders' OC Management page: settings, deployed plan, shared rates (pass cookie, leaders)
 //   /rc/push          Torn Recruit Scout script: leaders send scouted recruits (client-reported identity, no key)
 //   /l/rc/*           leaders' Recruitment page: the shared recruits - claim, status, notes, remove (pass cookie, leaders)
+//   /sx               Heart Breakers Hub userscript (in Torn, leaders only): signed link code from /l/sx/link - see HUB SCRIPT
 //
 // Nothing from GitHub shows through: GitHub's response headers are dropped (only type / caching headers are
 // passed on) and GitHub's own error pages are replaced by ours, so visitors only ever see this address.
@@ -218,6 +219,8 @@ export default {
     if (p.startsWith("/cw/")) return cwRoute(req, env, url);
     // Torn Recruit Scout script (client-reported identity, no key; leaders only) -> the Recruitment page (RECRUITMENT below)
     if (p.startsWith("/rc/")) return rcScriptRoute(env, req, p);
+    // Heart Breakers Hub userscript (leaders, in Torn): a signed link code instead of the pass cookie
+    if (p === "/sx") return sxRoute(env, ctx, req);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -256,6 +259,8 @@ export default {
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
     if (area === "l" && rest.startsWith("cw/")) return cwLeaderRoute(env, req, who, rest.slice(3));
+    // leaders: link the Heart Breakers Hub userscript (link code) / sign every linked script out
+    if (area === "l" && rest.startsWith("sx/")) return sxLeaderRoute(env, req, who, rest.slice(3));
     // leaders: Recruitment page (recruitment.html) - recruits shared by the Torn Recruit Scout script (D1 rc_recruit)
     if (area === "l" && rest.startsWith("rc/")) return rcLeaderRoute(env, req, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
@@ -321,6 +326,93 @@ async function ghProxy(env, req, who, path) {
     headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "User-Agent": "hb-gate",
               "Content-Type": "application/json"}});
   return new Response(r.body, {status: r.status, headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
+}
+
+// =====================================================================================================
+// HUB SCRIPT (Nov 11 2026, user: "a script that allows me to interact with certain aspects of the Hub from inside
+// Torn" - leaders only, view + leader actions). The Torn page can't use the Hub's pass cookie (other site,
+// SameSite=Lax, and Torn PDA's requests carry no cookies), so a leader LINKS the script once:
+//   GET  /l/sx/link     (signed in, leaders) -> {code, exp}: "hbsx1.<pid>.<gen>.<exp>.<sig>" - HMAC with the pass
+//                       secret, valid SX_DAYS days. The leader pastes it into the script's settings. No Torn key.
+//   POST /l/sx/revoke   (signed in, leaders) -> every code that leader has made stops working (gen + 1, D1)
+//   POST /sx  {code, op, ...}  (CORS torn.com; POST only, so Torn PDA's PDA_httpPost works too)
+//     op "whoami"                              -> {ok, me: {id, name, position}}
+//     op "read" {area: "m"|"l", path: "db/<file>.json"}   -> that file of the site (members' / leaders' folder)
+//     op "gh"   {method: "GET"|"PUT", path, ref?, body?}  -> the leaders' save route (ghProxy: same allowed paths -
+//                                                             config.json, data/payouts/, data/panels/)
+// Every call re-checks: code signature + not expired + not revoked + STILL a current member in a leader position
+// (db/members.json) - a demoted leader's script stops at once.
+// =====================================================================================================
+const SX_DAYS = 30;
+const SX_CORS = {"Access-Control-Allow-Origin": "https://www.torn.com", "Access-Control-Allow-Methods": "POST, OPTIONS",
+                 "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "86400",
+                 "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"};
+const sxJson = (obj, status = 200) => new Response(JSON.stringify(obj), {status, headers: {...SX_CORS, "Content-Type": "application/json"}});
+async function sxGen(env, pid) {
+  if (!env.OC_DB) return 0;
+  const r = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'all' AND k = ?").bind("sx_gen:" + pid).first().catch(() => null);
+  return r ? Number(r.v) || 0 : 0;
+}
+async function sxSign(env, pid, gen, exp) {
+  return b64u(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(`sx|${pid}|${gen}|${exp}`)));
+}
+async function sxWho(env, ctx, code) {
+  const m = /^hbsx1\.(\d+)\.(\d+)\.(\d+)\.([\w-]+)$/.exec(String(code || "").trim());
+  if (!m) return {error: "That isn't a Hub link code - make one on the Hub (Leaders Hub -> Link Torn script)."};
+  const [, pid, gen, exp, sig] = m;
+  let ok = false;
+  try { ok = await crypto.subtle.verify("HMAC", await hmacKey(env), unb64u(sig), enc.encode(`sx|${pid}|${gen}|${exp}`)); } catch (e) { ok = false; }
+  if (!ok) return {error: "That link code isn't valid - make a new one on the Hub."};
+  if (Number(exp) < Date.now()) return {error: "That link code has expired - make a new one on the Hub."};
+  if (Number(gen) !== await sxGen(env, pid)) return {error: "That link code was signed out - make a new one on the Hub."};
+  const members = await currentMembers(env, ctx);
+  const mm = members && members.get(Number(pid));
+  if (!mm) return {error: "Not a current Heart Breakers member."};
+  if (!isLeader(env, mm.position)) return {error: "The Hub script is for leaders only."};
+  return {who: {id: Number(pid), name: mm.name, position: mm.position || "", leader: true}, exp: Number(exp)};
+}
+async function sxLeaderRoute(env, req, who, rest) {
+  if (rest === "link" && req.method === "GET") {
+    const gen = await sxGen(env, who.id), exp = Date.now() + SX_DAYS * 864e5;
+    const code = `hbsx1.${who.id}.${gen}.${exp}.${await sxSign(env, who.id, gen, exp)}`;
+    return Response.json({ok: true, code, exp, days: SX_DAYS}, {headers: {"Cache-Control": "no-store"}});
+  }
+  if (rest === "revoke" && req.method === "POST") {
+    if (!env.OC_DB) return Response.json({ok: false, error: "storage isn't set up"}, {status: 503});
+    const gen = (await sxGen(env, who.id)) + 1;
+    await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', ?, ?, ?, ?) " +
+      "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
+      .bind("sx_gen:" + who.id, String(gen), Date.now(), who.name).run();
+    return Response.json({ok: true});
+  }
+  return new Response("Not found", {status: 404});
+}
+async function sxRoute(env, ctx, req) {
+  if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: SX_CORS});
+  if (req.method !== "POST") return sxJson({ok: false, error: "POST only"}, 405);
+  let b; try { b = await req.json(); } catch (e) { return sxJson({ok: false, error: "bad request"}, 400); }
+  const a = await sxWho(env, ctx, b && b.code);
+  if (!a.who) return sxJson({ok: false, error: a.error, relink: true}, 401);
+  const who = a.who, op = String(b.op || "");
+  if (op === "whoami") return sxJson({ok: true, me: {id: who.id, name: who.name, position: who.position}, exp: a.exp});
+  if (op === "read") {
+    const area = b.area === "l" ? "l" : "m", path = String(b.path || "");
+    if (!/^db\/[\w.-]+\.json$/.test(path)) return sxJson({ok: false, error: "not allowed"}, 403);
+    const dir = area === "l" ? env.LEADER_DIR : env.MEMBER_DIR;
+    const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(dir)}/${path}`));
+    if (!r.ok) return sxJson({ok: false, error: "not found"}, 404);
+    return new Response(r.body, {status: 200, headers: {...SX_CORS, "Content-Type": "application/json"}});
+  }
+  if (op === "gh") {
+    const method = b.method === "PUT" ? "PUT" : "GET", path = String(b.path || "");
+    const u = new URL("https://sx.local/" + path); if (b.ref) u.searchParams.set("ref", String(b.ref));
+    const inner = new Request(u.toString(), {method, headers: method === "PUT" ? {"X-HB-Save": "1", "Content-Type": "application/json"} : {},
+                                             body: method === "PUT" ? JSON.stringify(b.body || {}) : undefined});
+    const r = await ghProxy(env, inner, who, path);
+    const txt = await r.text();
+    return new Response(txt, {status: r.status, headers: {...SX_CORS, "Content-Type": "application/json"}});
+  }
+  return sxJson({ok: false, error: "unknown op"}, 400);
 }
 
 // ---------- a member's own private figures ----------

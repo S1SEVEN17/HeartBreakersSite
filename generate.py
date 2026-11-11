@@ -4029,6 +4029,7 @@ def header_default() -> dict:
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🏠 Leaders Hub", "L:index.html"),
                 L("🤝 Recruitment", "L:recruitment.html"),          # Nov 11 2026: Torn Recruit Scout -> shared recruits
+                L("🔗 Link Torn script", "L:script-link.html"),     # Nov 11 2026: Heart Breakers Hub userscript
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
                                                         L("⚔️ War readiness", "L:readiness.html"),
                                                         L("⛓️ Chain Watch", "L:chainwatch.html"),
@@ -4897,7 +4898,7 @@ def homepage_default() -> dict:
         ("🧮", "Payout calculator", "L:payout.html"),
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
         ("⚔️", "War readiness", "L:readiness.html"), ("⛓️", "Chain Watch", "L:chainwatch.html"),
-        ("🤝", "Recruitment", "L:recruitment.html"),
+        ("🤝", "Recruitment", "L:recruitment.html"), ("🔗", "Link Torn script", "L:script-link.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
         ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
@@ -5041,7 +5042,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
-             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"), ("Recruitment", "L:recruitment.html"),
+             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"), ("Recruitment", "L:recruitment.html"), ("Link Torn script", "L:script-link.html"),
              ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
@@ -6043,6 +6044,8 @@ def write_optin_pages(out: Path):
         # Recruitment (Nov 11 2026): recruits shared by the Torn Recruit Scout script - claim / status / notes / remove
         # (gatekeeper /l/rc/*, D1 rc_recruit; contract claude/recruitment-hub-contract.md)
         (lout / "recruitment.html").write_text(page("recruitment.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
+        # Link Torn script (Nov 11 2026): link code for the "Heart Breakers Hub" userscript (gatekeeper /l/sx/*)
+        (lout / "script-link.html").write_text(page("script_link.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
 
 
 def optin_saved():
@@ -6110,6 +6113,26 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
                                                     "min_chains": REL_MIN_CHAINS, "chain_min": REL_CHAIN_MIN},
                                           "averages": {"reliability": round(sum(sc) / len(sc), 1) if sc else 0,
                                                        "parts": avg_parts}})
+    # HUB SCRIPT FEED (Nov 11 2026): what the "Heart Breakers Hub" userscript shows in Torn, in one small file
+    # (read with op "read" {area:"l", path:"db/script_feed.json"}): latest newsletters / recaps / reports (absolute
+    # addresses - the images open without signing in) and the recent wars with report + payout links and Termed.
+    try:
+        mb = member_base().rstrip("/") + "/"
+        rec = _latest_receipts()
+        tw = termed_wars()
+        wars_ = []
+        for w in db["wars"]["wars"][-40:][::-1]:
+            wid = str(w["id"])
+            ms_ = [x for x in w["m"]]
+            wars_.append({"id": w["id"], "opponent": w.get("opponent"), "start": w.get("start"), "end": w["end"],
+                          "termed": wid in tw, "hits": sum(x[1] for x in ms_), "attackers": sum(1 for x in ms_ if x[1] > 0),
+                          "members": len(ms_), "report": f"{mb}reports/war-{wid}.html", "report_img": f"{mb}reports/war-{wid}.png",
+                          "payout": f"{mb}payouts/{rec[wid]}.html" if wid in rec else None,
+                          "m": [[x[0], x[1]] for x in ms_]})
+        _jdump(lout / "db" / "script_feed.json", {"generated": md["generated"], "member_base": mb.rstrip("/"),
+                                                  "latest": _hub_latest_items(mb, 8), "wars": wars_})
+    except Exception as e_:                       # never break the site build over the script feed
+        print("Hub script feed skipped:", e_)
     # the Leader Monitor page was removed (Nov 2026) - reliability is on Members / profiles, armory on the Armory
     # Monitor; its old address goes to the Leaders Hub
     (lout / "monitor.html").write_text('<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=index.html">'
