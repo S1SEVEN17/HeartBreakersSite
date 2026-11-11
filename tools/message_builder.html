@@ -761,7 +761,9 @@ $("publish").onclick = async () => {
 function torn() {
   const title = D.head.title || "Faction Message";
   if (!published) return {t: title, h: ""};
-  let html = `<p style="text-align:center;"><img src="${published}" alt="${esc(title)}" width="600"></p>`;
+  // Nov 11 2026 (user): no fixed 600 width - the image shows as large as Torn's column allows so it's readable;
+  // max-width keeps the full-size (~1300 px) image from spilling past the column on narrow screens
+  let html = `<p style="text-align:center;"><img src="${published}" alt="${esc(title)}" style="max-width:100%;height:auto;"></p>`;
   // buttons: one centred paragraph, NO whitespace between the <a> tags (Torn wraps the pair otherwise),
   // <br> after each row, torn.com links made site-relative - same as the announcement's buttons
   const btns = D.buttons.map((b, k) => publishedBtns[k] ? [b, publishedBtns[k]] : null).filter(Boolean);
