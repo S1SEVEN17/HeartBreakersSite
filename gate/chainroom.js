@@ -984,12 +984,9 @@ export class ChainRoom {
       if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s, now)) {   // under 25e, no way back
         delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; return;
       }
-      const st = this.mem.status[q.pid];
-      if (st && st.status === "Offline" && !q.away) {   // away = a soft pause: no offline removal
-        q._offlineSince = q._offlineSince || now;
-        // paused while the chain cools down: the queue is for the NEXT chain then
-        if (!cooling && idx < 2 && now - q._offlineSince > 5 * 60 * 1000) { delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; } // #1/#2 offline 5 min+
-      } else q._offlineSince = 0;
+      // (The old "#1 / #2 Offline in Torn for 5 min -> removed" rule is gone - Nov 11 2026, user: inactive members
+      //  are never removed, only flagged and sorted below active members.)
+      void idx; void cooling;
     });
   }
 
@@ -1173,7 +1170,8 @@ export class ChainRoom {
     // who a timer alert goes to: queued members who can act (not away, not in hospital / jail / flying) - INCLUDING
     // idle / offline (they get alert 3 and Panic as a last resort - idle/offline addendum §4)
     const able = this.orderedQueue().filter((x) => x.can_hit && !x.away).map((x) => x.pid);
-    const ableActive = this.orderedQueue().filter((x) => x.can_hit && !x.away && x.presence === "active").map((x) => x.pid);
+    let ableActive = this.orderedQueue().filter((x) => x.can_hit && !x.away && x.presence === "active").map((x) => x.pid);
+    if (!ableActive.length) ableActive = able;           // only inactive members left: they get alerts 1-2 too
     // HUB-DRIVEN PANIC (idle/offline addendum §6): {t:"panic"} at 30 s, then 15 s left, once each per lap, to the
     // alert-3 set; NOT held by "I'm hitting"; nothing below minChain; if both came due at once only the 15 s one goes.
     lap.panic = lap.panic || [];
@@ -1224,7 +1222,11 @@ export class ChainRoom {
     const cur = Number(c.current) || 0;
     const q = this.orderedQueue();
     // up / backup: can attack, not away, and ACTIVE (idle / offline are passed over like away - addendum §3)
-    const able = q.filter((x) => x.can_hit && !x.away && x.presence === "active");
+    // ... unless nobody active is left: then the inactive ones who can attack (user, Nov 11 2026: "unless they are
+    // the last people remaining in the queue")
+    // (active first, then inactive - so an inactive member is #1 / #2 only when there aren't enough active ones)
+    const able = q.filter((x) => x.can_hit && !x.away && x.presence === "active")
+      .concat(q.filter((x) => x.can_hit && !x.away && x.presence !== "active"));
     const cfg = this.mem.config || CW_DEFAULT_CONFIG;
     const next = nextBonus(cur);
     const b = this.mem.bonus && this.mem.bonus.at === next ? this.mem.bonus : null;
@@ -1262,10 +1264,14 @@ export class ChainRoom {
   // Ties: earlier join first. Members who haven't reported stats yet go last within their group, in join order.
   // "active" | "idle" | "offline" for a queued member (idle/offline addendum §2). Idle needs a script that sends
   // `presence` heartbeats (presence_cap) - older scripts never go idle, they can only be offline.
+  // INACTIVE MEMBERS (Nov 11 2026, user): also "offline" when Torn itself shows them Offline (faction/members,
+  // read every minute for queued members). Torn "Idle" alone does NOT count - watchers often sit waiting.
   presenceOf(q, now) {
     const pid = Number(q.pid);
     const sync = this.mem.syncSeen[pid] && now - this.mem.syncSeen[pid] <= SYNC_STALE_MS;
     if (!this.conns.has(pid) && !sync) return "offline";
+    const st = this.mem.status[pid];
+    if (st && st.status === "Offline") return "offline";
     if (q.presence_cap && now - (Number(q.last_seen) || Number(q.joined_at) || 0) >= IDLE_AFTER_MS) return "idle";
     return "active";
   }
@@ -1281,13 +1287,20 @@ export class ChainRoom {
   }
   orderedQueue(raw) {
     const now = Date.now();
-    const list = Object.values(this.mem.queue).map((q) => ({ q, e: energyNow(q, now), ok: canAttack(this.mem.status[q.pid], now) }))
-      .sort((a, b) => ((b.ok ? 1 : 0) - (a.ok ? 1 : 0)) || ((b.e == null ? -1 : b.e) - (a.e == null ? -1 : a.e)) || (a.q.joined_at - b.q.joined_at));
+    // ORDER (Nov 11 2026, user: inactive members shouldn't be queued at the top unless they're the last ones left):
+    //   1. can attack + active   2. can attack + INACTIVE (idle / offline / Torn Offline)   3. can't attack
+    //   then most energy first, then who joined first. Inactive members are only flagged and sorted down, never
+    //   removed for being inactive (user: "Never, just flag").
+    const list = Object.values(this.mem.queue).map((q) => {
+      const presence = this.presenceOf(q, now), ok = canAttack(this.mem.status[q.pid], now);
+      return { q, e: energyNow(q, now), ok, presence, grp: !ok ? 2 : presence === "active" ? 0 : 1 };
+    }).sort((a, b) => (a.grp - b.grp) || ((b.e == null ? -1 : b.e) - (a.e == null ? -1 : a.e)) || (a.q.joined_at - b.q.joined_at));
     if (raw) return list.map((x) => x.q);
-    return list.map(({ q, e, ok }) => ({
+    return list.map(({ q, e, ok, presence }) => ({
       pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e, can_hit: ok, away: !!q.away,
       hitting_until: q.hitting_until || 0, stats: q.stats || null, hits: q.hits || 0,
-      presence: this.presenceOf(q, now),           // "active" | "idle" | "offline" (idle/offline addendum §5)
+      presence,                                    // "active" | "idle" | "offline" (idle/offline addendum §5)
+      inactive: presence !== "active",             // flag for the queue row (Nov 11 2026)
     }));
   }
   openRetals() {
@@ -1371,7 +1384,8 @@ export class ChainRoom {
     this.pruneConns(now);
     const c = this.mem.chain || null, x = this.extras();
     const queue = this.orderedQueue().map((q) => ({ pid: q.pid, name: q.name, energy: q.energy, can_hit: q.can_hit,
-      away: q.away, hits: q.hits, connected: this.conns.has(q.pid) || !!this.mem.syncSeen[q.pid] }));
+      away: q.away, hits: q.hits, connected: this.conns.has(q.pid) || !!this.mem.syncSeen[q.pid],
+      presence: q.presence, inactive: q.inactive }));
     return Response.json({ ok: true, now,
       chain: c ? { current: Number(c.current) || 0, max: Number(c.max) || 0, expires_at: c.expires_at || 0, as_of: c.as_of || 0,
                    cooldown_until: this.coolingDown(now) ? c.cooldown_until : 0 } : null,

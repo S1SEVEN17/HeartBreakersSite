@@ -183,7 +183,7 @@ function renderNow() {
     const x = duty.find(s => s.role === role);
     if (!x) return `<div class="sh"><span class="r">${esc(D.roles[role])}</span><span class="n open">Open${role === "primary" ? " - nobody is watching" : ""}</span></div>`;
     const lq = qBy[x.pid];
-    const live = !L ? "" : lq ? `<span class="pill ${lq.can_hit && !lq.away ? "p" : "w"}">#${lq.pos} in queue${lq.away ? " · away" : !lq.can_hit ? " · can't hit" : ""}</span>`
+    const live = !L ? "" : lq ? `<span class="pill ${lq.can_hit && !lq.away && !lq.inactive ? "p" : "w"}">#${lq.pos} in queue${lq.away ? " · away" : !lq.can_hit ? " · can't hit" : lq.inactive ? (lq.presence === "idle" ? " · idle" : " · offline") : ""}</span>`
       + (lq.energy != null ? `<span class="pill">${lq.energy} E</span>` : "") + (lq.connected ? "" : `<span class="pill w">script off</span>`)
       : `<span class="pill w">not in queue</span>`;
     return `<div class="sh${x.pid === D.me.pid ? " me" : ""}"><span class="r">${esc(D.roles[role])}</span><span class="n">${prof(x.pid, x.name)}</span>${relPill(x.pid)}`

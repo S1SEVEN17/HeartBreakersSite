@@ -116,6 +116,9 @@ function drawQueue() {
       + (role ? `<span class="pill g">${role}${role === "Up" && X.turn.reason === "bonus" ? " · bonus" : ""}</span>` : "")
       + (cant ? `<span class="pill r" title="${esc(st && st.desc || "")}">${esc(st && st.state || "Can't attack")}${st && st.until ? " · " + cd(st.until - hubNow / 1000) : ""}</span>` : "")
       + (hitting ? `<span class="pill y">Hitting now</span>` : "")
+      // INACTIVE (Nov 11 2026): script quiet 3 min+, not connected, or Offline in Torn - sorted below active members
+      + (m.inactive ? `<span class="pill r" title="Sorted below active members; only picked when nobody active is left">${m.presence === "idle" ? "💤 Idle" : "⚪ Offline"}</span>` : "")
+      + (m.away ? `<span class="pill y">Away</span>` : "")
       + (on ? `<span class="pill ${onC}">${esc(on)}</span>` : "")
       + `<span class="pill${m.connected ? " g" : ""}">${m.connected ? "Script on" : "Script off"}</span></div>`
       + (s ? `<div class="eb"><u class="${e > max ? "st" : ""}" style="width:${pct}%"></u></div>`
