@@ -4639,17 +4639,19 @@ function fail(e){if(e.code===5){back=now()+60;return}
   if(BADKEY.includes(e.code)){store.set("");NOWERR="Torn didn't accept that key ("+e.message+"). Try another Public key."}
   else NOWERR="Couldn't reach Torn just now - retrying."}
 async function getChain(){if(!store.get()||now()<back)return;try{const t=now(),c=((await torn("chain")).chain)||{};
-    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR="";lastOk=now();
+    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);
+    // Nov 10 2026: Torn's `timeout` is frozen in its cache (shows more time than is left) - `end` is the exact expiry
+    CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:(+c.current>0&&+c.end>1e9)?+c.end:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR="";lastOk=now();
     shareChain(c,t)}
   catch(e){fail(e)}nowCards()}
 // Chain Watch (Nov 2026): this reading is recycled for the Hub's Chain Watch queue timer - the NUMBERS only (never the
 // key), only during a live chain, and only when Torn's data changed (its ~30 s cache repeats itself) -> ~2 a minute.
 let lastShare=null;
-function shareChain(c,t){const cur=+c.current||0,to=+c.timeout||0;if(!(cur>0&&to>0&&to<=300))return;
-  const left=to>1e9?to-t:to,exp=t+left;if(lastShare&&lastShare.c===cur&&Math.abs(lastShare.e-exp)<=2)return;
+function shareChain(c,t){const cur=+c.current||0,to=+c.timeout||0,end=+c.end||0;if(!(cur>0&&((to>0&&to<=300)||end>1e9)))return;
+  const left=end>1e9?end-t:to>1e9?to-t:to,exp=end>1e9?end:t+left;if(lastShare&&lastShare.c===cur&&Math.abs(lastShare.e-exp)<=2)return;
   lastShare={c:cur,e:exp};
   fetch("/m/cw/reading",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({current:cur,max:+c.max||0,timeout:Math.round(left),cooldown:+c.cooldown||0,modifier:c.modifier==null?null:+c.modifier})}).catch(()=>{})}
+    body:JSON.stringify({current:cur,max:+c.max||0,end:end>1e9?end:0,timeout:Math.round(left),cooldown:+c.cooldown||0,modifier:c.modifier==null?null:+c.modifier})}).catch(()=>{})}
 async function getWar(){if(!store.get()||now()<back)return;try{let w=((await torn("wars")).wars||{}).ranked;if(Array.isArray(w))w=w[0];
     const t=now();WAR=null;
     if(w&&w.factions&&!(w.end&&w.end<=t)){const F=Array.isArray(w.factions)?w.factions:Object.entries(w.factions).map(([id,f])=>Object.assign({id},f));

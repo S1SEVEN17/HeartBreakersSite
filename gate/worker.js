@@ -1823,16 +1823,17 @@ async function cwLeaderRoute(env, req, who, sub) {
   return Response.json({ok: false, error: "not found"}, {status: 404});
 }
 
-// POST /m/cw/reading {current, max, timeout, cooldown, modifier} - signed-in members only (pid from the sign-in).
+// POST /m/cw/reading {current, max, end, timeout, cooldown, modifier} - signed-in members only (pid from the sign-in).
 // Torn V2 faction/chain as the homepage read it; numbers only. No Torn call here.
 async function cwReading(env, req, who) {
   if (req.method !== "POST") return Response.json({ok: false, error: "POST only"}, {status: 405});
   if (!env.CHAINROOM) return Response.json({ok: false, error: "chain watch isn't set up"}, {status: 503});
   let b; try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "bad request"}, {status: 400}); }
   const n = x => (Number.isFinite(Number(x)) ? Number(x) : 0);
-  const reading = {pid: Number(who.id), current: n(b.current), max: n(b.max), timeout: n(b.timeout), cooldown: n(b.cooldown),
+  // `end` = Torn's absolute expiry (epoch s) - exact even from Torn's cache; `timeout` is the fallback (Nov 10 2026)
+  const reading = {pid: Number(who.id), current: n(b.current), max: n(b.max), timeout: n(b.timeout), end: n(b.end), cooldown: n(b.cooldown),
                    modifier: b.modifier == null ? null : n(b.modifier)};
-  if (!(reading.current > 0 && reading.timeout > 0 && reading.timeout <= 300)) return Response.json({ok: true, used: false});
+  if (!(reading.current > 0 && ((reading.timeout > 0 && reading.timeout <= 300) || reading.end > 1e9))) return Response.json({ok: true, used: false});
   const r = await cwStub(env).fetch("https://do/reading", {method: "POST", body: JSON.stringify(reading)});
   return Response.json(await r.json(), {headers: {"Cache-Control": "no-store"}});
 }

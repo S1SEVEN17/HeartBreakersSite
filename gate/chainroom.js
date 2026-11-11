@@ -637,9 +637,10 @@ export class ChainRoom {
   applyScriptChain(msg) {
     const now = Date.now();
     const cur = Number(msg.current) || 0;
-    const timeout = Number(msg.timeout) || 0;
-    if (!timeout || cur <= 0) return false;              // a script can never start/stop a chain on its own
-    const reading_expires = now + timeout * 1000;
+    // `end` (Torn's absolute expiry, epoch s) is preferred; `timeout` (seconds left, frozen in Torn's cache) is the
+    // fallback for older scripts
+    const reading_expires = this.chainExpiry(msg, now);
+    if (!reading_expires || cur <= 0) return false;      // a script can never start/stop a chain on its own
     const c = this.mem.chain;
     if (!c || (!c.current && now - c.as_of > 60000)) {
       // No (recent) Hub baseline -> accept it as a provisional reading; the Hub read confirms/corrects `current`.
@@ -671,16 +672,29 @@ export class ChainRoom {
     this.storage.setAlarm(now + 250).catch(() => {});    // ...which runs now (it reschedules itself after)
   }
 
+  /* ---- CHAIN EXPIRY (Nov 10 2026, user: the script timer ran ~7 s behind Torn's) ---------------------------------
+   * Torn's `timeout` is FROZEN in its response cache (the same 83 s came back three times over 8 s), so
+   * `now + timeout` always shows MORE time than is left - by however old the cached response is. Torn also sends
+   * `end` = the exact epoch second the chain times out, which stays correct while cached. Use `end` whenever it's
+   * there; `timeout` only as a fallback for readers that don't send it.
+   * ------------------------------------------------------------------------------------------------------------- */
+  chainExpiry(chain, now) {
+    const end = Number(chain && chain.end) || 0;
+    if (end > 1e9 && end * 1000 > now - 60000 && end * 1000 <= now + 330000) return end * 1000;
+    const timeout = Number(chain && chain.timeout) || 0;
+    return timeout > 0 ? now + timeout * 1000 : 0;
+  }
+
   /* ---- CHAIN: Hub-sourced reading (authoritative for `current`) ---------- */
   applyHubChain(chain) {
     const now = Date.now();
     const cur = Number(chain.current) || 0;
-    const timeout = Number(chain.timeout) || 0;
-    let expires = cur > 0 ? now + timeout * 1000 : 0;
+    const exact = Number(chain.end) > 1e9;                // Torn's absolute expiry - right even from a cached reply
+    let expires = cur > 0 ? this.chainExpiry(chain, now) : 0;
     const prev = this.mem.chain;
-    // The Hub's read can be up to ~30 s old (Torn's cache). If a script read the SAME count more recently and saw
-    // less time left, keep the shorter value (never show more time than a fresh reading did).
-    if (prev && cur > 0 && prev.current === cur && prev.src === "script" && now - prev.as_of < SCRIPT_READING_FRESH_MS
+    // Only without `end`: the Hub's `timeout` can be up to ~30 s old (Torn's cache). If a script read the SAME count
+    // more recently and saw less time left, keep the shorter value (never show more time than a fresh reading did).
+    if (!exact && prev && cur > 0 && prev.current === cur && prev.src === "script" && now - prev.as_of < SCRIPT_READING_FRESH_MS
         && prev.expires_at && prev.expires_at < expires) expires = prev.expires_at;
     this.mem.chain = {
       current: cur, max: Number(chain.max) || cur, cooldown: Number(chain.cooldown) || 0,
@@ -1276,7 +1290,7 @@ export class ChainRoom {
     let b = {};
     try { b = await request.json(); } catch (e) { /* ignore */ }
     const changed = this.applyScriptChain({
-      current: b.current, max: b.max, timeout: b.timeout, cooldown: b.cooldown, modifier: b.modifier,
+      current: b.current, max: b.max, timeout: b.timeout, end: b.end, cooldown: b.cooldown, modifier: b.modifier,
     });
     const day = todayUTC();
     if (this.mem.webDay !== day) { this.mem.webDay = day; this.mem.webReadings = 0; }

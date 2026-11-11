@@ -264,6 +264,8 @@ jobs:
           print('sync', '$code', d.get('ok'), s.get('t'), 'chain=%s src=%s' % (c.get('current'), c.get('src')), 'queue=%d' % len(s.get('queue') or []),
                 'retals=%d' % len(s.get('retals') or []), 'mode=%s' % s.get('mode'), 'minChain=%s' % (s.get('config') or {}).get('minChain'),
                 'leader=%s' % (s.get('me') or {}).get('is_leader'),
+                'hub_timer_left=%s' % (round((c.get('expires_at') - s.get('now')) / 1000) if c.get('expires_at') and s.get('now') else None),
+                'hub_now=%s' % (int(s.get('now') / 1000) if s.get('now') else None),
                 'schedule=%s' % ('none' if s.get('schedule') is None else len((s.get('schedule') or {}).get('shifts') or [])))" || echo "sync $code (not json)"
           rm -f /tmp/h.json /tmp/good.json /tmp/sync.json /tmp/s.json
           # homepage "Right Now" chain readings: signed-in members only (expect 401 here, no pass)
