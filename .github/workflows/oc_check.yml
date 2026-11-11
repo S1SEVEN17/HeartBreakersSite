@@ -68,6 +68,15 @@ jobs:
             "SELECT COUNT(*) AS n, SUM(CASE WHEN end_at <= unixepoch() THEN 1 ELSE 0 END) AS due, MAX(tries) AS tries, (SELECT COUNT(*) FROM cw_att) AS att FROM cw_ping" > ping.json 2> /dev/null \
             || { echo "cw_ping table not there yet"; exit 0; }
           python3 -c "import json; d=json.load(open('ping.json')); r=(d[0] if isinstance(d,list) else d)['results'][0]; print(f\"shift pings kept: {r['n']} (slot ended, awaiting delete: {r['due'] or 0}, max tries: {r['tries'] or 0}); shift attendance rows: {r['att']}\")"
+      - name: Chain Watch saved settings (alert numbers only)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command \
+            "SELECT v, ts FROM oc_config WHERE env = 'prod' AND k = 'chainwatch'" > cwcfg.json 2> /dev/null || { echo "no saved settings"; exit 0; }
+          python3 -c "import json; d=json.load(open('cwcfg.json')); r=((d[0] if isinstance(d,list) else d)['results'] or [{}])[0]; v=json.loads(r.get('v') or '{}'); print('saved chainwatch settings:', {k: v.get(k) for k in ('minChain','topAlertSeconds','restAlertSeconds','thirdAlertSeconds','firstAlertPrimaryOnly','bonusWarnHits')}, 'saved at', r.get('ts'))"
       - name: Feed timer + key present?
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
