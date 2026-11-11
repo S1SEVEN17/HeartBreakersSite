@@ -255,7 +255,8 @@ def core_sections(key: str, cfg: dict) -> dict:
                                  # last action time - Slacker Watch "inactive" check
                                  "last_action": (m.get("last_action") or {}).get("timestamp"),
                                  # Chain Review: skip chains from before they joined
-                                 "days_in_faction": m.get("days_in_faction")}
+                                 "days_in_faction": m.get("days_in_faction"),
+                                 "level": m.get("level")}     # the performance receipt (Nov 2026)
                                 for m in _as_list(raw["members"].get("members"))]},
         "positions": raw["positions"] if slow_ok else
         {"positions": [{"name": p.get("name"), "is_default": p.get("is_default")}
@@ -4408,6 +4409,7 @@ def write_report_pages(out: Path):
 
 
 PANELS_DIR = ROOT / "data" / "panels"     # images published from the Message Builder
+RECEIPTS_DIR = ROOT / "data" / "receipts"  # performance receipts published from a member's profile (leaders)
 
 
 def write_message_builder(out: Path):
@@ -4482,6 +4484,11 @@ def write_message_builder(out: Path):
         (mout / "panels").mkdir(exist_ok=True)
         for f in PANELS_DIR.glob("*.png"):
             shutil.copyfile(f, mout / "panels" / f.name)
+    # performance receipts leaders publish from a member's profile (data/receipts -> members' receipts/), Nov 2026
+    if RECEIPTS_DIR.exists():
+        (mout / "receipts").mkdir(exist_ok=True)
+        for f in RECEIPTS_DIR.glob("*.png"):
+            shutil.copyfile(f, mout / "receipts" / f.name)
 
 
 HUB_CSS = """
@@ -5294,6 +5301,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
         t["war_resp"], t["chain_resp"] = round(t["war_resp"], 2), round(t["chain_resp"], 2)
         members.append({"id": int(i), "name": names.get(i, "?"), "current": i in cur,
                         "position": m.get("position", ""), "days": m.get("days_in_faction"),
+                        "level": m.get("level"),
                         "last_action": m.get("last_action"), "t": t,
                         "gym": gym["all"].get(i, {}), "gym_month": gym["month_gain"].get(i, {})})
     return {"generated": now,
@@ -5339,34 +5347,65 @@ def rel_grade(score) -> str:
 # the same grading for the pages: relG(score) -> [grade, colour]
 REL_GRADE_JS = ("function relG(s){var G=" + json.dumps([[lo, g_, c] for lo, g_, c in REL_GRADES])
                 + ";for(var i=0;i<G.length;i++)if((s||0)>=G[i][0])return[G[i][1],G[i][2]];return['F','#e4382e'];}")
-REL_WARS = 10           # reliability: wars looked at
-REL_DAYS = 30           # reliability: chains / crime delays looked at (days)
-REL_CHAIN_MIN = 100     # reliability: chains of this many hits count
+REL_CHAIN_MIN = 100     # reliability: chains of this many hits count ("large chains")
+# RELIABILITY REWORK (Nov 11 2026, user - used for promotion / demotion decisions, so it must be fair):
+#   * the member's WHOLE time in the faction (every war / large chain since they joined - no 10-war / 30-day window)
+#   * taking part = at least REL_MIN_HITS hits (a token hit or two doesn't count)
+#   * "Not enough data" instead of full marks: a part needs REL_MIN_WARS wars / REL_MIN_CHAINS large chains to be
+#     judged; a part without enough is left out and the score is worked out from the parts that have data; with
+#     neither, the score is None ("Not enough data")
+#   * EXCUSED LEAVE: config.json "leave" {member id: [{from, to, note, by, at}]} (epoch s; leaders set it on the
+#     member's profile) - wars / chains that overlap a leave period never count for that member
+#   * crimes are NOT part of the rating any more (user) - War 55 + Chains 25 + Activity 20
+REL_MIN_HITS = 5
+REL_MIN_WARS = 3
+REL_MIN_CHAINS = 2
+REL_W_WAR, REL_W_CHAIN, REL_W_ACT = 55, 25, 20
+REL_RECEIPT_LAST = 5    # the receipt's "last wars" list
+
+
+def leave_periods(cfg: dict = None) -> dict:
+    """Excused leave: {member id (str): [(from, to), ...]} from config.json "leave"."""
+    try:
+        cfg = cfg if cfg is not None else load_config()
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for pid, lst in (cfg.get("leave") or {}).items():
+        for x in lst or []:
+            try:
+                a, b = int(x.get("from")), int(x.get("to"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if b >= a:
+                out.setdefault(str(pid), []).append((a, b))
+    return out
 
 
 def monitor_data(db: dict) -> dict:
     """Per CURRENT member:
       trend       hits in each of the last TREND_WARS wars (None = not in the faction for it), hit rate,
                   ▲/▼/► comparing the last 2 wars they were in with the 3 before
-      reliability 0-100 = War 40 (share of the last REL_WARS wars they were in where they hit - wars that started
-                                  before they joined never count; termed wars never count)
-                        + Chains 20 (share of REL_CHAIN_MIN+ chains in REL_DAYS days, since joining, they hit -
-                                     half or more = full marks: nobody can make every chain across time zones)
-                        + Crimes 25 (minus 8 per crime they delayed in REL_DAYS days, minus 4 more if 2h+)
-                        + Activity 15 (last action: <=1d 15, <=2d 12, <=3d 9, <=5d 5, else 0)
-                  A part with nothing to judge yet (e.g. a new member, no wars) counts as full.
+      reliability 0-100 (or None = not enough data) from the parts that have enough data:
+                    War 55       share of their wars (since joining, not termed, not on leave) with 5+ hits
+                    Chains 25    share of large (100+) chains since joining (not on leave) with 5+ hits - half or
+                                 more = full marks: nobody can make every chain across time zones
+                    Activity 20  last action: <=1d 20, <=2d 16, <=3d 12, <=5d 7, else 0
+                  score = points / max points of the parts used x 100
+      receipt     the figures for the leaders' performance receipt (wars, last 5 wars, large chains, faction avgs)
       ledger      every member ever paid: total, wars paid, average, last payout"""
     now = db["generated"]
     members = [m for m in db["members"]["members"] if m["current"]]
     wars = [w for w in db["wars"]["wars"] if not w.get("termed")]   # termed wars: never judged (TERMED WARS)
-    try:
-        delays = json.loads(CRIME_DELAYS_PATH.read_text(encoding="utf-8")).get("delays", [])
-    except (OSError, ValueError):
-        delays = []
-    recent_chains = [c for c in db["chains"]["chains"] if c["length"] >= REL_CHAIN_MIN and c["end"] >= now - REL_DAYS * 86400]
+    leave = leave_periods()
+    big_chains = [c for c in db["chains"]["chains"] if c["length"] >= REL_CHAIN_MIN]
     # each war's average hits among members who hit - the trend compares a member against this, so a
     # bigger or smaller war doesn't look like them improving or slipping
     war_avg = [(sum(x[1] for x in w["m"] if x[1] > 0) / max(1, sum(1 for x in w["m"] if x[1] > 0))) or 1 for w in wars]
+    # faction average hits per MEMBER in each war (everyone listed for it, 0s included) - the receipt's comparison
+    war_mavg = [sum(x[1] for x in w["m"]) / max(1, len(w["m"])) for w in wars]
+    # faction average hits per HITTER in each large chain (chain reports list the members who hit)
+    chain_havg = {id(c): sum(x[1] for x in c["m"] if x[1] > 0) / max(1, sum(1 for x in c["m"] if x[1] > 0)) for c in big_chains}
     rows = []
     for m in members:
         i = m["id"]
@@ -5374,12 +5413,13 @@ def monitor_data(db: dict) -> dict:
         # already running when they joined - is "not in the faction for it" (None), never a miss. Join date from
         # Torn's days-in-faction (whole days, so it errs towards leaving a borderline war out).
         joined = now - int(m["days"]) * 86400 if m.get("days") is not None else 0
+        lv = leave.get(str(i), [])
+        on_leave = lambda a, b: any(a <= t1 and b >= t0 for t0, t1 in lv)     # overlaps a leave period
         hist = [None if (w.get("start") or w["end"]) < joined else next((x[1] for x in w["m"] if x[0] == i), None)
                 for w in wars]
         rel = [None if h is None else h / war_avg[k] for k, h in enumerate(hist)]
         last = hist[-TREND_WARS:]
         present = [h for h in hist if h is not None]
-        p10 = [h for h in hist[-REL_WARS:] if h is not None]
         rate = round(100 * sum(1 for h in present[-TREND_WARS:] if h > 0) / len(present[-TREND_WARS:])) if present[-TREND_WARS:] else None
         relp = [r_ for r_ in rel if r_ is not None]
         a, b = relp[-2:], relp[-5:-2]
@@ -5387,28 +5427,48 @@ def monitor_data(db: dict) -> dict:
         if a and b:
             ra, rb = sum(a) / len(a), sum(b) / len(b)      # share of the war average
             trend = "▲" if ra > rb + 0.15 else "▼" if ra < rb - 0.15 else "►"
-        # reliability
-        war_pts = 40 * (sum(1 for h in p10 if h > 0) / len(p10)) if p10 else 40
-        # chains: only ones that started after they joined (same rule as wars)
-        elig = [c for c in recent_chains if (c.get("start") or c["end"]) >= joined]
-        hit_c = sum(1 for c in elig if any(x[0] == i and x[1] > 0 for x in c["m"]))
-        chain_pts = 20 * min(1.0, hit_c / len(elig) / 0.5) if elig else 20   # half the big chains or more = full
-        mine = [e for e in delays if str(e["member"]) == str(i) and e["start"] >= now - REL_DAYS * 86400]
-        crimes_d = {e["crime"] for e in mine}
-        long_d = {e["crime"] for e in mine if (e["minutes"] if e["minutes"] is not None else (now - e["start"]) // 60) >= 120}
-        crime_pts = max(0, 25 - 8 * len(crimes_d) - 4 * len(long_d))
+        # ---- wars judged: since joining, not termed, not on leave ----
+        jw = [(k, h) for k, h in enumerate(hist)
+              if h is not None and not on_leave(wars[k].get("start") or wars[k]["end"], wars[k]["end"])]
+        wars_in, wars_part = len(jw), sum(1 for _k, h in jw if h >= REL_MIN_HITS)
+        war_hits = sum(h for _k, h in jw)
+        war_pts = REL_W_WAR * wars_part / wars_in if wars_in >= REL_MIN_WARS else None
+        # ---- large chains judged: started after they joined, not on leave ----
+        jc = [c for c in big_chains if (c.get("start") or c["end"]) >= joined and not on_leave(c.get("start") or c["end"], c["end"])]
+        ch = [next((x[1] for x in c["m"] if x[0] == i), 0) for c in jc]
+        chains_in, chains_part = len(jc), sum(1 for h in ch if h >= REL_MIN_HITS)
+        chain_hits = sum(ch)
+        chain_pts = REL_W_CHAIN * min(1.0, chains_part / chains_in / 0.5) if chains_in >= REL_MIN_CHAINS else None
+        # ---- activity ----
         la = m.get("last_action")
         # idle time as of when the member list was READ (not this build) - the data's own moment, so rebuilds from the
         # same data give the same numbers (site deploys only on real changes, Nov 2026); ≤3 h behind at most
         idle = (members_asof(now) - int(la)) / 86400 if la else 0
-        act_pts = 15 if idle <= 1 else 12 if idle <= 2 else 9 if idle <= 3 else 5 if idle <= 5 else 0
-        score = round(war_pts + chain_pts + crime_pts + act_pts)
+        act_pts = 20 if idle <= 1 else 16 if idle <= 2 else 12 if idle <= 3 else 7 if idle <= 5 else 0
+        used = [(p_, mx) for p_, mx in ((war_pts, REL_W_WAR), (chain_pts, REL_W_CHAIN)) if p_ is not None]
+        score = round(100 * (sum(p_ for p_, _m in used) + act_pts) / (sum(mx for _p, mx in used) + REL_W_ACT)) if used else None
+        # ---- receipt figures ----
+        fac_war = sum(war_mavg[k] for k, _h in jw) / wars_in if wars_in else None
+        hit_chains = [(c, h) for c, h in zip(jc, ch) if h > 0]
+        receipt = {
+            "level": m.get("level"), "days": m.get("days"), "since": joined or None, "last_action": la,
+            "wars": {"in": wars_in, "part": wars_part, "hits": war_hits,
+                     "avg": round(war_hits / wars_in, 1) if wars_in else None,
+                     "fac_avg": round(fac_war, 1) if fac_war is not None else None,
+                     "last": [{"id": wars[k]["id"], "opponent": wars[k].get("opponent"), "end": wars[k]["end"], "hits": h,
+                               "fac_avg": round(war_mavg[k], 1), "ok": h >= REL_MIN_HITS} for k, h in jw[-REL_RECEIPT_LAST:]][::-1]},
+            "chains": {"in": chains_in, "part": chains_part, "hits": chain_hits,
+                       "avg": round(chain_hits / len(hit_chains), 1) if hit_chains else None,
+                       "fac_avg": round(sum(chain_havg[id(c)] for c, _h in hit_chains) / len(hit_chains), 1) if hit_chains else None},
+            "leave": [{"from": a_, "to": b_} for a_, b_ in lv],
+        }
         rows.append({"id": i, "name": m["name"], "position": m.get("position", ""), "last": last, "rate": rate,
                      "trend": trend, "score": score,
-                     "parts": {"war": round(war_pts), "chains": round(chain_pts), "crimes": crime_pts, "activity": act_pts},
-                     "detail": {"wars_hit": sum(1 for h in p10 if h > 0), "wars_in": len(p10), "chains_hit": hit_c,
-                                "chains_elig": len(elig), "delays": len(crimes_d), "long_delays": len(long_d),
-                                "idle_days": round(idle, 1)}})
+                     "parts": {"war": None if war_pts is None else round(war_pts),
+                               "chains": None if chain_pts is None else round(chain_pts), "activity": act_pts},
+                     "detail": {"wars_hit": wars_part, "wars_in": wars_in, "chains_hit": chains_part,
+                                "chains_elig": chains_in, "idle_days": round(idle, 1)},
+                     "receipt": receipt})
     ledger = []
     for m in db["members"]["members"]:
         if not m["t"]["payouts"]:
@@ -5422,8 +5482,7 @@ def monitor_data(db: dict) -> dict:
                        "wars": m["t"]["payouts"], "avg": m["t"]["paid"] // m["t"]["payouts"], "last": last})
     ledger.sort(key=lambda x: -x["total"])
     return {"generated": now, "wars": [{"id": w["id"], "opponent": w["opponent"], "end": w["end"]} for w in wars[-TREND_WARS:]],
-            "members": rows, "ledger": ledger,
-            "delays": sorted(delays, key=lambda e: -e["start"])[:50]}
+            "members": rows, "ledger": ledger}
 
 
 def _spark(vals: list) -> str:
@@ -6040,15 +6099,21 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     write_oc_management(out, db)
     oi = optin_publish(out, *(OPTIN_DATA.get("v") or optin_saved()))   # opt-in stats (no keys)
     write_optin_pages(out)
-    priv, sc = {}, [r["score"] for r in md["members"]]
+    priv, sc = {}, [r["score"] for r in md["members"] if r["score"] is not None]
     for r in md["members"]:
-        priv[str(r["id"])] = {"reliability": {"score": r["score"], "grade": rel_grade(r["score"]), "parts": r["parts"],
-                                              "detail": r["detail"]},
+        priv[str(r["id"])] = {"reliability": {"score": r["score"], "grade": rel_grade(r["score"]) if r["score"] is not None else None,
+                                              "parts": r["parts"], "detail": r["detail"], "receipt": r["receipt"]},
                               "armory": armory_own(ad, r["id"]), "optin": oi.get(str(r["id"]))}
-    avg_parts = {k: round(sum(r["parts"][k] for r in md["members"]) / len(md["members"]), 1) if md["members"] else 0
-                 for k in ("war", "chains", "crimes", "activity")}
+    # part averages over the members that part was judged for (None = not enough data: left out)
+    avg_parts = {}
+    for k in ("war", "chains", "activity"):
+        v = [r["parts"][k] for r in md["members"] if r["parts"][k] is not None]
+        avg_parts[k] = round(sum(v) / len(v), 1) if v else None
     _jdump(lout / "db" / "private.json", {"generated": md["generated"], "members": priv,
                                           "grades": [[lo, g_, c] for lo, g_, c in REL_GRADES],
+                                          "weights": {"war": REL_W_WAR, "chains": REL_W_CHAIN, "activity": REL_W_ACT},
+                                          "rules": {"min_hits": REL_MIN_HITS, "min_wars": REL_MIN_WARS,
+                                                    "min_chains": REL_MIN_CHAINS, "chain_min": REL_CHAIN_MIN},
                                           "averages": {"reliability": round(sum(sc) / len(sc), 1) if sc else 0,
                                                        "parts": avg_parts}})
     # the Leader Monitor page was removed (Nov 2026) - reliability is on Members / profiles, armory on the Armory
@@ -6118,6 +6183,7 @@ def write_profiles(out: Path, db: dict):
     tpl = (ROOT / "tools" / "member_profile.html").read_text(encoding="utf-8")
     gurl = gate_cfg()["url"].rstrip("/") if gate_cfg() else ""
     (mout / "member.html").write_text(tpl.replace("__MENU__", site_menu("")).replace("__GATE__", gurl)
+                                      .replace("__GHPROXY__", gh_proxy_url())
                                       .replace("/*__RELG__*/", REL_GRADE_JS)
                                       .replace("__FRESH__", fresh_html(["members", "wars", "chains", "crimes", "gym"])), encoding="utf-8")
     # leaderboards.html (this month / all time) + leaderboard-history.html (any past month) - war, chain, OC, gym

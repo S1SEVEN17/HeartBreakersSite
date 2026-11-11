@@ -294,7 +294,8 @@ const DATA_REPO = "S1SEVEN17/HeartBreakersLogo";       // private: config.json +
 // contents API THROUGH the gatekeeper: it checks the leader's pass (already done before we get here), adds the
 // faction's own token (GH_DISPATCH secret = DATA_TOKEN, Contents: write on the data repo) and forwards the call.
 // No GitHub token is needed - or ever shown - on any device. Only these paths can be read / written:
-const GH_PATHS = [/^config\.json$/, /^data\/payouts\/[\w.-]+$/, /^data\/panels\/[\w.-]+$/];
+// data/receipts: the performance receipt PNGs leaders publish from a member's profile (Nov 2026)
+const GH_PATHS = [/^config\.json$/, /^data\/payouts\/[\w.-]+$/, /^data\/panels\/[\w.-]+$/, /^data\/receipts\/[\w.-]+$/];
 // read-only for leaders (OC Management): the active crimes and the Refresh button's members + history rates
 const GH_READ_ONLY = [/^data\/oc_active\.json$/, /^data\/oc_pool\.json$/];
 async function ghProxy(env, req, who, path) {
@@ -329,7 +330,8 @@ async function ghProxy(env, req, who, path) {
 async function mine(env, who) {
   const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(env.LEADER_DIR)}/db/private.json`));
   const j = r.ok ? await r.json().catch(() => ({})) : {};
-  return Response.json(Object.assign({id: who.id}, (j.members || {})[String(who.id)] || {}, {averages: j.averages || {}}),
+  return Response.json(Object.assign({id: who.id}, (j.members || {})[String(who.id)] || {},
+                                     {averages: j.averages || {}, weights: j.weights || null, rules: j.rules || null}),
                        {headers: {"Cache-Control": "no-store"}});
 }
 async function dispatch(env, wf, inputs) {

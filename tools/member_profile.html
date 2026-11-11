@@ -119,6 +119,20 @@ td.z{color:#5d5254}td.dt{white-space:nowrap;color:#bbb}
 .pill.w{background:#16321a;color:var(--green)}.pill.d{background:#3a1414;color:#ff7a70}
 .empty{color:var(--sub);text-align:center;padding:18px;font-size:14px;background:var(--card);border:1px dashed #3a1416;border-radius:10px}
 .rng{margin:12px 0 4px}
+/* reliability: leaders' receipt + excused leave (Nov 2026) */
+.reltools{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.reltools button,.relbox button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:10px 14px;font:600 14px system-ui;cursor:pointer;min-height:42px}
+.reltools button.alt,.relbox button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+.relbox{background:#140c0d;border:1px solid var(--edge);border-radius:10px;padding:12px;margin-top:10px}
+.relbox canvas{width:100%;height:auto;display:block;border-radius:8px;border:1px solid #2a1416}
+.relbox .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.relbox .msg{font-size:13px;margin-top:8px;color:var(--gold);word-break:break-all}
+.relbox textarea{width:100%;min-height:70px;background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:8px;padding:8px;font:12px monospace;margin-top:6px}
+.relbox input{background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:7px;padding:8px;font:14px system-ui;min-height:40px}
+.lvrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#1a1012;border:1px solid #2a1416;border-radius:8px;padding:7px 10px;margin-top:6px;font-size:13px}
+.lvrow b{color:#fff}.lvrow span{flex:1;color:var(--sub);min-width:0}
+.lvadd{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:10px}
+.lvadd label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)}
 @media (max-width:560px){body{padding:8px}#secs>section{padding:2px 10px 12px}.hero{padding:12px;gap:12px}
   .hero .av{width:56px;height:56px;font-size:24px}.hero .rel{flex:1 1 100%;max-width:100%;min-width:0}
   .hero .rel .pv{white-space:normal}.cmp{grid-template-columns:1fr}.hero h1{font-size:22px}.tile b{font-size:18px}
@@ -138,7 +152,14 @@ __MENU__
   <div class="cmp" id="cmpc"></div></section>
   <section data-sec="reliability" id="relsec" style="display:none"><h2 id="relh">🛡️ Reliability breakdown <span class="tag" id="relt"></span></h2>
   <div class="hn" id="relhn"></div>
-  <div class="cmp" id="relb"></div></section>
+  <div class="cmp" id="relb"></div>
+  <!-- leaders only (Nov 2026): the performance receipt (PNG) + excused leave for this member -->
+  <div class="reltools" id="reltools" style="display:none">
+    <button type="button" id="rcBtn">🧾 Performance receipt</button>
+    <button type="button" id="lvBtn" class="alt">🗓 Excused leave</button>
+  </div>
+  <div class="relbox" id="lvBox" style="display:none"></div>
+  <div class="relbox" id="rcBox" style="display:none"></div></section>
   <section data-sec="armory" id="armsec" style="display:none"><h2 id="armory">🗄️ Armory usage <span class="tag" id="armt"></span></h2>
   <div class="hn" id="armhn"></div>
   <div class="tiles" id="armc"></div><div class="legend" id="arml" style="text-align:center;margin-top:6px"></div></section>
@@ -176,6 +197,7 @@ const day = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "sho
 const dshort = t => { if (!t) return ""; const d = new Date(t * 1000);
   return d.toLocaleDateString("en-US", {month: "short", day: "numeric", timeZone: "UTC"}) + " '" + String(d.getUTCFullYear()).slice(2); };
 const GATE = "__GATE__";
+const GHPROXY = "__GHPROXY__";   // leaders' saves: config.json (excused leave) + data/receipts/ (receipt PNGs)
 let id = +new URLSearchParams(location.search).get("id");
 const get = f => fetch("db/" + f + ".json").then(r => { if (!r.ok) throw new Error(f); return r.json(); });
 // who is signed in (the gatekeeper answers; null without it) - decides "my profile"
@@ -334,7 +356,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
   // ---- private figures (reliability, armory usage): your own (the gatekeeper's mine.json) or anyone's for leaders ----
   const priv = !me ? Promise.resolve(null) : own ? fetch("mine.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
     : me.leader ? fetch(GATE + "/l/db/private.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null)
-        .then(P => P ? Object.assign({}, (P.members || {})[String(id)] || {}, {averages: P.averages || {}}) : null) : Promise.resolve(null);
+        .then(P => P ? Object.assign({}, (P.members || {})[String(id)] || {}, {averages: P.averages || {}, weights: P.weights || null, rules: P.rules || null}) : null) : Promise.resolve(null);
   // ---- battle / work stats (opt-in): own or leaders -> private figures; everyone else -> what's shared with the faction ----
   const shared = fetch("db/optin_shared.json", {cache: "no-store"}).then(r => r.ok ? r.json() : {}).catch(() => ({}));
   Promise.all([priv.catch(() => null), shared]).then(([pv, SH]) => {
@@ -372,22 +394,32 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
     const who_ = own ? "only you and leaders see this" : "leaders only";
     if (pv.reliability) {
       // grade S..F with the 0-100 score as its secondary (relG - the grade table from generate.py REL_GRADES)
-      const R = pv.reliability, A = pv.averages || {}, sc = R.score, G = relG(sc), GA = relG(A.reliability);
+      // RELIABILITY (reworked Nov 2026): whole time in the faction, 5+ hits = took part, excused leave + termed wars
+      // left out, no crimes; a part without enough data is left out (score from the rest) - null score = not enough data
+      const R = pv.reliability, A = pv.averages || {}, sc = R.score, GA = relG(A.reliability);
+      const WT = pv.weights || {war: 55, chains: 25, activity: 20}, RU = pv.rules || {min_hits: 5, min_wars: 3, min_chains: 2, chain_min: 100};
+      const na = sc == null, G = na ? ["N/A", "#9a9a9c"] : relG(sc);
       $("rel").style.display = "block";
-      $("relv").innerHTML = `<span class="gr" style="color:${G[1]}">${G[0]}</span><span class="gn">${sc}</span>`;
+      $("relv").innerHTML = na ? `<span class="gr" style="color:#9a9a9c;font-size:20px">Not enough data</span>`
+        : `<span class="gr" style="color:${G[1]}">${G[0]}</span><span class="gn">${sc}</span>`;
       $("relp").textContent = `faction avg ${A.reliability != null ? GA[0] + " · " + A.reliability : "-"} · ${who_}`;
       const D = R.detail || {}, AP = A.parts || {};
-      // each part is POINTS towards the 0-100 score: "32 / 40 pts" (max points for that part)
-      const part = (label, k, max, note) => card(label, R.parts[k], AP[k], v => n1(v) + " pts", note,
-                                                 v => `${n1(v)} <span style="font-size:14px;color:#9a9a9c">/ ${max} pts</span>`);
+      // each part is POINTS towards the score: "32 / 55 pts" (max points for that part); null = not enough data yet
+      const part = (label, k, max, note, need) => R.parts[k] == null
+        ? `<div class="cm"><div class="l">${label}</div><div class="v" style="font-size:16px;color:#9a9a9c">Not enough data</div><div class="a">${note} · needs ${need} - left out of the score for now</div></div>`
+        : card(label, R.parts[k], AP[k], v => n1(v) + " pts", note, v => `${n1(v)} <span style="font-size:14px;color:#9a9a9c">/ ${max} pts</span>`);
       $("relsec").style.display = $("relsec").dataset.off ? "none" : "";
       $("relt").textContent = "";
-      $("relhn").innerHTML = `Grade <b style="color:${G[1]}">${G[0]}</b> from <b>${sc}</b> of 100 points - war up to 40 · chains up to 20 · crimes up to 25 · activity up to 15. `
+      $("relhn").innerHTML = (na ? `<b>Not enough data</b> yet - needs ${RU.min_wars} wars or ${RU.min_chains} large chains since joining. `
+          : `Grade <b style="color:${G[1]}">${G[0]}</b> from <b>${sc}</b> of 100. `)
+        + `War up to ${WT.war} · large chains (${RU.chain_min}+ hits) up to ${WT.chains} · activity up to ${WT.activity} pts. `
+        + `Their whole time in the faction; taking part = ${RU.min_hits}+ hits; termed wars and excused leave aren't counted; a part without enough data is left out and the score comes from the rest.`
         + `<br>Grades: S 95+ · A 85+ · B 75+ · C 65+ · D 55+ · E 45+ · F under 45 · ${who_}.`;
-      $("relb").innerHTML = part("⚔️ War", "war", 40, `hit in ${D.wars_hit}/${D.wars_in} wars`)
-        + part("⛓️ Chains", "chains", 20, `${D.chains_hit}/${D.chains_elig} big chains`)
-        + part("🕵️ Crimes", "crimes", 25, `${D.delays} delay${D.delays === 1 ? "" : "s"}`)
-        + part("🕐 Activity", "activity", 15, `idle ${D.idle_days} days`);
+      $("relb").innerHTML = part("⚔️ War", "war", WT.war, `${RU.min_hits}+ hits in ${D.wars_hit}/${D.wars_in} wars`, RU.min_wars + " wars")
+        + part("⛓️ Large chains", "chains", WT.chains, `${RU.min_hits}+ hits in ${D.chains_hit}/${D.chains_elig} chains (half = full marks)`, RU.min_chains + " chains")
+        + part("🕐 Activity", "activity", WT.activity, `idle ${D.idle_days} days`, "");
+      // leaders: performance receipt + excused leave (not on a member's own view)
+      if (me && me.leader && R.receipt) setupLeaderTools(m, R, WT, RU, sc, G);
     }
     // armory usage (Armory Monitor): this month, with last month and all time on record underneath
     const AR = pv.armory;
@@ -557,5 +589,141 @@ __FRESH__
   });
   addEventListener("resize", function () { document.querySelectorAll(".cap10").forEach(cap); });
 })();
+
+// =====================================================================================================
+// LEADERS: PERFORMANCE RECEIPT + EXCUSED LEAVE (Nov 2026, user)
+// Receipt: drawn on a <canvas> from the leaders' db/private.json (reliability.receipt) -> Copy image / Download PNG /
+// Publish (data/receipts/<id>-<time>.png through the gatekeeper's save route -> the members' receipts/ folder on the
+// next site update) + the Torn HTML for a mail / message (image linked to itself, full size on click).
+// Excused leave: config.json "leave" {member id: [{from, to, note, by, at}]} (epoch s, whole UTC days) - wars and
+// large chains overlapping a leave period don't count for that member (reliability + receipt), from the next update.
+// =====================================================================================================
+function setupLeaderTools(m, R, WT, RU, sc, G) {
+  $("reltools").style.display = "";
+  $("rcBtn").onclick = () => { const b = $("rcBox"); if (b.style.display === "none") { drawReceipt(m, R, WT, RU, sc, G); b.style.display = ""; } else b.style.display = "none"; };
+  $("lvBtn").onclick = () => { const b = $("lvBox"); if (b.style.display === "none") { openLeave(m); b.style.display = ""; } else b.style.display = "none"; };
+}
+const fmtD = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"}) : "-";
+const b64ToText = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g, "")), c => c.charCodeAt(0)));
+const textToB64 = t => { const u = new TextEncoder().encode(t); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+
+function drawReceipt(m, R, WT, RU, sc, G) {
+  const X = R.receipt, D = R.detail || {}, W = X.wars || {}, C = X.chains || {};
+  const S = 2, Wd = 640, pad = 28;                 // drawn at 2x for a sharp PNG
+  const last = W.last || [];
+  const H = 640 + last.length * 26 + (X.leave && X.leave.length ? 40 : 0);
+  const cv = document.createElement("canvas"); cv.width = Wd * S; cv.height = H * S;
+  const g = cv.getContext("2d"); g.scale(S, S);
+  // background + frame (Hub house style: dark card, red edge, gold headings)
+  g.fillStyle = "#100a0b"; g.fillRect(0, 0, Wd, H);
+  g.strokeStyle = "#5c1c1a"; g.lineWidth = 2; g.strokeRect(6, 6, Wd - 12, H - 12);
+  g.strokeStyle = "#2a1416"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(pad, 92); g.lineTo(Wd - pad, 92); g.stroke(); g.setLineDash([]);
+  const T = (txt, x, y, size, col, weight, align) => { g.font = `${weight || 400} ${size}px system-ui, -apple-system, Segoe UI, sans-serif`;
+    g.fillStyle = col || "#ddd"; g.textAlign = align || "left"; g.fillText(String(txt), x, y); };
+  T("HEART BREAKERS", Wd / 2, 40, 13, "#e4382e", 800, "center");
+  T("PERFORMANCE RECEIPT", Wd / 2, 66, 22, "#e8be5a", 800, "center");
+  T("Generated " + new Date().toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"}) + " (TCT)", Wd / 2, 84, 11, "#9a9a9c", 400, "center");
+  let y = 124;
+  T(m.name, pad, y, 24, "#fff", 800); T(`[${m.id}]`, Wd - pad, y, 13, "#9a9a9c", 400, "right"); y += 24;
+  T([X.level != null ? "Level " + X.level : "", m.position || "", X.days != null ? X.days + " days in the faction" : ""].filter(Boolean).join("  ·  "), pad, y, 14, "#cfcfd1"); y += 20;
+  T("Last active: " + (X.last_action ? fmtD(X.last_action) : "-"), pad, y, 12, "#9a9a9c"); y += 30;
+  // rating box
+  g.fillStyle = "#170d0e"; g.strokeStyle = "#5c1c1a"; g.lineWidth = 1; g.fillRect(pad, y, Wd - 2 * pad, 74); g.strokeRect(pad, y, Wd - 2 * pad, 74);
+  T("RELIABILITY RATING", pad + 14, y + 22, 11, "#9a9a9c", 700);
+  if (sc == null) T("Not enough data", pad + 14, y + 56, 24, "#9a9a9c", 800);
+  else { T(G[0], pad + 14, y + 60, 38, G[1], 800); T(sc + " / 100", pad + 64, y + 58, 20, "#fff", 700); }
+  const pt = (k, mx) => R.parts[k] == null ? "n/a" : `${R.parts[k]}/${mx}`;
+  T(`War ${pt("war", WT.war)}   ·   Chains ${pt("chains", WT.chains)}   ·   Activity ${pt("activity", WT.activity)}`, Wd - pad - 14, y + 56, 13, "#cfcfd1", 400, "right");
+  y += 104;
+  const row = (label, val, cmp) => { T(label, pad + 8, y, 14, "#cfcfd1"); T(val, Wd - pad - 8, y, 14, "#fff", 700, "right"); y += 24;
+    if (cmp) { T(cmp, Wd - pad - 8, y - 6, 11, "#9a9a9c", 400, "right"); y += 10; } };
+  const head = txt => { T(txt, pad, y, 15, "#e8be5a", 800); g.fillStyle = "#5c1c1a"; g.fillRect(pad, y + 7, Wd - 2 * pad, 1); y += 30; };
+  const pct = (a, b) => b ? Math.round(100 * a / b) + "%" : "-";
+  const vs = (a, f) => a == null || f == null ? "" : `faction avg ${f}  (${f ? (a >= f ? "▲ " : "▼ ") + Math.abs(Math.round((a / f - 1) * 100)) + "%" + (a >= f ? " above" : " below") : "-"})`;
+  head("⚔  WARS");
+  row("Wars while a member", String(W.in || 0));
+  row(`Wars participated (${RU.min_hits}+ hits)`, `${W.part || 0}  (${pct(W.part || 0, W.in)})`);
+  row("Total war hits", (W.hits || 0).toLocaleString("en-US"));
+  row("Hits per war", W.avg == null ? "-" : String(W.avg), vs(W.avg, W.fac_avg));
+  if (last.length) {
+    y += 4; T("LAST " + last.length + " WARS", pad + 8, y, 11, "#9a9a9c", 700); T("HITS", Wd - pad - 120, y, 11, "#9a9a9c", 700, "right"); T("FACTION AVG", Wd - pad - 8, y, 11, "#9a9a9c", 700, "right"); y += 20;
+    last.forEach(w => { T(`${w.ok ? "✓" : "✗"}  ${fmtD(w.end)}  vs ${String(w.opponent || "?").slice(0, 26)}`, pad + 8, y, 13, w.ok ? "#cfcfd1" : "#f08a84");
+      T(String(w.hits), Wd - pad - 120, y, 13, w.ok ? "#fff" : "#f08a84", 700, "right"); T(String(w.fac_avg), Wd - pad - 8, y, 13, "#9a9a9c", 400, "right"); y += 26; });
+  }
+  y += 12; head(`⛓  LARGE CHAINS (${RU.chain_min}+ HITS)`);
+  row("Large chains while a member", String(C.in || 0));
+  row(`Large chains participated (${RU.min_hits}+ hits)`, `${C.part || 0}  (${pct(C.part || 0, C.in)})`);
+  row("Large chain hits", (C.hits || 0).toLocaleString("en-US"));
+  row("Hits per chain (when hitting)", C.avg == null ? "-" : String(C.avg), C.avg == null ? "" : vs(C.avg, C.fac_avg).replace("faction avg", "faction avg per hitter"));
+  y += 6;
+  if (X.leave && X.leave.length) { T("Excused leave (not counted): " + X.leave.map(l => fmtD(l.from) + " – " + fmtD(l.to)).join(", "), pad, y, 11, "#e8be5a"); y += 20; }
+  T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars and excused leave aren't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, "#6f6f72", 400, "center");
+  // ---- show + actions ----
+  const box = $("rcBox"); box.innerHTML = "";
+  cv.style.maxWidth = "640px"; box.appendChild(cv);
+  const acts = document.createElement("div"); acts.className = "acts";
+  acts.innerHTML = `<button type="button" id="rcCopy">📋 Copy image</button><button type="button" class="alt" id="rcDl">⬇ Download PNG</button>`
+    + (GHPROXY ? `<button type="button" class="alt" id="rcPub">🌐 Publish for a Torn message</button>` : "");
+  box.appendChild(acts);
+  const msg = document.createElement("div"); msg.className = "msg"; box.appendChild(msg);
+  const fname = `receipt-${m.id}-${new Date().toISOString().slice(0, 10)}`;
+  $("rcCopy").onclick = () => cv.toBlob(b => {
+    if (!navigator.clipboard || !window.ClipboardItem) { msg.textContent = "Copying images isn't supported here - use Download PNG."; return; }
+    navigator.clipboard.write([new ClipboardItem({"image/png": b})]).then(() => msg.textContent = "Copied ✓ - paste it anywhere.",
+      () => msg.textContent = "Couldn't copy - use Download PNG.");
+  }, "image/png");
+  $("rcDl").onclick = () => { const a = document.createElement("a"); a.download = fname + ".png"; a.href = cv.toDataURL("image/png"); a.click(); };
+  if (GHPROXY) $("rcPub").onclick = () => {
+    msg.textContent = "Publishing…";
+    const name = `${fname}-${Date.now().toString(36)}.png`, b64 = cv.toDataURL("image/png").split(",")[1];
+    fetch(GHPROXY + "data/receipts/" + name, {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"},
+      body: JSON.stringify({message: `Performance receipt: ${m.name} [${m.id}]`, branch: "main", content: b64})})
+      .then(r => { if (!r.ok) throw new Error("publish failed (" + r.status + ")"); })
+      .then(() => {
+        const url = new URL("receipts/" + name, location.href).href;
+        const html = `<p style="text-align:center;"><a href="${url}" target="_blank"><img src="${url}" alt="Performance receipt - ${m.name}" style="max-width:100%;height:auto;"></a></p>`;
+        msg.innerHTML = `Published ✓ - online after the next site update (a few minutes): <a href="${url}" target="_blank" style="color:#e8be5a">${name}</a>`
+          + `<br>Torn HTML (paste into a mail / message in HTML mode):`;
+        const ta = document.createElement("textarea"); ta.readOnly = true; ta.value = html; box.appendChild(ta);
+        const cp = document.createElement("button"); cp.type = "button"; cp.className = "alt"; cp.textContent = "📋 Copy HTML"; cp.style.marginTop = "6px";
+        cp.onclick = () => { ta.select(); (navigator.clipboard ? navigator.clipboard.writeText(html) : Promise.reject()).then(() => cp.textContent = "Copied ✓", () => document.execCommand("copy")); };
+        box.appendChild(cp);
+      }).catch(e => msg.textContent = e.message);
+  };
+}
+
+function openLeave(m) {
+  const box = $("lvBox");
+  if (!GHPROXY) { box.innerHTML = '<div class="msg">Saving isn\'t set up on this site.</div>'; return; }
+  box.innerHTML = '<div class="msg">Loading…</div>';
+  const pid = String(m.id);
+  const load = () => fetch(GHPROXY + "config.json?ref=main", {cache: "no-store"}).then(r => { if (!r.ok) throw new Error("couldn't read the settings (" + r.status + ")"); return r.json(); });
+  const save = (mutate, what) => load().then(j => { const c = JSON.parse(b64ToText(j.content)); c.leave = c.leave || {}; mutate(c.leave); if (!(c.leave[pid] || []).length) delete c.leave[pid];
+      return fetch(GHPROXY + "config.json", {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"},
+        body: JSON.stringify({message: `Excused leave: ${m.name} [${pid}] ${what}`, sha: j.sha, branch: "main", content: textToB64(JSON.stringify(c, null, 2) + "\n")})}); })
+    .then(r => { if (!r.ok) throw new Error("save failed (" + r.status + ")"); return render("Saved ✓ - reliability and the receipt update in a few minutes."); });
+  const render = note => load().then(j => {
+    const list = ((JSON.parse(b64ToText(j.content)).leave || {})[pid] || []);
+    box.innerHTML = `<b style="color:#e8be5a">🗓 Excused leave - ${m.name}</b><div class="hn" style="margin:4px 0 0">Wars and large chains during these dates don't count for them (reliability + receipt). Dates are TCT (UTC), whole days.</div>`
+      + (list.length ? list.map((x, k) => `<div class="lvrow"><b>${fmtD(x.from)} – ${fmtD(x.to)}</b><span>${(x.note || "").replace(/[<>&]/g, "")}${x.by ? " · set by " + x.by : ""}</span><button type="button" class="alt" data-k="${k}">Remove</button></div>`).join("")
+        : `<div class="lvrow"><span>No excused leave.</span></div>`)
+      + `<div class="lvadd"><label>From<input type="date" id="lvF"></label><label>To<input type="date" id="lvT"></label><label>Note (optional)<input id="lvN" maxlength="80" placeholder="e.g. holiday"></label></div>`
+      + `<div class="acts"><button type="button" id="lvAdd">Add leave</button></div><div class="msg" id="lvMsg">${note || ""}</div>`;
+    box.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { $("lvMsg").textContent = "Saving…";
+      const x = list[+b.dataset.k];
+      save(L => { L[pid] = (L[pid] || []).filter(y => !(y.from === x.from && y.to === x.to)); }, "removed").catch(e => $("lvMsg").textContent = e.message); });
+    $("lvAdd").onclick = () => {
+      const f = $("lvF").value, t = $("lvT").value;
+      if (!f || !t) { $("lvMsg").textContent = "Pick both dates."; return; }
+      const from = Date.parse(f + "T00:00:00Z") / 1000, to = Date.parse(t + "T23:59:59Z") / 1000;
+      if (!(to >= from)) { $("lvMsg").textContent = "The end date is before the start."; return; }
+      $("lvMsg").textContent = "Saving…";
+      fetch(GATE + "/m/whoami.json", {cache: "no-store"}).then(r => r.ok ? r.json() : {}).catch(() => ({})).then(w =>
+        save(L => { (L[pid] = L[pid] || []).push({from, to, note: $("lvN").value.trim().slice(0, 80), by: (w && w.name) || "", at: Math.floor(Date.now() / 1000)}); }, "added"))
+        .catch(e => $("lvMsg").textContent = e.message);
+    };
+  }).catch(e => box.innerHTML = `<div class="msg">${e.message}</div>`);
+  render("");
+}
 </script>
 </body></html>
