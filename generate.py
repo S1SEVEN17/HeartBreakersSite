@@ -4409,7 +4409,6 @@ def write_report_pages(out: Path):
 
 
 PANELS_DIR = ROOT / "data" / "panels"     # images published from the Message Builder
-RECEIPTS_DIR = ROOT / "data" / "receipts"  # performance receipts published from a member's profile (leaders)
 
 
 def write_message_builder(out: Path):
@@ -4484,11 +4483,6 @@ def write_message_builder(out: Path):
         (mout / "panels").mkdir(exist_ok=True)
         for f in PANELS_DIR.glob("*.png"):
             shutil.copyfile(f, mout / "panels" / f.name)
-    # performance receipts leaders publish from a member's profile (data/receipts -> members' receipts/), Nov 2026
-    if RECEIPTS_DIR.exists():
-        (mout / "receipts").mkdir(exist_ok=True)
-        for f in RECEIPTS_DIR.glob("*.png"):
-            shutil.copyfile(f, mout / "receipts" / f.name)
 
 
 HUB_CSS = """

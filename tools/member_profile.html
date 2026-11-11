@@ -197,7 +197,7 @@ const day = t => t ? new Date(t * 1000).toLocaleDateString("en-US", {month: "sho
 const dshort = t => { if (!t) return ""; const d = new Date(t * 1000);
   return d.toLocaleDateString("en-US", {month: "short", day: "numeric", timeZone: "UTC"}) + " '" + String(d.getUTCFullYear()).slice(2); };
 const GATE = "__GATE__";
-const GHPROXY = "__GHPROXY__";   // leaders' saves: config.json (excused leave) + data/receipts/ (receipt PNGs)
+const GHPROXY = "__GHPROXY__";   // leaders' saves: config.json (excused leave)
 let id = +new URLSearchParams(location.search).get("id");
 const get = f => fetch("db/" + f + ".json").then(r => { if (!r.ok) throw new Error(f); return r.json(); });
 // who is signed in (the gatekeeper answers; null without it) - decides "my profile"
@@ -592,9 +592,8 @@ __FRESH__
 
 // =====================================================================================================
 // LEADERS: PERFORMANCE RECEIPT + EXCUSED LEAVE (Nov 2026, user)
-// Receipt: drawn on a <canvas> from the leaders' db/private.json (reliability.receipt) -> Copy image / Download PNG /
-// Publish (data/receipts/<id>-<time>.png through the gatekeeper's save route -> the members' receipts/ folder on the
-// next site update) + the Torn HTML for a mail / message (image linked to itself, full size on click).
+// Receipt: drawn on a <canvas> from the leaders' db/private.json (reliability.receipt) -> Create Message (copies the
+// image + opens Torn's compose page for the member; subject "Faction Performance <date>") / Copy image / Download PNG.
 // Excused leave: config.json "leave" {member id: [{from, to, note, by, at}]} (epoch s, whole UTC days) - wars and
 // large chains overlapping a leave period don't count for that member (reliability + receipt), from the next update.
 // =====================================================================================================
@@ -662,33 +661,35 @@ function drawReceipt(m, R, WT, RU, sc, G) {
   const box = $("rcBox"); box.innerHTML = "";
   cv.style.maxWidth = "640px"; box.appendChild(cv);
   const acts = document.createElement("div"); acts.className = "acts";
-  acts.innerHTML = `<button type="button" id="rcCopy">📋 Copy image</button><button type="button" class="alt" id="rcDl">⬇ Download PNG</button>`
-    + (GHPROXY ? `<button type="button" class="alt" id="rcPub">🌐 Publish for a Torn message</button>` : "");
+  // Nov 11 2026 (user): no Publish - "Create Message" copies the receipt image and opens Torn's compose page for
+  // this member; paste the image into the body. Subject "Faction Performance <date>" (its own Copy button: the
+  // clipboard holds one thing at a time).
+  const subject = "Faction Performance " + new Date().toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric", timeZone: "UTC"});
+  acts.innerHTML = `<button type="button" id="rcMsg">✉ Create Message</button><button type="button" class="alt" id="rcCopy">📋 Copy image</button>`
+    + `<button type="button" class="alt" id="rcDl">⬇ Download PNG</button>`;
   box.appendChild(acts);
+  const subj = document.createElement("div"); subj.className = "lvrow";
+  subj.innerHTML = `<span>Subject: <b>${subject}</b></span><button type="button" class="alt" id="rcSubj">📋 Copy subject</button>`;
+  box.appendChild(subj);
   const msg = document.createElement("div"); msg.className = "msg"; box.appendChild(msg);
   const fname = `receipt-${m.id}-${new Date().toISOString().slice(0, 10)}`;
-  $("rcCopy").onclick = () => cv.toBlob(b => {
-    if (!navigator.clipboard || !window.ClipboardItem) { msg.textContent = "Copying images isn't supported here - use Download PNG."; return; }
-    navigator.clipboard.write([new ClipboardItem({"image/png": b})]).then(() => msg.textContent = "Copied ✓ - paste it anywhere.",
-      () => msg.textContent = "Couldn't copy - use Download PNG.");
-  }, "image/png");
+  // ClipboardItem gets a PROMISE of the PNG, so the copy starts inside the tap (before anything else takes focus)
+  const pngP = () => new Promise(ok => cv.toBlob(ok, "image/png"));
+  const copyImg = () => {
+    if (!navigator.clipboard || !window.ClipboardItem) return Promise.reject(new Error("Copying images isn't supported here - use Download PNG and attach it."));
+    return navigator.clipboard.write([new ClipboardItem({"image/png": pngP()})]).catch(() => { throw new Error("Couldn't copy the image - use Download PNG."); });
+  };
+  $("rcCopy").onclick = () => copyImg().then(() => msg.textContent = "Image copied ✓ - paste it anywhere.", e => msg.textContent = e.message);
   $("rcDl").onclick = () => { const a = document.createElement("a"); a.download = fname + ".png"; a.href = cv.toDataURL("image/png"); a.click(); };
-  if (GHPROXY) $("rcPub").onclick = () => {
-    msg.textContent = "Publishing…";
-    const name = `${fname}-${Date.now().toString(36)}.png`, b64 = cv.toDataURL("image/png").split(",")[1];
-    fetch(GHPROXY + "data/receipts/" + name, {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"},
-      body: JSON.stringify({message: `Performance receipt: ${m.name} [${m.id}]`, branch: "main", content: b64})})
-      .then(r => { if (!r.ok) throw new Error("publish failed (" + r.status + ")"); })
-      .then(() => {
-        const url = new URL("receipts/" + name, location.href).href;
-        const html = `<p style="text-align:center;"><a href="${url}" target="_blank"><img src="${url}" alt="Performance receipt - ${m.name}" style="max-width:100%;height:auto;"></a></p>`;
-        msg.innerHTML = `Published ✓ - online after the next site update (a few minutes): <a href="${url}" target="_blank" style="color:#e8be5a">${name}</a>`
-          + `<br>Torn HTML (paste into a mail / message in HTML mode):`;
-        const ta = document.createElement("textarea"); ta.readOnly = true; ta.value = html; box.appendChild(ta);
-        const cp = document.createElement("button"); cp.type = "button"; cp.className = "alt"; cp.textContent = "📋 Copy HTML"; cp.style.marginTop = "6px";
-        cp.onclick = () => { ta.select(); (navigator.clipboard ? navigator.clipboard.writeText(html) : Promise.reject()).then(() => cp.textContent = "Copied ✓", () => document.execCommand("copy")); };
-        box.appendChild(cp);
-      }).catch(e => msg.textContent = e.message);
+  $("rcSubj").onclick = () => (navigator.clipboard ? navigator.clipboard.writeText(subject) : Promise.reject())
+    .then(() => msg.textContent = "Subject copied ✓", () => msg.textContent = "Couldn't copy - type the subject: " + subject);
+  $("rcMsg").onclick = () => {
+    // start the copy, then open Torn's compose page - both straight from the tap (popup + clipboard rules)
+    const cp = copyImg();
+    const w = window.open(`https://www.torn.com/messages.php#/p=compose&XID=${encodeURIComponent(m.id)}`, "_blank");
+    cp.then(() => msg.innerHTML = `Image copied ✓ - in Torn's message to <b>${m.name}</b>: set the subject to <b>${subject}</b> (Copy subject above) and paste the image into the body.`
+      + (w ? "" : ` If no tab opened, <a href="https://www.torn.com/messages.php#/p=compose&XID=${encodeURIComponent(m.id)}" target="_blank" style="color:#e8be5a">open the message here</a>.`),
+      e => msg.textContent = e.message + " Torn's message page was opened.");
   };
 }
 
