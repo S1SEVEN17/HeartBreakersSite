@@ -4027,6 +4027,7 @@ def header_default() -> dict:
                         L("⛓️ Chain watch", "M:chainwatch-schedule.html"), L("🧩 Scripts", "M:scripts.html")],
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🏠 Leaders Hub", "L:index.html"),
+                L("🤝 Recruitment", "L:recruitment.html"),          # Nov 11 2026: Torn Recruit Scout -> shared recruits
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
                                                         L("⚔️ War readiness", "L:readiness.html"),
                                                         L("⛓️ Chain Watch", "L:chainwatch.html"),
@@ -4895,6 +4896,7 @@ def homepage_default() -> dict:
         ("🧮", "Payout calculator", "L:payout.html"),
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
         ("⚔️", "War readiness", "L:readiness.html"), ("⛓️", "Chain Watch", "L:chainwatch.html"),
+        ("🤝", "Recruitment", "L:recruitment.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
         ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
@@ -5038,7 +5040,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
-             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"),
+             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"), ("Recruitment", "L:recruitment.html"),
              ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
@@ -5985,6 +5987,9 @@ def write_optin_pages(out: Path):
         (lout / "readiness.html").write_text(page("war_readiness.html", conf, leader_menu("")), encoding="utf-8")
         # Chain Watch settings (Nov 2026): the Faction Chain Watch script's faction settings, saved through the gate
         (lout / "chainwatch.html").write_text(page("chainwatch_settings.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
+        # Recruitment (Nov 11 2026): recruits shared by the Torn Recruit Scout script - claim / status / notes / remove
+        # (gatekeeper /l/rc/*, D1 rc_recruit; contract claude/recruitment-hub-contract.md)
+        (lout / "recruitment.html").write_text(page("recruitment.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
 
 
 def optin_saved():
