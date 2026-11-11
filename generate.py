@@ -6145,25 +6145,77 @@ def optin_publish(out: Path, opt: dict, st: dict) -> dict:
     return full
 
 
-def sx_export() -> dict:
-    """Stats members share from the Heart Breakers Hub script (gatekeeper GET /sx/export, D1 sx_share):
-    {member id: {bs: {share, s}, ws: {share, s}, ready, since}}. Proven with sha256(MEMBER_DIR|LEADER_DIR|hb-sx-export) -
-    secrets only this workflow and the gatekeeper have. Numbers only, never a key. {} when the gate is off / unreachable."""
-    import hashlib
+def write_greasyfork(out: Path):
+    """Scripts directory (Nov 11 2026, user: "Scripts should pull the greasyfork information for their name, version
+    numbers, etc. These should stay updated even when an update is made."): Greasy Fork blocks Cloudflare Workers
+    (403), so every deploying site run reads Greasy Fork's public JSON for each listing's script (gatekeeper /sx/export
+    gives the install links) -> members' db/greasyfork.json {"scripts": {id: {name, version, description, updated (ms),
+    code_url, url, installs, daily}}}. No Torn calls; a script that can't be read keeps last run's info."""
+    import re as _re
     g_ = gate_cfg()
+    if not g_:
+        return
+    old = {}
+    try:
+        old = json.loads(GF_PATH.read_text(encoding="utf-8")).get("scripts", {})
+    except (OSError, ValueError):
+        pass
+    ids = []
+    for u in (_sx_export_raw().get("scripts") or []):
+        m = _re.match(r"^https://(?:update\.)?(?:greasyfork|sleazyfork)\.org/(?:[a-z-]+/)?scripts/(\d+)", str(u), _re.I)
+        if m and m.group(1) not in ids:
+            ids.append(m.group(1))
+    got = {}
+    for i in ids[:60]:
+        try:
+            req = urllib.request.Request(f"https://greasyfork.org/scripts/{i}.json",
+                                         headers={"User-Agent": "HB Hub site build", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                j = json.loads(r.read().decode())
+            upd = j.get("code_updated_at")
+            got[i] = {"name": j.get("name"), "version": j.get("version"), "description": j.get("description"),
+                      "updated": int(datetime.fromisoformat(upd.replace("Z", "+00:00")).timestamp() * 1000) if upd else None,
+                      "code_url": j.get("code_url"), "url": j.get("url"), "installs": j.get("total_installs"),
+                      "daily": j.get("daily_installs")}
+        except Exception as ex:
+            print(f"Greasy Fork: script {i} not read ({type(ex).__name__})")
+            if i in old:
+                got[i] = old[i]
+    GF_PATH.write_text(json.dumps({"scripts": got}, separators=(",", ":")) + "\n", encoding="utf-8")
+    _jdump(member_out(out) / "db" / "greasyfork.json", {"scripts": got})
+    print(f"Greasy Fork: {len(got)} of {len(ids)} scripts")
+
+
+GF_PATH = ROOT / "data" / "greasyfork.json"
+_SX_RAW = {}
+
+
+def _sx_export_raw() -> dict:
+    """The gatekeeper's /sx/export answer (read once per run): {members, scripts}."""
+    import hashlib
+    if "v" in _SX_RAW:
+        return _SX_RAW["v"]
+    g_ = gate_cfg()
+    _SX_RAW["v"] = {}
     if not g_:
         return {}
     tok = hashlib.sha256(f'{os.environ.get("MEMBER_DIR", "")}|{os.environ.get("LEADER_DIR", "")}|hb-sx-export'.encode()).hexdigest()
     try:
         req = urllib.request.Request(g_["url"].rstrip("/") + "/sx/export", headers={"X-HB-Export": tok, "User-Agent": "HB Hub build"})
         with urllib.request.urlopen(req, timeout=20) as r:
-            d = json.loads(r.read().decode())
-        m = d.get("members") or {}
-        print(f"Script sharing: {len(m)} member(s)")
-        return m
+            _SX_RAW["v"] = json.loads(r.read().decode())
     except Exception as ex:
-        print(f"Script sharing: not read ({type(ex).__name__})")
-        return {}
+        print(f"Hub export: not read ({type(ex).__name__})")
+    return _SX_RAW["v"]
+
+
+def sx_export() -> dict:
+    """Stats members share from the Heart Breakers Hub script (gatekeeper GET /sx/export, D1 sx_share):
+    {member id: {bs: {share, s}, ws: {share, s}, ready, since}}. Proven with sha256(MEMBER_DIR|LEADER_DIR|hb-sx-export) -
+    secrets only this workflow and the gatekeeper have. Numbers only, never a key. {} when the gate is off / unreachable."""
+    m = _sx_export_raw().get("members") or {}
+    print(f"Script sharing: {len(m)} member(s)")
+    return m
 
 
 def write_monitor(out: Path, db: dict, cfg: dict = None):
@@ -10991,6 +11043,7 @@ def main():
     write_profiles(out, db_)
     write_profile_layouts(out, cfg)               # profile layouts (members' own + the leaders' default) + editors
     write_monitor(out, db_, cfg)
+    write_greasyfork(out)                         # scripts directory: Greasy Fork name / version / install link
     write_home_data(out, db_, raw)               # hubs: welcome numbers, war snapshot, needs attention
     write_freshness(out, db_, bool(args.mock))    # db/freshness.json - every page's "data read ... / on record since" line
     # (write_legacy_images: only for the GitHub Pages days - the site is now on Cloudflare, so the old

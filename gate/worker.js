@@ -597,6 +597,9 @@ async function sxExport(env, req) {
       if (r.ws !== "off") x.ws = {share: r.ws, s: sxJ(r.ws_s, [])};
       out.members[String(r.pid)] = x;
     });
+    // the scripts directory's install links - the site build reads Greasy Fork for them (Greasy Fork blocks Workers)
+    const sc = (await env.OC_DB.prepare("SELECT install_url FROM hub_script").all().catch(() => ({results: []}))).results || [];
+    out.scripts = sc.map(r => r.install_url).filter(Boolean);
   }
   return Response.json(out, {headers: {"Cache-Control": "no-store"}});
 }
@@ -2164,19 +2167,21 @@ async function cwReading(env, req, who) {
 // D1 hub_script. Listing text + links only (no code hosted). Links must be https://. No Torn call.
 const SCRIPT_LIMITS = {name: 80, summary: 200, description: 6000, install_url: 500, version: 30, count: 200};
 // Greasy Fork script info from an install link (greasyfork.org/scripts/<id>-... or update.greasyfork.org/scripts/<id>/...)
-// -> {id, name, version, description, updated (ms), code_url, url, installs, daily} or null. Cached 1 h by Cloudflare.
-async function gfInfo(u) {
+// -> {id, name, version, description, updated (ms), code_url, url, installs, daily} or null.
+// Greasy Fork answers Cloudflare Workers with 403, so the SITE BUILD reads it (generate.py write_greasyfork, every
+// deploying run) into the members' db/greasyfork.json {id: {...}}; this reads that copy (kept in memory 10 min).
+let GF_CACHE = {t: 0, v: null};
+async function gfInfo(env, u) {
   const m = /^https:\/\/(?:update\.)?(?:greasyfork|sleazyfork)\.org\/(?:[a-z-]+\/)?scripts\/(\d+)/i.exec(String(u || ""));
   if (!m) return null;
-  try {
-    const r = await fetch(`https://greasyfork.org/scripts/${m[1]}.json`, {cf: {cacheTtl: 3600, cacheEverything: true},
-                                                                          headers: {"User-Agent": "HB Hub (scripts directory)"}});
-    if (!r.ok) return {err: "greasyfork " + r.status};
-    const j = await r.json();
-    return {id: Number(m[1]), name: j.name, version: j.version, description: j.description,
-            updated: j.code_updated_at ? Date.parse(j.code_updated_at) : null, code_url: j.code_url, url: j.url,
-            installs: j.total_installs, daily: j.daily_installs};
-  } catch (e) { return {err: "greasyfork " + (e && e.name || "error")}; }
+  if (!GF_CACHE.v || Date.now() - GF_CACHE.t > 600000) {
+    try {
+      const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(env.MEMBER_DIR)}/db/greasyfork.json`));
+      GF_CACHE = {t: Date.now(), v: r.ok ? (await r.json()).scripts || {} : {}};
+    } catch (e) { GF_CACHE = {t: Date.now(), v: {}}; }
+  }
+  const g = GF_CACHE.v[m[1]];
+  return g ? Object.assign({id: Number(m[1])}, g) : {err: "not read yet (next site update)"};
 }
 async function scriptsRoute(env, req, url, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
@@ -2193,7 +2198,7 @@ async function scriptsRoute(env, req, url, who) {
     // shows Greasy Fork's current name / version / description / last update / install link (read through
     // Cloudflare's cache, at most once an hour per script). The leader's own summary is kept when there is one.
     rows = await Promise.all(rows.map(async r => {
-      const g = await gfInfo(r.install_url);
+      const g = await gfInfo(env, r.install_url);
       if (!g) return r;
       if (g.err) return Object.assign({}, r, {gf_err: g.err});      // shown to nobody - lets the Hub's check see why
       return Object.assign({}, r, {name: g.name || r.name, version: g.version || r.version, summary: r.summary || g.description,
