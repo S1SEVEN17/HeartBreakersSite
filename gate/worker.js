@@ -22,7 +22,7 @@
 //   /l/oc/*           leaders' OC Management page: settings, deployed plan, shared rates (pass cookie, leaders)
 //   /rc/push          Torn Recruit Scout script: leaders send scouted recruits (client-reported identity, no key)
 //   /l/rc/*           leaders' Recruitment page: the shared recruits - claim, status, notes, remove (pass cookie, leaders)
-//   /sx               Heart Breakers Hub userscript (in Torn, leaders only): client-reported identity -> session - see HUB SCRIPT
+//   /sx               Heart Breakers Hub userscript (in Torn, members + leaders): client-reported identity -> session - see HUB SCRIPT
 //
 // Nothing from GitHub shows through: GitHub's response headers are dropped (only type / caching headers are
 // passed on) and GitHub's own error pages are replaced by ours, so visitors only ever see this address.
@@ -327,39 +327,49 @@ async function ghProxy(env, req, who, path) {
 }
 
 // =====================================================================================================
-// HUB SCRIPT (Nov 11 2026, user: "a script that allows me to interact with certain aspects of the Hub from inside
-// Torn" - leaders only, view + leader actions). The Torn page can't use the Hub's pass cookie (other site,
-// SameSite=Lax, and Torn PDA's requests carry no cookies), so the script signs in on its own:
-// SIGN-IN (Nov 11 2026, user: "use an API key to log in" + "Key never leaves device"; the link code was REPLACED):
-//   the script reads its own Torn profile with the member's key IN THE BROWSER and sends only {pid, faction, name}
-//   (op "hello") - the Hub-wide client-reported identity pattern (OC / Chain Watch / Recruit Scout). The key is
-//   never sent here. Accepted tradeoff (user chose it knowing): a modified script could claim a leader's id.
+// HUB SCRIPT - the "Heart Breakers Hub" userscript (in Torn). History: Nov 11 2026 v1 leaders only (user: "a script
+// that allows me to interact with certain aspects of the Hub from inside Torn"); same day: sign-in with the member's
+// own API key kept on their device (link code REPLACED); then OPENED TO MEMBERS + LEADERS (user: "I want to open
+// this to members and leaders ... as much functionality here as I have on the site").
+// The Torn page can't use the Hub's pass cookie (other site, SameSite=Lax, and Torn PDA's requests carry no cookies),
+// so the script signs in on its own:
+// SIGN-IN: the script reads its own Torn profile with the member's key IN THE BROWSER and sends only
+//   {pid, faction, name} (op "hello") - the Hub-wide client-reported identity pattern (OC / Chain Watch / Recruit
+//   Scout). The key is never sent here. Accepted tradeoff (user chose it knowing): a modified script could claim
+//   another member's id (incl. a leader's) - so it could see that member's private figures / leaders' data.
 //   POST /sx  {op: "hello", pid, faction, name}   -> {ok, code, exp, me}: session "hbsx2.<pid>.<exp>.<sig>"
 //                                                  (HMAC with the pass secret, SX_HOURS hours; the script signs in
 //                                                  again by itself with the key kept on its device)
 //   POST /sx  {code, op, ...}  (CORS torn.com; POST only, so Torn PDA's PDA_httpPost works too)
-//     op "whoami"                              -> {ok, me: {id, name, position}, exp}
-//     op "read" {area: "m"|"l", path: "db/<file>.json"}   -> that file of the site (members' / leaders' folder)
-//     op "gh"   {method: "GET"|"PUT", path, ref?, body?}  -> the leaders' save route (ghProxy: same allowed paths -
-//                                                             config.json, data/payouts/, data/panels/)
-// Every call re-checks: session signature + not expired + STILL a current member in a leader position
-// (the Hub's member list) - a demoted leader's script stops at once.
+//     op "whoami"                               -> {ok, me: {id, name, position, leader}, exp}
+//     op "read" {area: "m"|"l", path}           -> a file of the site: members' folder "db/<file>.json" (members);
+//                                                  leaders' folder "db/<file>.json" or "payout_data/<file>.json"
+//                                                  (LEADERS only)
+//     op "mine"                                 -> the caller's OWN private figures (same as /m/mine.json)
+//     op "live" {what}                          -> "board" (Chain Watch live board) | "schedule" (chain watch shifts)
+//                                                  | "scripts" (Scripts directory) - members; "readiness" (war
+//                                                  readiness, opted-in members) - LEADERS. Same handlers as the site.
+//     op "gh"   {method: "GET"|"PUT", path, ref?, body?}  -> the leaders' save route - LEADERS (ghProxy: same allowed
+//                                                             paths - config.json, data/payouts/, data/panels/)
+// Every call re-checks: session signature + not expired + STILL a current member (the Hub's member list); leader
+// rights come from that list's position, never from the script - a demoted leader loses them at once.
 // =====================================================================================================
 const SX_HOURS = 24;
 const SX_CORS = {"Access-Control-Allow-Origin": "https://www.torn.com", "Access-Control-Allow-Methods": "POST, OPTIONS",
                  "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "86400",
                  "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"};
 const sxJson = (obj, status = 200) => new Response(JSON.stringify(obj), {status, headers: {...SX_CORS, "Content-Type": "application/json"}});
+// any Response -> the same body with the script's CORS headers
+const sxPass = async (r) => new Response(await r.text(), {status: r.status, headers: {...SX_CORS, "Content-Type": "application/json"}});
 async function sxSign(env, pid, exp) {
   return b64u(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(`sx2|${pid}|${exp}`)));
 }
-// is this pid a current member in a leader position? -> who, or {error}
-async function sxLeader(env, ctx, pid) {
+// is this pid a current member? -> who (leader from the Hub's own list), or {error}
+async function sxMember(env, ctx, pid) {
   const members = await currentMembers(env, ctx);
   const mm = members && members.get(Number(pid));
   if (!mm) return {error: "Not a current Heart Breakers member."};
-  if (!isLeader(env, mm.position)) return {error: "The Hub script is for leaders only."};
-  return {who: {id: Number(pid), name: mm.name, position: mm.position || "", leader: true}};
+  return {who: {id: Number(pid), name: mm.name, position: mm.position || "", leader: isLeader(env, mm.position)}};
 }
 async function sxWho(env, ctx, code) {
   const m = /^hbsx2\.(\d+)\.(\d+)\.([\w-]+)$/.exec(String(code || "").trim());
@@ -368,9 +378,10 @@ async function sxWho(env, ctx, code) {
   let ok = false;
   try { ok = await crypto.subtle.verify("HMAC", await hmacKey(env), unb64u(sig), enc.encode(`sx2|${pid}|${exp}`)); } catch (e) { ok = false; }
   if (!ok || Number(exp) < Date.now()) return {error: "Signing in again..."};
-  const a = await sxLeader(env, ctx, pid);
+  const a = await sxMember(env, ctx, pid);
   return a.who ? {who: a.who, exp: Number(exp)} : a;
 }
+const sxMe = (who) => ({id: who.id, name: who.name, position: who.position, leader: !!who.leader});
 async function sxRoute(env, ctx, req) {
   if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: SX_CORS});
   if (req.method !== "POST") return sxJson({ok: false, error: "POST only"}, 405);
@@ -378,32 +389,42 @@ async function sxRoute(env, ctx, req) {
   // sign in: client-reported identity (the script read it from Torn with its own key; no key comes here)
   if (b && b.op === "hello") {
     if (String(b.faction) !== String(env.FACTION_ID)) return sxJson({ok: false, error: "Heart Breakers members only."}, 403);
-    const l = await sxLeader(env, ctx, b.pid);
+    const l = await sxMember(env, ctx, b.pid);
     if (!l.who) return sxJson({ok: false, error: l.error}, 403);
     const exp = Date.now() + SX_HOURS * 36e5;
-    return sxJson({ok: true, code: `hbsx2.${l.who.id}.${exp}.${await sxSign(env, l.who.id, exp)}`, exp,
-                   me: {id: l.who.id, name: l.who.name, position: l.who.position}});
+    return sxJson({ok: true, code: `hbsx2.${l.who.id}.${exp}.${await sxSign(env, l.who.id, exp)}`, exp, me: sxMe(l.who)});
   }
   const a = await sxWho(env, ctx, b && b.code);
   if (!a.who) return sxJson({ok: false, error: a.error, relink: true}, 401);
   const who = a.who, op = String(b.op || "");
-  if (op === "whoami") return sxJson({ok: true, me: {id: who.id, name: who.name, position: who.position}, exp: a.exp});
+  const leadersOnly = () => sxJson({ok: false, error: "Leaders only."}, 403);
+  if (op === "whoami") return sxJson({ok: true, me: sxMe(who), exp: a.exp});
   if (op === "read") {
     const area = b.area === "l" ? "l" : "m", path = String(b.path || "");
-    if (!/^db\/[\w.-]+\.json$/.test(path)) return sxJson({ok: false, error: "not allowed"}, 403);
+    if (area === "l" && !who.leader) return leadersOnly();
+    const okPath = area === "l" ? /^(db|payout_data)\/[\w.-]+\.json$/ : /^db\/[\w.-]+\.json$/;
+    if (!okPath.test(path)) return sxJson({ok: false, error: "not allowed"}, 403);
     const dir = area === "l" ? env.LEADER_DIR : env.MEMBER_DIR;
     const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(dir)}/${path}`));
     if (!r.ok) return sxJson({ok: false, error: "not found"}, 404);
     return new Response(r.body, {status: 200, headers: {...SX_CORS, "Content-Type": "application/json"}});
   }
+  if (op === "mine") return sxPass(await mine(env, who));
+  if (op === "live") {
+    const what = String(b.what || ""), u = new URL("https://sx.local/"), get = new Request(u.toString());
+    if (what === "board") return sxPass(await cwLive(env));
+    if (what === "schedule") return sxPass(await cwSchedule(env, get, u, who));
+    if (what === "scripts") return sxPass(await scriptsRoute(env, get, u, who));
+    if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
+    return sxJson({ok: false, error: "unknown"}, 400);
+  }
   if (op === "gh") {
+    if (!who.leader) return leadersOnly();
     const method = b.method === "PUT" ? "PUT" : "GET", path = String(b.path || "");
     const u = new URL("https://sx.local/" + path); if (b.ref) u.searchParams.set("ref", String(b.ref));
     const inner = new Request(u.toString(), {method, headers: method === "PUT" ? {"X-HB-Save": "1", "Content-Type": "application/json"} : {},
                                              body: method === "PUT" ? JSON.stringify(b.body || {}) : undefined});
-    const r = await ghProxy(env, inner, who, path);
-    const txt = await r.text();
-    return new Response(txt, {status: r.status, headers: {...SX_CORS, "Content-Type": "application/json"}});
+    return sxPass(await ghProxy(env, inner, who, path));
   }
   return sxJson({ok: false, error: "unknown op"}, 400);
 }

@@ -5767,6 +5767,8 @@ def write_armory_page(out: Path, db: dict, ad: dict):
     lout = out / leader_dir()
     names = {str(m["id"]): (m["name"], m["current"]) for m in db["members"]["members"]}
     conf = dict(ad, names=names, member_base=member_base())
+    # the same data for the "Heart Breakers Hub" userscript (Armory tab, leaders - op "read" l db/armory.json)
+    _jdump(lout / "db" / "armory.json", conf)
     tpl = (ROOT / "tools" / "armory_monitor.html").read_text(encoding="utf-8")
     (lout / "armory.html").write_text(tpl.replace("__CONFIG__", json.dumps(conf, separators=(",", ":")).replace("</", "<\\/"))
                                       .replace("__MENU__", leader_menu(""))
@@ -6116,8 +6118,9 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
                                           "averages": {"reliability": round(sum(sc) / len(sc), 1) if sc else 0,
                                                        "parts": avg_parts}})
     # HUB SCRIPT FEED (Nov 11 2026): what the "Heart Breakers Hub" userscript shows in Torn, in one small file
-    # (read with op "read" {area:"l", path:"db/script_feed.json"}): latest newsletters / recaps / reports (absolute
-    # addresses - the images open without signing in) and the recent wars with report + payout links and Termed.
+    # (read with op "read" {area:"m", path:"db/script_feed.json"} - in the MEMBERS' folder since the script opened
+    # to members; nothing in it is leaders-only): latest newsletters / recaps / reports (absolute addresses - the
+    # images open without signing in), the recent wars with report + payout links and Termed, and the recap archive.
     try:
         mb = member_base().rstrip("/") + "/"
         rec = _latest_receipts()
@@ -6131,8 +6134,21 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
                           "members": len(ms_), "report": f"{mb}reports/war-{wid}.html", "report_img": f"{mb}reports/war-{wid}.png",
                           "payout": f"{mb}payouts/{rec[wid]}.html" if wid in rec else None,
                           "m": [[x[0], x[1]] for x in ms_]})
-        _jdump(lout / "db" / "script_feed.json", {"generated": md["generated"], "member_base": mb.rstrip("/"),
-                                                  "latest": _hub_latest_items(mb, 8), "wars": wars_})
+        recaps_ = []
+        for f in (sorted(RECAP_DIR.glob("*.png"), reverse=True) if RECAP_DIR.exists() else [])[:24]:
+            try:
+                lab = datetime.strptime(f.stem, "%Y-%m").strftime("%B %Y")
+            except ValueError:
+                continue
+            recaps_.append({"month": f.stem, "label": lab, "img": f"{mb}recaps/{f.name}", "url": f"{mb}newsletter.html#{f.stem}"})
+        chains_ = [{"id": c["id"], "length": c["length"], "end": c["end"],
+                    "report": f"{mb}reports/chain-{c['id']}.html", "img": f"{mb}reports/chain-{c['id']}.png"}
+                   for c in db["chains"]["chains"][-30:][::-1]
+                   if REPORTS_DIR.exists() and (REPORTS_DIR / f"chain-{c['id']}.json").exists()]
+        _jdump(member_out(out) / "db" / "script_feed.json", {"generated": md["generated"], "member_base": mb.rstrip("/"),
+                                                  "latest": _hub_latest_items(mb, 8), "wars": wars_, "chains": chains_,
+                                                  "recaps": recaps_})
+        (lout / "db" / "script_feed.json").unlink(missing_ok=True)      # its old place (leaders' folder)
     except Exception as e_:                       # never break the site build over the script feed
         print("Hub script feed skipped:", e_)
     # the Leader Monitor page was removed (Nov 2026) - reliability is on Members / profiles, armory on the Armory
@@ -9609,6 +9625,9 @@ def write_payout_calculator(cfg: dict, out: Path):
     write_payout_data(out / leader_dir(), _PAYOUT_RAW.get("raw") or {})
     d_ = out / leader_dir()
     d_.mkdir(parents=True, exist_ok=True)
+    # the calculator's settings for the "Heart Breakers Hub" userscript's Payout tab (leaders - op "read"
+    # l db/payout_cfg.json; its saved wars are l payout_data/*.json) - no repo / token details
+    _jdump(d_ / "db" / "payout_cfg.json", {k: v for k, v in conf.items() if k not in ("repo", "ghproxy")})
     (d_ / "payout.html").write_text(html_.replace("__CONFIG__", json.dumps(conf)).replace("__MENU__", leader_menu("")),
                                    encoding="utf-8")
     # Torn-side userscript that fills the faction newsletter from "Create Newsletter" (leaders install it)
