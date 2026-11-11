@@ -78,7 +78,12 @@ const FAIL_RESULTS = ["Lost", "Stalemate", "Interrupted", "Assist", "Escape", "T
 const BONUS_HITS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
 const CHAIN_TIMEOUT_S = 300;              // every hit resets the chain timer to 5 minutes
 const MIN_PACE_HITS_PER_HOUR = 12;        // the slowest pace that keeps a chain alive (1 hit / 5 min)
-const CONFIRM_READ_GAP_MS = 10000;        // a higher count from a script -> one confirming Hub read, at most every 10 s
+const CONFIRM_READ_GAP_MS = 10000;
+// PAGE READINGS (Nov 11 2026, user): the chain count + timer read off Torn's own page (chain bar / faction chain box)
+// by a member's script - live, no API call. A higher count from a page is taken straight away; for this long after
+// a page reading a LOWER count from a (cached) Torn API read is ignored while the page timer says the chain's alive.
+const PAGE_TRUST_MS = 45000;
+const PAGE_MAX_JUMP = 10;                  // a page reading can move the count up by at most this much at once        // a higher count from a script -> one confirming Hub read, at most every 10 s
 const RECRUIT_DAYS = 3;
 // HUB-SENT ALERTS (Nov 2026, user): the Hub times every chain alert itself (it knows the timer to the second) and
 // pushes {t:"alert"} to the members it's for - a background tab still gets a WebSocket message at once, while a
@@ -635,6 +640,7 @@ export class ChainRoom {
 
   /* ---- CHAIN: script-sourced reading (shorten-only, §3) ------------------- */
   applyScriptChain(msg) {
+    if (msg && msg.src === "page") return this.applyPageChain(msg);
     const now = Date.now();
     const cur = Number(msg.current) || 0;
     // `end` (Torn's absolute expiry, epoch s) is preferred; `timeout` (seconds left, frozen in Torn's cache) is the
@@ -664,6 +670,47 @@ export class ChainRoom {
     return false;
   }
 
+  /* ---- PAGE READING (Nov 11 2026, user: "set that up") ----------------------------------------------------------
+   * script -> Hub {t:"chain", src:"page", current, max?, end_ms?, remaining_ms?}
+   *   current       the count on Torn's page (chain bar / faction chain box)
+   *   end_ms        when the page timer hits 0, on the HUB clock (script: Date.now() + hubOffset + remaining) - preferred
+   *   remaining_ms  the page timer (ms) - used when end_ms is missing (the Hub adds it to its own now)
+   * Torn's page is updated live by Torn itself, so it beats any API read (whose reply can be cached for seconds):
+   *   - a HIGHER count (by 1..10) is taken at once: new lap, alerts re-armed, a fresh timer - no waiting for the
+   *     Hub's confirming API read;
+   *   - the SAME count: the page timer replaces the Hub's (either way, within 0..300 s) - it's the real one;
+   *   - a lower count / 0 is never taken from a page (a script can't stop a chain) - it asks the Hub for a read.
+   * For PAGE_TRUST_MS after a page reading, applyHubChain ignores a LOWER count from Torn's API while the page timer
+   * still has time left (a cached reply from before the hit), so the timer can't jump back.
+   * ------------------------------------------------------------------------------------------------------------- */
+  applyPageChain(msg) {
+    const now = Date.now();
+    const cur = Math.floor(Number(msg.current) || 0);
+    let end = Number(msg.end_ms) || 0;
+    if (!(end > now - 5000 && end <= now + 305000)) end = Number(msg.remaining_ms) > 0 ? now + Number(msg.remaining_ms) : 0;
+    if (!(end > now && end <= now + 305000)) end = 0;
+    const c = this.mem.chain;
+    if (cur <= 0 || !end) {                              // page shows no live chain / no timer: let Torn's API decide
+      if (c && c.current > 0) this.requestConfirmRead();
+      return false;
+    }
+    if (c && c.current > 0 && cur < c.current) { this.requestConfirmRead(); return false; }
+    if (c && c.current > 0 && cur > c.current + PAGE_MAX_JUMP) { this.requestConfirmRead(); return false; }
+    if (c && cur === c.current && c.expires_at && Math.abs(c.expires_at - end) < 500) {
+      c.page_at = now;                                   // same reading - just keep the page trust fresh
+      return false;
+    }
+    this.mem.chain = {
+      current: cur, max: Number(msg.max) || (c && c.max) || cur, cooldown: 0,
+      modifier: c && c.modifier != null ? c.modifier : null,
+      expires_at: end, as_of: now, src: "page", page_at: now, cooldown_until: 0,
+    };
+    if (this.mem.bonus && cur >= this.mem.bonus.at) this.mem.bonus = null;
+    this.mem.lastChainEndedAt = 0;
+    if (!c || cur !== c.current) this.requestConfirmRead();   // a new hit: the Hub's own read catches up (attacks etc.)
+    return true;
+  }
+
   requestConfirmRead() {
     const now = Date.now();
     if (now - (this.mem._confirmAt || 0) < CONFIRM_READ_GAP_MS) return;
@@ -689,6 +736,10 @@ export class ChainRoom {
   applyHubChain(chain) {
     const now = Date.now();
     const cur = Number(chain.current) || 0;
+    // a page reading (Torn's live page) is newer than this API reply: a lower count from Torn's cache is ignored
+    // while the page timer still has time left; a SAME count with an exact `end` still refines the timer
+    const pg = this.mem.chain;
+    if (pg && pg.page_at && now - pg.page_at < PAGE_TRUST_MS && pg.expires_at > now && cur < pg.current) return;
     const exact = Number(chain.end) > 1e9;                // Torn's absolute expiry - right even from a cached reply
     let expires = cur > 0 ? this.chainExpiry(chain, now) : 0;
     const prev = this.mem.chain;
@@ -696,10 +747,14 @@ export class ChainRoom {
     // more recently and saw less time left, keep the shorter value (never show more time than a fresh reading did).
     if (!exact && prev && cur > 0 && prev.current === cur && prev.src === "script" && now - prev.as_of < SCRIPT_READING_FRESH_MS
         && prev.expires_at && prev.expires_at < expires) expires = prev.expires_at;
+    // no `end` in this reply but a fresh page reading of the same count: the page timer is the real one
+    if (!exact && prev && cur > 0 && prev.current === cur && prev.page_at && now - prev.page_at < PAGE_TRUST_MS && prev.expires_at)
+      expires = prev.expires_at;
     this.mem.chain = {
       current: cur, max: Number(chain.max) || cur, cooldown: Number(chain.cooldown) || 0,
       modifier: chain.modifier != null ? Number(chain.modifier) : null,
       expires_at: expires, as_of: now, src: "hub",
+      page_at: prev && prev.current === cur ? prev.page_at || 0 : 0,   // page trust survives a same-count Hub read
       // COOLDOWN (Nov 2026): after a break Torn cools the chain 6 s per hit - when the next chain can start
       cooldown_until: cur === 0 && Number(chain.cooldown) > 0 ? now + Number(chain.cooldown) * 1000 : 0,
     };
