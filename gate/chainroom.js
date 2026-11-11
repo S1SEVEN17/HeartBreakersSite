@@ -61,6 +61,12 @@ const CALL_TTL_MS = 90000;                // a "called" retal lapses if not take
 const SCRIPT_READING_FRESH_MS = 35000;    // a script reading younger than this beats the Hub's (cached) read
 const IDLE_WIPE_MS = 5 * 60 * 1000;       // chain ended + queue empty this long => clear transient data
 const CONN_STALE_MS = 70000;              // a socket with no msg/ping for this long is treated as gone
+// IDLE / OFFLINE (chainwatch-idle-offline-addendum, Nov 10 2026): a queued member whose script sends `presence`
+// heartbeats (every 45 s while the Torn tab is visible) is IDLE after 3 min without one; OFFLINE = no live socket
+// and no recent /cw/sync. Both are skipped for up / backup (like Away) but still get alert 3 and Panic.
+const IDLE_AFTER_MS = 180000;
+// HUB-DRIVEN PANIC (same addendum §6): sent at 30 s, then 15 s left, once each per chain lap
+const PANIC_STAGES = [{ stage: 1, sec: 30 }, { stage: 2, sec: 15 }];
 const SYNC_STALE_MS = 45000;              // a /cw/sync device counts as present this long after its last sync
 const SESSION_TTL_MS = 24 * 3600 * 1000;  // HMAC session token lifetime
 const PING = '{"t":"ping"}', PONG = '{"t":"pong"}'; // answered by the runtime without waking the object
@@ -380,7 +386,15 @@ export class ChainRoom {
     const t = msg && msg.t;
     if (!t) return;
     let changed = false;
+    // any message from a queued member is proof of life (presence heartbeat, join, stats, away, hitting, sync poll)
+    const qLive = this.mem.queue[pid], wasPresence = qLive ? this.presenceOf(qLive, Date.now()) : null;
+    if (qLive) qLive.last_seen = Date.now();
     switch (t) {
+      // PRESENCE heartbeat (idle/offline addendum): marks the script as heartbeat-capable; idle -> active is broadcast
+      case "presence": {
+        if (qLive) { qLive.presence_cap = true; if (wasPresence !== "active") changed = true; }
+        break;
+      }
       case "chain": changed = this.applyScriptChain(msg); break;       // shorten-only (§3)
       case "stats": {
         const st = sanitizeStats(msg);
@@ -445,7 +459,7 @@ export class ChainRoom {
     this.mem.queue[pid] = {
       pid,
       name: m.name || (this.conns.get(pid) && this.conns.get(pid).name) || "Unknown",
-      joined_at: Date.now(), hitting_until: 0, away: false,
+      joined_at: Date.now(), hitting_until: 0, away: false, last_seen: Date.now(),
       stats: msg.stats ? sanitizeStats(msg.stats) : (this.mem.lastStats[pid] || null), hits: 0,
     };
     if (msg.stats) this.mem.lastStats[pid] = this.mem.queue[pid].stats;
@@ -751,6 +765,8 @@ export class ChainRoom {
     let next = now + Math.max(5000, base) * mult;
     const al = this.nextAlertAt(now);                      // an alert due before the next read: wake up for it
     if (al && al < next) next = Math.max(now + 250, al);
+    const ni = this.nextIdleAt(now);                       // a member going idle: wake so `up` moves on time
+    if (ni && ni < next) next = Math.max(now + 250, ni + 100);
     const ns = this.nextShiftNudgeAt(now);                 // a present member's shift starting before then: wake for it
     if (ns && ns < next) next = Math.max(now + 250, ns);
     await this.storage.setAlarm(next);
@@ -1036,6 +1052,7 @@ export class ChainRoom {
     const lap = this.alertLap();
     let t = null;
     for (const s of this.alertStages()) if (!lap.sent.includes(s.stage)) { const at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS; if (t == null || at < t) t = at; }
+    for (const s of PANIC_STAGES) if (!(lap.panic || []).includes(s.stage)) { const at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS; if (t == null || at < t) t = at; }
     return t != null && t < c.expires_at ? Math.max(t, now) : null;
   }
   async ensureAlertAlarm() {
@@ -1060,8 +1077,19 @@ export class ChainRoom {
     if (c.current < (Number(cfg.minChain) || 0) || c.expires_at <= now) return;
     if (this.alertPausedBy(now)) return;                   // "I'm hitting": held until a hit lands or it runs out
     const lap = this.alertLap(), left = c.expires_at - now;
-    // who a timer alert goes to: queued members who can act (not away, not in hospital / jail / flying)
+    // who a timer alert goes to: queued members who can act (not away, not in hospital / jail / flying) - INCLUDING
+    // idle / offline (they get alert 3 and Panic as a last resort - idle/offline addendum §4)
     const able = this.orderedQueue().filter((x) => x.can_hit && !x.away).map((x) => x.pid);
+    const ableActive = this.orderedQueue().filter((x) => x.can_hit && !x.away && x.presence === "active").map((x) => x.pid);
+    // HUB-DRIVEN PANIC (idle/offline addendum §6): {t:"panic"} at 30 s, then 15 s left, once each per lap, to the
+    // alert-3 set; held by "I'm hitting" (above) and below minChain; the most urgent stage wins after a pause.
+    lap.panic = lap.panic || [];
+    for (const p of PANIC_STAGES) {
+      if (lap.panic.includes(p.stage) || left > p.sec * 1000 + ALERT_EARLY_MS) continue;
+      lap.panic.push(p.stage);
+      if (PANIC_STAGES.some((x) => !lap.panic.includes(x.stage) && left <= x.sec * 1000 + ALERT_EARLY_MS)) continue;
+      for (const pid of new Set(able)) this.notify(Number(pid), { t: "panic", seconds: p.sec, stage: p.stage, chain: c.current, now });
+    }
     for (const s of this.alertStages()) {
       if (lap.sent.includes(s.stage) || left > s.sec * 1000 + ALERT_EARLY_MS) continue;
       lap.sent.push(s.stage);
@@ -1075,8 +1103,9 @@ export class ChainRoom {
       // away / hospital / jail / flying members are never #1 / #2 and never in `able`.
       const idx = this.alertStages().findIndex((x) => x.stage === s.stage);
       const top = turn ? [turn.up, turn.backup].filter(Boolean) : [];
-      const to = idx === 0 ? (cfg.firstAlertPrimaryOnly && top.length ? top.slice(0, 1) : able)
-               : idx === 1 ? (top.length ? top : able)
+      // (#1 / #2 are always active members; stage 1 "off" / no turn falls back to the ACTIVE set)
+      const to = idx === 0 ? (cfg.firstAlertPrimaryOnly && top.length ? top.slice(0, 1) : ableActive)
+               : idx === 1 ? (top.length ? top : ableActive)
                : able;
       this.sendAlert(to, { kind: "timer", stage: s.stage, seconds: s.sec, chain: c.current, expires_at: c.expires_at,
         remaining_ms: left, now });
@@ -1098,7 +1127,8 @@ export class ChainRoom {
     const c = this.mem.chain || {};
     const cur = Number(c.current) || 0;
     const q = this.orderedQueue();
-    const able = q.filter((x) => x.can_hit && !x.away);   // up / backup: can attack AND not away
+    // up / backup: can attack, not away, and ACTIVE (idle / offline are passed over like away - addendum §3)
+    const able = q.filter((x) => x.can_hit && !x.away && x.presence === "active");
     const cfg = this.mem.config || CW_DEFAULT_CONFIG;
     const next = nextBonus(cur);
     const b = this.mem.bonus && this.mem.bonus.at === next ? this.mem.bonus : null;
@@ -1134,6 +1164,25 @@ export class ChainRoom {
   // Members who can't attack right now (hospital, jail, travelling/abroad...) go to the back - still in energy order
   // - until they're Okay again (their `until` time passing counts, no need to wait for the next member read).
   // Ties: earlier join first. Members who haven't reported stats yet go last within their group, in join order.
+  // "active" | "idle" | "offline" for a queued member (idle/offline addendum §2). Idle needs a script that sends
+  // `presence` heartbeats (presence_cap) - older scripts never go idle, they can only be offline.
+  presenceOf(q, now) {
+    const pid = Number(q.pid);
+    const sync = this.mem.syncSeen[pid] && now - this.mem.syncSeen[pid] <= SYNC_STALE_MS;
+    if (!this.conns.has(pid) && !sync) return "offline";
+    if (q.presence_cap && now - (Number(q.last_seen) || Number(q.joined_at) || 0) >= IDLE_AFTER_MS) return "idle";
+    return "active";
+  }
+  // when the next active member goes idle (ms) - the alarm wakes then so `up` moves on time
+  nextIdleAt(now) {
+    let at = null;
+    for (const q of Object.values(this.mem.queue)) {
+      if (!q.presence_cap || this.presenceOf(q, now) !== "active") continue;
+      const t = (Number(q.last_seen) || 0) + IDLE_AFTER_MS;
+      if (at == null || t < at) at = t;
+    }
+    return at;
+  }
   orderedQueue(raw) {
     const now = Date.now();
     const list = Object.values(this.mem.queue).map((q) => ({ q, e: energyNow(q, now), ok: canAttack(this.mem.status[q.pid], now) }))
@@ -1142,6 +1191,7 @@ export class ChainRoom {
     return list.map(({ q, e, ok }) => ({
       pid: q.pid, name: q.name, joined_at: q.joined_at, energy: e, can_hit: ok, away: !!q.away,
       hitting_until: q.hitting_until || 0, stats: q.stats || null, hits: q.hits || 0,
+      presence: this.presenceOf(q, now),           // "active" | "idle" | "offline" (idle/offline addendum §5)
     }));
   }
   openRetals() {
@@ -1177,6 +1227,7 @@ export class ChainRoom {
     const body = await request.json();
     const pid = Number(body.pid);
     this.mem.syncSeen[pid] = Date.now();
+    if (this.mem.queue[pid]) this.mem.queue[pid].last_seen = Date.now();   // a sync poll is a presence signal (addendum §1)
     for (const m of body.out || []) await this.onMessage(pid, m);
     await this.save();
     await this.ensureAlarm();   // keep Hub reads going for these devices too
