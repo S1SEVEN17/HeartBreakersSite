@@ -280,3 +280,13 @@ jobs:
           echo "hub script hello wrong faction: $(curl -s -o /dev/null -w '%{http_code}' -X POST $B/sx -H 'Content-Type: application/json' -d '{"op":"hello","pid":1,"faction":1}')"
           echo "hub script hello not a member: $(curl -s -o /dev/null -w '%{http_code}' -X POST $B/sx -H 'Content-Type: application/json' -d '{"op":"hello","pid":1,"faction":51384}')"
           echo "hub script GET: $(curl -s -o /dev/null -w '%{http_code}' $B/sx)"
+          # signed-in reads (Hub script v2): one session from a client-reported identity (the Hub's own leader), then
+          # status codes + counts only - the session itself is never printed
+          SXC=$(curl -s -X POST $B/sx -H 'Content-Type: application/json' -d '{"op":"hello","pid":974757,"faction":51384,"name":"check"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('code',''))" 2>/dev/null)
+          sx() { curl -s -o /tmp/sx.json -w '%{http_code}' -X POST $B/sx -H 'Content-Type: application/json' -d "{\"code\":\"$SXC\",$1}"; }
+          echo "hub script session: $([ -n "$SXC" ] && echo yes || echo no)"
+          echo "hub script feed: $(sx '"op":"read","area":"m","path":"db/script_feed.json"') wars=$(python3 -c "import json; d=json.load(open('/tmp/sx.json')); print(len(d.get('wars',[])), 'chains', len(d.get('chains',[])), 'recaps', len(d.get('recaps',[])))" 2>/dev/null)"
+          echo "hub script armory: $(sx '"op":"read","area":"l","path":"db/armory.json"')  payout cfg: $(sx '"op":"read","area":"l","path":"db/payout_cfg.json"')  payout index: $(sx '"op":"read","area":"l","path":"payout_data/index.json"')"
+          echo "hub script mine: $(sx '"op":"mine"')  board: $(sx '"op":"live","what":"board"')  schedule: $(sx '"op":"live","what":"schedule"')  scripts: $(sx '"op":"live","what":"scripts"')  config: $(sx '"op":"gh","method":"GET","path":"config.json","ref":"main"')"
+          echo "hub script bad path: $(sx '"op":"read","area":"m","path":"../x.json"')"
+          rm -f /tmp/sx.json
