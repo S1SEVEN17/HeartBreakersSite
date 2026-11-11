@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Recruitment - Heart Breakers</title>
+<!--
+  RECRUITMENT (leaders' folder: recruitment.html, published by generate.py write_optin_pages - Nov 11 2026, user).
+  Recruits shared by leaders from the Torn Recruit Scout userscript (worker.js POST /rc/push). Every leader sees the
+  same list and can: claim a recruit ("I'm messaging them" - so nobody double-messages), set a status
+  (New / Contacted / Joined / Declined), keep one shared note, or remove it (a removed recruit isn't auto-sent again;
+  a manual "Send to Hub" from the script brings it back).
+  Data: GET rc/list.json, POST rc/update (X-HB-Save: 1) through the gatekeeper (D1 rc_recruit). No Torn call from
+  this page - the scouting figures are the script's snapshot at the time it was sent ("checked ... ago").
+  Contract: project doc claude/recruitment-hub-contract.md.
+  Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:760px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.seg{display:flex;flex-wrap:wrap;border:1px solid var(--edge);border-radius:8px;overflow:hidden}
+.seg button{background:#1a1012;color:#ddd;border:0;border-right:1px solid #2a1416;padding:8px 11px;font:14px system-ui;cursor:pointer;min-height:38px}
+.seg button:last-child{border-right:0}.seg button.on{background:var(--red);color:#fff;font-weight:600}
+select,textarea{background:#1a1012;color:#eee;border:1px solid var(--edge);border-radius:7px;padding:8px;font:14px system-ui}
+select{min-height:38px}textarea{width:100%;min-height:62px;resize:vertical}
+button.b{background:var(--red);color:#fff;border:0;border-radius:8px;padding:8px 13px;font:600 14px system-ui;cursor:pointer;min-height:38px}
+button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+a.b{display:inline-flex;align-items:center;background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:8px;padding:8px 13px;font:14px system-ui;text-decoration:none;min-height:38px}
+.cnt{margin-left:auto;color:var(--sub);font-size:13px}
+.msg{min-height:18px;font-size:13px;margin:6px 2px 0}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+.empty{color:var(--sub);text-align:center;padding:18px 6px}
+.rc{border-left:4px solid var(--edge)}.rc.hi{border-left-color:var(--green)}.rc.mid{border-left-color:var(--gold)}.rc.lo{border-left-color:var(--red)}
+.rh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rh a.nm{color:#fff;font-weight:700;font-size:16px;text-decoration:none}.rh a.nm:hover{text-decoration:underline}
+.id{color:var(--sub);font-size:12px}
+.pill{font-size:12px;padding:2px 8px;border-radius:8px;background:#2a1416;color:var(--sub);white-space:nowrap}
+.pill.g{background:#173117;color:#9be29b}.pill.y{background:#3a2e12;color:var(--gold)}.pill.r{background:#3a1414;color:#f08a84}
+.fit{margin-left:auto;font-weight:700}
+.chk{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.st{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:6px;margin-top:9px}
+.st div{background:#1a1012;border:1px solid #2a1416;border-radius:8px;padding:6px 7px}
+.st b{display:block;color:#fff;font-size:14px}.st span{color:var(--sub);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px}
+.act{margin-top:9px;background:#1a1012;border:1px solid #2a1416;border-radius:8px;padding:8px 9px;font-size:13px}
+.bars{display:flex;align-items:flex-end;gap:4px;height:34px;margin:5px 0 3px}
+.bars i{flex:1 1 0;min-height:2px;border-radius:3px 3px 0 0;background:var(--gold)}
+.bars i.idle{background:var(--red)}.bars i.na{background:#2a1416}
+.axis{display:flex;justify-content:space-between;color:var(--sub);font-size:10.5px}
+.warn{color:#f08a84}
+.meta{color:var(--sub);font-size:12px;margin-top:8px}
+.ctl{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid #2a1416}
+.ctl .who{flex:1;min-width:140px;font-size:13px}
+.nt{margin-top:8px}.nt .by{color:var(--sub);font-size:12px;margin-top:3px}
+.nt .row{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;flex-wrap:wrap}
+</style></head><body>
+__MENU__
+<h1>Recruitment</h1>
+<div class="sub">Recruits shared from the Torn Recruit Scout script. Claim one before messaging so leaders don't double up.</div>
+
+<div class="card">
+  <div class="bar">
+    <div class="seg" id="fs">
+      <button type="button" data-s="open">Open</button>
+      <button type="button" data-s="new">New</button>
+      <button type="button" data-s="contacted">Contacted</button>
+      <button type="button" data-s="joined">Joined</button>
+      <button type="button" data-s="declined">Declined</button>
+      <button type="button" data-s="all">All</button>
+    </div>
+  </div>
+  <div class="bar" style="margin-top:8px">
+    <select id="fc" aria-label="Claimed by">
+      <option value="any">Anyone's</option><option value="mine">Claimed by me</option><option value="none">Unclaimed</option>
+    </select>
+    <select id="so" aria-label="Sort">
+      <option value="fit">Best fit first</option><option value="new">Newest first</option><option value="bs">Battle stats</option>
+    </select>
+    <button class="b alt" id="rf" type="button">Refresh</button>
+    <span class="cnt" id="cnt"></span>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div id="list"><div class="empty">Loading…</div></div>
+
+<script>
+const CONF = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const STATUS = {new: ["New", ""], contacted: ["Contacted", "y"], joined: ["Joined", "g"], declined: ["Declined", "r"]};
+const ACTIVE_DAY_S = 30 * 60, WEAK_WEEK_S = 2 * 3600;   // same thresholds as the script
+let R = [], ME = null;
+let F = {s: "open", c: "any", so: "fit"};
+try { F = Object.assign(F, JSON.parse(localStorage.getItem("hb_rc_filters") || "{}")); } catch (e) {}
+
+function big(n) {
+  n = Number(n); if (!Number.isFinite(n)) return "—";
+  const a = Math.abs(n), t = (v, d) => v.toFixed(d).replace(/\.?0+$/, "");
+  return a >= 1e12 ? t(n / 1e12, 2) + "t" : a >= 1e9 ? t(n / 1e9, 2) + "b" : a >= 1e6 ? t(n / 1e6, 2) + "m" : a >= 1e3 ? t(n / 1e3, 1) + "k" : String(Math.round(n));
+}
+function dur(s) {
+  if (s == null || !Number.isFinite(Number(s))) return "—";
+  s = Math.max(0, Math.round(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
+}
+function ago(ms) {
+  if (!ms) return "—";
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  return s < 60 ? "just now" : s < 3600 ? Math.floor(s / 60) + "m ago" : s < 86400 ? Math.floor(s / 3600) + "h ago" : Math.floor(s / 86400) + "d ago";
+}
+function say(t, ok) { $("msg").textContent = t || ""; $("msg").className = "msg " + (ok ? "ok" : "bad"); }
+
+function card(r) {
+  const d = r.data || {}, f = d.fit || {}, a = d.activity;
+  const pct = Number(f.pct);
+  const cls = !Number.isFinite(pct) ? "" : pct >= 90 ? "hi" : pct >= 75 ? "mid" : "lo";
+  const [stl, stc] = STATUS[r.status] || STATUS.new;
+  const checks = (f.checks || []).map(c => `<span class="pill ${c.state === "pass" ? "g" : c.state === "near" ? "y" : c.state === "fail" ? "r" : ""}">${esc(c.label)} ${esc(c.value)}</span>`).join("");
+  const lifeAvg = d.lifeAvgSec;
+  const stat = (label, v) => `<div><b>${v}</b><span>${label}</span></div>`;
+  const stats = [
+    stat("Level", d.level == null ? "—" : esc(d.level)),
+    stat("Battle stats", d.bs == null ? "—" : esc(d.bsHuman || big(d.bs)) + " est"),
+    stat("RW hits", big(d.rwHits)),
+    stat("Last seen", d.lastActionTs ? ago(d.lastActionTs * 1000) : "—"),
+    stat("Xanax", big(d.xan)), stat("Refills", big(d.refills)), stat("Attacks won", big(d.attacksWon)),
+    stat("Streak", d.streak == null ? "—" : `${esc(d.streak)}d${d.bestStreak ? ` <small style="color:var(--sub)">(best ${esc(d.bestStreak)})</small>` : ""}`),
+    stat("Avg / day", dur(lifeAvg)), stat("Account age", d.age == null ? "—" : big(d.age) + "d"),
+  ].join("");
+  let act;
+  if (a && Array.isArray(a.daily) && a.daily.length) {
+    const known = a.daily.filter(v => v != null);
+    const max = Math.max(4 * 3600, ...known);
+    // oldest day on the left, last 24 h on the right
+    const bars = a.daily.slice().reverse().map((v, i, arr) => {
+      const k = arr.length - 1 - i, lab = k === 0 ? "Last 24h" : `${k}–${k + 1}d ago`;
+      if (v == null) return `<i class="na" title="${lab}: n/a"></i>`;
+      return `<i class="${v < ACTIVE_DAY_S ? "idle" : ""}" title="${lab}: ${dur(v)}" style="height:${Math.max(6, Math.round(v / max * 100))}%"></i>`;
+    }).join("");
+    const weeks = (a.weekly || []).map(v => v == null ? "—" : v < WEAK_WEEK_S ? `<span class="warn">${dur(v)}</span>` : dur(v)).join(" · ");
+    const flags = [];
+    if (a.longestIdle >= 2) flags.push(`${a.longestIdle} idle days in a row`);
+    if (a.weakWeeks) flags.push(`${a.weakWeeks} inactive week${a.weakWeeks > 1 ? "s" : ""}`);
+    act = `<div class="act"><div>Last 7 days: <b>${esc(a.activeDays)}/${esc(a.sampled)}</b> active · avg ${dur(a.avgSec)}/day</div>
+      <div class="bars">${bars}</div><div class="axis"><span>7d ago</span><span>today</span></div>
+      <div>Weekly (newest first): ${weeks}</div>${flags.length ? `<div class="warn">⚠ ${esc(flags.join(" · "))}</div>` : ""}</div>`;
+  } else act = `<div class="act" style="color:var(--sub)">Activity not checked.</div>`;
+  const mine = ME && Number(r.claim_pid) === Number(ME.id);
+  const claim = r.claim_pid
+    ? `<span class="who">Claimed by <b>${mine ? "you" : esc(r.claim_name)}</b> · ${ago(r.claim_at)}</span>
+       ${mine ? `<button class="b alt" data-a="unclaim">Release</button>` : `<button class="b alt" data-a="claim" data-take="${esc(r.claim_name)}">Take over</button>`}`
+    : `<span class="who" style="color:var(--sub)">Nobody's handling this yet</span><button class="b" data-a="claim">Claim</button>`;
+  const opts = Object.keys(STATUS).map(k => `<option value="${k}"${k === r.status ? " selected" : ""}>${STATUS[k][0]}</option>`).join("");
+  return `<div class="card rc ${cls}" data-pid="${esc(r.pid)}">
+    <div class="rh"><a class="nm" href="https://www.torn.com/profiles.php?XID=${encodeURIComponent(r.pid)}" target="_blank" rel="noopener">${esc(r.name || "Player " + r.pid)}</a>
+      <span class="id">[${esc(r.pid)}]</span><span class="pill ${stc}">${stl}</span>
+      <span class="pill fit">${Number.isFinite(pct) ? Math.round(pct) + "% fit" : "fit ?"}${f.total ? ` · ${esc(f.pass)}/${esc(f.total)}` : ""}</span></div>
+    <div class="chk">${checks}</div>
+    <div class="st">${stats}</div>
+    ${act}
+    <div class="meta">Sent by ${esc(r.sent_by || "—")} · ${ago(r.updated)}${d.checkedAt ? ` · stats checked ${ago(d.checkedAt)}` : ""}${r.status_by && r.status !== "new" ? ` · ${esc(stl)} set by ${esc(r.status_by)} ${ago(r.status_at)}` : ""}</div>
+    <div class="ctl">${claim}
+      <select data-a="status" aria-label="Status">${opts}</select></div>
+    <div class="nt"><textarea maxlength="500" placeholder="Shared note (every leader sees it)">${esc(r.note || "")}</textarea>
+      ${r.note_by ? `<div class="by">Note by ${esc(r.note_by)} · ${ago(r.note_at)}</div>` : ""}
+      <div class="row"><a class="b" href="https://www.torn.com/messages.php#/p=compose&XID=${encodeURIComponent(r.pid)}" target="_blank" rel="noopener">✉ Message</a>
+        <button class="b alt" data-a="note">Save note</button><button class="b alt" data-a="remove">Remove</button></div></div>
+  </div>`;
+}
+
+function render() {
+  document.querySelectorAll("#fs button").forEach(b => b.classList.toggle("on", b.dataset.s === F.s));
+  $("fc").value = F.c; $("so").value = F.so;
+  let list = R.filter(r =>
+    (F.s === "all" || (F.s === "open" ? (r.status === "new" || r.status === "contacted") : r.status === F.s)) &&
+    (F.c === "any" || (F.c === "mine" ? ME && Number(r.claim_pid) === Number(ME.id) : !r.claim_pid)));
+  const fit = r => Number((r.data && r.data.fit && r.data.fit.pct)) || 0;
+  const bs = r => Number(r.data && r.data.bs) || 0;
+  list.sort(F.so === "new" ? (a, b) => b.updated - a.updated
+          : F.so === "bs" ? (a, b) => bs(b) - bs(a) || fit(b) - fit(a)
+          : (a, b) => fit(b) - fit(a) || bs(b) - bs(a));
+  $("cnt").textContent = `${list.length} of ${R.length}`;
+  $("list").innerHTML = list.length ? list.map(card).join("")
+    : `<div class="card empty">${R.length ? "Nobody in this view." : "No recruits yet. Leaders send them from the Torn Recruit Scout script."}</div>`;
+}
+
+async function load(quiet) {
+  try {
+    const r = await fetch("rc/list.json", {cache: "no-store", credentials: "same-origin"});
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "couldn't load");
+    R = j.recruits || []; ME = j.me || null;
+    render();
+    if (!quiet) say("");
+  } catch (e) { say("Couldn't load the recruits: " + e.message); }
+}
+
+async function act(pid, action, extra) {
+  try {
+    const r = await fetch("rc/update", {method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json", "X-HB-Save": "1"}, body: JSON.stringify(Object.assign({pid, action}, extra || {}))});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "save failed (" + r.status + ")");
+    say("Saved.", true);
+  } catch (e) { say(e.message); }
+  load(true);
+}
+
+$("list").addEventListener("click", e => {
+  const b = e.target.closest("button[data-a]"); if (!b) return;
+  const c = b.closest("[data-pid]"), pid = Number(c.dataset.pid), a = b.dataset.a;
+  if (a === "claim" && b.dataset.take && !confirm(`Take this recruit over from ${b.dataset.take}?`)) return;
+  if (a === "remove" && !confirm("Remove this recruit from the list? The script won't add them back automatically.")) return;
+  if (a === "note") return act(pid, "note", {note: c.querySelector("textarea").value});
+  act(pid, a);
+});
+$("list").addEventListener("change", e => {
+  const s = e.target.closest("select[data-a='status']"); if (!s) return;
+  act(Number(s.closest("[data-pid]").dataset.pid), "status", {status: s.value});
+});
+const saveF = () => { try { localStorage.setItem("hb_rc_filters", JSON.stringify(F)); } catch (e) {} render(); };
+document.querySelectorAll("#fs button").forEach(b => b.addEventListener("click", () => { F.s = b.dataset.s; saveF(); }));
+$("fc").addEventListener("change", () => { F.c = $("fc").value; saveF(); });
+$("so").addEventListener("change", () => { F.so = $("so").value; saveF(); });
+$("rf").addEventListener("click", () => load());
+// another leader may have claimed / updated something meanwhile: reload when the page comes back into view
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) load(true);
+});
+load();
+</script>
+</body></html>

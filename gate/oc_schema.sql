@@ -121,3 +121,33 @@ CREATE TABLE IF NOT EXISTS cw_att (
   first_in    INTEGER,                  -- epoch s: first time in the queue during the shift
   updated     INTEGER NOT NULL          -- epoch ms
 );
+
+-- RECRUITMENT (Nov 11 2026, user): recruits shared from the Torn Recruit Scout userscript to the Leaders Hub's
+-- Recruitment page (leaders' recruitment.html, worker.js rcScriptRoute / rcLeaderRoute). One row per recruit.
+--   data       JSON scouting snapshot as the script sent it (level, battle-stat estimate, ranked war hits, last action,
+--              activity, which checks passed ...) - replaced on every push; claim / status / note are never touched by a push
+--   claim_*    the leader handling this recruit ("I'm messaging them") so leaders don't double-message
+--   status     'new' | 'contacted' | 'joined' | 'declined' (+ who set it, when)
+--   note       one shared note every leader sees (+ who wrote it, when)
+--   removed_at a leader removed it: hidden from the page, and auto-sends from the script skip it (a MANUAL send from
+--              the script brings it back). Removed rows are deleted for good after 180 days.
+CREATE TABLE IF NOT EXISTS rc_recruit (
+  pid         INTEGER PRIMARY KEY,      -- the recruit's Torn id
+  name        TEXT,
+  data        TEXT    NOT NULL,         -- JSON
+  sent_by     TEXT,                     -- leader who last sent it ("Name [id]")
+  first_sent  INTEGER NOT NULL,         -- epoch ms
+  updated     INTEGER NOT NULL,         -- epoch ms of the last push
+  status      TEXT    NOT NULL DEFAULT 'new',
+  status_by   TEXT,
+  status_at   INTEGER,
+  claim_pid   INTEGER,
+  claim_name  TEXT,
+  claim_at    INTEGER,
+  note        TEXT    NOT NULL DEFAULT '',
+  note_by     TEXT,
+  note_at     INTEGER,
+  removed_at  INTEGER,
+  removed_by  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rc_recruit_upd ON rc_recruit (removed_at, updated);

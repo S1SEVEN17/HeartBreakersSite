@@ -20,6 +20,8 @@
 //                     on every call (not the pass cookie). See OC OPTIMIZER below.
 //   /oc/plan          OC Optimizer: the crimes leaders turned off + the caller's OWN assigned role (key-checked)
 //   /l/oc/*           leaders' OC Management page: settings, deployed plan, shared rates (pass cookie, leaders)
+//   /rc/push          Torn Recruit Scout script: leaders send scouted recruits (client-reported identity, no key)
+//   /l/rc/*           leaders' Recruitment page: the shared recruits - claim, status, notes, remove (pass cookie, leaders)
 //
 // Nothing from GitHub shows through: GitHub's response headers are dropped (only type / caching headers are
 // passed on) and GitHub's own error pages are replaced by ours, so visitors only ever see this address.
@@ -214,6 +216,8 @@ export default {
     if (p === "/oc/history/stats") return ocHistStats(env);
     // Faction Chain Watch script (client-reported identity, no key) -> the ChainRoom Durable Object (chainroom.js)
     if (p.startsWith("/cw/")) return cwRoute(req, env, url);
+    // Torn Recruit Scout script (client-reported identity, no key; leaders only) -> the Recruitment page (RECRUITMENT below)
+    if (p.startsWith("/rc/")) return rcScriptRoute(env, req, p);
     const area = p.startsWith("/m/") || p === "/m" ? "m" : p.startsWith("/l/") || p === "/l" ? "l" : null;
     // public images at the site root (faction description banner) - one level only, images only
     if (!area && /^\/[\w.-]+$/.test(p) && PUBLIC_EXT.test(p)) return proxy(env, "", p.slice(1), req, false);
@@ -252,6 +256,8 @@ export default {
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
     if (area === "l" && rest.startsWith("cw/")) return cwLeaderRoute(env, req, who, rest.slice(3));
+    // leaders: Recruitment page (recruitment.html) - recruits shared by the Torn Recruit Scout script (D1 rc_recruit)
+    if (area === "l" && rest.startsWith("rc/")) return rcLeaderRoute(env, req, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
     if (area === "l" && rest === "readiness.json") return readiness(env, ctx);
     // leaders' tools save through here (no GitHub token on their devices) - see ghProxy
@@ -1890,6 +1896,164 @@ async function scriptsRoute(env, req, url, who) {
     const r = await env.OC_DB.prepare("INSERT INTO hub_script (name, summary, description, install_url, version, created, updated, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(v.name, v.summary, v.description, v.install_url, v.version, now, now, String(who.name || "")).run();
     return Response.json({ok: true, id: r && r.meta ? r.meta.last_row_id : null}, H);
+  }
+  return bad("not allowed", 405);
+}
+
+// ======================================================================================================
+// RECRUITMENT (Nov 11 2026, user; project doc claude/recruitment-hub-contract.md). The Torn Recruit Scout userscript
+// scouts players on torn.com with the leader's OWN key (never sent here) and shares promising recruits with the Leaders
+// Hub's Recruitment page (recruitment.html), where every leader sees them and can claim, set a status, keep a shared
+// note, or remove them.
+//   Script (runs on torn.com; identity is client-reported like /oc/* and /cw/* - the Hub trusts {pid, faction}):
+//     POST /rc/push {pid, faction, recruits: [{pid, name, data, manual}]}   at most RC_MAX_PUSH per call
+//       - LEADERS ONLY (the user's rule): pid must be a current member whose position (the Hub's own db/members.json,
+//         never the client) is a leader position. Else 403.
+//       - Upsert per recruit: the scouting snapshot (data, cleaned by rcClean) + who sent it. A push never touches the
+//         claim / status / note leaders set on the Hub.
+//       - A recruit a leader REMOVED stays removed when the script auto-sends (manual: false); a MANUAL send from the
+//         script ("Send to Hub" on the card) brings it back as 'new'.
+//       -> {ok, added, updated, removed: [pids skipped because a leader removed them], full: n skipped (list full)}
+//   Leaders (pass cookie, /l/rc/...):
+//     GET  /l/rc/list.json  -> {ok, recruits: [...], me: {id, name}}   (removed ones left out)
+//     POST /l/rc/update (X-HB-Save: 1) {pid, action, status?, note?}
+//          action: claim (take it - also takes it over from another leader) | unclaim | status (new|contacted|joined|declined)
+//                  | note (shared, max RC_NOTE_MAX characters) | remove
+// No Torn call anywhere here. Storage: D1 rc_recruit (gate/oc_schema.sql).
+// ======================================================================================================
+const RC_STATUS = ["new", "contacted", "joined", "declined"];
+const RC_MAX_PUSH = 100, RC_MAX_ROWS = 2000, RC_NOTE_MAX = 500;
+const RC_PURGE_MS = 180 * 864e5;         // removed recruits are deleted for good after 180 days
+
+// Only the fields the Recruitment page shows, with sane types and lengths - nothing else from the client is stored.
+function rcClean(d) {
+  d = d && typeof d === "object" ? d : {};
+  const n = v => (v == null || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
+  const s = (v, max) => v == null ? "" : String(v).slice(0, max);
+  const arr = (a, len) => Array.isArray(a) ? a.slice(0, len).map(n) : [];
+  const a = d.activity && typeof d.activity === "object" ? d.activity : null;
+  const f = d.fit && typeof d.fit === "object" ? d.fit : {};
+  const STATES = ["pass", "near", "fail", "unknown"];
+  return {
+    level: n(d.level), age: n(d.age), factionId: n(d.factionId), factionName: s(d.factionName, 60),
+    lastActionTs: n(d.lastActionTs), rwHits: n(d.rwHits), xan: n(d.xan), refills: n(d.refills), attacksWon: n(d.attacksWon),
+    streak: n(d.streak), bestStreak: n(d.bestStreak), lifeAvgSec: n(d.lifeAvgSec),
+    bs: n(d.bs), bsHuman: s(d.bsHuman, 20), ff: n(d.ff),
+    activity: a ? {daily: arr(a.daily, 7), weekly: arr(a.weekly, 4), activeDays: n(a.activeDays), sampled: n(a.sampled),
+                   avgSec: n(a.avgSec), longestIdle: n(a.longestIdle), weakWeeks: n(a.weakWeeks), at: n(a.at)} : null,
+    fit: {pass: n(f.pass), total: n(f.total), pct: n(f.pct),
+          checks: (Array.isArray(f.checks) ? f.checks : []).slice(0, 12).map(c => ({
+            key: s(c && c.key, 12), label: s(c && c.label, 20), value: s(c && c.value, 40),
+            state: STATES.includes(c && c.state) ? c.state : "unknown"}))},
+    checkedAt: n(d.checkedAt), ver: s(d.ver, 12),
+  };
+}
+
+async function rcScriptRoute(env, req, p) {
+  if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
+  if (p !== "/rc/push") return ocErr(404, "not found");
+  if (req.method !== "POST") return ocErr(405, "method not allowed");
+  if (!env.OC_DB) return ocErr(503, "Hub storage isn't set up yet");
+  let b; try { b = await req.json(); } catch (e) { return ocErr(400, "body must be JSON"); }
+  if (!b || typeof b !== "object") return ocErr(400, "body must be JSON");
+  const pid = Number(b.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return ocErr(400, "pid must be your Torn player id");
+  if (String(b.faction) !== String(env.FACTION_ID)) return ocErr(403, "Heart Breakers members only");
+  // leader rights from the Hub's own member list - never from the client
+  const members = await currentMembers(env).catch(() => null);
+  if (!members) return ocErr(503, "the member list isn't available right now - try again shortly");
+  const me = members.get(pid) || members.get(String(pid));
+  if (!me) return ocErr(403, "not on the Heart Breakers member list");
+  if (!isLeader(env, me.position)) return ocErr(403, "only leaders can send recruits to the Hub");
+  const list = Array.isArray(b.recruits) ? b.recruits : [];
+  if (list.length > RC_MAX_PUSH) return ocErr(400, `send at most ${RC_MAX_PUSH} recruits at a time`);
+  const now = Date.now(), by = `${me.name} [${pid}]`;
+  await env.OC_DB.prepare("DELETE FROM rc_recruit WHERE removed_at IS NOT NULL AND removed_at < ?").bind(now - RC_PURGE_MS).run().catch(() => {});
+  const items = [];
+  const seen = new Set();
+  for (const r of list) {
+    const rid = Number(r && r.pid);
+    if (!Number.isInteger(rid) || rid <= 0 || seen.has(rid)) continue;
+    seen.add(rid);
+    items.push({pid: rid, name: String((r && r.name) || "").slice(0, 40), data: JSON.stringify(rcClean(r && r.data)), manual: !!(r && r.manual)});
+  }
+  if (!items.length) return ocJson({ok: true, added: 0, updated: 0, removed: [], full: 0});
+  const {results} = await env.OC_DB.prepare(`SELECT pid, removed_at FROM rc_recruit WHERE pid IN (${items.map(() => "?").join(",")})`)
+    .bind(...items.map(x => x.pid)).all();
+  const have = new Map((results || []).map(r => [Number(r.pid), r]));
+  const cnt = await env.OC_DB.prepare("SELECT COUNT(*) AS n FROM rc_recruit").first();
+  let room = RC_MAX_ROWS - Number((cnt && cnt.n) || 0);
+  const ops = [], removed = [];
+  let added = 0, updated = 0, full = 0;
+  for (const x of items) {
+    const cur = have.get(x.pid);
+    if (cur && cur.removed_at != null && !x.manual) { removed.push(x.pid); continue; }   // a leader removed it
+    if (!cur) {
+      if (room <= 0) { full++; continue; }
+      room--; added++;
+      ops.push(env.OC_DB.prepare("INSERT INTO rc_recruit (pid, name, data, sent_by, first_sent, updated, status) VALUES (?, ?, json(?), ?, ?, ?, 'new')")
+        .bind(x.pid, x.name, x.data, by, now, now));
+    } else if (cur.removed_at != null) {                    // manual re-send of a removed recruit: back as new
+      updated++;
+      ops.push(env.OC_DB.prepare("UPDATE rc_recruit SET name = ?, data = json(?), sent_by = ?, updated = ?, removed_at = NULL, removed_by = NULL, " +
+        "status = 'new', status_by = ?, status_at = ?, claim_pid = NULL, claim_name = NULL, claim_at = NULL WHERE pid = ?")
+        .bind(x.name, x.data, by, now, by, now, x.pid));
+    } else {                                                // scouting data only - claim / status / note untouched
+      updated++;
+      ops.push(env.OC_DB.prepare("UPDATE rc_recruit SET name = ?, data = json(?), sent_by = ?, updated = ? WHERE pid = ?")
+        .bind(x.name, x.data, by, now, x.pid));
+    }
+  }
+  if (ops.length) await env.OC_DB.batch(ops);
+  return ocJson({ok: true, added, updated, removed, full});
+}
+
+async function rcLeaderRoute(env, req, who, sub) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  const bad = (error, status) => Response.json({ok: false, error}, {status: status || 400});
+  if (!env.OC_DB) return bad("Hub storage isn't set up yet", 503);
+  if (req.method === "GET" && sub === "list.json") {
+    let rows = [];
+    try {
+      rows = (await env.OC_DB.prepare("SELECT pid, name, data, sent_by, first_sent, updated, status, status_by, status_at, " +
+        "claim_pid, claim_name, claim_at, note, note_by, note_at FROM rc_recruit WHERE removed_at IS NULL ORDER BY updated DESC LIMIT ?")
+        .bind(RC_MAX_ROWS).all()).results || [];
+    } catch (e) { rows = []; }                                // table not there yet (first deploy)
+    const recruits = rows.map(r => { let d = {}; try { d = JSON.parse(r.data); } catch (e) {} return Object.assign({}, r, {data: d}); });
+    return Response.json({ok: true, recruits, me: {id: who.id, name: who.name}}, H);
+  }
+  if (req.method === "POST" && sub === "update") {
+    // a custom header can't be sent cross-site without CORS approval -> blocks other sites posting with the cookie
+    if (req.headers.get("X-HB-Save") !== "1") return bad("Missing header");
+    let b; try { b = await req.json(); } catch (e) { return bad("bad request"); }
+    const pid = Number(b && b.pid);
+    if (!Number.isInteger(pid) || pid <= 0) return bad("Which recruit?");
+    const now = Date.now(), by = `${who.name} [${who.id}]`;
+    let st;
+    switch (b.action) {
+      case "claim":
+        st = env.OC_DB.prepare("UPDATE rc_recruit SET claim_pid = ?, claim_name = ?, claim_at = ? WHERE pid = ? AND removed_at IS NULL")
+          .bind(Number(who.id), String(who.name || ""), now, pid); break;
+      case "unclaim":
+        st = env.OC_DB.prepare("UPDATE rc_recruit SET claim_pid = NULL, claim_name = NULL, claim_at = NULL WHERE pid = ? AND removed_at IS NULL").bind(pid); break;
+      case "status":
+        if (!RC_STATUS.includes(b.status)) return bad("Status must be new, contacted, joined or declined.");
+        st = env.OC_DB.prepare("UPDATE rc_recruit SET status = ?, status_by = ?, status_at = ? WHERE pid = ? AND removed_at IS NULL")
+          .bind(b.status, by, now, pid); break;
+      case "note": {
+        const note = String(b.note == null ? "" : b.note).replace(/\r\n?/g, "\n").trim();
+        if (note.length > RC_NOTE_MAX) return bad(`Notes can be at most ${RC_NOTE_MAX} characters.`);
+        st = env.OC_DB.prepare("UPDATE rc_recruit SET note = ?, note_by = ?, note_at = ? WHERE pid = ? AND removed_at IS NULL")
+          .bind(note, note ? by : null, note ? now : null, pid); break;
+      }
+      case "remove":
+        st = env.OC_DB.prepare("UPDATE rc_recruit SET removed_at = ?, removed_by = ? WHERE pid = ? AND removed_at IS NULL").bind(now, by, pid); break;
+      default:
+        return bad("Unknown action.");
+    }
+    const r = await st.run();
+    if (!(r && r.meta && r.meta.changes)) return bad("That recruit isn't on the list any more.", 404);
+    return Response.json({ok: true}, H);
   }
   return bad("not allowed", 405);
 }
