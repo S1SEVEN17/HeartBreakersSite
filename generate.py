@@ -5361,7 +5361,7 @@ REL_MIN_HITS = 5
 REL_MIN_WARS = 3
 REL_MIN_CHAINS = 2
 REL_W_WAR, REL_W_CHAIN, REL_W_ACT = 55, 25, 20
-REL_RECEIPT_LAST = 5    # the receipt's "last wars" list
+REL_RECEIPT_LAST = 10   # the receipt's "last wars" list (user, Nov 11 2026: last 10)
 
 
 def leave_periods(cfg: dict = None) -> dict:
