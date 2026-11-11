@@ -68,6 +68,27 @@ jobs:
             "SELECT COUNT(*) AS n, SUM(CASE WHEN end_at <= unixepoch() THEN 1 ELSE 0 END) AS due, MAX(tries) AS tries, (SELECT COUNT(*) FROM cw_att) AS att FROM cw_ping" > ping.json 2> /dev/null \
             || { echo "cw_ping table not there yet"; exit 0; }
           python3 -c "import json; d=json.load(open('ping.json')); r=(d[0] if isinstance(d,list) else d)['results'][0]; print(f\"shift pings kept: {r['n']} (slot ended, awaiting delete: {r['due'] or 0}, max tries: {r['tries'] or 0}); shift attendance rows: {r['att']}\")"
+      - name: Torn chain timer fields (numbers only - timeout vs end vs server clock)
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+        run: |
+          # API: Heart Breakers Hub - chain timer check (faction/chain, key in the Authorization header, never printed)
+          for i in 1 2 3; do
+            curl -s -D h.txt -H "Authorization: ApiKey ${TORN_API_KEY}" \
+              "https://api.torn.com/v2/faction/chain?comment=Heart%20Breakers%20Hub" -o c.json
+            python3 - <<'PY'
+          import json, email.utils, time
+          d = json.load(open("c.json")); c = d.get("chain") or {}
+          hdr = {l.split(":",1)[0].lower(): l.split(":",1)[1].strip() for l in open("h.txt") if ":" in l}
+          srv = int(email.utils.parsedate_to_datetime(hdr["date"]).timestamp()) if "date" in hdr else None
+          print("chain fields:", sorted(c.keys()), "| current", c.get("current"), "timeout", c.get("timeout"),
+                "start", c.get("start"), "end", c.get("end"), "cooldown", c.get("cooldown"),
+                "| server now", srv, "| local now", int(time.time()),
+                "| end - server now", (c.get("end") - srv) if (c.get("end") and srv) else None,
+                "| cache-control", hdr.get("cache-control"), "age", hdr.get("age"), "error" if d.get("error") else "")
+          PY
+            sleep 4
+          done
       - name: Chain Watch saved settings (alert numbers only)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
