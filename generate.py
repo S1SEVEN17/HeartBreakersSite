@@ -4029,7 +4029,6 @@ def header_default() -> dict:
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🏠 Leaders Hub", "L:index.html"),
                 L("🤝 Recruitment", "L:recruitment.html"),          # Nov 11 2026: Torn Recruit Scout -> shared recruits
-                L("🔗 Link Torn script", "L:script-link.html"),     # Nov 11 2026: Heart Breakers Hub userscript
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
                                                         L("⚔️ War readiness", "L:readiness.html"),
                                                         L("⛓️ Chain Watch", "L:chainwatch.html"),
@@ -4898,7 +4897,7 @@ def homepage_default() -> dict:
         ("🧮", "Payout calculator", "L:payout.html"),
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
         ("⚔️", "War readiness", "L:readiness.html"), ("⛓️", "Chain Watch", "L:chainwatch.html"),
-        ("🤝", "Recruitment", "L:recruitment.html"), ("🔗", "Link Torn script", "L:script-link.html"),
+        ("🤝", "Recruitment", "L:recruitment.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
         ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
@@ -5042,7 +5041,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
-             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"), ("Recruitment", "L:recruitment.html"), ("Link Torn script", "L:script-link.html"),
+             ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"), ("Recruitment", "L:recruitment.html"),
              ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
@@ -6044,8 +6043,11 @@ def write_optin_pages(out: Path):
         # Recruitment (Nov 11 2026): recruits shared by the Torn Recruit Scout script - claim / status / notes / remove
         # (gatekeeper /l/rc/*, D1 rc_recruit; contract claude/recruitment-hub-contract.md)
         (lout / "recruitment.html").write_text(page("recruitment.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
-        # Link Torn script (Nov 11 2026): link code for the "Heart Breakers Hub" userscript (gatekeeper /l/sx/*)
-        (lout / "script-link.html").write_text(page("script_link.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
+        # Link Torn script page REMOVED (Nov 11 2026): the "Heart Breakers Hub" userscript now signs in with the
+        # leader's own API key (kept on their device; the Hub gets only the client-reported identity - gatekeeper
+        # /sx op "hello"). Its old address goes to the Leaders Hub.
+        (lout / "script-link.html").write_text('<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=index.html">'
+                                               '<title>Leaders Hub</title>', encoding="utf-8")
 
 
 def optin_saved():
