@@ -1833,7 +1833,7 @@ async function cwReading(env, req, who) {
   // `end` = Torn's absolute expiry (epoch s) - exact even from Torn's cache; `timeout` is the fallback (Nov 10 2026)
   const reading = {pid: Number(who.id), current: n(b.current), max: n(b.max), timeout: n(b.timeout), end: n(b.end), cooldown: n(b.cooldown),
                    modifier: b.modifier == null ? null : n(b.modifier)};
-  if (!(reading.current > 0 && ((reading.timeout > 0 && reading.timeout <= 300) || reading.end > 1e9))) return Response.json({ok: true, used: false});
+  if (!(reading.current > 0 && ((reading.timeout > 0 && reading.timeout <= 300) || (reading.end > 1e9 && reading.end * 1000 <= Date.now() + 303000)))) return Response.json({ok: true, used: false});
   const r = await cwStub(env).fetch("https://do/reading", {method: "POST", body: JSON.stringify(reading)});
   return Response.json(await r.json(), {headers: {"Cache-Control": "no-store"}});
 }

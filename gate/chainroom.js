@@ -83,6 +83,10 @@ const CONFIRM_READ_GAP_MS = 10000;
 // by a member's script - live, no API call. A higher count from a page is taken straight away; for this long after
 // a page reading a LOWER count from a (cached) Torn API read is ignored while the page timer says the chain's alive.
 const PAGE_TRUST_MS = 45000;
+// Torn: every attack resets the chain timer to 5 minutes, and 5 minutes is the most it can ever show (user, Nov 11
+// 2026). Every timer the Hub accepts is capped at this; readings past it (+ a little clock slack) are rejected.
+const CHAIN_TIMER_MAX_MS = 300000;
+const CHAIN_TIMER_SLACK_MS = 3000;
 const PAGE_MAX_JUMP = 10;                  // a page reading can move the count up by at most this much at once        // a higher count from a script -> one confirming Hub read, at most every 10 s
 const RECRUIT_DAYS = 3;
 // HUB-SENT ALERTS (Nov 2026, user): the Hub times every chain alert itself (it knows the timer to the second) and
@@ -687,8 +691,10 @@ export class ChainRoom {
     const now = Date.now();
     const cur = Math.floor(Number(msg.current) || 0);
     let end = Number(msg.end_ms) || 0;
-    if (!(end > now - 5000 && end <= now + 305000)) end = Number(msg.remaining_ms) > 0 ? now + Number(msg.remaining_ms) : 0;
-    if (!(end > now && end <= now + 305000)) end = 0;
+    const cap = now + CHAIN_TIMER_MAX_MS + CHAIN_TIMER_SLACK_MS;
+    if (!(end > now - 5000 && end <= cap)) end = Number(msg.remaining_ms) > 0 ? now + Number(msg.remaining_ms) : 0;
+    if (!(end > now && end <= cap)) end = 0;
+    if (end) end = Math.min(end, now + CHAIN_TIMER_MAX_MS);  // never more than 5 minutes
     const c = this.mem.chain;
     if (cur <= 0 || !end) {                              // page shows no live chain / no timer: let Torn's API decide
       if (c && c.current > 0) this.requestConfirmRead();
@@ -727,9 +733,10 @@ export class ChainRoom {
    * ------------------------------------------------------------------------------------------------------------- */
   chainExpiry(chain, now) {
     const end = Number(chain && chain.end) || 0;
-    if (end > 1e9 && end * 1000 > now - 60000 && end * 1000 <= now + 330000) return end * 1000;
+    if (end > 1e9 && end * 1000 > now - 60000 && end * 1000 <= now + CHAIN_TIMER_MAX_MS + CHAIN_TIMER_SLACK_MS)
+      return Math.min(end * 1000, now + CHAIN_TIMER_MAX_MS);
     const timeout = Number(chain && chain.timeout) || 0;
-    return timeout > 0 ? now + timeout * 1000 : 0;
+    return timeout > 0 && timeout <= 300 ? now + timeout * 1000 : 0;   // 5 minutes at most
   }
 
   /* ---- CHAIN: Hub-sourced reading (authoritative for `current`) ---------- */
