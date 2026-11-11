@@ -417,7 +417,8 @@ export class ChainRoom {
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
         break;
       case "hitting": {
-        // "I'm hitting" also PAUSES every chain alert for everyone until a hit lands or the flag runs out (20 s)
+        // "I'm hitting" also PAUSES alerts 1 & 2 for everyone until a hit lands or the flag runs out (20 s) - alert 3
+        // and Panic still fire (Nov 10 2026, user)
         const q = this.mem.queue[pid];
         if (q) { q.hitting_until = msg.on ? Date.now() + HITTING_FLAG_MS : 0; changed = true; }
         if (q && !msg.on) await this.ensureAlertAlarm();   // paused alerts may be due straight away
@@ -1024,8 +1025,9 @@ export class ChainRoom {
    *           firstAlertPrimaryOnly, else (and stages 2..3) to everyone in the queue who can act
    *   up      "you're up" - once, to the member who becomes UP
    *   (backup - removed Nov 10 2026, user: the normal alerts suffice; alert 2 goes to #1 and #2)
-   * Nothing below minChain. Paused (held, not dropped) while anyone's "I'm hitting" flag is on - when it runs out
-   * without a hit, the alerts that came due are sent at once. Away / can't-attack members get no timer alerts.
+   * Nothing below minChain. Alerts 1 & 2 are paused (held, not dropped) while anyone's "I'm hitting" flag is on -
+   * when it runs out without a hit, the most urgent one that came due is sent; ALERT 3 AND PANIC ARE NEVER HELD
+   * (Nov 10 2026, user). Away / can't-attack members get no timer alerts.
    * Message: {t:"alert", kind:"timer"|"up"|"backup"|"test", stage, seconds (threshold), remaining_ms, expires_at,
    *           chain, now, paused?:false} - sent only to the members it's for (sync devices: held for their next sync).
    * ------------------------------------------------------------------------------------------------------------- */
@@ -1048,10 +1050,14 @@ export class ChainRoom {
     const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
     if (!c || !(c.current > 0) || !c.expires_at || c.current < (Number(cfg.minChain) || 0)) return null;
     const p = this.alertPausedBy(now);
-    if (p) return p.until + 50;                            // resume check when the "I'm hitting" flag runs out
-    const lap = this.alertLap();
+    const lap = this.alertLap(), st = this.alertStages();
     let t = null;
-    for (const s of this.alertStages()) if (!lap.sent.includes(s.stage)) { const at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS; if (t == null || at < t) t = at; }
+    st.forEach((s, i) => {
+      if (lap.sent.includes(s.stage)) return;
+      let at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS;
+      if (p && i < st.length - 1) at = Math.max(at, p.until + 50);   // alerts 1 & 2 wait for the pause to end
+      if (t == null || at < t) t = at;
+    });
     for (const s of PANIC_STAGES) if (!(lap.panic || []).includes(s.stage)) { const at = c.expires_at - s.sec * 1000 - ALERT_EARLY_MS; if (t == null || at < t) t = at; }
     return t != null && t < c.expires_at ? Math.max(t, now) : null;
   }
@@ -1075,14 +1081,17 @@ export class ChainRoom {
         remaining_ms: c.expires_at - now, reason: turn.reason, now });
     }
     if (c.current < (Number(cfg.minChain) || 0) || c.expires_at <= now) return;
-    if (this.alertPausedBy(now)) return;                   // "I'm hitting": held until a hit lands or it runs out
+    // "I'm hitting" PAUSE SCOPE (idle/offline addendum item 6 + alerts addendum UPDATE 6, Nov 10 2026, user): the
+    // pause holds ONLY alerts 1 & 2 (until a hit lands or the flag runs out). Alert 3 and Panic fire regardless -
+    // a claimed hit isn't a landed hit.
+    const paused = !!this.alertPausedBy(now);
     const lap = this.alertLap(), left = c.expires_at - now;
     // who a timer alert goes to: queued members who can act (not away, not in hospital / jail / flying) - INCLUDING
     // idle / offline (they get alert 3 and Panic as a last resort - idle/offline addendum §4)
     const able = this.orderedQueue().filter((x) => x.can_hit && !x.away).map((x) => x.pid);
     const ableActive = this.orderedQueue().filter((x) => x.can_hit && !x.away && x.presence === "active").map((x) => x.pid);
     // HUB-DRIVEN PANIC (idle/offline addendum §6): {t:"panic"} at 30 s, then 15 s left, once each per lap, to the
-    // alert-3 set; held by "I'm hitting" (above) and below minChain; the most urgent stage wins after a pause.
+    // alert-3 set; NOT held by "I'm hitting"; nothing below minChain; if both came due at once only the 15 s one goes.
     lap.panic = lap.panic || [];
     for (const p of PANIC_STAGES) {
       if (lap.panic.includes(p.stage) || left > p.sec * 1000 + ALERT_EARLY_MS) continue;
@@ -1090,12 +1099,15 @@ export class ChainRoom {
       if (PANIC_STAGES.some((x) => !lap.panic.includes(x.stage) && left <= x.sec * 1000 + ALERT_EARLY_MS)) continue;
       for (const pid of new Set(able)) this.notify(Number(pid), { t: "panic", seconds: p.sec, stage: p.stage, chain: c.current, now });
     }
-    for (const s of this.alertStages()) {
+    const stages = this.alertStages();
+    for (const s of stages) {
       if (lap.sent.includes(s.stage) || left > s.sec * 1000 + ALERT_EARLY_MS) continue;
+      const i = stages.indexOf(s), last = i === stages.length - 1;
+      if (paused && !last) continue;                       // alerts 1 & 2: held while someone's hitting
       lap.sent.push(s.stage);
-      // the most urgent stage reached wins if several came due at once (e.g. after a pause) - only that one is sent
-      const due = this.alertStages().filter((x) => !lap.sent.includes(x.stage) && left <= x.sec * 1000 + ALERT_EARLY_MS);
-      if (due.length) continue;
+      // the most urgent stage reached wins: if a later stage is also due, or was already sent (e.g. alert 3 went out
+      // during a pause), this one is skipped - no burst, and no alert 1/2 after alert 3
+      if (stages.slice(i + 1).some((x) => lap.sent.includes(x.stage) || left <= x.sec * 1000 + ALERT_EARLY_MS)) continue;
       // RECIPIENTS BY QUEUE POSITION (alerts addendum UPDATE, Nov 10 2026, user):
       //   alert 1 -> #1 only (who's up; config.firstAlertPrimaryOnly - off = everyone, as before)
       //   alert 2 -> #1 and #2 only (who's up + backup)      alert 3 -> everyone in the queue who can act
