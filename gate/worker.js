@@ -2171,12 +2171,12 @@ async function gfInfo(u) {
   try {
     const r = await fetch(`https://greasyfork.org/scripts/${m[1]}.json`, {cf: {cacheTtl: 3600, cacheEverything: true},
                                                                           headers: {"User-Agent": "HB Hub (scripts directory)"}});
-    if (!r.ok) return null;
+    if (!r.ok) return {err: "greasyfork " + r.status};
     const j = await r.json();
     return {id: Number(m[1]), name: j.name, version: j.version, description: j.description,
             updated: j.code_updated_at ? Date.parse(j.code_updated_at) : null, code_url: j.code_url, url: j.url,
             installs: j.total_installs, daily: j.daily_installs};
-  } catch (e) { return null; }
+  } catch (e) { return {err: "greasyfork " + (e && e.name || "error")}; }
 }
 async function scriptsRoute(env, req, url, who) {
   const H = {headers: {"Cache-Control": "no-store"}};
@@ -2195,6 +2195,7 @@ async function scriptsRoute(env, req, url, who) {
     rows = await Promise.all(rows.map(async r => {
       const g = await gfInfo(r.install_url);
       if (!g) return r;
+      if (g.err) return Object.assign({}, r, {gf_err: g.err});      // shown to nobody - lets the Hub's check see why
       return Object.assign({}, r, {name: g.name || r.name, version: g.version || r.version, summary: r.summary || g.description,
         install_url: g.code_url || r.install_url, updated: g.updated || r.updated, updated_by: g.updated ? "Greasy Fork" : r.updated_by,
         gf: {id: g.id, url: g.url, installs: g.installs, daily: g.daily}});
