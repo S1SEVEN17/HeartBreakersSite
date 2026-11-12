@@ -1,5 +1,5 @@
-# TEMPORARY (Nov 12 2026): find which tornprobability.com API the /scenarios page reads its payout data from.
-# Prints endpoint paths and response shapes only. Delete after use.
+# TEMPORARY (Nov 12 2026): size up tornprobability.com /api/scenarios?name= (recorded scenario outcomes) for payouts.
+# Prints counts / reward stats only. Delete after use.
 name: tp probe
 on: workflow_dispatch
 jobs:
@@ -9,12 +9,23 @@ jobs:
       - run: |
           set +e
           B=https://tornprobability.com:3000
-          curl -s -m 20 -A "Mozilla/5.0" $B/scenarios -o page.html
-          echo "---- page (scripts / fetch calls) ----"
-          grep -oE "fetch\([^)]{0,160}" page.html | head -20
-          grep -oE "/api/[A-Za-z0-9_/?=&.-]+" page.html | sort -u | head -30
-          grep -oE '<script[^>]*src="[^"]+"' page.html | head
-          echo "---- tries ----"
-          for q in "scenarios?name=Blast%20from%20the%20Past" "scenarios?scenario=Blast%20from%20the%20Past" "scenarios/Blast%20from%20the%20Past" "scenarios?scenarioName=Blast%20from%20the%20Past"; do
-            code=$(curl -s -m 20 -o r.json -w '%{http_code}' "$B/api/$q"); echo "$q -> $code $(wc -c < r.json)"; head -c 1500 r.json | tr '\n' ' '; echo
+          for n in "Blast from the Past" "Stage Fright" "Crane Reaction" "Leave No Trace"; do
+            curl -s -m 60 -G --data-urlencode "name=$n" "$B/api/scenarios" -o s.json -w "$n: %{http_code} %{size_download} bytes %{time_total}s\n"
+            python3 - "$n" <<'PY'
+          import json,sys,statistics as S
+          try: d=json.load(open('s.json'))
+          except Exception as e: print('  parse fail',e); sys.exit()
+          print('  type',type(d).__name__,'records',len(d) if isinstance(d,list) else '-')
+          if isinstance(d,list) and d:
+              print('  keys',sorted(d[0].keys()))
+              r=[x.get('rewards') or {} for x in d]
+              m=[x.get('money') or 0 for x in r]; pos=[v for v in m if v>0]
+              print('  money>0',len(pos),'min',min(pos) if pos else 0,'avg',int(S.mean(pos)) if pos else 0,'max',max(pos) if pos else 0)
+              its=[x.get('items') for x in r if x.get('items')]
+              print('  with items',len(its),'sample',json.dumps(its[:2])[:300])
+              print('  scope sample',[x.get('scope') for x in r[:8]], 'respect', [x.get('respect') for x in r[:8]])
+              other=[k for k in d[0].keys() if k not in('events','rewards')]
+              print('  other fields sample',{k:d[0][k] for k in other if k!='_id'})
+              ts=[x.get('createdAt') or x.get('date') or x.get('timestamp') for x in d[:3]]; print('  time fields',ts)
+          PY
           done
