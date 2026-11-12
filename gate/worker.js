@@ -1534,7 +1534,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       // Team Builder settings - the gatekeeper's automatic planner uses the same ones (ocAutoPlan)
       const n = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
       v = v && typeof v === "object" ? v : {};
-      v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65), cap: n(v.cap, 50, 100, 85), chains: !!v.chains, includeBusy: !!v.includeBusy,
+      v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65),
+           // WEIGHT-SCALED MINIMUM (Nov 12 2026): lowest rate for a 0%-weight role, null = off (oc_planner.js floorOf)
+           minZero: v.minZero == null || v.minZero === "" ? null : Math.min(n(v.minRole, 0, 100, 65), n(v.minZero, 0, 100, null)),
+           cap: n(v.cap, 50, 100, 85), chains: !!v.chains, includeBusy: !!v.includeBusy,
            // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
            share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null),
            queueHours: n(v.queueHours, 0, 168, 12),    // queue members whose current crime is ready within this many hours
@@ -2020,7 +2023,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, chains: false, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3};
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
