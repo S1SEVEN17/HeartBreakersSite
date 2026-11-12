@@ -6136,7 +6136,13 @@ def optin_publish(out: Path, opt: dict, st: dict) -> dict:
                 byday.update({r[0]: r for r in e[part].get("s") or []})
                 x[part]["s"] = [byday[d] for d in sorted(byday)]
             else:
-                x[part] = {"share": e[part]["share"], "s": e[part].get("s") or [], "via": "script"}
+                x[part] = {"share": e[part]["share"], "s": e[part].get("s") or []}
+    # SHARING SOURCES (Nov 11 2026): how each member shares each thing - leaders see it ("site" = Hub site with a
+    # stored key, "script" = the Heart Breakers Hub script, "ocopt" = the OC Optimizer script's pass rates). Leaders'
+    # db/private.json only (optin.via); never in the members' optin_shared.json.
+    for i, v in (_sx_export_raw().get("via") or {}).items():
+        if any(v.get(k) for k in ("bs", "ws", "ready", "oc", "cw")):
+            full.setdefault(i, {"ready": False})["via"] = v
     for i, x in full.items():
         sh = {p: x[p] for p in ("bs", "ws") if p in x and x[p]["share"] == "faction"}
         if sh:

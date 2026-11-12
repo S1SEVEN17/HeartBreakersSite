@@ -56,7 +56,7 @@ ul{margin:6px 0 0;padding-left:18px;color:#cfc6c6;font-size:13px}li{margin:3px 0
 .how{margin-top:14px;border-top:1px dashed var(--edge);padding-top:10px}.how h3{color:var(--gold);font-size:12px;letter-spacing:1px;text-transform:uppercase;margin:0 0 6px}
 #viewbtn{width:100%;margin:2px 0 10px;border-radius:10px;padding:11px;font:600 15px system-ui;cursor:pointer;border:1px solid #6b4a18;background:#2a1a10;color:var(--gold)}
 #viewer{display:none}#viewer .sec{border-top:1px solid #2a1416;padding:10px 0}#viewer .sec:first-of-type{border-top:0}
-#viewer h4{margin:0 0 4px;color:#fff;font-size:15px}.who{font-size:12px;color:var(--sub);margin-bottom:6px}.who b{color:var(--gold)}
+#viewer h4{margin:0 0 4px;color:#fff;font-size:15px}.srcb{display:inline-block;padding:1px 7px;margin:1px 2px 1px 0;border-radius:9px;background:#2a1416;border:1px solid #5c1c1a;color:#e8be5a;font-size:11px}.who{font-size:12px;color:var(--sub);margin-bottom:6px}.who b{color:var(--gold)}
 .vt{width:100%;font-size:12px;border-collapse:collapse}.vt th{color:var(--sub);text-align:left;font-weight:600;padding:3px 4px;border-bottom:1px solid var(--edge)}
 .vt td{padding:3px 4px;border-top:1px solid #241214;color:#ddd}.vt td:first-child{color:#ddd;padding-right:4px}.vscroll{max-height:240px;overflow:auto}.err{color:#ff8a80}
 </style></head><body>
@@ -161,6 +161,9 @@ const esc = v => String(v == null ? "" : v).replace(/[&<>"]/g, c => ({"&": "&amp
 const num = v => v == null ? "-" : Math.round(v).toLocaleString("en-US");
 const whom = v => v === "faction" ? "<b>Faction members</b> (your profile) and <b>leaders</b>" : v === "leaders" ? "<b>Faction leaders</b> only" : "nobody (off)";
 const dstr = d => { const t = typeof d === "number" && d > 1e8 ? d * 1000 : Date.parse(d); return isNaN(t) ? esc(d) : new Date(t).toLocaleDateString("en-US", {month: "short", day: "numeric", year: "numeric"}); };
+// SHARING SOURCES (Nov 11 2026): how each thing is shared - d.via {bs: ["site", "script"], ...} from /m/shared.json
+const SRC = {site: "🌐 Hub site", script: "🧩 Hub script", ocopt: "🕵️ OC Optimizer script"};
+const thru = (d, k) => { const v = (d.via || {})[k] || []; return v.length ? `<div class="who">Shared through: ${v.map(x => `<span class="srcb">${SRC[x] || esc(x)}</span>`).join(" ")}</div>` : ""; };
 function statTable(rows, cols) {
   if (!rows || !rows.length) return '<div class="muted">Nothing saved yet - the first reading comes with the next update.</div>';
   const r = rows.slice().reverse();
@@ -177,24 +180,26 @@ async function showViewer() {
   const o = d.optin, sec = [];
   sec.push(`<div class="sec"><h4>🔑 Your key</h4><table class="vt">
     <tr><td>Limited API key</td><td>${o && o.key_stored ? "Stored on the Hub, encrypted (never shown - not even to you)" : "None stored"}</td></tr></table></div>`);
-  const bs = o ? o.bs : "off", ws = o ? o.ws : "off";
-  sec.push(`<div class="sec"><h4>💪 Battle stats</h4><div class="who">Shared with: ${whom(bs)}</div>${bs !== "off" ? statTable((d.stats || {}).bs, ["Str", "Def", "Spd", "Dex"]) : ""}</div>`);
-  sec.push(`<div class="sec"><h4>🧰 Work stats</h4><div class="who">Shared with: ${whom(ws)}</div>${ws !== "off" ? statTable((d.stats || {}).ws, ["Man", "Int", "End"]) : ""}</div>`);
+  // "who sees it" = the widest of the Hub site and the Hub script settings (d.level)
+  const bs = d.level ? d.level.bs : o ? o.bs : "off", ws = d.level ? d.level.ws : o ? o.ws : "off";
+  sec.push(`<div class="sec"><h4>💪 Battle stats</h4><div class="who">Shared with: ${whom(bs)}</div>${thru(d, "bs")}${bs !== "off" ? statTable((d.stats || {}).bs, ["Str", "Def", "Spd", "Dex"]) : ""}</div>`);
+  sec.push(`<div class="sec"><h4>🧰 Work stats</h4><div class="who">Shared with: ${whom(ws)}</div>${thru(d, "ws")}${ws !== "off" ? statTable((d.stats || {}).ws, ["Man", "Int", "End"]) : ""}</div>`);
   let rd = "";
-  if (o && o.ready) {
+  const readyOn = ((d.via || {}).ready || []).length > 0 || !!(o && o.ready);
+  if (readyOn) {
     const R = d.ready || {}, bar = b => b ? `${b.cur} / ${b.max}` : "-";
     rd = R.err ? `<div class="err">${esc(R.err)}</div>` : `<div class="muted" style="margin-bottom:4px">What leaders last saw on War Readiness${R.at ? ` (read ${Math.max(0, Math.round((Date.now() / 1000 - R.at) / 60))} min ago)` : ""} - it's only read from Torn once a minute while a leader has that page open:</div>
       <table class="vt"><tr><td>Energy</td><td>${bar(R.energy)}</td></tr><tr><td>Nerve</td><td>${bar(R.nerve)}</td></tr><tr><td>Happy</td><td>${bar(R.happy)}</td></tr><tr><td>Life</td><td>${bar(R.life)}</td></tr>
       ${Object.entries(R.cd || {}).map(([k, x]) => `<tr><td>${esc(k[0].toUpperCase() + k.slice(1))} cooldown</td><td>${x ? Math.ceil(x / 60) + " min" : "none"}</td></tr>`).join("")}
       <tr><td>Energy refill used today</td><td>${R.refill == null ? "-" : R.refill ? "yes" : "no"}</td></tr><tr><td>Status</td><td>${esc(R.status || "-")}</td></tr></table>`;
   }
-  sec.push(`<div class="sec"><h4>⚔️ War readiness</h4><div class="who">Shared with: ${o && o.ready ? "<b>Faction leaders</b> only" : "nobody (off)"}</div>${rd}</div>`);
+  sec.push(`<div class="sec"><h4>⚔️ War readiness</h4><div class="who">Shared with: ${readyOn ? "<b>Faction leaders</b> only" : "nobody (off)"}</div>${thru(d, "ready")}${rd}</div>`);
   const oc = d.oc, ks = oc ? Object.keys(oc.roles || {}).sort() : [];
-  sec.push(`<div class="sec"><h4>🕵️ Organized crime pass rates</h4><div class="who">Shared with: ${oc ? "<b>Faction leaders</b> (OC Management) and <b>faction members using the OC Optimizer script</b>" : "nobody (not sharing)"}${oc && !(o && o.oc) ? " · <i>shared from the OC Optimizer script</i>" : ""}</div>` +
+  sec.push(`<div class="sec"><h4>🕵️ Organized crime pass rates</h4><div class="who">Shared with: ${oc ? "<b>Faction leaders</b> (OC Management) and <b>faction members using the OC Optimizer script</b>" : "nobody (not sharing)"}${oc && !(o && o.oc) ? " · <i>shared from the OC Optimizer script</i>" : ""}</div>${thru(d, "oc")}` +
     (oc ? `<div class="muted" style="margin-bottom:4px">Last shared ${ago(oc.ts)} · ${ks.length} role${ks.length === 1 ? "" : "s"}</div><div class="vscroll"><table class="vt"><tr><th>Crime</th><th>Role</th><th>Pass rate</th></tr>` +
       ks.map(k => { const [c, r] = k.split("|"); return `<tr><td>${esc(c)}</td><td>${esc(r)}</td><td>${oc.roles[k]}%</td></tr>`; }).join("") + "</table></div>" : "") + "</div>");
   // Chain timer: nothing is saved or shared - only faction chain readings feed the shared timer
-  sec.push(`<div class="sec"><h4>⛓️ Chain timer</h4><div class="who">${o && o.cw ? "<b>On</b> - during live chains your key may read the faction chain (~2 a minute at most) while your Chain Watch script isn't connected. Nothing about you is read or saved." : "Off - your key is never used for chain watch."}</div></div>`);
+  sec.push(`<div class="sec"><h4>⛓️ Chain timer</h4><div class="who">${o && o.cw ? "<b>On</b> - during live chains your key may read the faction chain (~2 a minute at most) while your Chain Watch script isn't connected. Nothing about you is read or saved." : "Off - your key is never used for chain watch."}</div>${thru(d, "cw")}</div>`);
   if (o) sec.push(`<div class="sec muted">Opted in since ${day(o.since)} · settings last changed ${day(o.updated)}</div>`);
   v.innerHTML = sec.join("");
 }

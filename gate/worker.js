@@ -559,7 +559,7 @@ async function sxShareOp(env, who, op, b) {
     const roles = {};
     b.oc.slice(0, 200).forEach(x => { if (Array.isArray(x) && x.length === 3 && Number.isFinite(Number(x[2])))
       roles[ocFb(x[0]) + "|" + ocFb(ocBaseRole(x[1]))] = Math.max(0, Math.min(100, Math.round(Number(x[2])))); });
-    if (Object.keys(roles).length) { await ocStoreRates(env, pid, who.name, roles); extra++; }
+    if (Object.keys(roles).length) { await ocStoreRates(env, pid, who.name, roles, "script"); extra++; }
   }
   if (row.cw && b.chain && typeof b.chain === "object" && env.CHAINROOM) {
     // the same checks + room call as the homepage's chain readings (cwReading): shorten-only in the room
@@ -590,13 +590,22 @@ async function sxExport(env, req) {
   const out = {members: {}};
   if (env.OC_DB) {
     await sxShareTable(env).catch(() => {});
-    const rows = (await env.OC_DB.prepare("SELECT pid, bs, ws, ready, bs_s, ws_s, since FROM sx_share").all().catch(() => ({results: []}))).results || [];
+    const rows = (await env.OC_DB.prepare("SELECT pid, bs, ws, ready, oc, bs_s, ws_s, since FROM sx_share").all().catch(() => ({results: []}))).results || [];
     rows.forEach(r => {
       const x = {ready: !!r.ready, since: r.since};
       if (r.bs !== "off") x.bs = {share: r.bs, s: sxJ(r.bs_s, [])};
       if (r.ws !== "off") x.ws = {share: r.ws, s: sxJ(r.ws_s, [])};
       out.members[String(r.pid)] = x;
     });
+    // SHARING SOURCES for leaders (db/private.json optin.via): everyone sharing anything, any way
+    try {
+      const {data} = await readOptin(env, false);
+      const ocopt = await shareSrcOcopt(env);
+      const sxBy = Object.fromEntries(rows.map(r => [String(r.pid), {bs: r.bs, ws: r.ws, ready: !!r.ready, oc: !!r.oc}]));
+      const ids = new Set(Object.keys(data.members || {}).concat(Object.keys(sxBy), Object.keys(ocopt)));
+      out.via = {};
+      ids.forEach(i => { out.via[i] = shareVia((data.members || {})[i], sxBy[i], ocopt[i]).via; });
+    } catch (e) { /* leave via out */ }
     // the scripts directory's install links - the site build reads Greasy Fork for them (Greasy Fork blocks Workers)
     const sc = (await env.OC_DB.prepare("SELECT install_url FROM hub_script").all().catch(() => ({results: []}))).results || [];
     out.scripts = sc.map(r => r.install_url).filter(Boolean);
@@ -609,6 +618,52 @@ async function sxShareOwn(env, id) {
   if (!r) return null;
   return {bs: r.bs, ws: r.ws, ready: !!r.ready, oc: !!r.oc, cw: !!r.cw, since: r.since, stats: {bs: sxJ(r.bs_s, []), ws: sxJ(r.ws_s, [])},
           rd: r.rd ? Object.assign({at: Math.floor(Number(r.rd_at) / 1000)}, sxJ(r.rd, {})) : null};
+}
+
+// =====================================================================================================
+// SHARING SOURCES (Nov 11 2026, user: "I want to be able to differentiate which method they're using to share their
+// stats. If they're using the HUB Site, HUB Script, OC Script, etc. This can be shown in their 'My stored data' and
+// also visible to leadership"). Each shared thing -> the ways it's being shared:
+//   "site"   = Hub site, My data & sharing (a key stored on the Hub)            - from data/optin.json
+//   "script" = the Heart Breakers Hub script (key stays on the device)          - from D1 sx_share
+//   "ocopt"  = the OC Optimizer script (OC pass rates it publishes, /oc/cpr)   - from D1 share_src
+// share_src (pid, kind, src, ts) records who WROTE OC pass rates and when (any source; the OC Optimizer has no
+// setting to read, so its rates are the only record). Shown: View my shared data (via + who sees it) and to leaders
+// (generate.py puts optin.via into db/private.json: Member stats, the Hub script).
+// =====================================================================================================
+const SHARE_SRC_DAYS = 60;                 // an OC Optimizer share counts as "sharing" for this long after its last write
+const SHARE_SRC_NAMES = {site: "Hub site", script: "Hub script", ocopt: "OC Optimizer script"};
+let SHARE_SRC_READY = false;
+async function shareSrcTable(env) {
+  if (SHARE_SRC_READY || !env.OC_DB) return;
+  await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS share_src (pid INTEGER NOT NULL, kind TEXT NOT NULL, src TEXT NOT NULL, ts INTEGER NOT NULL, " +
+                          "PRIMARY KEY (pid, kind, src))").run();
+  SHARE_SRC_READY = true;
+}
+async function shareSrcMark(env, pid, kind, src) {
+  if (!env.OC_DB) return;
+  await shareSrcTable(env);
+  await env.OC_DB.prepare("INSERT INTO share_src (pid, kind, src, ts) VALUES (?, ?, ?, ?) ON CONFLICT (pid, kind, src) DO UPDATE SET ts = excluded.ts")
+    .bind(Number(pid), kind, src, Date.now()).run();
+}
+// recent OC Optimizer shares -> {pid: ts}
+async function shareSrcOcopt(env) {
+  if (!env.OC_DB) return {};
+  await shareSrcTable(env).catch(() => {});
+  const rows = (await env.OC_DB.prepare("SELECT pid, ts FROM share_src WHERE kind = 'oc' AND src = 'ocopt' AND ts > ?")
+    .bind(Date.now() - SHARE_SRC_DAYS * 864e5).all().catch(() => ({results: []}))).results || [];
+  return Object.fromEntries(rows.map(r => [String(r.pid), Number(r.ts)]));
+}
+// one member: {via: {bs: [...], ws, ready, oc, cw}, level: {bs, ws}} from their Hub opt-in (e), script sharing (x) and
+// a recent OC Optimizer share (ocTs)
+function shareVia(e, x, ocTs) {
+  const lv = ["off", "leaders", "faction"], wide = (a, b) => lv[Math.max(lv.indexOf(a || "off"), lv.indexOf(b || "off"))];
+  const on = v => v && v !== "off";
+  const via = {bs: [], ws: [], ready: [], oc: [], cw: []};
+  if (e) { if (on(e.bs)) via.bs.push("site"); if (on(e.ws)) via.ws.push("site"); if (e.ready) via.ready.push("site"); if (e.oc) via.oc.push("site"); if (e.cw) via.cw.push("site"); }
+  if (x) { if (on(x.bs)) via.bs.push("script"); if (on(x.ws)) via.ws.push("script"); if (x.ready) via.ready.push("script"); if (x.oc) via.oc.push("script"); }
+  if (ocTs) via.oc.push("ocopt");
+  return {via, level: {bs: wide(e && e.bs, x && x.bs), ws: wide(e && e.ws, x && x.ws)}};
 }
 
 // ---------- a member's own private figures ----------
@@ -733,6 +788,7 @@ async function ocCprDrop(env, id) {
   if (!env.OC_DB) return;
   await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Number(env.FACTION_ID), Number(id)).run();
   await env.OC_DB.prepare("DELETE FROM oc_cpr_t WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Number(env.FACTION_ID), Number(id)).run().catch(() => {});
+  await env.OC_DB.prepare("DELETE FROM share_src WHERE pid = ? AND kind = 'oc'").bind(Number(id)).run().catch(() => {});
 }
 // -> {roles: n} | {bad: true} (key gone) | {err}
 async function ocPullMember(env, id, name, key) {
@@ -746,12 +802,13 @@ async function ocPullMember(env, id, name, key) {
     if (sl.user || typeof sl.checkpoint_pass_rate !== "number") continue;
     roles[ocFb(c.name) + "|" + ocFb(ocBaseRole((sl.position_info && sl.position_info.label) || sl.position))] = Math.round(sl.checkpoint_pass_rate);
   }
-  return ocStoreRates(env, id, name, roles);
+  return ocStoreRates(env, id, name, roles, "site");
 }
 // store a member's pass rates {"Crime|Role": rate} into oc_cpr (shared by the Hub-key read above and the Hub script's
 // sharing - SCRIPT SHARING "OC pass rates")
-async function ocStoreRates(env, id, name, roles) {
+async function ocStoreRates(env, id, name, roles, src) {
   const n = Object.keys(roles).length;
+  if (n && src) await shareSrcMark(env, id, "oc", src);
   if (n) {
     // merge over what's stored; only written (and ts moved on) when a rate is new or different
     const cur = await env.OC_DB.prepare("SELECT roles FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
@@ -859,6 +916,24 @@ async function mySharedData(env, who) {
     }
   } catch (x) { out.optin_err = "couldn't read your opt-in settings right now"; }
   if (env.OC_DB) out.script = await sxShareOwn(env, id).catch(() => null);     // shared from the Hub script (no key)
+  // SHARING SOURCES: how each thing is shared (Hub site / Hub script / OC Optimizer script) + the widest "who sees it"
+  {
+    const e = out.optin, x = out.script, ocTs = (await shareSrcOcopt(env).catch(() => ({})))[id];
+    const v = shareVia(e && {bs: e.bs, ws: e.ws, ready: e.ready, oc: e.oc, cw: e.cw}, x, ocTs);
+    out.via = v.via; out.level = v.level; out.ocopt_at = ocTs || null;
+    // stats shared only from the script: show the script's readings (same day from both = one row)
+    if (x && x.stats) {
+      out.stats = out.stats || {};
+      for (const k of ["bs", "ws"]) {
+        if (!(x.stats[k] || []).length) continue;
+        const by = {}; (out.stats[k] || []).forEach(r => { by[r[0]] = r; }); x.stats[k].forEach(r => { by[r[0]] = r; });
+        out.stats[k] = Object.keys(by).sort().map(d => by[d]);
+      }
+    }
+    if (x && x.ready && x.rd && (!out.ready || out.ready.err || (out.ready.at || 0) < x.rd.at))
+      out.ready = {energy: x.rd.energy, nerve: x.rd.nerve, happy: x.rd.happy, life: x.rd.life, cd: x.rd.cd || {}, refill: x.rd.refill,
+                   status: x.rd.status ? x.rd.status.desc || x.rd.status.state : null, at: x.rd.at};
+  }
   if (env.OC_DB) {
     const r = await env.OC_DB.prepare("SELECT roles, ts FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?")
       .bind(Number(env.FACTION_ID), Number(id)).first();
@@ -1094,6 +1169,7 @@ async function ocWrite(env, ctx, req, body, del) {
     "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
     .bind(body.env, fid, id.player_id, name, JSON.stringify(Object.assign(old, clean)), now).run();
   await ocCprTimes(env, body.env, id.player_id, Object.keys(clean), now);
+  if (body.env === "prod") await shareSrcMark(env, id.player_id, "oc", "ocopt").catch(() => {});   // shared from the OC Optimizer script
   return ocJson({ok: true});
 }
 

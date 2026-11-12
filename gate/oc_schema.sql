@@ -169,3 +169,13 @@ CREATE TABLE IF NOT EXISTS sx_share (
   since   INTEGER,
   updated INTEGER
 );
+
+-- Sharing sources (Nov 11 2026): who wrote OC pass rates and when - "site" (Hub key), "script" (Hub script),
+-- "ocopt" (OC Optimizer script). Shown on View my shared data and to leaders. (The Worker also creates it.)
+CREATE TABLE IF NOT EXISTS share_src (
+  pid  INTEGER NOT NULL,
+  kind TEXT    NOT NULL,    -- 'oc'
+  src  TEXT    NOT NULL,    -- 'site' | 'script' | 'ocopt'
+  ts   INTEGER NOT NULL,    -- ms, last write
+  PRIMARY KEY (pid, kind, src)
+);

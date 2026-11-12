@@ -36,6 +36,8 @@ __MENU__
 <div class="scroll"><table id="tb"></table></div>
 <h2>🧰 Work stats</h2>
 <div class="scroll"><table id="tw"></table></div>
+<h2>🔗 How members share <span class="tag">🌐 Hub site (key stored on the Hub) · 🧩 Hub script (key stays on their device) · 🕵️ OC Optimizer script</span></h2>
+<div class="scroll"><table id="tv"></table></div>
 <script>
 const CFG = __CONFIG__;
 const $ = id => document.getElementById(id);
@@ -45,11 +47,11 @@ const gain = (s, days, f) => { if (!s || s.length < 2) return null; const last =
   const want = new Date(Date.parse(last[0]) - days * 864e5).toISOString().slice(0, 10);
   const base = s.filter(x => x[0] <= want).pop() || s[0]; return base === last ? null : f(last) - f(base); };
 function sortable(el, cols, rows, key0) {
-  let key = key0, desc = true;
+  let key = key0, desc = key0 !== "name";      // names A-Z first, numbers biggest first
   const draw = () => { rows.sort((a, b) => { const x = a[key], y = b[key]; const r = typeof x === "string" ? x.localeCompare(y) : (x ?? -1) - (y ?? -1); return desc ? -r : r; });
-    el.innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" || k === "share" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${l}</th>`).join("")}</tr>`
+    el.innerHTML = `<tr>${cols.map(([l, k]) => `<th class="${k === "name" || k === "share" || typeof (rows[0] || {})[k] === "string" ? "" : "n"}${k === key ? " on" + (desc ? "" : " up") : ""}" data-k="${k}">${l}</th>`).join("")}</tr>`
       + (rows.map(r => `<tr>${cols.map(([_l, k, f]) => k === "name" ? `<td><a href="${CFG.member_base}/member.html?id=${r.id}">${esc(r.name)}</a></td>`
-        : `<td class="${k === "share" ? "tag" : "n"}">${f ? f(r[k]) : esc(r[k])}</td>`).join("")}</tr>`).join("")
+        : `<td class="${k === "share" || k === "ways" ? "tag" : typeof r[k] === "string" ? "" : "n"}">${f ? f(r[k]) : esc(r[k])}</td>`).join("")}</tr>`).join("")
         || `<tr><td class="tag" colspan="${cols.length}">Nobody shares these yet.</td></tr>`);
     el.querySelectorAll("th").forEach(th => th.onclick = () => { if (th.dataset.k === key) desc = !desc; else { key = th.dataset.k; desc = key !== "name"; } draw(); }); };
   draw();
@@ -65,15 +67,28 @@ Promise.all([fetch("db/private.json", {cache: "no-store"}).then(r => r.json()),
                share: o.bs.share === "faction" ? "faction" : "leaders", on: l[0]}); }
     if (o.ws && o.ws.s.length) { const l = o.ws.s[o.ws.s.length - 1], wt = r => r[1] + r[2] + r[3];
       ws.push({id, name: names[id] || id, total: wt(l), man: l[1], int: l[2], end: l[3], g30: gain(o.ws.s, 30, wt), share: o.ws.share === "faction" ? "faction" : "leaders"}); } });
+  // SHARING SOURCES (Nov 11 2026, user: "differentiate which method they're using to share their stats ... visible to
+  // leadership"): optin.via {bs: ["site", "script"], ws, ready, oc: [..., "ocopt"], cw} from the site build
+  const SRC = {site: "🌐", script: "🧩", ocopt: "🕵️"}, SRCN = {site: "Hub site", script: "Hub script", ocopt: "OC Optimizer script"};
+  const viaTxt = v => (v || []).map(x => SRC[x] || x).join(" ");
+  const viaOf = (id, k) => (((P.members[id] || {}).optin || {}).via || {})[k];
+  bs.forEach(r => { r.via = viaTxt(viaOf(r.id, "bs")); }); ws.forEach(r => { r.via = viaTxt(viaOf(r.id, "ws")); });
+  const vrows = Object.entries(P.members || {}).filter(([, x]) => x.optin && x.optin.via).map(([id, x]) => {
+    const v = x.optin.via, t = k => viaTxt(v[k]) || "-";
+    return {id, name: names[id] || id, bs: t("bs"), ws: t("ws"), ready: t("ready"), oc: t("oc"), cw: t("cw"),
+            ways: [...new Set([].concat(...Object.values(v)))].map(x => SRCN[x] || x).join(", ")};
+  });
   const opted = Object.values(P.members || {}).filter(x => x.optin).length;
   $("tot").innerHTML = [[opted, "Opted in"], [bs.length, "Share battle stats"], [ws.length, "Share work stats"],
     [Object.values(P.members || {}).filter(x => x.optin && x.optin.ready).length, "War readiness on"]]
     .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join("");
   const g = v => v == null ? '<span class="tag">-</span>' : `<span class="up">+${big(v)}</span>`;
   sortable($("tb"), [["Member", "name"], ["Total", "total", big], ["Strength", "str", big], ["Defense", "def", big], ["Speed", "spd", big],
-    ["Dexterity", "dex", big], ["Gain 7 days", "g7", g], ["Gain 30 days", "g30", g], ["Shared with", "share"], ["Read", "on"]], bs, "total");
+    ["Dexterity", "dex", big], ["Gain 7 days", "g7", g], ["Gain 30 days", "g30", g], ["Shared with", "share"], ["Through", "via"], ["Read", "on"]], bs, "total");
   sortable($("tw"), [["Member", "name"], ["Total", "total", big], ["Manual labor", "man", big], ["Intelligence", "int", big],
-    ["Endurance", "end", big], ["Gain 30 days", "g30", g], ["Shared with", "share"]], ws, "total");
+    ["Endurance", "end", big], ["Gain 30 days", "g30", g], ["Shared with", "share"], ["Through", "via"]], ws, "total");
+  sortable($("tv"), [["Member", "name"], ["Battle", "bs"], ["Work", "ws"], ["Readiness", "ready"], ["OC rates", "oc"], ["Chain timer", "cw"],
+    ["Ways", "ways"]], vrows, "name");
 }).catch(e => { $("tot").innerHTML = `<div style="grid-column:1/-1"><b>-</b><span>Couldn't load (${esc(e.message)})</span></div>`; });
 </script>
 </body></html>
