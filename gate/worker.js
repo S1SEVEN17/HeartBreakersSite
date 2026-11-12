@@ -1499,7 +1499,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.last_runs = await ocLastRuns(env, envName, c.rotate).catch(() => ({}));   // for the page's Auto-build (rotation mix rule)
       c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
       c.reconfigured = ((await ocSnapGet(env, "hub", "plan:reconfigured").catch(() => null)) || {}).data || null;   // last reconfigure
-      c.auto_run = Number(((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).as_of) || null;     // last automatic run (ms)
+      const pst = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
+      c.auto_run = Number((pst || {}).as_of) || null;                                     // last automatic run (ms)
+      c.auto_reason = ((pst && pst.data) || {}).reason || null;                            // TRIGGERS: why it ran
+      c.auto_every = ((pst && pst.data) || {}).every || null;                              // scheduled interval (ms)
       const tpw = await ocSnapGet(env, "hub", "tp:weights").catch(() => null);
       c.weights = (tpw && tpw.data && tpw.data.weights) || null;                                                     // role weights
       c.tp_names = (tpw && tpw.data && tpw.data.names) || null;                                                      // role order
@@ -1550,6 +1553,29 @@ async function ocLeaderRoute(env, req, url, who, sub) {
                 "Content-Type": "application/json"}});
     if (!r.ok) return Response.json({ok: false, error: "couldn't start a crime check (" + r.status + ")"}, {status: 502});
     return Response.json({ok: true, next_at: now + GAP}, H);
+  }
+  // UPDATE NOW (Nov 12 2026, user: 'a "Update" button for leadership to trigger a manual update'): reads the
+  // crimes from Torn (1 call, the same read as the 3-minute beat) and rebuilds the plan at once. Once a minute.
+  if (req.method === "POST" && sub === "update") {
+    if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+    const now = Date.now(), last = await ocSnapGet(env, "hub", "plan:update").catch(() => null);
+    if (last && now - Number(last.as_of) < 60000) return Response.json({ok: false, error: "Updated less than a minute ago - try again shortly."}, {status: 429});
+    await ocSnapPut(env, "hub", "plan:update", now, "{}", who.name || "leader").run();
+    const cfg0 = await ocConfig(env, "prod");
+    if (Object.assign({}, OC_OPTS_DEFAULT, cfg0.opts || {}).auto === false)
+      return Response.json({ok: false, error: "Automatic assignment is off - turn it on in the Team Builder ⚙️ Settings, or Deploy a plan."}, {status: 409});
+    let crimes;
+    try {
+      // API: Heart Breakers Hub - OC Management "Update now" (faction crimes, 1 call)
+      const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
+      crimes = (d.crimes || []).map(ocFeedCleanCrime);
+      await env.OC_DB.batch(["prod", "test"].map(e => ocSnapPut(env, e, "crimes", now, JSON.stringify(crimes), "hub")));
+    } catch (e) {
+      const snap = await ocSnapGet(env, "prod", "crimes").catch(() => null); crimes = (snap && snap.data) || null;   // Torn down: last read
+    }
+    if (!crimes) return Response.json({ok: false, error: "Couldn't read the crimes right now."}, {status: 502});
+    await ocAutoPlan(env, crimes, now, {force: true, by: who.name || ""});
+    return Response.json({ok: true, at: now}, H);
   }
   if (req.method === "PUT" && sub === "config") {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
@@ -2140,7 +2166,31 @@ async function ocScriptSeen(env, envName) {
     .bind(envName, Date.now() - OC_SCRIPT_DAYS * 864e5).all().catch(() => ({results: []}));
   const out = {}; (results || []).forEach(r => { out[String(r.pid)] = Number(r.ts); }); return out;
 }
-async function ocAutoPlan(env, crimes, now) {
+// TRIGGERS (Nov 12 2026, user: "The planner should update on certain triggers. New crimes detected, crimes
+// completing, crimes gaining/losing members and anything else that would effect member placement"): on every 3-minute
+// beat the plan is rebuilt straight away when any of these changed since the last run, else when opts.autoMinutes have
+// passed (scheduled). force = a leader's "Update now" (POST /l/oc/update).
+//   crimes   the recruiting / planning crimes (new, completed or expired, members joining / leaving, planning progress
+//            past a whole role, status)
+//   members  the faction roster (joins / leaves)
+//   settings the Team Builder settings, switched-off and rotated crimes
+//   rates    members' shared pass rates (new or updated) and the payout / history-rate summaries
+// stats.trig {crimes, members, settings, rates} (short hashes), stats.reason, stats.every (ms) - OC Management shows
+// the next scheduled run + why the last one ran.
+const ocHash = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+async function ocTriggers(env, cfg, crimes) {
+  const cr = (crimes || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning"))
+    .map(c => [c.id, c.status, (c.slots || []).map(sl => sl.user ? [sl.user.id, Math.floor((Number(sl.user.progress) || 0) / 100)] : 0)])
+    .sort((a, b) => a[0] - b[0]);
+  const [ros, sum, rt] = await Promise.all([ocSnapGet(env, "prod", "roster").catch(() => null), ocSnapGet(env, "prod", "summaries").catch(() => null),
+    // rates: the shared rates themselves (a script re-sharing the same rates doesn't count as a change - ts is left out)
+    env.OC_DB.prepare("SELECT player_id, roles FROM oc_cpr WHERE env = 'prod' ORDER BY player_id").all().catch(() => null)]);
+  return {crimes: ocHash(JSON.stringify(cr)), members: ocHash(JSON.stringify(Object.keys((ros && ros.data) || {}).sort())),
+          settings: ocHash(JSON.stringify([cfg.opts || {}, cfg.disabled || [], cfg.rotate || []])),
+          rates: ocHash(JSON.stringify([((rt && rt.results) || []).map(r => [r.player_id, r.roles]), sum && sum.as_of]))};
+}
+const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or left", settings: "settings changed", rates: "pass rates updated"};
+async function ocAutoPlan(env, crimes, now, run = {}) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
   // RESERVATIONS RULE (Nov 2026, the user): the live plan only reserves slots for members who haven't joined a crime,
@@ -2151,13 +2201,17 @@ async function ocAutoPlan(env, crimes, now) {
   // AUTOMATIC off (OC Management setting): the Hub leaves the deployed plan exactly as leaders deployed it
   // (the last stats - pay per day, items - stay as they were, so the script keeps showing them)
   if (opts.auto === false) return;
-  // AUTOMATIC TIMER: the Worker's timer beats every 3 minutes (the crimes feed is still read every beat); the plan is
-  // only rebuilt when opts.autoMinutes have passed since the last automatic run (plan:stats is written every run)
+  // AUTOMATIC TIMER + TRIGGERS: the Worker's timer beats every 3 minutes (the crimes feed is read every beat); the plan
+  // is rebuilt when something that affects placement changed (TRIGGERS above), a leader pressed Update now, or
+  // opts.autoMinutes have passed since the last run (plan:stats is written every run)
   const every = Math.max(3, Math.min(60, Number(opts.autoMinutes) || 3)) * 60000;
-  if (every > 180000) {
-    const last = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
-    if (last && now - Number(last.as_of) < every - 30000) return;
-  }
+  const trig = await ocTriggers(env, cfg, crimes).catch(() => null);
+  const last = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
+  const lastTrig = (last && last.data && last.data.trig) || null;
+  const changed = trig && lastTrig ? Object.keys(trig).filter(k => trig[k] !== lastTrig[k]) : [];
+  const due = !last || now - Number(last.as_of) >= every - 30000;
+  if (!run.force && !due && !changed.length) return;
+  const reason = run.force ? "update now" + (run.by ? " by " + run.by : "") : changed.length && last ? changed.map(k => OC_TRIG_LABEL[k]).join(", ") : "scheduled";
   const [ros, catS, sumS, priS] = await Promise.all([ocSnapGet(env, "prod", "roster"), ocSnapGet(env, "prod", "catalog"),
                                                      ocSnapGet(env, "prod", "summaries"), ocSnapGet(env, "prod", "prices")]);
   const members = (ros && ros.data) || null;
@@ -2260,6 +2314,8 @@ async function ocAutoPlan(env, crimes, now) {
     const m = {}; (c.slots || []).forEach((sl, i) => { const it = sl.required_item; if (it && it.id)
       m[(sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1))] = {id: it.id, name: it.name || null}; });
     r.stats.items[c.name] = m; }
+  // TRIGGERS: what this run saw (the next beat compares against it), why it ran, the scheduled interval
+  r.stats.trig = trig; r.stats.reason = reason; r.stats.every = every;
   // the planner's stats every run (incl. why recruiting crimes were left open) - read by the oc_check workflow
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")

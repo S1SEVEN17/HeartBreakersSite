@@ -823,12 +823,40 @@ function drawSharing() {
 // AUTOMATIC (Nov 2026): the Hub keeps the live plan up to date every 3 minutes - new teams as crimes finish, slots
 // reserved as positions open / close - and RECONFIGURES every reservation when a reserved slot is taken by someone
 // else (gate/worker.js ocAutoPlan). Saved with the Team Builder settings (oc_config 'opts'.auto); default on.
+// NEXT UPDATE + UPDATE NOW (Nov 12 2026, user: "Add a countdown for when the next scheduled update is, with a
+// "Update" button for leadership"): the Hub's beat is every 3 minutes (on the clock's 3-minute marks); the next
+// SCHEDULED rebuild is the first beat once autoMinutes have passed since the last run - it also rebuilds sooner when
+// crimes, members, settings or pass rates change (gate/worker.js TRIGGERS). "Update now" = POST oc/update (once a
+// minute): reads the crimes and rebuilds the plan at once, then the page reloads.
+function nextRun() {
+  const last = D.config.auto_run, every = D.config.auto_every || (OPT.autoMinutes || 3) * 60000;
+  if (!last) return null;
+  return Math.max(Math.ceil((last + every - 30000) / 180000) * 180000, Math.ceil(Date.now() / 180000) * 180000);
+}
+const mmss = ms => { const t = Math.max(0, Math.round(ms / 1000)); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
+function nextHtml() {
+  if (OPT.auto === false) return "";
+  const n = nextRun();
+  return `<div class="hn nextu">⏱️ Next scheduled update <b id="nextIn">${n ? "in " + mmss(n - Date.now()) : "on the next run"}</b>`
+    + ` <span class="tag">- sooner if crimes, members, settings or pass rates change${D.config.auto_run ? ` · last update ${ago(D.config.auto_run)}${D.config.auto_reason ? ` (${esc(D.config.auto_reason)})` : ""}` : ""}</span>`
+    + ` <button class="s" id="updNow" title="Read the crimes from Torn and rebuild the plan now (once a minute)">🔄 Update now</button></div>`;
+}
+setInterval(() => { const el = $("nextIn"), n = nextRun(); if (el && n) el.textContent = n - Date.now() > 0 ? "in " + mmss(n - Date.now()) : "now (within a minute)"; }, 1000);
+async function updateNow() {
+  const b = $("updNow"); if (!b || b.disabled) return;
+  b.disabled = true; b.textContent = "Updating…";
+  try { const r = await fetch("oc/update", {method: "POST", headers: {"X-HB-Save": "1"}}); const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't update (" + r.status + ")");
+    st("Updated ✓ - the plan was rebuilt from the crimes in Torn just now."); await load(); }
+  catch (e) { st(e.message); b.disabled = false; b.textContent = "🔄 Update now"; }
+}
 function autoHtml() {
   // LIVE PLAN: status only (Nov 11 2026, user: "The automatic setting should just be in team builder") - the On / Off,
   // timer and every assignment setting are in the Team Builder's ⚙️ Settings (one shared set: config "opts")
   const rc = D.config.reconfigured, moves = (rc && rc.moves) || [];
   return `<div class="hn"><b>🤖 Automatic assignment: ${OPT.auto !== false ? '<span class="ok">On</span>' : '<span class="mid">Off</span>'}</b>
     <span class="tag">${OPT.auto !== false ? `re-plans every ${OPT.autoMinutes || 3} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""} · team ${OPT.target}% · lowest role ${OPT.minRole}% · queue ${OPT.queueHours} h` : "the live plan only changes when a leader deploys one"} · change it in the <b>Team Builder ⚙️ Settings</b></span></div>`
+    + nextHtml()
     + (moves.length ? `<div class="hn">🔀 <b>Reconfigured ${ago(rc.at)}</b> - ${moves.slice(0, 4).map(m => `${esc(m.took.name || "[" + m.took.pid + "]")} took the ${esc(m.position)} slot in ${esc(m.crime)} reserved for ${esc(m.planned.name || "[" + m.planned.pid + "]")}`).join("; ")}${moves.length > 4 ? ` and ${moves.length - 4} more` : ""}. Every reserved and queued member was placed again.</div>` : "");
 }
 // TEAM BUILDER ⚙️ SETTINGS (Nov 11 2026, user: "The automatic setting should just be in team builder and they should
@@ -844,7 +872,8 @@ function settingsHtml() {
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
               "On: the Hub builds teams, reserves slots and keeps the live plan up to date by itself. Off: the live plan only changes when a leader deploys one.")}
         ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[3, 5, 10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${(OPT.autoMinutes || 3) === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
-              `How often the Hub rebuilds the plan${D.config.auto_run ? ` · last run ${ago(D.config.auto_run)}` : ""}.`)}
+              `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once (on its next 3-minute check) when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated.`)}
+        ${nextHtml()}
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
         ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A team is only formed (and a recruiting crime only filled) when the team's weighted success reaches this.")}
@@ -867,6 +896,7 @@ function settingsHtml() {
     </div></details>`;
 }
 function wireAuto() {
+  if ($("updNow")) $("updNow").onclick = updateNow;
   const sd = document.querySelector("details.sets");
   if (sd) sd.ontoggle = () => { SET_OPEN = sd.open; LS.set("hb_oc_set_open", SET_OPEN); };
   if ($("autoOn")) { $("autoOn").onclick = () => set(true); $("autoOff").onclick = () => set(false); }
