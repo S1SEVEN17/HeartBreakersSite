@@ -97,6 +97,7 @@ details.sets summary b{color:var(--gold)}
 .sr{font-weight:800;font-size:15px;white-space:nowrap}
 .rr{display:grid;grid-template-columns:minmax(80px,auto) 1fr auto;gap:6px;align-items:center;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
 .rr .pos{color:var(--sub);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wt{display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;background:#20141a;border:1px solid #3a1c1e;color:#c9b27a;font-size:11px;font-weight:600;vertical-align:1px}
 .rr select{width:100%;padding:5px 6px;font-size:13px}
 .rr .rt{min-width:46px;text-align:right;font-weight:700}
 .tag{color:var(--sub);font-size:12px}.src{font-size:10px;color:var(--sub);margin-left:3px}
@@ -270,6 +271,15 @@ function roleW(crime, label) {
   const mean = all.reduce((a, v) => a + v, 0) / all.length;
   return mean > 0 ? (look(label) ?? mean) / mean : 1;
 }
+// ROLE WEIGHT SHOWN (Nov 12 2026, user: "Show weights next to roles on the OC Management panel"): a role's share of
+// the crime's success, as Torn shows it (e.g. Leave No Trace: Techie 29.0% · Imitator 36.9% · Negotiator 34.1%).
+// share = roleW / number of roles (roleW is weight / mean). null = no weights for this crime.
+function roleShare(crime, label) {
+  const W = D.config.weights; if (!W || !Object.keys(W).some(k => tpK(k) === tpK(crime))) return null;
+  const n = rolesOf(crime).length; if (!n) return null;
+  return roleW(crime, label) / n * 100;
+}
+const wTag = (crime, label) => { const p = roleShare(crime, label); return p == null ? "" : `<span class="wt" title="Role weight - this role's share of the crime's success">${p.toFixed(1)}%</span>`; };
 const teamAvg = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); if (!r.length) return null;
   const ws = r.reduce((a, x) => a + roleW(t.crime, x.position), 0); return ws > 0 ? r.reduce((a, x) => a + x.rate * roleW(t.crime, x.position), 0) / ws : null; };
 // the calculated success chance (tornprobability.com CalculateSuccess, worked out by the Hub for full teams) or null
@@ -650,7 +660,7 @@ function teamCard(t) {
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
     const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
     const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
-    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r, busy[r.pid])}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r, busy[r.pid])}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
@@ -795,7 +805,7 @@ function drawDeployed() {
   const sm = spawnMap(plan.teams);
   const cards = plan.teams.map(t => {
     const rows = t.roles.map(r => {
-      if (r.pid == null) return `<tr><td>${esc(r.position)}</td><td class="tag">empty</td><td></td><td></td></tr>`;
+      if (r.pid == null) return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td class="tag">empty</td><td></td><td></td></tr>`;
       total++;
       const b = busy[r.pid];
       // JOINED vs QUEUED (Nov 2026): a live team's member has joined only when they're in THAT crime id; a queued
@@ -807,7 +817,7 @@ function drawDeployed() {
       const stt = (nextOn ? `<span class="qd" title="In this crime now - queued for their next crime, joins it when this one pays out">🕒 Queued · next: ${esc(nq.crime)}${nq.id ? " #" + esc(nq.id) : " (to spawn)"} · free in ${freeIn(nq.free_at)}</span>`
         : ok ? '<span class="ok">✅ Joined</span>' : r.queued ? queueTag(r, b) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ Not joined yet</span>')
         + (r.replaces && !ok ? ` <span class="bad">🔁 replacing ${esc(r.replaces.name || nameOf(r.replaces.pid))}</span>` : "");
-      return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
+      return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
