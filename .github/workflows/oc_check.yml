@@ -160,6 +160,10 @@ jobs:
           live = sum(1 for x in t if x.get("kind") == "live"); placed = sum(1 for x in t for y in x.get("roles", []) if y.get("pid") and not y.get("existing")); queued = sum(1 for x in t for y in x.get("roles", []) if y.get("queued"))
           print(f"Plan: {len(t)} teams ({live} in recruiting crimes, {len(t) - live} to spawn) · {placed} members placed ({queued} queued) · "
                 f"last change {(time.time() * 1000 - r['ts']) / 60000:.0f} min ago by {r['who']}" + (f" · planner {v['auto'].get('ms')} ms" if v.get('auto') else ""))
+          # every team: crime, Torn crime id, kind, slots in the crime / planned / queued / empty (no names or ids of members)
+          for x in t:
+              ro = x.get("roles", [])
+              print(f"  team: {x.get('crime')} #{x.get('crime_id') or '-'} {x.get('kind')} · in crime {sum(1 for y in ro if y.get('existing'))} · planned {sum(1 for y in ro if y.get('pid') and not y.get('existing') and not y.get('queued'))} · queued {sum(1 for y in ro if y.get('queued'))} · empty {sum(1 for y in ro if not y.get('pid'))}")
           # recruiting crimes the planner left open and why (crime names + rates only - no member names or IDs)
           ss = json.loads(r.get("stats") or "null") or {}
           dl = json.loads(r.get("dl") or "null") or {}
