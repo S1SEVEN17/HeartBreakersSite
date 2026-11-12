@@ -136,10 +136,11 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, includeBusy: false, chains: false, share: null, queueHours: 12, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
+const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
 OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
+delete OPT.chains;                // "Chain finals" option removed (Nov 12 2026) - prerequisite crimes are planned like any other
 // settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
-// plan uses the same target / lowest role / cap / chains / busy rules
+// plan uses the same target / lowest role / cap / queue rules
 let optTimer = null;
 const saveOpts = () => { LS.set("hb_oc_opts", OPT); clearTimeout(optTimer);
   optTimer = setTimeout(() => saveConfig("opts", OPT).catch(e => st("Settings not saved for the live plan: " + e.message, true)), 800); };
@@ -396,7 +397,7 @@ const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v
 const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
 const teamExp = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
 const crimeOk = crime => { const off = new Set(D.config.disabled || []);
-  return !off.has(crime) && rolesOf(crime).length && (OPT.chains || !(CFG.catalog[crime] || {}).prereq); };
+  return !off.has(crime) && rolesOf(crime).length; };   // chain finals allowed (Nov 12 2026) - switch crimes off in the Crimes tab
 
 // ROLE CAP (Nov 2026): a member whose rate in a crime's role is ABOVE OPT.cap is held back for a HIGHER-difficulty
 // crime, as long as they pass a role in a higher, switched-on crime at or above the lowest-role %. Auto-build only;
@@ -642,7 +643,6 @@ function drawBuilder() {
   // 0%-weight minimum: empty = off; never above the lowest individual role
   $("o_mz").onchange = () => { const v = $("o_mz").value.trim(); OPT.minZero = v === "" ? null : Math.max(0, Math.min(OPT.minRole, +v || 0)); saveOpts(); draw(); }; num("o_cap", "cap", 50, 100); num("o_q", "queueHours", 0, 168);
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
-  $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
   wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
   $("auto").onclick = () => { autoBuild(); draw(); };
   // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
@@ -783,9 +783,8 @@ function settingsHtml() {
       <div class="sgrp"><h4>🕒 Queue</h4>
         ${row("Queue members finishing within", numIn("o_q", OPT.queueHours, 0, 168, "hours"), "Members whose current crime is ready within this time get a slot in their next crime. 0 = only members who aren't in a crime.")}
       </div>
-      <div class="sgrp"><h4>💰 Pay & crimes</h4>
+      <div class="sgrp"><h4>💰 Pay</h4>
         ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
-        ${row("Chain finals", `<label class="ck"><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include</label>`, "Allow the final crimes of OC chains.")}
       </div>
     </div></details>`;
 }

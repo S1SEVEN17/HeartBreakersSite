@@ -41,7 +41,9 @@
 // ocPlan(X) -> {teams, changed, stats}. X:
 //   crimes   feed crimes (Torn v2 shape)          prev     the current plan's teams (or [])
 //   catalog  {name: {difficulty, roles: [labels], prereq}}           members  {pid: name} (current roster)
-//   opts     {target, minRole, minZero, cap, chains, includeBusy}   disabled Set of crime names switched off
+//   opts     {target, minRole, minZero, cap, includeBusy}          disabled Set of crime names switched off
+//            (CHAIN FINALS, Nov 12 2026, the user: the "Chain finals" option is gone - a crime with a prerequisite is
+//             planned like any other; leaders switch crimes off in the Crimes tab instead. opts.chains is ignored.)
 //   rateOf(pid, crime, label) -> {rate, src} | null                  payOf(crime) -> {pot, days} (team, max)
 //   budgetMs  time for the spawn optimizer's extra passes (page ~900, gatekeeper 0 = one pass)
 //   now       ms (default Date.now()) - for the queue window
@@ -52,7 +54,7 @@
 //   slot user.progress follows joined_at). So a member only has to JOIN before the members ahead of them finish
 //   planning. For a rotated crime that's recruiting, a member still in a Planning crime can be queued into it when
 //   they free up before their turn: the i-th new joiner (soonest free first) must be free by
-//   now + (planning left for the members already in it) + 24 h x i. Rotated crimes go first, may use chain finals,
+//   now + (planning left for the members already in it) + 24 h x i. Rotated crimes go first,
 //   and at most floor(pool / seats) recruiting instances get rotation at once (pool = members with a rate >= lowest role in one of its roles).
 //   MIX: best rates win, but a pool member who sat out the latest completed run gets priority, so nobody who
 //   qualifies sits out two runs in a row. While no instance is recruiting, pool members get normal crimes.
@@ -126,7 +128,7 @@ export function ocPlan(X) {
   const usable = (pid, c) => !busy.has(Number(pid)) || (queueable(pid) && beforeExpiry(pid, c)) || rotOk(pid, c);
   const ROT = X.rotate instanceof Set ? X.rotate : new Set(X.rotate || []);
   const rotated = n => ROT.has(n) && !X.disabled.has(n);
-  const crimeOk = n => !X.disabled.has(n) && rolesOf(n).length && (O.chains || !(cat[n] || {}).prereq || rotated(n));
+  const crimeOk = n => !X.disabled.has(n) && rolesOf(n).length;   // chain finals allowed (Nov 12 2026) - switched-off crimes only
   // ---- rotation: join-order planning deadlines ----
   const PLAN_MS = 24 * 3600e3;
   const planLeft = c => (c.slots || []).reduce((a, sl) => a + (sl.user ? Math.max(0, 100 - (Number(sl.user.progress) || 0)) / 100 * PLAN_MS : 0), 0);
@@ -331,7 +333,7 @@ export function ocPlan(X) {
   for (const c of recruiting) {
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
     if (t && t.lock) { skip(c, "locked"); continue; }
-    if (!t && (X.disabled.has(c.name) || (!O.chains && (cat[c.name] || {}).prereq && !rotated(c.name)))) { skip(c, X.disabled.has(c.name) ? "switched off" : "chain final"); continue; }   // switched off (an existing team is kept)
+    if (!t && X.disabled.has(c.name)) { skip(c, "switched off"); continue; }   // switched off (an existing team is kept)
     const roles = t ? t.roles : (c.slots || []).map(sl => {
       const label = slotLabel(sl);
       if (!sl.user) return {position: label, pid: null, name: "", rate: null};
