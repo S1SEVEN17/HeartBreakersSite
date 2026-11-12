@@ -9,15 +9,12 @@ jobs:
       - run: |
           set +e
           B=https://tornprobability.com:3000
-          curl -s -m 20 -A "Mozilla/5.0" $B/scenarios -o page.html; echo "page bytes: $(wc -c < page.html)"
-          grep -oE '(src|href)="[^"]+\.js[^"]*"' page.html | head -20
-          for js in $(grep -oE 'src="[^"]+\.js[^"]*"' page.html | sed 's/src="//;s/"$//' | head -15); do
-            case "$js" in http*) u=$js;; /*) u=$B$js;; *) u=$B/$js;; esac
-            curl -s -m 20 "$u" -o b.js; echo "== $u $(wc -c < b.js)"
-            grep -oE '"/?api/[A-Za-z0-9_/-]+' b.js | sort -u | head -40
-            grep -oE "'/?api/[A-Za-z0-9_/-]+" b.js | sort -u | head -40
-            grep -oE '`/?api/[A-Za-z0-9_/${}.-]+' b.js | sort -u | head -40
-          done
-          for ep in GetScenarios GetScenarioData GetScenarioPayouts GetPayouts GetRewards GetCrimes GetScenario scenarios GetAllScenarios; do
-            code=$(curl -s -m 20 -o r.json -w '%{http_code}' $B/api/$ep); echo "$ep -> $code $(wc -c < r.json) $(head -c 300 r.json | tr '\n' ' ')"
+          curl -s -m 20 -A "Mozilla/5.0" $B/scenarios -o page.html
+          echo "---- page (scripts / fetch calls) ----"
+          grep -oE "fetch\([^)]{0,160}" page.html | head -20
+          grep -oE "/api/[A-Za-z0-9_/?=&.-]+" page.html | sort -u | head -30
+          grep -oE '<script[^>]*src="[^"]+"' page.html | head
+          echo "---- tries ----"
+          for q in "scenarios?name=Blast%20from%20the%20Past" "scenarios?scenario=Blast%20from%20the%20Past" "scenarios/Blast%20from%20the%20Past" "scenarios?scenarioName=Blast%20from%20the%20Past"; do
+            code=$(curl -s -m 20 -o r.json -w '%{http_code}' "$B/api/$q"); echo "$q -> $code $(wc -c < r.json)"; head -c 1500 r.json | tr '\n' ' '; echo
           done
