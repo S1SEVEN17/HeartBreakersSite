@@ -1,0 +1,23 @@
+# TEMPORARY (Nov 12 2026): find which tornprobability.com API the /scenarios page reads its payout data from.
+# Prints endpoint paths and response shapes only. Delete after use.
+name: tp probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set +e
+          B=https://tornprobability.com:3000
+          curl -s -m 20 -A "Mozilla/5.0" $B/scenarios -o page.html; echo "page bytes: $(wc -c < page.html)"
+          grep -oE '(src|href)="[^"]+\.js[^"]*"' page.html | head -20
+          for js in $(grep -oE 'src="[^"]+\.js[^"]*"' page.html | sed 's/src="//;s/"$//' | head -15); do
+            case "$js" in http*) u=$js;; /*) u=$B$js;; *) u=$B/$js;; esac
+            curl -s -m 20 "$u" -o b.js; echo "== $u $(wc -c < b.js)"
+            grep -oE '"/?api/[A-Za-z0-9_/-]+' b.js | sort -u | head -40
+            grep -oE "'/?api/[A-Za-z0-9_/-]+" b.js | sort -u | head -40
+            grep -oE '`/?api/[A-Za-z0-9_/${}.-]+' b.js | sort -u | head -40
+          done
+          for ep in GetScenarios GetScenarioData GetScenarioPayouts GetPayouts GetRewards GetCrimes GetScenario scenarios GetAllScenarios; do
+            code=$(curl -s -m 20 -o r.json -w '%{http_code}' $B/api/$ep); echo "$ep -> $code $(wc -c < r.json) $(head -c 300 r.json | tr '\n' ' ')"
+          done
