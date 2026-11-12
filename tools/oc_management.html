@@ -26,7 +26,8 @@
     history   their latest rate for that crime + role from completed crimes (CFG.hist, rebuilt every full update)
     A rate in a crime they're in now wins; otherwise the NEWEST of shared and history (no age limit, Nov 2026). Members with no rate for a crime + role
     are never placed in it (a rate from an easier crime would overstate what they'd manage).
-  BUSY: members already in an active crime are left out unless "Include members already in a crime" is on.
+  BUSY: members already in an active crime are left out (unless queued). The old "Include members already in a crime"
+  draft option was REMOVED (Nov 11 2026, user) - OPT.includeBusy is always false, same as the automatic assignment.
   ENV: always prod (LIVE) - the Test data set was removed when the OC tools went live (Nov 2026). The Worker still
   keeps a separate 'test' env for the script's test fork; this page no longer shows or edits it.
   Data: CFG (__CONFIG__: catalog, hist, members, ghproxy) + live reads through the gatekeeper (leaders' pass):
@@ -135,6 +136,7 @@ const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
 const OPT = Object.assign({target: 75, minRole: 65, cap: 85, includeBusy: false, chains: false, share: null, queueHours: 12, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
+OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
 // settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
 // plan uses the same target / lowest role / cap / chains / busy rules
 let optTimer = null;
@@ -600,7 +602,7 @@ function drawBuilder() {
       Anyone above the <b>role cap</b> in a crime is moved up to a harder crime they can pass (placed back only if no harder team can use them). Pay =
       max reward recorded (last 100 completions, items at market price) × payout % ÷ planning days - the same figure members see in the script. Auto-build also weighs team success. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
     ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
-      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Members whose crime is ready within ${OPT.queueHours} h are queued for their next one automatically; tick <b>Include members already in a crime</b> to draft further ahead (the live plan won't reserve those).</div>` : ""}
+      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Members whose crime is ready within ${OPT.queueHours} h are queued for their next one automatically.</div>` : ""}
     ${settingsHtml()}
     <div class="bar" style="justify-content:flex-start;margin-top:10px">
       <button class="gold" id="auto">⚡ Auto-build teams</button>
@@ -622,7 +624,6 @@ function drawBuilder() {
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100); num("o_cap", "cap", 50, 100); num("o_q", "queueHours", 0, 168);
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
-  $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
   $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
   wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
   $("auto").onclick = () => { autoBuild(); draw(); };
@@ -764,9 +765,6 @@ function settingsHtml() {
       <div class="sgrp"><h4>💰 Pay & crimes</h4>
         ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
         ${row("Chain finals", `<label class="ck"><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include</label>`, "Allow the final crimes of OC chains.")}
-      </div>
-      <div class="sgrp"><h4>✏️ This board only</h4>
-        ${row("Members already in a crime", `<label class="ck"><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include</label>`, "Draft further ahead on this board. The live plan never reserves slots for them unless they're queued.")}
       </div>
     </div></details>`;
 }
