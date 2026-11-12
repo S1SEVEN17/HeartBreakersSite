@@ -2149,7 +2149,44 @@ async function ocSpawnAlerts(env) {
                  held_until: t.hold && Number(t.hold.until) > now ? Number(t.hold.until) : null, names: t.roles.map(r => r.name || "")});
   }
   alerts.sort((a, b) => (b.pay_day || 0) - (a.pay_day || 0));
-  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts};
+  const oc_alerts = await ocOcAlerts(env, cfg, crimes).catch(() => null);
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts};
+}
+// LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
+// parameters. Alert leadership when crimes fall below the minimum pass rate") - the same rules as OC Management
+// (tools/oc_management.html ocAlerts), for the Hub script's leaders' Home:
+//   roles  [{crime, crime_id, name, position, rate, why}]  a member in a recruiting / planning crime below that role's
+//          minimum (opts.minRole, weight-scaled by opts.minZero) or above opts.cap (when under 100)
+//   crimes [{crime, crime_id, success, target, status}]     every slot filled, weighted team success below opts.target
+async function ocOcAlerts(env, cfg, crimes) {
+  const O = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
+  const [tpw, ros] = await Promise.all([ocSnapGet(env, "hub", "tp:weights").catch(() => null), ocSnapGet(env, "prod", "roster").catch(() => null)]);
+  const W = (tpw && tpw.data && tpw.data.weights) || null, names = (ros && ros.data) || {};
+  const K = v => String(v || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const wOf = (crime, label) => {                     // weight / the crime's mean weight (1 = no weights) - as the page's roleW
+    if (!W) return 1; const e = Object.entries(W).find(([k]) => K(k) === K(crime)); if (!e) return 1;
+    const m = {}; Object.entries(e[1] || {}).forEach(([r, v]) => { m[K(r)] = Math.max(0, Number(v) || 0); });
+    const vals = Object.values(m), mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0; if (!mean) return 1;
+    const k = K(label), v = m[k] ?? (/\d+$/.test(k) ? m[k.replace(/\d+$/, "")] : undefined);
+    return v == null ? 1 : v / mean; };
+  const floorOf = (crime, label) => O.minZero == null || !(O.minZero < O.minRole) ? O.minRole
+    : O.minZero + (O.minRole - O.minZero) * Math.min(1, wOf(crime, label));
+  const roles = [], crimesOut = [];
+  for (const c of crimes || []) {
+    if (!c || (c.status !== "Recruiting" && c.status !== "Planning")) continue;
+    let a = 0, w = 0;
+    for (const sl of c.slots || []) {
+      if (!sl.user || typeof sl.checkpoint_pass_rate !== "number") continue;
+      const pos = (sl.position_info && sl.position_info.label) || sl.position, rate = Math.round(sl.checkpoint_pass_rate);
+      const min = Math.ceil(floorOf(c.name, pos) - 1e-9), k = wOf(c.name, pos); a += sl.checkpoint_pass_rate * k; w += k;
+      const base = {crime: c.name, crime_id: c.id, name: names[String(sl.user.id)] || "[" + sl.user.id + "]", position: pos, rate};
+      if (rate < min) roles.push(Object.assign(base, {why: `below the ${min}% minimum`}));
+      else if (O.cap < 100 && rate > O.cap) roles.push(Object.assign(base, {why: `above the ${O.cap}% cap`}));
+    }
+    if ((c.slots || []).length && (c.slots || []).every(sl => sl.user) && w && a / w < O.target)
+      crimesOut.push({crime: c.name, crime_id: c.id, success: Math.round(a / w), target: O.target, status: c.status});
+  }
+  return {roles, crimes: crimesOut};
 }
 // SCRIPT USERS (Nov 12 2026): {pid: ms} members who asked the Hub for their OC assignment (POST /oc/plan, /oc/bundle -
 // the OC Optimizer script) in the last OC_SCRIPT_DAYS days. Members not in it don't see assignments.

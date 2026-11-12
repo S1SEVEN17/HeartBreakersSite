@@ -92,6 +92,7 @@ details.sets summary b{color:var(--gold)}
 .srow .ck{display:flex;gap:5px;align-items:center;font-weight:normal}
 .opts label{display:flex;align-items:center;gap:6px;font-size:13px;color:#ccc}
 .teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;margin-top:10px}
+.alerts{background:#2a1214;border:1px solid #d9583a;border-radius:10px;padding:8px 12px;margin:8px 0;font-size:13px;line-height:1.6}.alerts>b{color:#ff8f6b}
 .team{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:10px 12px}
 .team.lock{border-color:#6b4a18}
 .th{display:flex;align-items:center;gap:8px;margin-bottom:6px}.th b{flex:1;color:#fff;min-width:0}
@@ -120,7 +121,7 @@ __MENU__
 <div class="sub">Choose which crimes the OC Optimizer suggests, build teams and deploy them to members using the script</div>
 <div class="bar"><button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
-<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="sharing">📡 Rate sharing</button></div>
+<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="sharing">📡 Rate sharing</button></div>
 <div id="view"></div>
 <script>
 // ---- shared OC team planner (gate/oc_planner.js, inlined by generate.py) ----
@@ -599,7 +600,7 @@ function addTeam(crime) {
 // ---------- views ----------
 function draw() {
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
-  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
+  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
 }
 
 // ROTATION (Nov 2026): leaders mark the crimes they want ROTATED. A rotated crime that's recruiting is filled first
@@ -906,6 +907,65 @@ function wireAuto() {
     saveConfig("opts", OPT).then(() => st(`The Hub now re-plans every ${OPT.autoMinutes} minutes.`)).catch(e => st("Not saved: " + e.message, true));
     draw(); };
 }
+// LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
+// parameters. Alert leadership when crimes fall below the minimum pass rate"), from the crimes in Torn (D.feed):
+//   role   a member IN a recruiting / planning crime whose pass rate is below that role's minimum (the lowest
+//          individual role, weight-scaled when "Lowest rate for 0%-weight roles" is set - floorOf) or above the
+//          role cap (OPT.cap, when it's under 100)
+//   crime  a crime with every slot filled whose weighted team success (role weights) is below the overall team target
+// Shown on the Deployed and Planning tabs; the Hub script's leaders' Home shows the same (gate/worker.js ocOcAlerts).
+const feedRole = sl => (sl.position_info && sl.position_info.label) || sl.position;
+const weightedOf = (crime, slots) => { let a = 0, w = 0;
+  slots.forEach(sl => { if (sl.user && typeof sl.checkpoint_pass_rate === "number") { const k = roleW(crime, feedRole(sl)); a += sl.checkpoint_pass_rate * k; w += k; } });
+  return w ? a / w : null; };
+function ocAlerts() {
+  const out = {roles: [], crimes: []};
+  (D.feed || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning")).forEach(c => {
+    (c.slots || []).forEach(sl => { if (!sl.user || typeof sl.checkpoint_pass_rate !== "number") return;
+      const rate = Math.round(sl.checkpoint_pass_rate), pos = feedRole(sl), min = Math.ceil(floorOf(c.name, pos) - 1e-9);
+      if (rate < min) out.roles.push({c, pos, pid: sl.user.id, rate, why: `below the ${min}% minimum`});
+      else if (OPT.cap < 100 && rate > OPT.cap) out.roles.push({c, pos, pid: sl.user.id, rate, why: `above the ${OPT.cap}% cap`}); });
+    if ((c.slots || []).length && (c.slots || []).every(sl => sl.user)) { const w = weightedOf(c.name, c.slots || []);
+      if (w != null && w < OPT.target) out.crimes.push({c, w}); }
+  });
+  return out;
+}
+function alertsHtml() {
+  const A = ocAlerts();
+  if (!A.roles.length && !A.crimes.length) return "";
+  const id = c => `${esc(c.name)} <span class="tag">#${esc(c.id)}</span>`;
+  return `<div class="alerts"><b>⚠️ Leadership alerts</b>`
+    + A.crimes.map(x => `<div>📉 ${id(x.c)} - team success <b class="bad">${Math.round(x.w)}%</b>, below the ${OPT.target}% target${x.c.status === "Planning" ? " (planning)" : ""}</div>`).join("")
+    + A.roles.map(x => `<div>🎯 <b>${esc(nameOf(x.pid))}</b> joined ${esc(x.pos)} in ${id(x.c)} at <b class="${x.why.startsWith("below") ? "bad" : "mid"}">${x.rate}%</b> - ${x.why}</div>`).join("")
+    + `</div>`;
+}
+// PLANNING TAB (Nov 12 2026, user: 'Show a "Planning" section for crimes that are filled, with individual crime stats
+// including pass rates, expected completion, etc. Sort them by earliest completed at the top'): every crime in Torn
+// with all its slots filled (Planning), soonest ready first - each member's role (weight), pass rate (flagged when it's
+// outside the min-max) and planning progress, the weighted team success, each member's cut and when it's ready.
+function drawPlanning() {
+  const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
+  const when = s => s ? new Date(s * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "-";
+  const cards = list.map(c => {
+    const w = weightedOf(c.name, c.slots || []), v = valueOf(c.name), cut = v.pot ? v.pot / (rolesOf(c.name).length || (c.slots || []).length || 1) : 0;
+    // calculated full-team chance (tornprobability.com) when the Hub has it for this exact set of rates
+    const sc = teamSuccess({crime: c.name, roles: (c.slots || []).map(sl => ({position: feedRole(sl), pid: sl.user ? sl.user.id : null,
+      rate: sl.user && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}))});
+    const rows = (c.slots || []).map(sl => { const pos = feedRole(sl), u = sl.user;
+      const rate = u && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null;
+      const min = Math.ceil(floorOf(c.name, pos) - 1e-9), out_ = rate != null && (rate < min || (OPT.cap < 100 && rate > OPT.cap));
+      const pg = u ? Math.round(Number(u.progress) || 0) : 0;
+      return `<tr><td>${esc(pos)}${wTag(c.name, pos)}</td><td>${u ? `<b>${esc(nameOf(u.id))}</b>` : '<span class="mid">Unfilled</span>'}</td>`
+        + `<td class="${col(rate)}">${rate == null ? "-" : rate + "%"}${out_ ? ' <span title="Outside the min-max">⚠️</span>' : ""}</td>`
+        + `<td>${u ? (pg >= 100 ? '<span class="ok">✅ planned</span>' : pg > 0 ? `<span class="qd">⏳ ${pg}%</span>` : '<span class="tag">waiting</span>') : ""}</td></tr>`; }).join("");
+    return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
+        <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
+      <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${w != null && w < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
+      <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Planning</th></tr>${rows}</table></div>`; }).join("");
+  $("view").innerHTML = `<div class="panel">${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
+    ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
+    ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
+}
 function drawDeployed() {
   // FILLED crimes aren't shown (Nov 11 2026, user): every slot taken in Torn and no replacement pending - the planner
   // drops them on its next run; hide them now too (a member leaving brings the crime back with an open slot)
@@ -961,6 +1021,7 @@ function drawDeployed() {
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
     <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = finishing a crime and already lined up for the next one (shown in both) · ⏳ <b>Not joined yet</b> = free, hasn't joined. Counted once per member.</div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
+    ${alertsHtml()}
     ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
   wireAuto();
