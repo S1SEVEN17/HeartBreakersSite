@@ -592,6 +592,8 @@ export function ocPlan(X) {
     // TIME IN THE CRIME: {crime_id: crime type's days / days for whoever joins now} - scales a live team's pay per day
     inst_mult: Object.fromEntries([...inst.values()].filter(c => c.status === "Recruiting").map(c => {
       const v = X.payOf(c.name); return [String(c.id), v && v.days ? +(v.days / instDays(c)).toFixed(3) : 1]; })),
+    // JOIN NOW (Nov 12 2026): {crime_id: days to payout for whoever joins now} - every recruiting crime
+    inst_days: Object.fromEntries([...inst.values()].filter(c => c.status === "Recruiting").map(c => [String(c.id), +instDays(c).toFixed(3)])),
     rotation: Object.keys(poolOf).map(n => ({crime: n, pool: poolOf[n].size, seats: rolesOf(n).length,
       max: Math.max(1, Math.floor(poolOf[n].size / (rolesOf(n).length || 1))),
       live: [...ROT_ON].filter(id => (inst.get(id) || {}).name === n).length}))}};

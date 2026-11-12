@@ -1454,7 +1454,24 @@ async function ocPlanObj(env, envName, id) {
       sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null}))
       .sort((a, b) => (a.sharing - b.sharing) || a.name.localeCompare(b.name));
   }
-  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing,
+  // JOIN NOW (Nov 12 2026, user: 'a "Join Now" pay per day rate that can be given to members to encourage them to
+  // join these roles'; project doc claude/oc-optimizer-hub-joinnow-addendum.md): for every RECRUITING crime with
+  // at least one member in it and an open slot - the pay per member per day for whoever joins now (cut / days to
+  // payout = planning left + 24 h per open slot + later chain crimes; the planner's stats.inst_days / inst_mult)
+  // next to the crime's normal rate. join_now {crime_id: {crime, pay_day, pay_day_min, normal, normal_min, days, mult}}
+  // and assignment.join_now (a live, not-queued assignment).
+  const instDays = (ps && ps.data && ps.data.inst_days) || {};
+  const join_now = {};
+  for (const c of crimes || []) {
+    if (!c || c.status !== "Recruiting" || !(c.slots || []).some(sl => sl.user) || !(c.slots || []).some(sl => !sl.user)) continue;
+    const id = String(c.id), m = Number(instMult[id]) || 0, hi = payDay[c.name], lo = payMin[c.name];
+    if (!m || !hi) continue;
+    join_now[id] = {crime: c.name, pay_day: Math.round(hi * m), pay_day_min: lo != null ? Math.round(lo * m) : null,
+                    normal: hi, normal_min: lo ?? null, days: Number(instDays[id]) || null, mult: Math.round(m * 100) / 100};
+  }
+  if (assignment && assignment.crime_id != null && !assignment.queued && join_now[String(assignment.crime_id)])
+    assignment.join_now = join_now[String(assignment.crime_id)];
+  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing, join_now,
           weights_at: tpRow ? Number(tpRow.as_of) || null : null};   // when the role weights were last fetched (null = none yet)
 }
 function ocSpawnState(crimes, snap, crime, position) {
@@ -2343,9 +2360,11 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   }
   // for the script (Nov 2026): pay per member per day of every planned crime + each catalog role's required item
   r.stats.pay_day = {}; r.stats.pay_day_min = {}; r.stats.items = {};
-  for (const t of r.teams) { const p = payOf(t.crime), q = payOf(t.crime, true);
-    r.stats.pay_day[t.crime] = p.days ? Math.round(p.pot / p.days / seats(t.crime)) : 0;            // best recorded
-    r.stats.pay_day_min[t.crime] = q.days ? Math.round(q.pot / q.days / seats(t.crime)) : 0; }      // worst recorded
+  // (JOIN NOW, Nov 12 2026: every recruiting crime's type too, not only planned ones - the script's join-now badges)
+  const payNames = new Set(r.teams.map(t => t.crime).concat((crimes || []).filter(c => c && c.status === "Recruiting" && catalog[c.name]).map(c => c.name)));
+  for (const n of payNames) { const p = payOf(n), q = payOf(n, true);
+    r.stats.pay_day[n] = p.days ? Math.round(p.pot / p.days / seats(n)) : 0;            // best recorded
+    r.stats.pay_day_min[n] = q.days ? Math.round(q.pot / q.days / seats(n)) : 0; }      // worst recorded
   for (const c of (catS.data.organizedcrimes || [])) if (c && c.name && r.teams.some(t => t.crime === c.name)) {
     const m = {}; (c.slots || []).forEach((sl, i) => { const it = sl.required_item; if (it && it.id)
       m[(sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1))] = {id: it.id, name: it.name || null}; });
