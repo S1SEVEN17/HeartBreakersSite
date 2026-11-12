@@ -74,6 +74,20 @@ input[type=number]{width:70px;text-align:center}
 .sw input:checked+span{background:#2f6b32}.sw input:checked+span:before{transform:translateX(20px);background:#fff}
 /* team builder */
 .opts{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
+/* ⚙️ Settings (Nov 11 2026): grouped, one row per setting with a plain-words note */
+details.sets{background:#170d0e;border:1px solid #3a1c1e;border-radius:10px;padding:8px 12px;margin-bottom:10px}
+details.sets summary{cursor:pointer;list-style:none}details.sets summary::-webkit-details-marker{display:none}
+details.sets summary b{color:var(--gold)}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;margin-top:10px}
+.sgrp{background:#120a0b;border:1px solid #2a1416;border-radius:8px;padding:8px 10px}
+.sgrp h4{margin:0 0 6px;font-size:13px;color:#fff}
+.srow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:6px 0;border-top:1px solid #241214}
+.srow:first-of-type{border-top:0}
+.srow label{font-size:13px;color:#e6e6e6;font-weight:600}
+.srow .sctl{display:flex;gap:6px;align-items:center;justify-content:flex-end;font-size:12px;color:#bbb;white-space:nowrap}
+.srow .sctl input[type=number]{width:64px}
+.srow .snote{grid-column:1 / -1;font-size:11.5px;color:var(--sub);line-height:1.35}
+.srow .ck{display:flex;gap:5px;align-items:center;font-weight:normal}
 .opts label{display:flex;align-items:center;gap:6px;font-size:13px;color:#ccc}
 .teams{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;margin-top:10px}
 .team{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:10px 12px}
@@ -587,15 +601,7 @@ function drawBuilder() {
       max reward recorded (last 100 completions, items at market price) × payout % ÷ planning days - the same figure members see in the script. Auto-build also weighs team success. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
     ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
       ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Members whose crime is ready within ${OPT.queueHours} h are queued for their next one automatically; tick <b>Include members already in a crime</b> to draft further ahead (the live plan won't reserve those).</div>` : ""}
-    <div class="opts">
-      <label title="Team success = the role-WEIGHTED average of the members' pass rates (tornprobability.com role weights) - the default everywhere">Target team success (weighted) <input type="number" id="o_t" min="1" max="100" value="${OPT.target}">%</label>
-      <label>Lowest role <input type="number" id="o_m" min="0" max="100" value="${OPT.minRole}">%</label>
-      <label title="Above this a member is moved up to a harder crime they can pass (100 = off)">Role cap <input type="number" id="o_cap" min="50" max="100" value="${OPT.cap}">%</label>
-      <label title="Members' share of each payout. Empty = each crime's recorded payout %">Members' share <input type="number" id="o_sh" min="0" max="100" placeholder="recorded" value="${OPT.share ?? ""}" style="width:80px">%</label>
-      <label title="Plan members whose current crime is ready within this many hours into their next crime (0 = off)">Queue members finishing within <input type="number" id="o_q" min="0" max="168" value="${OPT.queueHours}">h</label>
-      <label title="Drafts on this board only - the live plan never reserves slots for members already in a crime unless they're queued (their crime is ready within the queue window)"><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include members already in a crime (draft only)</label>
-      <label><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
-    </div>
+    ${settingsHtml()}
     <div class="bar" style="justify-content:flex-start;margin-top:10px">
       <button class="gold" id="auto">⚡ Auto-build teams</button>
       <select id="addc">
@@ -618,6 +624,7 @@ function drawBuilder() {
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   $("o_b").onchange = () => { OPT.includeBusy = $("o_b").checked; saveOpts(); draw(); };
   $("o_c").onchange = () => { OPT.chains = $("o_c").checked; saveOpts(); draw(); };
+  wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
   $("auto").onclick = () => { autoBuild(); draw(); };
   // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
   $("add").onclick = () => { const x = suggBy.get($("addc").value);
@@ -724,44 +731,48 @@ function drawSharing() {
 // reserved as positions open / close - and RECONFIGURES every reservation when a reserved slot is taken by someone
 // else (gate/worker.js ocAutoPlan). Saved with the Team Builder settings (oc_config 'opts'.auto); default on.
 function autoHtml() {
+  // LIVE PLAN: status only (Nov 11 2026, user: "The automatic setting should just be in team builder") - the On / Off,
+  // timer and every assignment setting are in the Team Builder's ⚙️ Settings (one shared set: config "opts")
   const rc = D.config.reconfigured, moves = (rc && rc.moves) || [];
-  return `<div class="hn" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><b>⚙️ Automatic team building</b>
-    <button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>
-    ${OPT.auto !== false ? `<label title="How often the Hub rebuilds the live plan (3-60 minutes; the crimes are still checked every 3)">every <select id="autoMin">${[3, 5, 10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${(OPT.autoMinutes || 3) === m ? " selected" : ""}>${m} min</option>`).join("")}</select></label>` : ""}
-    <span class="tag">${OPT.auto !== false ? `The Hub builds teams, reserves slots and re-plans every ${OPT.autoMinutes || 3} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""}.` : "Off - the live plan only changes when a leader deploys one."}</span></div>`
-    // AUTOMATIC ASSIGNMENT SETTINGS (Nov 11 2026, user: "Add settings to control the automatic assignment function. Overall
-    // success rates, individual success rates, Queue time, etc." - SHARED with the Team Builder by the user's choice:
-    // the same opts, saved to the Hub as config "opts", which ocAutoPlan reads)
-    + `<details class="hn autoset"${AUTOSET_OPEN ? " open" : ""}><summary><b>🎛️ Automatic assignment settings</b> <span class="tag">team ${OPT.target}% · lowest role ${OPT.minRole}% · cap ${OPT.cap}% · queue ${OPT.queueHours} h${OPT.chains ? " · chain finals" : ""} - shared with the Team Builder</span></summary>
-      <div class="opts" style="margin-top:8px">
-        <label title="The overall team success the Hub aims for: a team is only formed / a recruiting crime only filled when the role-WEIGHTED average of the members' pass rates reaches this">Overall team success (weighted) <input type="number" id="a_t" min="1" max="100" value="${OPT.target}">%</label>
-        <label title="No member is put in a role they pass below this">Lowest individual role <input type="number" id="a_m" min="0" max="100" value="${OPT.minRole}">%</label>
-        <label title="A member who passes a role above this is moved up to a harder crime they can pass (100 = off)">Individual role cap <input type="number" id="a_cap" min="50" max="100" value="${OPT.cap}">%</label>
-        <label title="Members whose current crime is ready within this many hours are queued into their next crime (0 = only members who aren't in a crime)">Queue members finishing within <input type="number" id="a_q" min="0" max="168" value="${OPT.queueHours}">h</label>
-        <label title="Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %">Members' share <input type="number" id="a_sh" min="0" max="100" placeholder="recorded" value="${OPT.share ?? ""}" style="width:80px">%</label>
-        <label><input type="checkbox" id="a_c"${OPT.chains ? " checked" : ""}> Include chain finals</label>
-      </div>
-      <div class="tag" style="margin-top:6px">Saved to the Hub for everyone - the automatic assignment uses them from its next run${OPT.auto !== false ? ` (within ${OPT.autoMinutes || 3} minutes)` : " (it's Off now)"}. Changing them in the Team Builder changes them here too.</div></details>`
+  return `<div class="hn"><b>🤖 Automatic assignment: ${OPT.auto !== false ? '<span class="ok">On</span>' : '<span class="mid">Off</span>'}</b>
+    <span class="tag">${OPT.auto !== false ? `re-plans every ${OPT.autoMinutes || 3} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""} · team ${OPT.target}% · lowest role ${OPT.minRole}% · queue ${OPT.queueHours} h` : "the live plan only changes when a leader deploys one"} · change it in the <b>Team Builder ⚙️ Settings</b></span></div>`
     + (moves.length ? `<div class="hn">🔀 <b>Reconfigured ${ago(rc.at)}</b> - ${moves.slice(0, 4).map(m => `${esc(m.took.name || "[" + m.took.pid + "]")} took the ${esc(m.position)} slot in ${esc(m.crime)} reserved for ${esc(m.planned.name || "[" + m.planned.pid + "]")}`).join("; ")}${moves.length > 4 ? ` and ${moves.length - 4} more` : ""}. Every reserved and queued member was placed again.</div>` : "");
 }
-let AUTOSET_OPEN = false;
+// TEAM BUILDER ⚙️ SETTINGS (Nov 11 2026, user: "The automatic setting should just be in team builder and they should
+// share the same settings. Make the settings easier to read."): ONE set (OPT, saved to the Hub as config "opts") used
+// by the Team Builder AND the Hub's automatic assignment (ocAutoPlan). Grouped, each with a plain-words note.
+let SET_OPEN = LS.get("hb_oc_set_open", true);
+function settingsHtml() {
+  const row = (label, ctl, note) => `<div class="srow"><label>${label}</label><div class="sctl">${ctl}</div><div class="snote">${note}</div></div>`;
+  const numIn = (id, v, lo, hi, unit, w) => `<input type="number" id="${id}" min="${lo}" max="${hi}" value="${v ?? ""}"${w ? ` style="width:${w}px"` : ""}${v == null ? ' placeholder="recorded"' : ""}> ${unit}`;
+  return `<details class="sets"${SET_OPEN ? " open" : ""}><summary><b>⚙️ Settings</b> <span class="tag">automatic ${OPT.auto !== false ? "on" : "off"} · team ${OPT.target}% · lowest role ${OPT.minRole}% · cap ${OPT.cap}% · queue ${OPT.queueHours} h - used by the Team Builder and the automatic assignment</span></summary>
+    <div class="sgrid">
+      <div class="sgrp"><h4>🤖 Automatic assignment</h4>
+        ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
+              "On: the Hub builds teams, reserves slots and keeps the live plan up to date by itself. Off: the live plan only changes when a leader deploys one.")}
+        ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[3, 5, 10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${(OPT.autoMinutes || 3) === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
+              `How often the Hub rebuilds the plan${D.config.auto_run ? ` · last run ${ago(D.config.auto_run)}` : ""}.`)}
+      </div>
+      <div class="sgrp"><h4>🎯 Success rates</h4>
+        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A team is only formed (and a recruiting crime only filled) when the team's weighted success reaches this.")}
+        ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), "Nobody is put in a role they pass below this.")}
+        ${row("Individual role cap", numIn("o_cap", OPT.cap, 50, 100, "%"), "Someone who passes a role above this is moved up to a harder crime they can pass. 100 = off.")}
+      </div>
+      <div class="sgrp"><h4>🕒 Queue</h4>
+        ${row("Queue members finishing within", numIn("o_q", OPT.queueHours, 0, 168, "hours"), "Members whose current crime is ready within this time get a slot in their next crime. 0 = only members who aren't in a crime.")}
+      </div>
+      <div class="sgrp"><h4>💰 Pay & crimes</h4>
+        ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
+        ${row("Chain finals", `<label class="ck"><input type="checkbox" id="o_c"${OPT.chains ? " checked" : ""}> Include</label>`, "Allow the final crimes of OC chains.")}
+      </div>
+      <div class="sgrp"><h4>✏️ This board only</h4>
+        ${row("Members already in a crime", `<label class="ck"><input type="checkbox" id="o_b"${OPT.includeBusy ? " checked" : ""}> Include</label>`, "Draft further ahead on this board. The live plan never reserves slots for them unless they're queued.")}
+      </div>
+    </div></details>`;
+}
 function wireAuto() {
-  // automatic assignment settings (shared opts) - saved to the Hub (saveOpts -> config "opts")
-  const as = document.querySelector("details.autoset");
-  if (as) as.ontoggle = () => { AUTOSET_OPEN = as.open; };
-  const anum = (id, k, lo, hi, label) => { if ($(id)) $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts();
-    st(`${label} set to ${OPT[k]}${k === "queueHours" ? " h" : "%"} - the automatic assignment uses it from its next run.`); draw(); }; };
-  anum("a_t", "target", 1, 100, "Overall team success"); anum("a_m", "minRole", 0, 100, "Lowest individual role");
-  anum("a_cap", "cap", 50, 100, "Individual role cap"); anum("a_q", "queueHours", 0, 168, "Queue window");
-  if ($("a_sh")) $("a_sh").onchange = () => { const v = $("a_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts();
-    st(OPT.share == null ? "Members' share: each crime's recorded payout %." : `Members' share set to ${OPT.share}%.`); draw(); };
-  if ($("a_c")) $("a_c").onchange = () => { OPT.chains = $("a_c").checked; saveOpts(); st(OPT.chains ? "Chain finals included." : "Chain finals left out."); draw(); };
-  const set = on => { if ((OPT.auto !== false) === on) return;
-    if (!on && !confirm("Turn off automatic team building? The live plan will stay exactly as it is until a leader deploys a new one.")) return;
-    OPT.auto = on; LS.set("hb_oc_opts", OPT);
-    saveConfig("opts", OPT).then(() => st(on ? "Automatic team building on - the Hub re-plans within 3 minutes." : "Automatic team building off."))
-      .catch(e => st("Not saved: " + e.message, true));
-    draw(); };
+  const sd = document.querySelector("details.sets");
+  if (sd) sd.ontoggle = () => { SET_OPEN = sd.open; LS.set("hb_oc_set_open", SET_OPEN); };
   if ($("autoOn")) { $("autoOn").onclick = () => set(true); $("autoOff").onclick = () => set(false); }
   // AUTOMATIC TIMER (Nov 2026): minutes between the Hub's automatic re-plans (opts.autoMinutes, 3-60)
   if ($("autoMin")) $("autoMin").onchange = () => {
