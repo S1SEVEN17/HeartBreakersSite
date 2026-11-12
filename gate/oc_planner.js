@@ -15,7 +15,7 @@
 //   * Members left over: "needs spawn" teams for crime TYPES (the pay-per-day optimizer: multi-start greedy +
 //     steal/backfill + upgrades, role cap) - the script and the Hub warn the crime needs to be spawned.
 //     PRIORITY (Nov 11 2026, the user): the plan kept is the one that seats the most members in the crime with the
-//     highest recorded MAX pay per member per day, then the next crime, and so on (better()); total expected pay only
+//     highest recorded MAX pay per member per day, then the next crime, and so on (better()); total max pay only
 //     breaks exact ties.
 //   QUEUE (Nov 2026): a member in a PLANNING crime that's ready within opts.queueHours (default 12, leaders can change it; 0 = off) can be QUEUED for their
 //     next crime - they join it when their current crime pays out. Queued roles carry queued: true + free_at (ms).
@@ -82,7 +82,7 @@
 //   fresh     true = ignore prev (except locked teams) - the page's "Auto-build" from scratch
 //   weights   ROLE WEIGHTS (Nov 2026, tornprobability.com GetRoleWeights): {CrimeKey: {RoleKey: weight}} - how much each
 //             role's pass rate moves the crime's success. Team success = the WEIGHTED average of its members' rates
-//             (each role's weight / the crime's mean weight), used for the target, the expected pay and every fill.
+//             (each role's weight / the crime's mean weight), used for the target and every fill.
 //             Keys are matched letters-and-digits only, case-insensitive ("Stage Fright"/"StageFright",
 //             "Muscle #1"/"Muscle1"). A crime with no weights falls back to the plain average.
 //   succOf    CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): (crime, roles) -> tornprobability.com's
@@ -90,7 +90,7 @@
 //             the Hub checks the planned full teams after each run and caches them; partial teams can't be checked).
 //             When known it REPLACES the weighted average: the success target applies to it (a full team below the
 //             target is rejected - the search moves on to the next-best team, and a kept team below it is broken up
-//             and refilled) and expected pay uses it. The weighted average still shortlists (the search can't ask
+//             and refilled). Pay is never multiplied by success (no expected pay). The weighted average still shortlists (the search can't ask
 //             tornprobability about every team) and decides for partial teams.
 //   reshuffle true = RECONFIGURE (Nov 2026, the user's rule): someone took a slot that was reserved for another member,
 //             so every RESERVATION is planned again from scratch for the most efficient placement - members already
@@ -234,7 +234,10 @@ export function ocPlan(X) {
     const a = avgOf(roles, crime); return a != null && a >= O.target; };
   // a full team the search found: rejected only when its calculated chance is KNOWN and below the target
   const calcBad = (roles, crime) => { const c = calcOf(roles, crime); if (c != null && c < O.target) { calcRejected++; return true; } return false; };
-  const expPay = t => { const a = succ(t.roles, t.crime); return a == null ? 0 : payDay(t.crime) * a / 100; };
+  // NO EXPECTED PAY (Nov 12 2026, the user: "Remove expected pay per day. This isn't needed."): a team's value is its
+  // crime's MAX pay per day - success is NOT multiplied in; it only decides whether a team may be formed (the target,
+  // calculated chance when known). The tiny success term only breaks exact ties (stable picks), never outweighs pay.
+  const expPay = t => { const a = succ(t.roles, t.crime); return a == null ? 0 : payDay(t.crime) + a * 1e-6; };
 
   // ---- 1. keep what's still valid ----
   const teams = [], assigned = new Set();                  // pids planned somewhere (not counting `existing`)
@@ -469,7 +472,8 @@ export function ocPlan(X) {
     const resv = new Map();                                // pid -> the live role they're reserved in (not joined)
     teams.forEach(t => { if (t.kind === "live" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !r.existing && !r.replaces) resv.set(Number(r.pid), {t, r}); }); });
     const liveDen = t => { const c = inst.get(String(t.crime_id)); return c ? payDayInst(c) / (t.roles.length || 1) : density(t.crime); };   // TIME IN THE CRIME
-    const curPay = pid => { const x = resv.get(pid); return x ? liveDen(x.t) * (x.r.rate || 0) / 100 : 0.5 * (bestDay[pid] || 0); };
+    // what a pulled member is planned for now: their reserved crime's MAX pay per member per day (no expected pay)
+    const curPay = pid => { const x = resv.get(pid); return x ? liveDen(x.t) : 0.5 * (bestDay[pid] || 0); };
     const cands = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n) && !(holdLog[n] > NOW)
       && !teams.some(t => t.kind === "spawn" && t.hold && t.crime === n)).sort((a, b) => density(b) - density(a));
     let pulled = false;

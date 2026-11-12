@@ -375,7 +375,7 @@ function bestTeam(crime, blocked) {
 //   each $/day  = pot ÷ roles ÷ days
 // Prerequisite chains (No Reserve -> Bidding War): only the final crime pays, split over every seat in the chain.
 //   both crimes: pot = final pot × its seats ÷ all seats, days = both crimes' roles (the whole chain)
-// Auto-build RANKS by that × team success (teamExp), so safer teams win among those that reach the target.
+// Auto-build RANKS by max pay per day (teamExp) - success only gates it (the target).
 const fmt$ = n => n == null ? "-" : n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "b" : n >= 1e6 ? "$" + (n / 1e6).toFixed(1) + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n);
 const PP_DEFAULT = (() => { const v = Object.values(CFG.values || {}).map(x => x.pp).filter(x => x != null).sort((a, b) => a - b);
   return v.length ? v[v.length >> 1] : 100; })();           // typical payout % when a crime's own isn't known
@@ -445,8 +445,8 @@ const payRange = crime => { const hi = eachPay(crime), lo = Math.min(eachLow(cri
 const delayTag = pid => { const d = ((D.config || {}).delays || {})[String(pid)];
   return d && d.n ? `<span class="tag bad" title="Held up ${d.n} crime${d.n === 1 ? "" : "s"} in the last 30 days (${d.hrs} h in total${d.runs ? `, took part in ${d.runs}` : ""}) - the planner counts the likely delay against the crime's pay">⏱ ${d.n} delay${d.n === 1 ? "" : "s"} · ${Math.round(d.hrs)}h</span>` : ""; };
 // teamPay = max payout per day for the team; eachPay = per member per day (what's SHOWN) - same as the script.
-// teamExp = what auto-build RANKS by: that × team success, so among teams that all reach the target the safer,
-//           better-paying ones still win (the target itself is a hard limit either way).
+// teamExp = what auto-build RANKS by: the team's MAX pay per day (no expected pay, Nov 12 2026 - success only decides
+//           whether a team may be formed; the target is a hard limit).
 // TIME IN THE CRIME (Nov 12 2026, user - same rule as gate/oc_planner.js instDays): a member who joins a RECRUITING
 // crime now is tied up for the planning still left (roles plan one after another, 24 h each) + 24 h per open slot +
 // later crimes in its chain, at least 1 day - so a half-planned crime pays far more per day to fill. Spawn teams and
@@ -474,8 +474,10 @@ function payLine(t, team) {
 }
 const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / teamDays(t); };
 const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
-// CALCULATED SUCCESS: tornprobability's chance for a full team when the Hub has checked it, else the weighted average
-const teamExp = t => { const a = teamSuccess(t) ?? teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
+// NO EXPECTED PAY (Nov 12 2026, the user: "Remove expected pay per day. This isn't needed."): the team's MAX pay per
+// day - success isn't multiplied in (it only decides whether the team may be formed: the target, tornprobability's
+// calculated chance when known); a tiny success term only breaks exact ties
+const teamExp = t => { const a = teamSuccess(t) ?? teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / v.days + a * 1e-6; };
 const crimeOk = crime => { const off = new Set(D.config.disabled || []);
   return !off.has(crime) && rolesOf(crime).length; };   // chain finals allowed (Nov 12 2026) - switch crimes off in the Crimes tab
 
@@ -551,7 +553,7 @@ function autoBuild() {
     payOf: crime => valueOf(crime), budgetMs: 900, weights: D.config.weights || null,
     holdLog: D.config.hold_log || {},
     // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability's chance for a full team when the Hub
-    // has checked it - the target applies to it and expected pay uses it (gate/oc_planner.js succOf)
+    // has checked it - the target applies to it (gate/oc_planner.js succOf)
     succOf: (crime, roles) => teamSuccess({crime, roles}), scriptUsers: scriptKnown() ? new Set(Object.keys(D.config.script_seen).filter(usesScript).map(Number)) : null});
   BOARD.teams = r.teams;
   saveBoard();
