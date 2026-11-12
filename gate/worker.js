@@ -2156,7 +2156,7 @@ async function ocSpawnAlerts(env) {
 // parameters. Alert leadership when crimes fall below the minimum pass rate") - the same rules as OC Management
 // (tools/oc_management.html ocAlerts), for the Hub script's leaders' Home:
 //   roles  [{crime, crime_id, name, position, rate, why}]  a member in a recruiting / planning crime below that role's
-//          minimum (opts.minRole, weight-scaled by opts.minZero) or above opts.cap (when under 100)
+//          minimum (opts.minRole, weight-scaled by opts.minZero) - the above-cap alert was removed (Nov 12 2026, user)
 //   crimes [{crime, crime_id, success, target, status}]     every slot filled, weighted team success below opts.target
 async function ocOcAlerts(env, cfg, crimes) {
   const O = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -2180,8 +2180,7 @@ async function ocOcAlerts(env, cfg, crimes) {
       const pos = (sl.position_info && sl.position_info.label) || sl.position, rate = Math.round(sl.checkpoint_pass_rate);
       const min = Math.ceil(floorOf(c.name, pos) - 1e-9), k = wOf(c.name, pos); a += sl.checkpoint_pass_rate * k; w += k;
       const base = {crime: c.name, crime_id: c.id, name: names[String(sl.user.id)] || "[" + sl.user.id + "]", position: pos, rate};
-      if (rate < min) roles.push(Object.assign(base, {why: `below the ${min}% minimum`}));
-      else if (O.cap < 100 && rate > O.cap) roles.push(Object.assign(base, {why: `above the ${O.cap}% cap`}));
+      if (rate < min) roles.push(Object.assign(base, {why: `below the ${min}% minimum`}));   // (above-cap alert removed Nov 12 2026)
     }
     if ((c.slots || []).length && (c.slots || []).every(sl => sl.user) && w && a / w < O.target)
       crimesOut.push({crime: c.name, crime_id: c.id, success: Math.round(a / w), target: O.target, status: c.status});

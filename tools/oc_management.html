@@ -910,8 +910,8 @@ function wireAuto() {
 // LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
 // parameters. Alert leadership when crimes fall below the minimum pass rate"), from the crimes in Torn (D.feed):
 //   role   a member IN a recruiting / planning crime whose pass rate is below that role's minimum (the lowest
-//          individual role, weight-scaled when "Lowest rate for 0%-weight roles" is set - floorOf) or above the
-//          role cap (OPT.cap, when it's under 100)
+//          individual role, weight-scaled when "Lowest rate for 0%-weight roles" is set - floorOf). (The "above the
+//          role cap" alert was removed Nov 12 2026, user.)
 //   crime  a crime with every slot filled whose weighted team success (role weights) is below the overall team target
 // Shown on the Deployed and Planning tabs; the Hub script's leaders' Home shows the same (gate/worker.js ocOcAlerts).
 const feedRole = sl => (sl.position_info && sl.position_info.label) || sl.position;
@@ -923,8 +923,7 @@ function ocAlerts() {
   (D.feed || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning")).forEach(c => {
     (c.slots || []).forEach(sl => { if (!sl.user || typeof sl.checkpoint_pass_rate !== "number") return;
       const rate = Math.round(sl.checkpoint_pass_rate), pos = feedRole(sl), min = Math.ceil(floorOf(c.name, pos) - 1e-9);
-      if (rate < min) out.roles.push({c, pos, pid: sl.user.id, rate, why: `below the ${min}% minimum`});
-      else if (OPT.cap < 100 && rate > OPT.cap) out.roles.push({c, pos, pid: sl.user.id, rate, why: `above the ${OPT.cap}% cap`}); });
+      if (rate < min) out.roles.push({c, pos, pid: sl.user.id, rate, why: `below the ${min}% minimum`}); });   // (above-cap alert removed Nov 12 2026, user)
     if ((c.slots || []).length && (c.slots || []).every(sl => sl.user)) { const w = weightedOf(c.name, c.slots || []);
       if (w != null && w < OPT.target) out.crimes.push({c, w}); }
   });
@@ -953,10 +952,10 @@ function drawPlanning() {
       rate: sl.user && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}))});
     const rows = (c.slots || []).map(sl => { const pos = feedRole(sl), u = sl.user;
       const rate = u && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null;
-      const min = Math.ceil(floorOf(c.name, pos) - 1e-9), out_ = rate != null && (rate < min || (OPT.cap < 100 && rate > OPT.cap));
+      const min = Math.ceil(floorOf(c.name, pos) - 1e-9), out_ = rate != null && rate < min;
       const pg = u ? Math.round(Number(u.progress) || 0) : 0;
       return `<tr><td>${esc(pos)}${wTag(c.name, pos)}</td><td>${u ? `<b>${esc(nameOf(u.id))}</b>` : '<span class="mid">Unfilled</span>'}</td>`
-        + `<td class="${col(rate)}">${rate == null ? "-" : rate + "%"}${out_ ? ' <span title="Outside the min-max">⚠️</span>' : ""}</td>`
+        + `<td class="${col(rate)}">${rate == null ? "-" : rate + "%"}${out_ ? ` <span title="Below the ${min}% minimum">⚠️</span>` : ""}</td>`
         + `<td>${u ? (pg >= 100 ? '<span class="ok">✅ planned</span>' : pg > 0 ? `<span class="qd">⏳ ${pg}%</span>` : '<span class="tag">waiting</span>') : ""}</td></tr>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
