@@ -576,8 +576,10 @@ function withPrereqs(set) { let grew = true;
   return set; }
 function drawCrimes() {
   const off = new Set(D.config.disabled || []), rot = new Set(D.config.rotate || []);
-  const names = Object.keys(CFG.catalog).sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
-  $("view").innerHTML = `<div class="panel"><div class="hn">Switch a crime <b>off</b> and the OC Optimizer stops suggesting it to members (and Auto-build skips it).
+  // RANKING (Nov 12 2026, user: "Crimes should be ranked based off their maximum possible profit per day"): best
+  // recorded pay per member per day first (eachPay), then difficulty
+  const names = Object.keys(CFG.catalog).sort((a, b) => eachPay(b) - eachPay(a) || (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
+  $("view").innerHTML = `<div class="panel"><div class="hn">Crimes are listed by their best recorded pay per member per day. Switch a crime <b>off</b> and the OC Optimizer stops suggesting it to members (and Auto-build skips it).
     <b>🔁 Rotate</b> a high-paying crime and the planner keeps its next team lined up: when one is recruiting it's filled first,
     including members still finishing another crime who'll be free before their planning turn. Its prerequisite crimes rotate too.
     ${D.config.disabled_by ? `Last saved by ${esc(D.config.disabled_by)} ${ago(D.config.disabled_ts)}.` : ""}</div>
@@ -587,7 +589,7 @@ function drawCrimes() {
       // for="crN": a <button> inside the label (🔁 Rotate) would otherwise be the label's control and swallow the
       // row's click, so the on/off switch never toggled (fixed Nov 2026)
       return `<label class="cr${off.has(n) ? " off" : ""}" for="cr${ix}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
-        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}</i></span>
+        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each` : ""}</i></span>
         <button type="button" class="rot${rot.has(n) ? " on" : ""}" data-rot="${esc(n)}" title="Rotate this crime">🔁 Rotate</button>
         <span class="sw"><input type="checkbox" id="cr${ix}" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
       : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;
@@ -618,7 +620,8 @@ function suggestions() {
   const pool = new Set(Object.keys(CFG.members).map(Number).filter(p => !blocked.has(p) && (OPT.includeBusy || !busy[p])));
   const list = [];
   Object.keys(CFG.catalog).filter(crimeOk).forEach(c => { const t = teamFor(c, pool, 0, {}); if (t) list.push({crime: c, team: t, pay: teamExp(t) || 0}); });
-  list.sort((a, b) => b.pay - a.pay || (diffOf(b.crime) || 0) - (diffOf(a.crime) || 0));
+  // RANKING (Nov 12 2026): maximum pay per member per day first; expected team pay (max x success) breaks ties
+  list.sort((a, b) => eachPay(b.crime) - eachPay(a.crime) || b.pay - a.pay || (diffOf(b.crime) || 0) - (diffOf(a.crime) || 0));
   SUGG = {sig, list};
   return list;
 }
@@ -626,7 +629,7 @@ function suggestions() {
 function drawBuilder() {
   const busy = busyMap(), off = new Set(D.config.disabled || []);
   const sugg = suggestions(), suggBy = new Map(sugg.map(x => [x.crime, x]));
-  const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length && !suggBy.has(n)).sort((a, b) => (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
+  const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length && !suggBy.has(n)).sort((a, b) => eachPay(b) - eachPay(a) || (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));   // max pay/day first (Nov 12 2026)
   const used = usedIds();
   const placed = used.size, free = Object.keys(CFG.members).filter(p => !busy[p]).length;
   const avgAll = BOARD.teams.length ? BOARD.teams.reduce((a, t) => a + (teamAvg(t) || 0), 0) / BOARD.teams.length : null;
