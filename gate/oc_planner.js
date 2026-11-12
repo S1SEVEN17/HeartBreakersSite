@@ -10,6 +10,8 @@
 //     target average success (each new member >= the lowest-role %, role cap applies) - otherwise it's
 //     SKIPPED (left open, members go elsewhere). Best pay per day first.
 //   * Planning crimes: full - their members are busy until the crime pays out.
+//   * FILLED crimes leave the plan (Nov 11 2026, the user): once the last slot is taken in Torn the team is dropped
+//     (nothing left to plan); if a member then leaves, the open slot is filled again like any recruiting crime.
 //   * Members left over: "needs spawn" teams for crime TYPES (the pay-per-day optimizer: multi-start greedy +
 //     steal/backfill + upgrades, role cap) - the script and the Hub warn the crime needs to be spawned.
 //     PRIORITY (Nov 11 2026, the user): the plan kept is the one that seats the most members in the crime with the
@@ -191,6 +193,11 @@ export function ocPlan(X) {
         return {position: label, pid: null, name: "", rate: null};
       });
       t.kind = "live"; t.crime = c.name; t.difficulty = c.difficulty ?? t.difficulty;
+      // FILLED (Nov 11 2026, user: "This should NOT show crimes that are already filled. Once a member joins the last
+      // slot, they should no longer appear in the OC Management Deployed area. If a member leaves, it returns to find
+      // the next best member."): every slot taken in Torn (and no leader replacement pending) -> the team leaves the
+      // plan. A member leaving opens a slot -> the crime is Recruiting with an open slot again and step 3 fills it.
+      if (t.roles.length && t.roles.every(r => r.existing) && !t.roles.some(r => r.replaces)) continue;
       t.roles.forEach(r => { if (r.pid != null && !r.existing) take(r.pid); });
       claimed.add(String(c.id));
       teams.push(t);

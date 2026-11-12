@@ -779,7 +779,11 @@ function wireAuto() {
     draw(); };
 }
 function drawDeployed() {
-  const plan = D.config.plan, busy = busyMap();
+  // FILLED crimes aren't shown (Nov 11 2026, user): every slot taken in Torn and no replacement pending - the planner
+  // drops them on its next run; hide them now too (a member leaving brings the crime back with an open slot)
+  const full = t => t.kind === "live" && t.roles.length && t.roles.every(r => r.existing) && !t.roles.some(r => r.replaces);
+  const plan0 = D.config.plan, busy = busyMap();
+  const plan = plan0 ? Object.assign({}, plan0, {teams: (plan0.teams || []).filter(t => !full(t))}) : plan0;
   if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel">${autoHtml()}<div class="hn">Nothing deployed to Live yet - ${OPT.auto !== false ? "the Hub builds the first teams on its next 3-minute run, or " : ""}build teams in the Team Builder and press Deploy.</div></div>`; wireAuto(); return; }
   // NEXT CRIME (Nov 11 2026, user: a member in a crime that's planning AND queued for the next crime (it exists and is
   // re-scheduled for when the first one finishes) shows as Queued, not Joined): pid -> the team they're queued into
