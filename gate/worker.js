@@ -2171,13 +2171,20 @@ async function ocAutoPlan(env, crimes, now) {
     let iv = 0; Object.keys(p.items || {}).forEach(id => { iv += (p.items[id] || 0) * (Number((prices[id] || {}).price) || 0); });
     return ((p.moneyMax || 0) + iv) * (opts.share != null ? opts.share : (p.ppAvg ?? 80)) / 100; };
   const seats = n => (catalog[n] || {roles: []}).roles.length || 1;
+  // CHAINS (Nov 12 2026, user): the FINAL crime's payout, after the faction's cut, is split evenly over every member of
+  // every crime in the chain (No Reserve 3 + Bidding War 6 = 9); days = from joining this crime to the payout = its own
+  // planning + every later crime's (No Reserve 9, Bidding War 6). Any length. Same as the page (valueOf) and the script.
+  const chainOf = n => { const seen = new Set([n]), out = [n]; let c = n, g = 0;
+    while ((catalog[c] || {}).prereq && !seen.has(catalog[c].prereq) && g++ < 8) { c = catalog[c].prereq; seen.add(c); out.unshift(c); }
+    c = n; g = 0;
+    for (let nx = Object.keys(catalog).find(x => (catalog[x] || {}).prereq === c); nx && !seen.has(nx) && g++ < 8;
+         nx = Object.keys(catalog).find(x => (catalog[x] || {}).prereq === c)) { seen.add(nx); out.push(nx); c = nx; }
+    return out; };
   const payOf = (n, low) => {
-    const s = seats(n), pre = (catalog[n] || {}).prereq, fin = Object.keys(catalog).find(x => catalog[x].prereq === n);
-    if (fin) { const sf = seats(fin); return {pot: gross(fin, low) * s / (s + sf), days: s + sf}; }
-    // FINAL crime (Nov 12 2026, user: match the OC Optimizer script): split over the whole chain's seats, but only
-    // its own days - the prerequisite is already done when a member joins it
-    if (pre) { const sp = seats(pre); return {pot: gross(n, low) * s / (s + sp), days: s}; }
-    return {pot: gross(n, low), days: s};
+    const s = seats(n), ch = chainOf(n);
+    if (ch.length < 2) return {pot: gross(n, low), days: s};
+    const all = ch.reduce((a, x) => a + seats(x), 0), days = ch.slice(ch.indexOf(n)).reduce((a, x) => a + seats(x), 0);
+    return {pot: gross(ch[ch.length - 1], low) * s / all, days};
   };
   const delays = await ocDelayStats(env, now).catch(() => ({}));
   const lastRuns = {};

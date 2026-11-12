@@ -17,8 +17,9 @@
                    "Lowest role %"); keep it if it reaches the target (default 75%), then try another team of the same crime;
                    when it can't, move to the next-hardest crime. So the hardest crimes get the strongest members, and
                    as many teams as the faction can staff at 75%+ are built.
-                 Crimes with a prerequisite (e.g. Bidding War after No Reserve) are only auto-built when "Include chain
-                 finals" is on - they can only start after their prerequisite. Locked teams (🔒) are kept by Auto-build.
+                 Chains (e.g. No Reserve -> Bidding War): the final crime's payout, after the faction's cut, is split
+                 evenly over every member of every crime in the chain; pay/day counts the days from joining to the payout
+                 (valueOf / chainOf). Switch a chain off in the Crimes tab. Locked teams (🔒) are kept by Auto-build.
     DEPLOYED     the plan that's live for the script, with each member's progress from the active crimes
                  (✅ in their assigned role · ⏳ not joined yet · 🕒 queued - joins when their current crime pays out · ⚠️ in a different crime).
   PASS RATES (a member's checkpoint pass rate for one crime + role - the same "Crime|Role" keys as the script):
@@ -397,16 +398,29 @@ const shareOf = crime => { if (OPT.share != null) return OPT.share;
   const p = D.sums && D.sums.payouts && D.sums.payouts[crime]; if (p && p.ppAvg != null) return p.ppAvg;
   const v = (CFG.values || {})[crime]; return (v && v.pp) ?? PP_DEFAULT; };
 const potRaw = (crime, low) => { const n = netOf(crime, low); return n != null ? n : grossOf(crime) * shareOf(crime) / 100; };
+// CHAINS (Nov 12 2026, user): "No Reserve must be completed (3 members, 3 days) ... Bidding War takes another 6 members,
+// 6 days ... the payout is issued to all members of Bidding War and No Reserve ... taxed and then split evenly between
+// all members involved in both crimes." Any length (Manifest Cruelty -> Gone Fission -> Crane Reaction too), the same
+// as the OC Optimizer script (buildTypeTable chainOf):
+//   pot per member = the FINAL crime's payout (net, after the faction's cut) / every seat in the whole chain
+//   days           = from joining THIS crime to the payout = its own planning + every later crime's planning
+//                    (No Reserve 3 + 6 = 9, Bidding War 6); planning days = seats
+//   pot (returned) = this crime's seats' share, so pot / days / seats = pay per member per day
+function chainOf(crime) {
+  const cat = CFG.catalog, seen = new Set([crime]), out = [crime];
+  let c = crime, g = 0;
+  while ((cat[c] || {}).prereq && !seen.has(cat[c].prereq) && g++ < 8) { c = cat[c].prereq; seen.add(c); out.unshift(c); }
+  c = crime; g = 0;
+  for (let nx = Object.keys(cat).find(n => (cat[n] || {}).prereq === c); nx && !seen.has(nx) && g++ < 8;
+       nx = Object.keys(cat).find(n => (cat[n] || {}).prereq === c)) { seen.add(nx); out.push(nx); c = nx; }
+  return out;
+}
 function valueOf(crime, low) {
-  const s = rolesOf(crime).length || 1, pre = (CFG.catalog[crime] || {}).prereq;
-  const fin = Object.keys(CFG.catalog).find(n => (CFG.catalog[n] || {}).prereq === crime);
-  if (fin) { const sf = rolesOf(fin).length || 1;
-    return {pot: potRaw(fin, low) * s / (s + sf), days: s + sf, seats: s, chain: fin}; }
-  // FINAL crime of a chain (Nov 12 2026, user: follow the OC Optimizer script's maths): the payout is split over every
-  // seat in the chain, but a member who joins the final crime is only committed for ITS days (the prerequisite is done)
-  if (pre) { const sp = rolesOf(pre).length || 1;
-    return {pot: potRaw(crime, low) * s / (s + sp), days: s, seats: s, chain: pre}; }
-  return {pot: potRaw(crime, low), days: s, seats: s};
+  const s = rolesOf(crime).length || 1, ch = chainOf(crime);
+  if (ch.length < 2) return {pot: potRaw(crime, low), days: s, seats: s};
+  const fin = ch[ch.length - 1], all = ch.reduce((a, n) => a + (rolesOf(n).length || 1), 0);
+  const days = ch.slice(ch.indexOf(crime)).reduce((a, n) => a + (rolesOf(n).length || 1), 0);
+  return {pot: potRaw(fin, low) * s / all, days, seats: s, chain: ch.filter(n => n !== crime).join(" + ")};
 }
 // PAY RANGE (Nov 2026): per member per day from the worst to the best recorded result, e.g. "$1.2m-$10.25m"
 const fmt2 = n => n == null ? "-" : n >= 1e9 ? "$" + +(n / 1e9).toFixed(2) + "b" : n >= 1e6 ? "$" + +(n / 1e6).toFixed(2) + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n);
