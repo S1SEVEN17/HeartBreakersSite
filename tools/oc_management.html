@@ -242,6 +242,8 @@ function spawnMap(teams) {
 // a HOLD (members kept for it instead of a lower-paying recruiting crime, opts.holdHours) with its end time.
 const hhmm = ms => new Date(ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
 const heldTag = t => t.hold && Number(t.hold.until) > Date.now() ? ` <span class="tag mid" title="These members are held for this crime instead of a lower-paying recruiting crime - spawn it before then">⏳ held until ${hhmm(t.hold.until)}</span>` : "";
+// the hold on a team card goes on its own line under the header (Nov 12 2026, user: it crowded the crime name)
+const heldLine = t => t.hold && Number(t.hold.until) > Date.now() ? `<div class="hn" style="color:var(--gold)">⏳ Members held for this crime until <b>${hhmm(t.hold.until)}</b> - spawn it before then.</div>` : "";
 function spawnAlertsHtml(teams, sm) {
   if (!sm) return "";
   const list = teams.filter(t => t.kind !== "live" && sm.get(t.id) && !sm.get(t.id).ok && t.roles.length && t.roles.every(r => r.pid != null))
@@ -727,7 +729,7 @@ function teamCard(t) {
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${notes ? `<div class="rnotes">${notes}</div>` : ""}${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}${heldTag(t)}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
+      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
       <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
       <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
       ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>`}
@@ -736,7 +738,7 @@ function teamCard(t) {
     <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
       return p == null ? "" : v.pot ? `💰 ${payRange(t.crime)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
         : "💰 no pay data yet"; })()}</div>
-    ${t.kind === "live" ? "" : spawnHtml(SPAWN && SPAWN.get(t.id))}
+    ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
 }
 // planning progress of the member holding this slot in Torn (the feed's slot user.progress), e.g. "40%", or ""
@@ -891,9 +893,9 @@ function drawDeployed() {
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${heldTag(t)}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
+      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
-      ${t.kind === "live" ? "" : spawnHtml(sm && sm.get(t.id))}
+      ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
   $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Slots are only reserved for members who haven't joined a crime or are queued (their crime is ready within ${OPT.queueHours} h) - members already in a crime stay where they are. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (free and queued members only) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
