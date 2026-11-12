@@ -449,6 +449,18 @@ function liveDays(t) {
   return Math.max(1, left + down);
 }
 const teamDays = t => liveDays(t) ?? valueOf(t.crime).days;
+// PAY LINE (Team Builder + Deployed cards, Nov 12 2026): pay per member per day (worst-best recorded). A live recruiting
+// crime shows the rate for whoever joins NOW (TIME IN THE CRIME - liveDays) and the crime's normal rate beside it when
+// joining now pays more; spawn teams show the normal rate over the crime's full days.
+function payLine(t, team) {
+  const v = valueOf(t.crime); if (!v.pot) return "💰 no pay data yet";
+  const ld = liveDays(t), m = ld ? v.days / ld : 1;
+  const rng = k => { const hi = eachPay(t.crime) * k, lo = Math.min(eachLow(t.crime), eachPay(t.crime)) * k;
+    return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); };
+  const p = v.pot / (ld || v.days);
+  return (ld ? `💰 <b>${rng(m)}/day each</b> joining now · ${Math.round(ld * 10) / 10} days to payout${m > 1.01 ? ` <span class="tag">(normally ${rng(1)} over ${v.days} days)</span>` : ""}`
+             : `💰 <b>${rng(1)}/day each</b> · ${v.days} days`) + (v.chain ? ` (with ${esc(v.chain)})` : "") + (team ? ` · ${fmt$(p)}/day team` : "");
+}
 const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / teamDays(t); };
 const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
 const teamExp = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
@@ -749,12 +761,7 @@ function teamCard(t) {
       ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>`}
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
-    <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
-      const ld = liveDays(t), m = ld ? v.days / ld : 1;
-      const pr = m === 1 ? payRange(t.crime) : (() => { const hi = eachPay(t.crime) * m, lo = Math.min(eachLow(t.crime), eachPay(t.crime)) * m;
-        return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); })();
-      return p == null ? "" : v.pot ? `💰 ${pr}/day each · ${ld ? `${(Math.round(ld * 10) / 10)} days to payout if joined now` : `${v.days} days`}${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
-        : "💰 no pay data yet"; })()}</div>
+    <div class="tag">${teamAvg(t) == null ? "" : payLine(t, true)}</div>
     ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
 }
@@ -1012,6 +1019,7 @@ function drawDeployed() {
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
+      <div class="tag">${payLine(t, false)}</div>
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
