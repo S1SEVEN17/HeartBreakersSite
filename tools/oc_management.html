@@ -95,10 +95,13 @@ details.sets summary b{color:var(--gold)}
 .team.lock{border-color:#6b4a18}
 .th{display:flex;align-items:center;gap:8px;margin-bottom:6px}.th b{flex:1;color:#fff;min-width:0}
 .sr{font-weight:800;font-size:15px;white-space:nowrap}
-.rr{display:grid;grid-template-columns:minmax(80px,auto) 1fr auto;gap:6px;align-items:center;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
+.rr{display:grid;grid-template-columns:minmax(72px,34%) minmax(0,1fr) auto;gap:6px;align-items:center;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
 .spawnal{width:100%;margin:4px 0 10px;font-size:13px}.spawnal td{vertical-align:top}
 @media (max-width:600px){.spawnal td:last-child,.spawnal th:last-child{display:none}}
-.rr .pos{color:var(--sub);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rr .rnotes{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;margin-top:-2px;font-size:12px}
+.rr select{min-width:0}
+.rr .pos{color:var(--sub);font-weight:600;overflow:hidden;text-overflow:ellipsis;line-height:1.35}
+.rr .pos .wt{display:block;width:max-content;max-width:100%;margin:2px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}   /* weight under the role name (Nov 12 2026) */
 .wt{display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;background:#20141a;border:1px solid #3a1c1e;color:#c9b27a;font-size:11px;font-weight:600;vertical-align:1px}
 .rr select{width:100%;padding:5px 6px;font-size:13px}
 .rr .rt{min-width:46px;text-align:right;font-weight:700}
@@ -399,8 +402,10 @@ function valueOf(crime, low) {
   const fin = Object.keys(CFG.catalog).find(n => (CFG.catalog[n] || {}).prereq === crime);
   if (fin) { const sf = rolesOf(fin).length || 1;
     return {pot: potRaw(fin, low) * s / (s + sf), days: s + sf, seats: s, chain: fin}; }
+  // FINAL crime of a chain (Nov 12 2026, user: follow the OC Optimizer script's maths): the payout is split over every
+  // seat in the chain, but a member who joins the final crime is only committed for ITS days (the prerequisite is done)
   if (pre) { const sp = rolesOf(pre).length || 1;
-    return {pot: potRaw(crime, low) * s / (s + sp), days: s + sp, seats: s, chain: pre}; }
+    return {pot: potRaw(crime, low) * s / (s + sp), days: s, seats: s, chain: pre}; }
   return {pot: potRaw(crime, low), days: s, seats: s};
 }
 // PAY RANGE (Nov 2026): per member per day from the worst to the best recorded result, e.g. "$1.2m-$10.25m"
@@ -701,8 +706,11 @@ function teamCard(t) {
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
     const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}${usesScript(c.pid) ? "" : " 📵"}</option>`).join("");
     const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
-    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r, busy[r.pid])}${r.existing ? "" : noScrTag(r.pid)}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
-      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${warn}</div>`;
+    // LAYOUT (Nov 12 2026, user): role · member · rate on one line; queued / no-script / delay / in-the-crime notes on
+    // their own line underneath, so the member picker keeps its width and names show in full
+    const notes = [queueTag(r, busy[r.pid]), r.existing ? "" : noScrTag(r.pid), r.pid != null ? delayTag(r.pid) : "", r.existing ? '<span class="tag">in the crime</span>' : ""].filter(Boolean).join(" ");
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>
+      <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${notes ? `<div class="rnotes">${notes}</div>` : ""}${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}${heldTag(t)}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}

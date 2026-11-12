@@ -2162,7 +2162,8 @@ async function ocAutoPlan(env, crimes, now) {
     return sh || h;
   };
   // pay per member per day (Nov 2026, the user's formula): max payout recorded (summaries, items at prices) x the
-  // members' share (opts.share if a leader set one, else that crime's recorded payout %, else 80%), ÷ every participant in the chain (prerequisite seats too), ÷ the chain's days (prerequisite included).
+  // members' share (opts.share if a leader set one, else that crime's recorded payout %, else 80%), ÷ every participant in the chain (prerequisite seats too), ÷ days to payout
+  // (a prerequisite: both crimes' days; the final crime: its own days - same as the OC Optimizer script, Nov 12 2026).
   // pot here = this crime's seats' share, so pot ÷ days ÷ seats = per member per day - the same figure the page and script show
   const prices = (priS && priS.data) || {};
   const gross = (n, low) => { const p = (S.payouts || {})[n]; if (!p || !(p.samples > 0)) return 0;
@@ -2173,7 +2174,9 @@ async function ocAutoPlan(env, crimes, now) {
   const payOf = (n, low) => {
     const s = seats(n), pre = (catalog[n] || {}).prereq, fin = Object.keys(catalog).find(x => catalog[x].prereq === n);
     if (fin) { const sf = seats(fin); return {pot: gross(fin, low) * s / (s + sf), days: s + sf}; }
-    if (pre) { const sp = seats(pre); return {pot: gross(n, low) * s / (s + sp), days: s + sp}; }   // the chain's days, both crimes
+    // FINAL crime (Nov 12 2026, user: match the OC Optimizer script): split over the whole chain's seats, but only
+    // its own days - the prerequisite is already done when a member joins it
+    if (pre) { const sp = seats(pre); return {pot: gross(n, low) * s / (s + sp), days: s}; }
     return {pot: gross(n, low), days: s};
   };
   const delays = await ocDelayStats(env, now).catch(() => ({}));
