@@ -12,6 +12,9 @@
 //   * Planning crimes: full - their members are busy until the crime pays out.
 //   * Members left over: "needs spawn" teams for crime TYPES (the pay-per-day optimizer: multi-start greedy +
 //     steal/backfill + upgrades, role cap) - the script and the Hub warn the crime needs to be spawned.
+//     PRIORITY (Nov 11 2026, the user): the plan kept is the one that seats the most members in the crime with the
+//     highest recorded MAX pay per member per day, then the next crime, and so on (better()); total expected pay only
+//     breaks exact ties.
 //   QUEUE (Nov 2026): a member in a PLANNING crime that's ready within opts.queueHours (default 12, leaders can change it; 0 = off) can be QUEUED for their
 //     next crime - they join it when their current crime pays out. Queued roles carry queued: true + free_at (ms).
 //     Live open slots: only when no free member can fill the crime to the target (fewest queued members, and only
@@ -401,6 +404,15 @@ export function ocPlan(X) {
   }
   const density = c => payDay(c) / (rolesOf(c).length || 1);
   const planScore = ts => ts.reduce((s, t) => s + expPay(t) + 1 + (t.difficulty || 0) * 0.1, 0);
+  // PRIORITY (Nov 11 2026, user: "Prioritize crimes by highest recorded maximum income per day"): plans are compared
+  // crime by crime from the highest recorded MAX pay per member per day down - the plan that seats more members in
+  // the better-paying crime wins, whatever happens further down; only an exact tie falls back to the total expected
+  // pay (planScore). The success target / lowest role / cap still decide who CAN be placed.
+  const PRIO = spawnCrimes.slice().sort((a, b) => density(b) - density(a) || (diffOf(b) || 0) - (diffOf(a) || 0));
+  const planKey = ts => { const n = new Map(); ts.forEach(t => n.set(t.crime, (n.get(t.crime) || 0) + t.roles.length)); return PRIO.map(c => n.get(c) || 0); };
+  const better = (a, b) => { const ka = planKey(a), kb = planKey(b);
+    for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] > kb[i];
+    return planScore(a) > planScore(b); };
   let best = [], bestScore = -1, runs = 0;
   const alphas = [0, 0.5, 1, 0.25, 0.75];
   while (runs < (X.budgetMs ? 5 : 1) || (X.budgetMs && clock() - t0 < X.budgetMs && runs < 60)) {
@@ -415,8 +427,7 @@ export function ocPlan(X) {
     improve(made, free, order);
     fill();
     capOn = false; fill(); capOn = true;                 // members the cap held back that no harder team could use
-    const sc = planScore(made);
-    if (sc > bestScore) { bestScore = sc; best = made; }
+    if (bestScore < 0 || better(made, best)) { bestScore = planScore(made); best = made; }
     runs++;
   }
   // step 2 of the spawn optimizer (changes made + free in place): steal / backfill, then upgrades
