@@ -164,8 +164,6 @@ jobs:
           for x in t:
               ro = x.get("roles", [])
               print(f"  team: {x.get('crime')} #{x.get('crime_id') or '-'} {x.get('kind')} · in crime {sum(1 for y in ro if y.get('existing'))} · planned {sum(1 for y in ro if y.get('pid') and not y.get('existing') and not y.get('queued'))} · queued {sum(1 for y in ro if y.get('queued'))} · empty {sum(1 for y in ro if not y.get('pid'))}")
-              if x.get('crime') == 'Leave No Trace':
-                  print("    roles: " + ", ".join(f"{y.get('position')}={'in crime' if y.get('existing') else 'queued' if y.get('queued') else 'planned' if y.get('pid') else 'empty'} {y.get('rate')}%" for y in ro))
           # recruiting crimes the planner left open and why (crime names + rates only - no member names or IDs)
           ss = json.loads(r.get("stats") or "null") or {}
           dl = json.loads(r.get("dl") or "null") or {}
