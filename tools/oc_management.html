@@ -88,7 +88,7 @@ input[type=number]{width:70px;text-align:center}
 .bench{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .bench span{background:#1a1012;border:1px solid var(--edge);border-radius:12px;padding:3px 9px;font-size:12px}
 .note{background:#1f1608;border:1px solid #6b4a18;color:#e8d6a8;border-radius:8px;padding:8px 12px;font-size:13px;margin:8px 0}
-.ok{color:var(--green)}.mid{color:var(--gold)}.bad{color:#ff7a70}
+.ok{color:var(--green)}.mid{color:var(--gold)}.bad{color:#ff7a70}.qd{color:#7cc5ff}
 table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid #2a1416;text-align:left;font-size:13px}
 th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 @media (max-width:560px){body{padding:8px}.teams,.crl{grid-template-columns:1fr}.panel{padding:10px}}
@@ -631,7 +631,9 @@ function drawBuilder() {
 let SPAWN = null;                                       // spawnMap of the board being drawn
 // QUEUE (Nov 2026): a queued member is still in a Planning crime and joins this one when it pays out (free_at, ms)
 const freeIn = ms => { const h = (ms - Date.now()) / 3600e3; return h <= 0 ? "any moment" : h < 1 ? Math.max(1, Math.round(h * 60)) + "m" : (Math.round(h * 10) / 10) + "h"; };
-const queueTag = r => r && r.queued ? `<span class="tag" title="In a crime that's planning - joins this one when it pays out">🕒 queued · free in ${freeIn(r.free_at)}</span>` : "";
+// JOINED vs QUEUED (Nov 11 2026, user: "differentiate between Joined members ... and members who are Queued to join"):
+// queued = still finishing ANOTHER crime (shown by name when known) and joins this one when it pays out
+const queueTag = (r, b) => r && r.queued ? `<span class="qd" title="Still in ${b ? esc(b.crime) : "another crime"} - joins this one when it pays out">🕒 Queued${b ? ` · finishing ${esc(b.crime)}` : ""} · free in ${freeIn(r.free_at)}</span>` : "";
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
   const rows = t.roles.map((r, i) => {
@@ -640,7 +642,7 @@ function teamCard(t) {
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
     const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
     const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
-    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r)}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r, busy[r.pid])}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
@@ -746,7 +748,7 @@ function wireAuto() {
 function drawDeployed() {
   const plan = D.config.plan, busy = busyMap();
   if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel">${autoHtml()}<div class="hn">Nothing deployed to Live yet - ${OPT.auto !== false ? "the Hub builds the first teams on its next 3-minute run, or " : ""}build teams in the Team Builder and press Deploy.</div></div>`; wireAuto(); return; }
-  let joined = 0, total = 0;
+  let joined = 0, queued = 0, total = 0;
   const sm = spawnMap(plan.teams);
   const cards = plan.teams.map(t => {
     const rows = t.roles.map(r => {
@@ -756,8 +758,8 @@ function drawDeployed() {
       // JOINED vs QUEUED (Nov 2026): a live team's member has joined only when they're in THAT crime id; a queued
       // member who is still in another crime of the same type is queued, not joined
       const ok = b && (t.crime_id && b.cid != null ? String(b.cid) === String(t.crime_id) : (!r.queued && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position)));
-      if (ok) joined++;
-      const stt = (ok ? '<span class="ok">✅ joined</span>' : r.queued ? queueTag(r) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ not yet</span>')
+      if (ok) joined++; else if (r.queued) queued++;
+      const stt = (ok ? '<span class="ok">✅ Joined</span>' : r.queued ? queueTag(r, b) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ Not joined yet</span>')
         + (r.replaces && !ok ? ` <span class="bad">🔁 replacing ${esc(r.replaces.name || nameOf(r.replaces.pid))}</span>` : "");
       return `<tr><td>${esc(r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
@@ -769,7 +771,8 @@ function drawDeployed() {
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
   $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Slots are only reserved for members who haven't joined a crime or are queued (their crime is ready within ${OPT.queueHours} h) - members already in a crime stay where they are. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (free and queued members only) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
-    <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${joined}</b><span>Joined</span></div><div><b>${total - joined}</b><span>Not yet</span></div></div>
+    <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${joined}</b><span>✅ Joined</span></div><div><b class="qd">${queued}</b><span>🕒 Queued</span></div><div><b>${total - joined - queued}</b><span>⏳ Not joined yet</span></div></div>
+    <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = still finishing another crime, joins this one when that pays out · ⏳ <b>Not joined yet</b> = free, hasn't joined.</div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
     ${spawnSummary(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
