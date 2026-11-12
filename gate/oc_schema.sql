@@ -179,3 +179,13 @@ CREATE TABLE IF NOT EXISTS share_src (
   ts   INTEGER NOT NULL,    -- ms, last write
   PRIMARY KEY (pid, kind, src)
 );
+
+-- SCRIPT USERS (Nov 12 2026, user): the last time each member asked for their OC assignment (POST /oc/plan, /oc/bundle -
+-- the OC Optimizer script). At most one write per member an hour. Used by the planner (script users first when it's
+-- close) and the OC Management page ("no script" flag). No key, no name.
+CREATE TABLE IF NOT EXISTS oc_seen (
+  env TEXT    NOT NULL,
+  pid INTEGER NOT NULL,
+  ts  INTEGER NOT NULL,          -- epoch ms
+  PRIMARY KEY (env, pid)
+);

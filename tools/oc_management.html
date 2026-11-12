@@ -96,6 +96,8 @@ details.sets summary b{color:var(--gold)}
 .th{display:flex;align-items:center;gap:8px;margin-bottom:6px}.th b{flex:1;color:#fff;min-width:0}
 .sr{font-weight:800;font-size:15px;white-space:nowrap}
 .rr{display:grid;grid-template-columns:minmax(80px,auto) 1fr auto;gap:6px;align-items:center;padding:5px 0;border-top:1px solid #2a1416;font-size:13px}
+.spawnal{width:100%;margin:4px 0 10px;font-size:13px}.spawnal td{vertical-align:top}
+@media (max-width:600px){.spawnal td:last-child,.spawnal th:last-child{display:none}}
 .rr .pos{color:var(--sub);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wt{display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;background:#20141a;border:1px solid #3a1c1e;color:#c9b27a;font-size:11px;font-weight:600;vertical-align:1px}
 .rr select{width:100%;padding:5px 6px;font-size:13px}
@@ -136,7 +138,7 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
+const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 2, noShowHours: 6, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
 OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
 delete OPT.chains;                // "Chain finals" option removed (Nov 12 2026) - prerequisite crimes are planned like any other
 // settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
@@ -229,6 +231,25 @@ function spawnMap(teams) {
                               : {ok: true});
   });
   return out;
+}
+// SPAWN ALERTS (Nov 12 2026, user: "Give alerts to spawn higher paying jobs when members who qualify are available or
+// becoming available ... alert leadership to try spawning it"): the deployed plan's spawn teams whose crime isn't
+// recruiting, best pay per member per day first - how many of the team are free now / still finishing a crime, and
+// a HOLD (members kept for it instead of a lower-paying recruiting crime, opts.holdHours) with its end time.
+const hhmm = ms => new Date(ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+const heldTag = t => t.hold && Number(t.hold.until) > Date.now() ? ` <span class="tag mid" title="These members are held for this crime instead of a lower-paying recruiting crime - spawn it before then">⏳ held until ${hhmm(t.hold.until)}</span>` : "";
+function spawnAlertsHtml(teams, sm) {
+  if (!sm) return "";
+  const list = teams.filter(t => t.kind !== "live" && sm.get(t.id) && !sm.get(t.id).ok && t.roles.length && t.roles.every(r => r.pid != null))
+    .sort((a, b) => eachPay(b.crime) - eachPay(a.crime));
+  if (!list.length) return "";
+  const rows = list.map(t => { const q = t.roles.filter(r => r.queued), ready = t.roles.length - q.length;
+    const nf = q.length ? Math.min(...q.map(r => Number(r.free_at) || Date.now())) : null;
+    return `<tr><td><span class="dif">D${t.difficulty ?? "?"}</span> <b>${esc(t.crime)}</b>${heldTag(t)}</td><td>${fmt$(eachPay(t.crime))}/day each</td>
+      <td>${ready ? `<span class="ok">${ready} ready now</span>` : ""}${ready && q.length ? " · " : ""}${q.length ? `<span class="qd">${q.length} free in ${freeIn(nf)}${q.length > 1 ? "+" : ""}</span>` : ""}</td>
+      <td class="tag">${t.roles.map(r => esc(r.name || nameOf(r.pid))).join(", ")}</td></tr>`; }).join("");
+  return `<div class="hn" style="color:var(--gold);margin-top:8px">🧪 <b>Spawn alerts</b> - teams are ready for these crimes but none is recruiting. Spawn them in Torn (best pay first); the plan moves the team in on its next run.</div>
+    <table class="spawnal"><tr><th>Crime</th><th>Pay</th><th>Members</th><th>Team</th></tr>${rows}</table>`;
 }
 const spawnHtml = sp => sp && !sp.ok ? `<div class="hn" style="color:var(--gold)">⚠️ Not available: ${esc(sp.why)}.</div>` : "";
 function spawnSummary(teams, sm) {
@@ -468,7 +489,8 @@ function autoBuild() {
   const r = ocPlan({crimes: D.feed || [], prev: keep, fresh: true, catalog: CFG.catalog, members: CFG.members,
     rotate: new Set(D.config.rotate || []), lastRuns, delays: D.config.delays || {},
     opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),
-    payOf: crime => valueOf(crime), budgetMs: 900, weights: D.config.weights || null});
+    payOf: crime => valueOf(crime), budgetMs: 900, weights: D.config.weights || null,
+    holdLog: D.config.hold_log || {}, scriptUsers: scriptKnown() ? new Set(Object.keys(D.config.script_seen).filter(usesScript).map(Number)) : null});
   BOARD.teams = r.teams;
   saveBoard();
   const busy = busyMap(), busyN = Object.keys(CFG.members).filter(p => busy[p]).length, total = Object.keys(CFG.members).length;
@@ -642,6 +664,7 @@ function drawBuilder() {
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100);
   // 0%-weight minimum: empty = off; never above the lowest individual role
   $("o_mz").onchange = () => { const v = $("o_mz").value.trim(); OPT.minZero = v === "" ? null : Math.max(0, Math.min(OPT.minRole, +v || 0)); saveOpts(); draw(); }; num("o_cap", "cap", 50, 100); num("o_q", "queueHours", 0, 168);
+  num("o_ns", "noShowHours", 0, 72); num("o_hold", "holdHours", 0, 24);   // no-shows / spawn holds (Nov 12 2026)
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
   $("auto").onclick = () => { autoBuild(); draw(); };
@@ -659,6 +682,13 @@ let SPAWN = null;                                       // spawnMap of the board
 const freeIn = ms => { const h = (ms - Date.now()) / 3600e3; return h <= 0 ? "any moment" : h < 1 ? Math.max(1, Math.round(h * 60)) + "m" : (Math.round(h * 10) / 10) + "h"; };
 // JOINED vs QUEUED (Nov 11 2026, user: "differentiate between Joined members ... and members who are Queued to join"):
 // queued = still finishing ANOTHER crime (shown by name when known) and joins this one when it pays out
+// SCRIPT USERS (Nov 12 2026, user): members who asked for their assignment through the OC Optimizer script in the last
+// 3 days (D.config.script_seen {pid: ms}). Others never see their assignment - leaders need to tell them. Shown only
+// once anyone has been seen (the record is new).
+const SCRIPT_MS = 3 * 864e5;
+const scriptKnown = () => Object.keys(D.config.script_seen || {}).length > 0;
+const usesScript = pid => !scriptKnown() || Date.now() - Number((D.config.script_seen || {})[String(pid)] || 0) < SCRIPT_MS;
+const noScrTag = pid => pid == null || usesScript(pid) ? "" : `<span class="tag mid" title="Hasn't used the OC Optimizer script in 3 days - they won't see this assignment. Message them in Torn.">📵 no script</span>`;
 const queueTag = (r, b) => r && r.queued ? `<span class="qd" title="Still in ${b ? esc(b.crime) : "another crime"} - joins this one when it pays out">🕒 Queued${b ? ` · finishing ${esc(b.crime)}` : ""} · free in ${freeIn(r.free_at)}</span>` : "";
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
@@ -666,13 +696,13 @@ function teamCard(t) {
     // a member already IN the crime (or a leader's replacement of one): changeable, defaults to them (Nov 2026)
     const held = r.existing ? {pid: +r.pid, name: r.name || nameOf(r.pid)} : r.replaces ? {pid: +r.replaces.pid, name: r.replaces.name || nameOf(r.replaces.pid)} : null;
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
-    const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}</option>`).join("");
+    const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}${usesScript(c.pid) ? "" : " 📵"}</option>`).join("");
     const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
-    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r, busy[r.pid])}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>${queueTag(r, busy[r.pid])}${r.existing ? "" : noScrTag(r.pid)}${r.pid != null ? delayTag(r.pid) : ""}${r.existing ? '<span class="tag">in the crime</span>' : ""}
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
+      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}${heldTag(t)}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
       <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
       <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
       ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>`}
@@ -724,8 +754,9 @@ async function deploy() {
   const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
   if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
   const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
+    hold: t.hold || null, noshow: t.noshow || null,   // spawn hold / no-shows (Nov 12 2026) kept through a deploy
     roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing,
-      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null}))}))};
+      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null, since: r.since || null}))}))};
   try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
@@ -782,6 +813,10 @@ function settingsHtml() {
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>
         ${row("Queue members finishing within", numIn("o_q", OPT.queueHours, 0, 168, "hours"), "Members whose current crime is ready within this time get a slot in their next crime. 0 = only members who aren't in a crime.")}
+        ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the next best member gets it and they aren't put back into that crime. 0 = never.")}
+      </div>
+      <div class="sgrp"><h4>🧪 Spawn alerts</h4>
+        ${row("Hold members for a better crime", numIn("o_hold", OPT.holdHours, 0, 24, "hours"), "When members reserved in a lower-paying recruiting crime (plus free or soon-free members) could make a team for a better-paying crime nobody has spawned, they're held for it this long and it shows as a spawn alert. Not spawned in time: they go back to normal and that crime isn't held again for the same time. 0 = no holds (spawn alerts still show the plan's spawn teams).")}
       </div>
       <div class="sgrp"><h4>💰 Pay</h4>
         ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
@@ -827,11 +862,11 @@ function drawDeployed() {
       const stt = (nextOn ? `<span class="qd" title="In this crime now - queued for their next crime, joins it when this one pays out">🕒 Queued · next: ${esc(nq.crime)}${nq.id ? " #" + esc(nq.id) : " (to spawn)"} · free in ${freeIn(nq.free_at)}</span>`
         : ok ? '<span class="ok">✅ Joined</span>' : r.queued ? queueTag(r, b) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ Not joined yet</span>')
         + (r.replaces && !ok ? ` <span class="bad">🔁 replacing ${esc(r.replaces.name || nameOf(r.replaces.pid))}</span>` : "");
-      return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b></td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
+      return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b>${ok ? "" : " " + noScrTag(r.pid)}</td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
+      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${heldTag(t)}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       ${t.kind === "live" ? "" : spawnHtml(sm && sm.get(t.id))}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
@@ -840,7 +875,7 @@ function drawDeployed() {
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
     <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = finishing a crime and already lined up for the next one (shown in both) · ⏳ <b>Not joined yet</b> = free, hasn't joined. Counted once per member.</div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
-    ${spawnSummary(plan.teams, sm)}
+    ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
   wireAuto();
   $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;

@@ -350,6 +350,7 @@ async function ghProxy(env, req, who, path) {
 //     op "live" {what}                          -> "board" (Chain Watch live board) | "schedule" (chain watch shifts)
 //                                                  | "scripts" (Scripts directory) - members; "readiness" (war
 //                                                  readiness, opted-in members) - LEADERS. Same handlers as the site.
+//                                                  | "spawn" (OC spawn alerts, Nov 12 2026) - LEADERS (ocSpawnAlerts)
 //     op "gh"   {method: "GET"|"PUT", path, ref?, body?}  -> the leaders' save route - LEADERS (ghProxy: same allowed
 //                                                             paths - config.json, data/payouts/, data/panels/)
 //     op "share_get" / "share_set" / "share_push" / "share_ping"  -> sharing FROM THE SCRIPT (see SCRIPT SHARING)
@@ -420,6 +421,7 @@ async function sxRoute(env, ctx, req) {
     if (what === "schedule") return sxPass(await cwSchedule(env, get, u, who));
     if (what === "scripts") return sxPass(await scriptsRoute(env, get, u, who));
     if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
+    if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
     return sxJson({ok: false, error: "unknown"}, 400);
   }
   if (op === "gh") {
@@ -1293,6 +1295,10 @@ async function ocPlanRoute(env, ctx, req) {
 }
 // {ok, disabled, assignment, plan_ts} for the caller (POST /oc/plan and /oc/bundle)
 async function ocPlanObj(env, envName, id) {
+  // SCRIPT USERS (Nov 12 2026): the member asked for their assignment -> they'll see it. At most one row write an hour.
+  if (id && Number(id.player_id)) await ocSeenTable(env).then(() => env.OC_DB.prepare("INSERT INTO oc_seen (env, pid, ts) VALUES (?, ?, ?) " +
+    "ON CONFLICT (env, pid) DO UPDATE SET ts = excluded.ts WHERE oc_seen.ts < excluded.ts - 3600000")
+    .bind(envName, Number(id.player_id), Date.now()).run()).catch(() => {});
   const cfg = await ocConfig(env, envName);
   const teamsCfg = (cfg.plan || {}).teams || [];
   // the feed's crimes (every 3 min + members' write-backs) - read once for every spawn / status check below
@@ -1452,11 +1458,15 @@ function ocCleanTeams(teams) {
   return (teams || []).slice(0, 100).map(t => ({id: String(t.id || "").slice(0, 40), crime: String(t.crime || "").slice(0, 80),
     difficulty: Number(t.difficulty) || null, kind: t.kind === "live" ? "live" : "spawn",
     crime_id: t.kind === "live" && t.crime_id != null ? Number(t.crime_id) || null : null, lock: !!t.lock,
+    // SPAWN HOLD (spawn teams) {since, until} ms; NO-SHOWS {pid: ms} kept out of this crime instance (oc_planner.js)
+    hold: t.kind !== "live" && t.hold && Number(t.hold.until) ? {since: Number(t.hold.since) || 0, until: Number(t.hold.until)} : null,
+    noshow: t.noshow && typeof t.noshow === "object" ? Object.fromEntries(Object.entries(t.noshow).slice(0, 20).filter(([k, v]) => Number(k) && Number(v)).map(([k, v]) => [String(Number(k)), Number(v)])) : null,
     roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 10).map(r => ({position: String(r.position || "").slice(0, 40),
       pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
       rate: r.rate == null ? null : Math.round(Number(r.rate)) || 0, src: r.src ? String(r.src).slice(0, 20) : null,
       existing: !!r.existing, joined: !!r.joined,
       queued: !!r.queued, free_at: r.queued && Number(r.free_at) ? Number(r.free_at) : null,   // QUEUE: still in a Planning crime
+      since: !r.existing && Number(r.since) ? Number(r.since) : null,                        // NO-SHOW clock (reservation made)
       replaces: r.replaces && Number(r.replaces.pid) ? {pid: Number(r.replaces.pid), name: String(r.replaces.name || "").slice(0, 40)} : null}))}));
 }
 
@@ -1475,6 +1485,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.weights = (tpw && tpw.data && tpw.data.weights) || null;                                                     // role weights
       c.tp_names = (tpw && tpw.data && tpw.data.names) || null;                                                      // role order
       c.success = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;               // team success (CalculateSuccess)
+      c.script_seen = await ocScriptSeen(env, envName);                                                              // {pid: ms} OC script users
+      c.hold_log = ((((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).data) || {}).hold_log || {};   // spawn hold cooldowns
       return Response.json(c, H); }
     const {results} = await env.OC_DB.prepare("SELECT c.player_id, c.name, c.roles, c.ts, t.t AS rt FROM oc_cpr c LEFT JOIN oc_cpr_t t " +
       "ON t.env = c.env AND t.faction_id = c.faction_id AND t.player_id = c.player_id WHERE c.env = ? AND c.faction_id = ?")
@@ -1541,6 +1553,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
            share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null),
            queueHours: n(v.queueHours, 0, 168, 12),    // queue members whose current crime is ready within this many hours
+           // SPAWN HOLDS (Nov 12 2026): hold qualifying members for a better-paying crime that needs spawning this many
+           // hours (0 = off); NO-SHOWS: a reservation not joined after this many hours is released (0 = off). oc_planner.js
+           holdHours: n(v.holdHours, 0, 24, 2), noShowHours: n(v.noShowHours, 0, 72, 6),
            // AUTOMATIC (Nov 2026): the Hub keeps the live plan up to date every 3 minutes (default on); off = the plan
            // only changes when a leader deploys one
            auto: v.auto !== false,
@@ -2023,7 +2038,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 2, noShowHours: 6, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3};
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
@@ -2060,6 +2075,44 @@ async function ocDelayStats(env, now) {
   return out;
 }
 
+// SPAWN ALERTS (Nov 12 2026, the user: "Give alerts to spawn higher paying jobs when members who qualify are available
+// or becoming available"): every spawn team in the live plan whose crime has no recruiting instance with an open slot
+// of its roles = "spawn this". Best pay per member per day first. For the Hub script (op live "spawn", leaders) - the
+// OC Management page works the same out from the plan itself. No Torn call (the plan + the crimes feed snapshot).
+//   -> {ok, as_of, alerts: [{crime, difficulty, seats, pay_day (per member, best recorded), ready (members free now),
+//        queued (still in a crime), next_free (ms, soonest queued member), held_until (ms) | null, names: [...]}]}
+async function ocSpawnAlerts(env) {
+  const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
+  const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first().catch(() => null);
+  let crimes = []; try { const d = snap ? JSON.parse(snap.data) : []; crimes = Array.isArray(d) ? d : (d.crimes || []); } catch (e) {}
+  const payDay = (plan.auto && plan.auto.pay_day) || {}, now = Date.now();
+  const alerts = [];
+  for (const t of plan.teams || []) {
+    if (t.kind === "live" || !t.roles || !t.roles.length || t.roles.some(r => r.pid == null)) continue;
+    if (snap && ocSpawnState(crimes, snap, t.crime, "").recruiting) continue;   // open slots in Torn: the plan moves in next run
+    const q = t.roles.filter(r => r.queued);
+    alerts.push({crime: t.crime, difficulty: t.difficulty ?? null, seats: t.roles.length, pay_day: Number(payDay[t.crime]) || null,
+                 ready: t.roles.length - q.length, queued: q.length, next_free: q.length ? Math.min(...q.map(r => Number(r.free_at) || now)) : null,
+                 held_until: t.hold && Number(t.hold.until) > now ? Number(t.hold.until) : null, names: t.roles.map(r => r.name || "")});
+  }
+  alerts.sort((a, b) => (b.pay_day || 0) - (a.pay_day || 0));
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts};
+}
+// SCRIPT USERS (Nov 12 2026): {pid: ms} members who asked the Hub for their OC assignment (POST /oc/plan, /oc/bundle -
+// the OC Optimizer script) in the last OC_SCRIPT_DAYS days. Members not in it don't see assignments.
+const OC_SCRIPT_DAYS = 3;
+let OC_SEEN_READY = false;
+async function ocSeenTable(env) {
+  if (OC_SEEN_READY || !env.OC_DB) return;
+  await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS oc_seen (env TEXT NOT NULL, pid INTEGER NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (env, pid))").run();
+  OC_SEEN_READY = true;
+}
+async function ocScriptSeen(env, envName) {
+  await ocSeenTable(env).catch(() => {});
+  const {results} = await env.OC_DB.prepare("SELECT pid, ts FROM oc_seen WHERE env = ? AND ts > ?")
+    .bind(envName, Date.now() - OC_SCRIPT_DAYS * 864e5).all().catch(() => ({results: []}));
+  const out = {}; (results || []).forEach(r => { out[String(r.pid)] = Number(r.ts); }); return out;
+}
 async function ocAutoPlan(env, crimes, now) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -2147,9 +2200,13 @@ async function ocAutoPlan(env, crimes, now) {
   }
   let tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null);   // role weights (tornprobability.com)
   if (!tpW) { await tpWeightsRefresh(env, true).catch(() => {}); tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null); }   // first run
+  const lastStats = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);   // SPAWN HOLD cooldowns (hold_log)
+  const seen = await ocScriptSeen(env, "prod");
   const r = ocPlan({crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                     rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now,
-                    reshuffle: moves.length > 0});
+                    reshuffle: moves.length > 0, holdLog: ((lastStats && lastStats.data) || {}).hold_log || {},
+                    // SCRIPT USERS: null until anyone has been seen (the table is new) - no preference until then
+                    scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null});
   if (moves.length) {
     r.stats.reconfigured = {at: now, moves};
     // kept for OC Management's Deployed tab ("Reconfigured ... - X took Y's spot") until the next one

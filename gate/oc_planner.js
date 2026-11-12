@@ -50,6 +50,27 @@
 //   rotate    Set of crime names leaders ROTATE (oc_config 'rotate'; prerequisites are added by the page)
 //   lastRuns  {crime: [[pids of the latest completed run], [the run before], ...]} - for the rotation's mix rule
 //   delays    {pid: {n, long, hrs, runs}} - members' crime delays in the last 30 days (placement cost, see delayCost)
+//   holdLog   {crime: ms} SPAWN HOLD cooldowns from the last run (stats.hold_log) - see SPAWN HOLDS below
+//   scriptUsers  Set of pids who use the OC Optimizer script (asked for their assignment in the last few days), or
+//             null = unknown (no preference). See SCRIPT USERS below.
+// SPAWN HOLDS (Nov 12 2026, the user: "Give alerts to spawn higher paying jobs when members who qualify are available
+//   or becoming available ... alert leadership to try spawning it" + "Hold for a time limit"): after the recruiting
+//   crimes are filled, each crime TYPE that isn't recruiting (no open slot anywhere) is checked, best pay per member
+//   per day first: can a team that reaches the target be made from members who are free / queueable and not planned,
+//   plus members RESERVED (not joined) in a lower-paying recruiting crime - and would it pay more than what those
+//   members are planned for now? Then those members are taken out of their reservations and HELD in a spawn team for
+//   that crime (team.hold {since, until}) for opts.holdHours (default 2, 0 = off: no holds, the plan's normal spawn
+//   teams are still the alerts). Leaders see it as a spawn alert (OC Management, Hub script). The freed live slots
+//   are filled again from everyone else. If the crime is spawned in time the held team moves into it (step 2); if not,
+//   the hold ends, the members are normal again and that crime can't be held again for another opts.holdHours
+//   (stats.hold_log, so the same members aren't pulled back and forth).
+// NO-SHOWS (Nov 12 2026, the user: "No-show release"): every reservation in a recruiting crime carries since (ms, when
+//   it was made). A member who hasn't joined opts.noShowHours (default 6, 0 = off) after since - or after their
+//   current crime is ready, for queued members - loses the slot; it's filled again by the next best member and they
+//   aren't put back into that crime instance (team.noshow {pid: ms}). Locked teams are left alone.
+// SCRIPT USERS (Nov 12 2026, the user): members who don't use the script never see their assignment, so when two
+//   members are close, the script user gets the slot - a non-script member counts as 2 rate points lower in the
+//   scores below (never in the success maths).
 // ROTATION (Nov 2026): planning runs one member at a time in JOIN order, 24 h each (confirmed from the feed:
 //   slot user.progress follows joined_at). So a member only has to JOIN before the members ahead of them finish
 //   planning. For a rotated crime that's recruiting, a member still in a Planning crime can be queued into it when
@@ -159,6 +180,12 @@ export function ocPlan(X) {
   }
   const lastOf = n => ((X.lastRuns || {})[n] || [])[0] || null;    // pids in the latest completed run of n
 
+  // ---- spawn holds / no-shows / script users (see the header) ----
+  const HOLD = Math.max(0, Number(O.holdHours ?? 2) || 0) * 3600e3, NS = Math.max(0, Number(O.noShowHours ?? 6) || 0) * 3600e3;
+  const holdLog = {};
+  Object.entries(X.holdLog || {}).forEach(([c, v]) => { if (Number(v) > NOW) holdLog[c] = Number(v); });
+  const SU = X.scriptUsers instanceof Set ? X.scriptUsers : null;
+  const noScr = pid => !!SU && !SU.has(Number(pid));
   // ---- pay ----
   const payDay = crime => { const v = X.payOf(crime); return v && v.days ? v.pot / v.days : 0; };          // team, max
   // DELAYS (Nov 2026): X.delays {pid: {n, long, hrs, runs}} - a member's crime delays over the last 30 days. The hours
@@ -198,6 +225,11 @@ export function ocPlan(X) {
         }
         // open slot: keep the planned member while they're still free, still here and not planned elsewhere
         // (RECONFIGURE: dropped - planned again below; locked teams keep theirs)
+        // NO-SHOW: reserved too long without joining -> the slot is opened again and they're kept out of this crime
+        if (o.pid != null && !o.existing && !t.lock && NS > 0 && o.since && NOW - Math.max(Number(o.since), busy.has(Number(o.pid)) ? (freeAt.get(Number(o.pid)) || NOW) : 0) > NS) {
+          (t.noshow || (t.noshow = {}))[String(o.pid)] = NOW;
+          return {position: label, pid: null, name: "", rate: null};
+        }
         if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid))) {
           const k = Object.assign({}, o, {joined: false}); delete k.replaces; return k;   // the old member has left: a normal open slot now
         }
@@ -213,7 +245,9 @@ export function ocPlan(X) {
       claimed.add(String(c.id));
       teams.push(t);
     } else {
-      if (X.reshuffle && !t.lock) continue;                // RECONFIGURE: unlocked spawn teams are planned again
+      // SPAWN HOLD over: the members are normal again; that crime can't be held again for another holdHours
+      if (t.hold && !(NOW < Number(t.hold.until))) { holdLog[t.crime] = NOW + HOLD; delete t.hold; }
+      if (X.reshuffle && !t.lock && !t.hold) continue;     // RECONFIGURE: unlocked spawn teams are planned again (holds stay)
       t.kind = "spawn"; t.crime_id = null;
       t.roles = (t.roles || []).map(r => (r.pid != null && (roster[String(r.pid)] == null || (!usable(r.pid) && !O.includeBusy) || assigned.has(Number(r.pid))))
         ? Object.assign({}, r, {pid: null, name: "", rate: null, src: null}) : r);
@@ -280,7 +314,7 @@ export function ocPlan(X) {
   const freePool = () => Object.keys(roster).map(Number).filter(p => !busy.has(p) && !assigned.has(p)).map(pid => ({pid, soft: false}));
   const softPool = () => {
     const out = [];
-    teams.forEach(t => { if (t.kind === "spawn" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !busy.has(Number(r.pid))) out.push({pid: Number(r.pid), soft: true}); }); });   // queued spawn members aren't moved to live slots
+    teams.forEach(t => { if (t.kind === "spawn" && !t.lock && !t.hold) t.roles.forEach(r => { if (r.pid != null && !busy.has(Number(r.pid))) out.push({pid: Number(r.pid), soft: true}); }); });   // queued spawn members aren't moved to live slots
     return out;
   };
 
@@ -310,18 +344,18 @@ export function ocPlan(X) {
   // sat out the latest run, - a little per day of waiting (free members first when it's otherwise equal). The
   // picked members are then checked in join order (soonest free first): the i-th must be free by
   // now + planning left + 24 h x i; a member who isn't is left out and the fill retried.
-  function rotFill(c, roles, open, fixedSum, pool, k) {
+  function rotFill(c, roles, open, fixedSum, pool, k, nsBan) {
     const last = lastOf(c.name), pl = poolOf[c.name] || new Set(), inNow = new Set();
     [...inst.values()].forEach(x => { if (x.name === c.name && String(x.id) !== String(c.id)) (x.slots || []).forEach(sl => { if (sl.user) inNow.add(Number(sl.user.id)); }); });
     const base = planLeft(c), ban = new Set();
     const fOf = pid => busy.has(Number(pid)) ? freeAt.get(Number(pid)) : NOW;
     for (let tries = 0; tries < 6; tries++) {
-      const q = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && rotOk(p, c)).map(pid => ({pid, soft: false, q: true}));
+      const q = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && rotOk(p, c) && !nsBan.has(p)).map(pid => ({pid, soft: false, q: true}));
       const all = pool.concat(q).filter(p => !ban.has(p.pid));
       const best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, all, (p, rate) =>
         k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6
         + (last && pl.has(p.pid) && !last.has(p.pid) && !inNow.has(p.pid) ? 1e9 : 0)       // MIX: sat out the last run
-        - (p.q ? k * Math.max(0, fOf(p.pid) - NOW) / 3600e3 : 0) - delayCost(p.pid, c.name), 20000);
+        - (p.q ? k * Math.max(0, fOf(p.pid) - NOW) / 3600e3 : 0) - delayCost(p.pid, c.name) - (noScr(p.pid) ? k * 2 : 0), 20000);
       if (!best) return null;
       const order = best.slice().sort((a, b) => fOf(a.pid) - fOf(b.pid));
       const late = order.find((b, i) => fOf(b.pid) > NOW + base + PLAN_MS * i + 600e3);   // 10 min slack
@@ -330,7 +364,7 @@ export function ocPlan(X) {
     }
     return null;
   }
-  for (const c of recruiting) {
+  const fillRecruiting = () => { for (const c of recruiting) {
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
     if (t && t.lock) { skip(c, "locked"); continue; }
     if (!t && X.disabled.has(c.name)) { skip(c, "switched off"); continue; }   // switched off (an existing team is kept)
@@ -346,18 +380,19 @@ export function ocPlan(X) {
     const fixed = roles.filter(r => r.pid != null);
     if (fixed.some(r => r.rate == null)) { skip(c, "a member in it has no known rate"); continue; }         // someone in it has no known rate - can't judge the success
     const fixedSum = wSum(c.name, fixed);                   // weighted (role weights)
-    const pool = freePool().concat(softPool());
+    const nsBan = new Set(Object.keys((t && t.noshow) || {}).map(Number));   // NO-SHOWS: not back into this crime
+    const pool = freePool().concat(softPool()).filter(p => !nsBan.has(p.pid));
     const k = payDay(c.name) / roles.length / 100;     // a member's pay per day here = k x their rate
     let best = null;
-    if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k);
+    if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k, nsBan);
     if (!best) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
-                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - delayCost(p.pid, c.name), 20000);
+                           (p, rate) => k * (rate - (p.soft ? 3 : 0) - (noScr(p.pid) ? 2 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - delayCost(p.pid, c.name), 20000);
     // QUEUE: nobody free can fill it to the target -> let members finishing their crime soon in, as few as possible
     if (!best && !ROT_ON.has(String(c.id))) {
-      const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c))
+      const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c) && !nsBan.has(p))
         .map(pid => ({pid, soft: false, q: true}));
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
-                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0) - delayCost(p.pid, c.name), 20000);
+                           (p, rate) => k * (rate - (p.soft ? 3 : 0) - (noScr(p.pid) ? 2 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0) - delayCost(p.pid, c.name), 20000);
     }
     if (!best) {                                           // can't reach the target: SKIPPED (left open)
       // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
@@ -380,11 +415,39 @@ export function ocPlan(X) {
     });
     if (!t) { t = {id: uid(), crime: c.name, difficulty: c.difficulty ?? diffOf(c.name), kind: "live", crime_id: c.id, lock: false, roles}; teams.push(t); claimed.add(String(c.id)); }
     else t.roles = roles;
+  } };
+  fillRecruiting();
+
+  // ---- 3b. SPAWN HOLDS (see the header) ----
+  const density = c => payDay(c) / (rolesOf(c).length || 1);
+  const openRecruitingNames = new Set(recruiting.filter(c => (c.slots || []).some(sl => !sl.user)).map(c => c.name));
+  if (HOLD > 0) {
+    const resv = new Map();                                // pid -> the live role they're reserved in (not joined)
+    teams.forEach(t => { if (t.kind === "live" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !r.existing && !r.replaces) resv.set(Number(r.pid), {t, r}); }); });
+    const curPay = pid => { const x = resv.get(pid); return x ? payDay(x.t.crime) * (x.r.rate || 0) / 100 / (x.t.roles.length || 1) : 0.5 * (bestDay[pid] || 0); };
+    const cands = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n) && !(holdLog[n] > NOW)
+      && !teams.some(t => t.kind === "spawn" && t.hold && t.crime === n)).sort((a, b) => density(b) - density(a));
+    let pulled = false;
+    for (const C of cands) {
+      const roles = rolesOf(C), n = roles.length || 1, k = payDay(C) / n / 100;
+      const pool = Object.keys(roster).map(Number).filter(p => resv.has(p) ? density(resv.get(p).t.crime) < density(C) : (!assigned.has(p) && usable(p)));
+      if (pool.length < n) continue;
+      const best = fillSlots(C, roles.map(l => ({label: l})), 0, n, pool.map(pid => ({pid})),
+        (p, rate) => k * (rate - (noScr(p.pid) ? 2 : 0) - (busy.has(p.pid) ? 3 : 0)) - curPay(p.pid) - delayCost(p.pid, C), 40000);
+      if (!best || !best.some(b => resv.has(b.pid))) continue;          // nobody to pull: step 4 handles free members
+      const nt = {id: uid(), crime: C, difficulty: diffOf(C), kind: "spawn", crime_id: null, lock: false, hold: {since: NOW, until: NOW + HOLD},
+                  roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: nameOf(best[i].pid), rate: best[i].rate, src: best[i].src}))};
+      if (expPay(nt) - best.reduce((a, b) => a + curPay(b.pid), 0) <= 0) continue;   // must pay more than what they're planned for
+      best.forEach(b => { const x = resv.get(b.pid);
+        if (x) { Object.assign(x.r, {pid: null, name: "", rate: null, src: null}); delete x.r.since; resv.delete(b.pid); }
+        take(b.pid); });
+      teams.push(nt); pulled = true;
+    }
+    if (pulled) { skipped.length = 0; fillRecruiting(); }  // the slots they left are filled again from everyone else
   }
 
   // ---- 4. spawn teams for members left over ----
   // existing spawn teams: refill their empty roles (only if the team then reaches the target), else drop the empties
-  const openRecruitingNames = new Set(recruiting.filter(c => (c.slots || []).some(sl => !sl.user)).map(c => c.name));
   for (const t of teams) {
     if (t.kind !== "spawn" || t.lock) continue;
     const open = t.roles.map((r, i) => r.pid == null ? i : -1).filter(i => i >= 0);
@@ -415,12 +478,11 @@ export function ocPlan(X) {
     const roles = rolesOf(crime); if (!roles.length) return null;
     const k = payDay(crime) / roles.length / 100;
     const best = fillSlots(crime, roles.map(l => ({label: l})), 0, roles.length, [...pool].map(pid => ({pid: Number(pid)})),
-      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0) - (busy.has(p.pid) ? k * 3 : 0) - delayCost(p.pid, crime), 40000);   // free members preferred over queued
+      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0) - (busy.has(p.pid) ? k * 3 : 0) - (noScr(p.pid) ? k * 2 : 0) - delayCost(p.pid, crime), 40000);   // free members preferred over queued
     if (!best) return null;
     return {id: uid(), crime, difficulty: diffOf(crime), kind: "spawn", crime_id: null, lock: false,
             roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: nameOf(best[i].pid), rate: best[i].rate, src: best[i].src}))};
   }
-  const density = c => payDay(c) / (rolesOf(c).length || 1);
   const planScore = ts => ts.reduce((s, t) => s + expPay(t) + 1 + (t.difficulty || 0) * 0.1, 0);
   // PRIORITY (Nov 11 2026, user: "Prioritize crimes by highest recorded maximum income per day"): plans are compared
   // crime by crime from the highest recorded MAX pay per member per day down - the plan that seats more members in
@@ -500,11 +562,15 @@ export function ocPlan(X) {
     const q = r.pid != null && !r.existing && busy.has(Number(r.pid)) && freeAt.has(Number(r.pid));
     if (q) { r.queued = true; r.free_at = freeAt.get(Number(r.pid)); } else { delete r.queued; delete r.free_at; }
   }));
+  // NO-SHOW clock: every reservation in a recruiting crime gets since = when it was made (kept while it stays)
+  teams.forEach(t => t.roles.forEach(r => {
+    if (t.kind === "live" && r.pid != null && !r.existing) { if (!r.since) r.since = NOW; } else delete r.since; }));
   teams.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "live" ? -1 : 1) || payDay(b.crime) - payDay(a.crime) || (b.difficulty || 0) - (a.difficulty || 0));
-  const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
+  const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.hold ? 1 : 0, Object.keys(t.noshow || {}).length, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
   const changed = sig(teams) !== sig(X.prev || []);
   return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
+    holds: teams.filter(t => t.hold).length, hold_log: holdLog,
     rotation: Object.keys(poolOf).map(n => ({crime: n, pool: poolOf[n].size, seats: rolesOf(n).length,
       max: Math.max(1, Math.floor(poolOf[n].size / (rolesOf(n).length || 1))),
       live: [...ROT_ON].filter(id => (inst.get(id) || {}).name === n).length}))}};
