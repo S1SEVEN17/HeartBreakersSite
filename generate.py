@@ -4023,27 +4023,25 @@ def member_out(out: Path) -> Path:
 # link:   "M:<page>" members' folder · "L:<page>" leaders' folder · "G:/" the dashboard (Leaders Hub for leaders,
 #         Members Hub for everyone else) · a full https:// address. Dropdowns are <details>, so they work by tap.
 def header_default() -> dict:
+    # Nov 12 2026 (user, site cleanup): History = wars / chains / crimes as tabs; one home (no Leaders Hub link);
+    # Member data = stats + war readiness; one Torn panels entry; Site settings = homepage / header / profile layout
+    # tabs; "Members list" (already in the top row) left the leaders' menu
     L = lambda label, link: {"label": label, "link": link}
-    return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("👥 Members", "M:members.html"),
+    return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("📜 History", "M:wars.html"),
+                        L("👥 Members", "M:members.html"),
                         L("⛓️ Chain watch", "M:chainwatch-schedule.html"), L("🧩 Scripts", "M:scripts.html")],
             "leaders": [{"label": "🛡️ Leaders", "items": [
-                L("🏠 Leaders Hub", "L:index.html"),
                 L("🤝 Recruitment", "L:recruitment.html"),          # Nov 11 2026: Torn Recruit Scout -> shared recruits
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
-                                                        L("⚔️ War readiness", "L:readiness.html"),
                                                         L("⛓️ Chain Watch", "L:chainwatch.html"),
                                                         L("💰 Paid wars", "M:wars.html#paid")]},
-                {"label": "🕵️ Organized crimes", "items": [L("🕵️ OC Management", "L:oc.html")]},
-                {"label": "👥 Members", "items": [L("🗄️ Armory monitor", "L:armory.html"), L("💪 Member stats", "L:stats.html"),
-                                                 L("👥 Members list", "M:members.html")]},
-                {"label": "📢 Torn panels", "items": [L("📢 Announcements", "L:announcements.html"),
-                                                     L("🖼️ Faction description", "L:description.html")]},
+                L("🕵️ OC Management", "L:oc.html"),
+                {"label": "👥 Members", "items": [L("🗄️ Armory monitor", "L:armory.html"), L("💪 Member data", "L:stats.html")]},
+                L("📢 Torn panels", "L:announcements.html"),
                 {"label": "📰 Newsletters", "items": [L("🎨 Newsletter builder", "L:builder.html"),
                                                      L("🧷 Newsletter filler", "L:hb-newsletter-filler.user.js"),
                                                      L("🗂️ Recap archive", "M:recaps.html")]},
-                {"label": "⚙️ Site settings", "items": [L("🏠 Homepage editor", "L:homepage.html"),
-                                                       L("🧭 Header editor", "L:header-editor.html"),
-                                                       L("🧩 Profile layout", "L:profile-default.html")]}]}]}
+                L("⚙️ Site settings", "L:homepage.html")]}]}
 
 
 _HEADER = {}
@@ -4097,7 +4095,8 @@ def _menu_js(root: str) -> str:
 # Account menu (gatekeeper on): "👤 <their name>" with links to their own information + Sign out.
 # The name is filled in the browser from whoami.json, which also reveals the leader-only groups.
 # My Profile = their own member.html (the gatekeeper's /m/me sends them there; #sections jump to a part).
-ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🔐 My data & sharing", "my-data.html"), ("🧩 My profile layout", "profile-editor.html"),
+# ("🧩 My profile layout" left the menu Nov 12 2026 - it's the "⚙️ Customize this page" button on profiles)
+ACCOUNT_LINKS = [("👤 My Profile", "me"), ("🔐 My data & sharing", "my-data.html"),
                  ("💰 My Payouts", "me#payouts"),
                  ("⚔️ My Wars", "me#wars"), ("⛓️ My Chains", "me#chains"), ("🕵️ My Crimes", "me#crimes")]
 
@@ -4106,12 +4105,9 @@ def account_menu(mroot: str) -> str:
     g_ = gate_cfg()["url"].rstrip("/")
     links = "".join(f'<a href="{mroot}{u}">{t}</a>' for t, u in ACCOUNT_LINKS)
     return (f'<details class="hbacc"><summary id="hbaccn">👤 Me</summary><div>{links}'
-            f'<a href="#" id="hbKeyClr" style="display:none">🔑 Remove my API key</a>'
             f'<a href="{g_}/logout" style="color:#ff8a80">🚪 Sign out</a></div></details>'
-            # "Remove my API key": shown when this browser keeps the member's Public key (live timers, hb_pub_key)
-            "<script>(function(){var K='hb_pub_key',b=document.getElementById('hbKeyClr');try{if(localStorage.getItem(K))b.style.display='';}catch(e){}"
-            "b.onclick=function(e){e.preventDefault();if(confirm('Remove your Torn API key from this browser? (The live war and chain timers stop until you add it again.)'))"
-            "{try{localStorage.removeItem(K);}catch(x){}b.style.display='none';location.reload();}};})();</script>"
+            # (the browser-kept key and its "Remove my API key" link went Nov 12 2026 - Right now reads the Hub)
+            "<script>try{localStorage.removeItem('hb_pub_key');}catch(e){}</script>"
             # OC pass rates moved to the stored opt-in key (Nov 2026): clear the old browser-only OC key everywhere
             "<script>try{['hb_oc_key','hb_oc_owner','hb_oc_shared_at'].forEach(function(k){localStorage.removeItem(k);});}catch(e){}</script>"
             "<script>(function(){fetch(" + json.dumps(mroot + "whoami.json") + ",{cache:'no-store'})"
@@ -4168,6 +4164,29 @@ def nav_menu(mroot: str, lroot: str) -> str:
     if g_:
         parts.append(account_menu(mroot))
     return MENU_CSS + '<div class="hbm">' + "".join(parts) + "</div>" + _menu_js(mroot)
+
+
+# TAB BARS (Nov 12 2026, user: merge pages) - pages that belong together share one header entry and a tab bar under
+# the header; each tab is its own page (same folder), so old links and #anchors keep working.
+#   History      wars.html · chains.html · crimes.html                 (members)
+#   Member data  stats.html · readiness.html                           (leaders)
+#   Site settings homepage.html · header-editor.html · profile-default.html (leaders)
+#   Torn panels  announcements.html · description.html                  (leaders)
+HISTORY_TABS = [("⚔️ Wars", "wars.html"), ("⛓️ Chains", "chains.html"), ("🕵️ Crimes", "crimes.html")]
+MEMBER_DATA_TABS = [("💪 Stats", "stats.html"), ("⚔️ War readiness", "readiness.html")]
+PANEL_TABS = [("📢 Announcements", "announcements.html"), ("🖼️ Faction description", "description.html")]   # Torn panels
+SETTINGS_TABS = [("🏠 Homepage", "homepage.html"), ("🧭 Header", "header-editor.html"), ("🧩 Profile layout", "profile-default.html")]
+TAB_CSS = ("<style>.hbtabs{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:-4px 0 12px;font:14px system-ui,sans-serif}"
+           ".hbtabs a{color:#ddd;text-decoration:none;background:#1a1012;border:1px solid #5c1c1a;border-radius:8px;padding:6px 14px}"
+           ".hbtabs a.on{background:#e4382e;border-color:#e4382e;color:#fff;font-weight:600}</style>")
+
+
+def tab_bar(tabs: list, cur: str) -> str:
+    """The tab bar for a page group (see TAB BARS) - `cur` = this page's file name."""
+    import html as _h
+    on = ' class="on"'
+    return TAB_CSS + '<nav class="hbtabs">' + "".join(
+        f'<a href="{_h.escape(u, quote=True)}"{on if u == cur else ""}>{_h.escape(t)}</a>' for t, u in tabs) + "</nav>"
 
 
 def _leader_root() -> str:
@@ -4475,7 +4494,7 @@ def write_message_builder(out: Path):
     for only, fname in (("D", "description.html"), ("A", "announcements.html")):
         c_ = dict(pconf, only=only, html=description_snippet() if only == "D" else _PANEL_HTML.get("A", ""),
                   leadership=LEADERSHIP_NOW)      # who holds each leadership slot now (Description editor)
-        (lout / fname).write_text(tpl_.replace("__CONFIG__", json.dumps(c_)).replace("__MENU__", leader_menu("")),
+        (lout / fname).write_text(tpl_.replace("__CONFIG__", json.dumps(c_)).replace("__MENU__", leader_menu("") + tab_bar(PANEL_TABS, fname)),
                                   encoding="utf-8")
     (lout / "panels.html").write_text('<!DOCTYPE html><meta charset="utf-8"><meta http-equiv="refresh" '
                                       'content="0;url=announcements.html"><title>Site Panels</title>', encoding="utf-8")
@@ -4579,11 +4598,9 @@ HUB_CSS += """
 #   who   /m/whoami.json  - name, position, leader      mine  /m/mine.json - own reliability (leaders' badge)
 #   home  db/home.json    - own numbers vs average
 #   att   leaders' db/attention.json - unpaid payouts, idle recruits ("Needs attention" hides when empty)
-# "Right now" (live ranked war + chain) is read from Torn IN THE MEMBER'S BROWSER with THEIR OWN Public key, which
-# they paste once into the section; it's kept only in that browser (localStorage "hb_pub_key") and never sent to
-# the gatekeeper or GitHub. Torn v2, both Public access: /faction/chain every CHAIN_EVERY s, /faction/wars every
-# WAR_EVERY s (timestamp= skips Torn's short cache), only while the page is visible; Torn's limit is 100 calls a
-# minute per key, so this uses ~6. Too-many-requests (code 5) backs off to a minute. Timers tick every second.
+# "Right now" (live ranked war + chain) comes from the Hub (/m/now.json, Nov 12 2026 - members no longer paste a key
+# here): the war from the Hub's 3-minute Torn read, the chain from the Chain Watch room or that read. Timers tick
+# every second; the Hub is asked every 20 s while the page is visible.
 HOME_JS = r"""
 (function(){
 const H=window.HBH||{},$=id=>document.getElementById(id),now=()=>Date.now()/1e3;
@@ -4626,50 +4643,17 @@ function attention(){const el=$("hbAtt");if(!el)return;const L=H.links||{},rows=
 }
 
 
-// ---------- Right now: live war + chain from Torn with the member's own Public key (this browser only) ----------
-// The key comes from the sign-in page ("keep my key in this browser") or the box shown here; both store it in
-// localStorage hb_pub_key. Chain every 15 s (Torn allows 100 calls a minute per key - this uses ~6).
-const KEYK="hb_pub_key",CHAIN_EVERY=15,WAR_EVERY=30;
-const store={get:()=>{try{return localStorage.getItem(KEYK)||""}catch(e){return ""}},
-  set:v=>{try{v?localStorage.setItem(KEYK,v):localStorage.removeItem(KEYK)}catch(e){}}};
-let back=0;                                   // too many requests -> wait until this time
-async function torn(path){const r=await fetch(`https://api.torn.com/v2/faction/${H.faction}/${path}?timestamp=${Math.floor(now())}&comment=${encodeURIComponent(H.comment||"Heart Breakers Hub")}`,
-    {headers:{Authorization:"ApiKey "+store.get(),Accept:"application/json"},cache:"no-store"});
-  const j=await r.json();if(j.error){const e=new Error(j.error.error||"Torn error");e.code=j.error.code;throw e}return j}
-const BADKEY=[1,2,10,13,16,18];               // key missing / wrong / paused / not allowed -> ask again
-function fail(e){if(e.code===5){back=now()+60;return}
-  if(BADKEY.includes(e.code)){store.set("");NOWERR="Torn didn't accept that key ("+e.message+"). Try another Public key."}
-  else NOWERR="Couldn't reach Torn just now - retrying."}
-async function getChain(){if(!store.get()||now()<back)return;try{const t=now(),c=((await torn("chain")).chain)||{};
-    const ts=v=>!v?0:(+v>1e9?+v:t+ +v);
-    // Nov 10 2026: Torn's `timeout` is frozen in its cache (shows more time than is left) - `end` is the exact expiry
-    CHAIN={current:+c.current||0,max:+c.max||0,timeout_at:(+c.current>0&&+c.end>1e9)?+c.end:ts(c.timeout),cooldown_at:ts(c.cooldown)};NOWERR="";lastOk=now();
-    shareChain(c,t)}
-  catch(e){fail(e)}nowCards()}
-// Chain Watch (Nov 2026): this reading is recycled for the Hub's Chain Watch queue timer - the NUMBERS only (never the
-// key), only during a live chain, and only when Torn's data changed (its ~30 s cache repeats itself) -> ~2 a minute.
-let lastShare=null;
-function shareChain(c,t){const cur=+c.current||0,to=+c.timeout||0,end=+c.end||0;if(!(cur>0&&((to>0&&to<=300)||end>1e9)))return;
-  const left=end>1e9?end-t:to>1e9?to-t:to,exp=end>1e9?end:t+left;if(lastShare&&lastShare.c===cur&&Math.abs(lastShare.e-exp)<=2)return;
-  lastShare={c:cur,e:exp};
-  fetch("/m/cw/reading",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({current:cur,max:+c.max||0,end:end>1e9?end:0,timeout:Math.round(left),cooldown:+c.cooldown||0,modifier:c.modifier==null?null:+c.modifier})}).catch(()=>{})}
-async function getWar(){if(!store.get()||now()<back)return;try{let w=((await torn("wars")).wars||{}).ranked;if(Array.isArray(w))w=w[0];
-    const t=now();WAR=null;
-    if(w&&w.factions&&!(w.end&&w.end<=t)){const F=Array.isArray(w.factions)?w.factions:Object.entries(w.factions).map(([id,f])=>Object.assign({id},f));
-      const me=F.find(f=>String(f.id)===String(H.faction))||{},them=F.find(f=>String(f.id)!==String(H.faction))||{};
-      WAR={kind:w.start&&w.start<=t?"ongoing":"upcoming",opponent:them.name||"?",start:w.start||0,end:w.end||0,our:me.score||0,their:them.score||0}}
-    NOWERR=""}catch(e){fail(e)}nowCards()}
-function keyForm(){return `<div class="keyc"><b>⚡ Live war and chain</b><br>Add your Torn <b>Public</b> API key to see the ranked war countdown and the chain timer here.`
-  +`<form id="hbKeyF"><input id="hbKey" type="password" autocomplete="off" maxlength="16" placeholder="16-character Public key"><button>Save</button></form>`
-  +`<small>Stored locally in this browser only - never sent to the site - and used only for your own requests to Torn (faction chain and wars, Public access, comment "Heart Breakers Hub"). The key is shared with nobody; during a live chain the chain count and timer it reads (numbers only) also help the Hub's Chain Watch queue timer. Remove it any time from the Me menu or by signing out. `
-  +`<a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Get a key</a></small>${NOWERR?`<small class="err">${esc(NOWERR)}</small>`:""}</div>`}
+// ---------- Right now: live war + chain FROM THE HUB (Nov 12 2026, user: no key on the homepage) ----------
+// /m/now.json (gate/worker.js hubNow): the ranked war from the Hub's own 3-minute Torn read, the chain from the
+// Chain Watch room (members' scripts, every few seconds during a chain) or else that 3-minute read. Read every
+// NOW_EVERY s while the page is visible - no Torn call from the browser, no key. The old browser key is forgotten.
+const NOW_EVERY=20;
+try{localStorage.removeItem("hb_pub_key")}catch(e){}
+async function getNow(){const d=await get(H.now);
+  if(!d||!d.ok){NOWERR="Couldn't reach the Hub just now - retrying.";nowCards();return}
+  WAR=d.war||null;CHAIN=d.chain||null;NOWERR="";lastOk=d.chain&&d.chain.as_of?Math.max(d.chain.as_of,d.as_of||0):(d.as_of||now());nowCards()}
 // the war + chain cards (redrawn every second for the timers)
 function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;
-  if(!store.get()){if(!$("hbKeyF")){el.querySelector(".nowc").innerHTML=keyForm();
-      $("hbKeyF").onsubmit=e=>{e.preventDefault();const v=$("hbKey").value.trim();
-        if(!/^[A-Za-z0-9]{16}$/.test(v)){NOWERR="That doesn't look like a Torn API key (16 letters/numbers).";el.querySelector(".nowc").innerHTML="";nowCards();return}
-        store.set(v);NOWERR="";el.querySelector(".nowc").innerHTML="";getWar();getChain()}}return}
   const t=now(),L=H.links||{};let h="";
   if(WAR){const live_=WAR.kind==="ongoing"||(WAR.start&&WAR.start<=t);
     h+=`<a class="war" href="${L.torn_war}" target="_blank" rel="noopener"><i>⚔️</i><div class="x"><b>Ranked war vs ${esc(WAR.opponent)}</b>`
@@ -4682,16 +4666,12 @@ function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;
       +`<div class="pbar"><u style="width:${pc}%"></u></div><span>${c.timeout_at>t?`Timeout <em>${dur(c.timeout_at-t)}</em>`:"Checking…"} · ${(nx-c.current).toLocaleString("en-US")} to the next bonus</span></div><span class="go">Hit</span></a>`}
   else if(c&&c.cooldown_at>t)h+=`<a class="chain" href="${L.torn_chain}" target="_blank" rel="noopener"><i>❄️</i><div class="x"><b>Chain on cooldown</b><span>A new chain can start in <em>${dur(c.cooldown_at-t)}</em></span></div></a>`;
   if(!h&&(WAR!==undefined||CHAIN!==undefined))h=`<div class="nowq">😴 No ranked war or chain running right now.</div>`;
-  else if(!h)h=`<div class="nowq">Checking Torn…</div>`;
+  else if(!h)h=`<div class="nowq">Checking…</div>`;
   if(NOWERR)h+=`<div class="nowe">${esc(NOWERR)}</div>`;
-  // footer: live status on the left, a small "Remove key" button on the right
-  h+=`<div class="nowf"><span class="lv"><i class="${NOWERR?"off":""}"></i>Live from Torn with your key${lastOk?` · ${Math.max(0,Math.round(t-lastOk))}s ago`:""}</span>`
-    +`<button class="keyx" id="hbKeyX" type="button">🔑 Remove key</button></div>`;
-  el.querySelector(".nowc").innerHTML=h;
-  $("hbKeyX").onclick=()=>{if(confirm("Remove your API key from this browser?")){store.set("");WAR=CHAIN=undefined;el.querySelector(".nowc").innerHTML="";nowCards()}}}
-let lastC=0,lastW=0;
-function tick(){if($("hbNow")&&store.get()&&document.visibilityState==="visible"){const t=now();
-    if(t-lastC>=CHAIN_EVERY){lastC=t;getChain()}if(t-lastW>=WAR_EVERY){lastW=t;getWar()}}nowCards()}
+  h+=`<div class="nowf"><span class="lv"><i class="${NOWERR?"off":""}"></i>Live from the Hub${lastOk?` · updated ${dur(Math.max(0,t-lastOk))} ago`:""}</span></div>`;
+  el.querySelector(".nowc").innerHTML=h}
+let lastN=0;
+function tick(){if($("hbNow")&&document.visibilityState==="visible"){const t=now();if(t-lastN>=NOW_EVERY){lastN=t;getNow()}}nowCards()}
 Promise.all([get(H.who),get(H.home),$("hbAtt")?get(H.att):null]).then(([w,h,a])=>{WHO=w;HOME=h;ATT=a;welcome();attention()});
 if($("hbNow")){tick();setInterval(tick,1e3);document.addEventListener("visibilitychange",tick)}
 })();
@@ -4817,7 +4797,8 @@ def _hub_latest(mb: str) -> str:
          f'</div></a>')
     tiles = []
     for kind, head, allp in LATEST_GROUPS:
-        rows = [x for x in items if x["kind"] == kind]
+        # the featured (newest) post isn't listed again under its kind (Nov 12 2026, user: no repeats)
+        rows = [x for x in items if x["kind"] == kind and x is not f]
         if not rows:
             continue
         tiles.append(f'<div class="ltile"><p>{head}' + (f'<a href="{mb}{allp}">All →</a>' if allp else "") + "</p>" + "".join(
@@ -4903,11 +4884,11 @@ def homepage_default() -> dict:
         ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
         ("🧷", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
     return {"v": HOME_LAYOUT_V,
+            # Nov 12 2026 (user): no Quick actions / Explore (they repeated the header) - one home for everyone
             "members": {"sections": [{"type": "welcome", "title": ""},
                                      {"type": "now", "title": "Right now"},
-                                     actions,
-                                     {"type": "latest", "title": "Latest"},
-                                     {"type": "groups", "title": "Explore", "groups": [compete, grow, faction]}]},
+                                     {"type": "attention", "title": "Needs attention"},
+                                     {"type": "latest", "title": "Latest"}]},
             "leaders": {"sections": [{"type": "welcome", "title": ""},
                                      {"type": "now", "title": "Right now"},
                                      {"type": "attention", "title": "Needs attention"},
@@ -4936,6 +4917,7 @@ def home_js_cfg(hub: str) -> dict:
     return {"hub": hub, "home": member_base() + "/db/home.json",
             "att": (leader_base() + "/db/attention.json") if leader_dir() else "",
             "who": gate + "/m/whoami.json" if gate else "", "mine": gate + "/m/mine.json" if gate else "",
+            "now": gate + "/m/now.json" if gate else "",          # Right now (Nov 12 2026) - the Hub's war + chain
             "faction": int(os.environ.get("FACTION_ID", "51384")), "comment": API_COMMENT,
             "links": {"payout": _hub_link("L:payout.html", hub), "members": _hub_link("M:members.html", hub),
                       "profile": _hub_link("M:member.html", hub),
@@ -4959,8 +4941,8 @@ def _hub_sections(sections: list, hub: str) -> str:
             h += f'<div class="hbsec" id="hbNow" hidden>{head}<div class="nowc"></div></div>'
             live = True
         elif t_ == "attention":
-            if hub != "leaders":
-                continue                     # leaders only - never on the Members Hub
+            # ONE HOME (Nov 12 2026): shown on the Members Hub too - it stays hidden unless the leaders' attention file
+            # loads, which only a leader's pass can read
             h += f'<div class="hbsec" id="hbAtt" hidden><div class="attn"><div class="ah"><b>🔔 {_html.escape(title or "Needs attention")}</b>' \
                  '<span class="cnt"></span></div><div class="rows"></div></div></div>'
             live = True
@@ -5007,11 +4989,10 @@ def write_homepages(out: Path, cfg: dict = None):
     if not leader_dir():
         return
     lout = out / leader_dir()
-    lsec = (hp.get("leaders") or {}).get("sections") or []
-    _hub_page(lout / "index.html", "Heart Breakers", "Leaders Hub - leaders only",
-              _hub_sections(lsec, "leaders"), hub=True, menu=leader_menu(""), fresh=["members", "wars", "chains", "crimes", "gym", "armory"],
-              fresh_root=member_base() + "/",
-              top=not any(s.get("type") == "welcome" for s in lsec))
+    # ONE HOME (Nov 12 2026, user): the Leaders Hub was merged into the Members Hub (leaders see "Needs attention"
+    # there) - the leaders' index.html just forwards, so old links and bookmarks still land on the home
+    (lout / "index.html").write_text('<!DOCTYPE html><meta charset="utf-8"><title>Heart Breakers</title>'
+                                     f'<script>location.replace({json.dumps(member_base() + "/")})</script>', encoding="utf-8")
     # the Homepage editor (leaders) - its preview uses the same CSS + script, the current "Latest" and these defaults
     pages = SITE_PAGES
     conf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": pages, "default": homepage_default(),
@@ -5020,24 +5001,24 @@ def write_homepages(out: Path, cfg: dict = None):
             "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
     (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
                                         .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
-                                        .replace("__MENU__", leader_menu("")), encoding="utf-8")
+                                        .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "homepage.html")), encoding="utf-8")
     # the Header editor (leaders, Nov 2026) - config.json "site_header": the members' header + the leaders' extra items
     hconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": SITE_PAGES, "default": header_default(),
              "css": MENU_CSS}
     (lout / "header-editor.html").write_text((ROOT / "tools" / "header_editor.html").read_text(encoding="utf-8")
                                              .replace("__CONFIG__", json.dumps(hconf).replace("</", "<\\/"))
-                                             .replace("__MENU__", leader_menu("")), encoding="utf-8")
+                                             .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "header-editor.html")), encoding="utf-8")
 
 
 # every page the editors (homepage, header) can link to: (title, link)
-SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:index.html"), ("War History", "M:wars.html"),
+SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:index.html"), ("History (wars)", "M:wars.html"),
              ("Paid wars (War History)", "M:wars.html#paid"), ("Chain History", "M:chains.html"), ("Organized Crimes", "M:crimes.html"),
              ("Leaderboards", "M:leaderboards.html"), ("Leaderboard History", "M:leaderboard-history.html"),
-             ("Gym Leaderboards", "M:gym.html"), ("Gym History", "M:gym-history.html"), ("Members", "M:members.html"),
+             ("Gym Leaderboards", "M:leaderboards.html#gym"), ("Members", "M:members.html"),
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
-             ("Leaders Hub", "L:index.html"), ("Armory Monitor", "L:armory.html"),
+             ("Armory Monitor", "L:armory.html"),
              ("Profile layout (default)", "L:profile-default.html"),
-             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("Scripts directory", "M:scripts.html"), ("Member Stats (opt-in)", "L:stats.html"), ("War Readiness (opt-in)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
+             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("Scripts directory", "M:scripts.html"), ("Member data (stats)", "L:stats.html"), ("Member data (war readiness)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
@@ -6082,8 +6063,8 @@ def write_optin_pages(out: Path):
     if leader_dir():
         lout = out / leader_dir()
         conf = {"member_base": member_base(), "gate": gate}
-        (lout / "stats.html").write_text(page("member_stats.html", conf, leader_menu("")), encoding="utf-8")
-        (lout / "readiness.html").write_text(page("war_readiness.html", conf, leader_menu("")), encoding="utf-8")
+        (lout / "stats.html").write_text(page("member_stats.html", conf, leader_menu("") + tab_bar(MEMBER_DATA_TABS, "stats.html")), encoding="utf-8")
+        (lout / "readiness.html").write_text(page("war_readiness.html", conf, leader_menu("") + tab_bar(MEMBER_DATA_TABS, "readiness.html")), encoding="utf-8")
         # Chain Watch settings (Nov 2026): the Faction Chain Watch script's faction settings, saved through the gate
         (lout / "chainwatch.html").write_text(page("chainwatch_settings.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
         # Recruitment (Nov 11 2026): recruits shared by the Torn Recruit Scout script - claim / status / notes / remove
@@ -6377,31 +6358,44 @@ def write_profiles(out: Path, db: dict):
         .replace("__FRESH__", fresh_html(["wars", "chains", "crimes", "gym"]))
     (mout / "leaderboards.html").write_text(ltpl.replace("__MODE__", "current"), encoding="utf-8")
     (mout / "leaderboard-history.html").write_text(ltpl.replace("__MODE__", "history"), encoding="utf-8")
-    # gym.html (this month / all time) + gym-history.html (past months) - header button "🏋️ Gym", from db/gym.json
-    gtpl = (ROOT / "tools" / "gym_boards.html").read_text(encoding="utf-8").replace("__MENU__", site_menu("")) \
-        .replace("__FRESH__", fresh_html(["gym", "members"]))
-    (mout / "gym.html").write_text(gtpl.replace("__MODE__", "current"), encoding="utf-8")
-    (mout / "gym-history.html").write_text(gtpl.replace("__MODE__", "history"), encoding="utf-8")
+    # gym.html / gym-history.html: the Gym page became the Leaderboards' Gym tab (Nov 12 2026, user) - the old addresses
+    # forward there (gym-history.html#YYYY-MM -> that month). tools/gym_boards.html is kept for reference only.
+    (mout / "gym.html").write_text('<!DOCTYPE html><meta charset="utf-8"><title>Gym</title>'
+                                   '<script>location.replace("leaderboards.html#gym")</script>', encoding="utf-8")
+    (mout / "gym-history.html").write_text('<!DOCTYPE html><meta charset="utf-8"><title>Gym</title><script>'
+                                           'var m=location.hash.slice(1);location.replace("leaderboard-history.html"+'
+                                           '(/^\\d{4}-\\d{2}$/.test(m)?"?m="+m:"")+"#gym")</script>', encoding="utf-8")
     # crimes.html - Organized Crimes breakdown (header button), drawn in the browser from db/crimes.json
     (mout / "crimes.html").write_text((ROOT / "tools" / "oc_stats.html").read_text(encoding="utf-8")
-                                      .replace("__MENU__", site_menu("")).replace("__FRESH__", fresh_html(["crimes"])),
+                                      .replace("__MENU__", site_menu("") + tab_bar(HISTORY_TABS, "crimes.html")).replace("__FRESH__", fresh_html(["crimes"])),
                                       encoding="utf-8")
     if gate_cfg():     # account.html merged into the profile: old links go to their own profile (keeping #section)
         (mout / "account.html").write_text('<!DOCTYPE html><meta charset="utf-8"><title>My Profile</title>'
                                            '<script>location.replace("me" + location.hash)</script>', encoding="utf-8")
     ms = db["members"]["members"]
+    # MEMBERS LIST (Nov 12 2026, user): the one per-member table - the war / chain history pages' "Every member"
+    # columns moved here (hits per war, war respect, best war, assists, chain respect, best chain, retals)
     def table(rows):
-        h = ('<table class="srt"><tr><th>Member</th><th>Position</th><th>Days</th><th>War hits</th><th>Wars hit</th>'
-             "<th>Chain hits</th><th>Crimes</th><th>Payouts</th></tr>")
+        h = ('<div style="overflow-x:auto"><table class="srt"><tr><th>Member</th><th>Position</th><th>Days</th><th>War hits</th><th>Wars hit</th>'
+             "<th>Hits / war</th><th>War respect</th><th>Best war</th><th>Assists</th>"
+             "<th>Chain hits</th><th>Chain respect</th><th>Best chain</th><th>Retals</th><th>Crimes</th><th>Payouts</th></tr>")
         for m in rows:
             t = m["t"]
+            w_, c_ = WAR_AGG.get(str(m["id"]), {}), CHAIN_AGG.get(str(m["id"]), {})
+            n0 = lambda v, f=fmt_int: (f(v) if v else "-")
             h += (f'<tr data-id="{m["id"]}"><td><a href="member.html?id={m["id"]}" style="color:#e8be5a">{_html.escape(m["name"])}</a></td>'
                   f'<td data-v="{position_rank(m.get("position"))}">{_html.escape(str(m.get("position") or ""))}</td>'
                   f'<td data-v="{m.get("days") or 0}">{m.get("days") or ""}</td>'
                   f'<td data-v="{t["war_hits"]}">{t["war_hits"]:,}</td><td data-v="{t["wars"] - t["wars_zero"]}">{t["wars"] - t["wars_zero"]}/{t["wars"]}</td>'
-                  f'<td data-v="{t["chain_hits"]}">{t["chain_hits"]:,}</td><td data-v="{t["crimes_ok"]}">{t["crimes_ok"]}/{t["crimes"]}</td>'
+                  f'<td data-v="{w_.get("per") or 0}">{n0(w_.get("per"), lambda v: f"{v:,.1f}")}</td>'
+                  f'<td data-v="{round(w_.get("resp") or 0)}">{n0(w_.get("resp"), lambda v: f"{v:,.0f}")}</td>'
+                  f'<td data-v="{w_.get("best") or 0}">{n0(w_.get("best"))}</td><td data-v="{w_.get("assists") or 0}">{n0(w_.get("assists"))}</td>'
+                  f'<td data-v="{t["chain_hits"]}">{t["chain_hits"]:,}</td>'
+                  f'<td data-v="{round(c_.get("resp") or 0)}">{n0(c_.get("resp"), lambda v: f"{v:,.0f}")}</td>'
+                  f'<td data-v="{c_.get("best") or 0}">{n0(c_.get("best"))}</td><td data-v="{c_.get("rets") or 0}">{n0(c_.get("rets"))}</td>'
+                  f'<td data-v="{t["crimes_ok"]}">{t["crimes_ok"]}/{t["crimes"]}</td>'
                   f'<td data-v="{t["paid"]}">${t["paid"]:,}</td></tr>')
-        return h + "</table>"
+        return h + "</table></div>"
     cur = [m for m in ms if m["current"]]
     past = [m for m in ms if not m["current"] and (m["t"]["war_hits"] or m["t"]["chain_hits"] or m["t"]["crimes"])]
     # leaders only: a Reliability column, filled from the leaders' db/private.json (members never get the file)
@@ -6467,7 +6461,7 @@ def write_profile_layouts(out: Path, cfg: dict):
         tpl.replace("__CONFIG__", json.dumps(dict(base, mode=mode)).replace("</", "<\\/")).replace("__MENU__", menu), encoding="utf-8")
     put(mout / "profile-editor.html", "member", site_menu(""))
     if leader_dir():
-        put(out / leader_dir() / "profile-default.html", "default", leader_menu(""))
+        put(out / leader_dir() / "profile-default.html", "default", leader_menu("") + tab_bar(SETTINGS_TABS, "profile-default.html"))
 
 
 def write_panel_preview_kit(out: Path, summary: dict):
@@ -7185,6 +7179,10 @@ def _chain_meta(cid: str, chist: dict, members: list, ccfg: dict, png: bytes = N
                         "respect": r["respect"], "attackers": r["attackers"]})
 
 
+# per-member war / chain totals from the history pages, for the Members list (Nov 12 2026): {id: {...}}
+WAR_AGG, CHAIN_AGG = {}, {}
+
+
 def chain_history_page(out: Path, chist: dict, ccfg: dict):
     """chains.html (members) - every chain of min_length+ hits on record, newest first, with its report
     when one is saved."""
@@ -7215,14 +7213,11 @@ def chain_history_page(out: Path, chist: dict, ccfg: dict):
         a["per"] = round(a.get("bigh", 0) / a["big"], 1) if a.get("big") else None
         a["rph"] = round(a["resp"] / a["hits"], 2) if a["hits"] else None     # chain bonus respect included
         rows_.append(a)
-    rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
-    msum = _member_summary(rows_, [("Chains", "chains", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
-                                   (f"Hits / chain ({CHAIN_AVG_MIN}+)", "per", lambda v: f"{v:,.1f}"), ("Respect / hit", "rph", lambda v: f"{v:,.2f}"),
-                                   ("Best chain", "best", fmt_int), ("Retals", "rets", fmt_int)], "csumT")
-    body = (site_menu("") + "<h2>⛓️ Chain Summary</h2>" + HIST_STATS_CSS + _stat_strip([
+    # MEMBERS LIST (Nov 12 2026): per-member chain totals go to members.html (see WAR_AGG)
+    CHAIN_AGG.clear(); CHAIN_AGG.update({str(a["id"]): a for a in rows_})
+    body = (site_menu("") + tab_bar(HISTORY_TABS, "chains.html") + "<h2>⛓️ Chain Summary</h2>" + HIST_STATS_CSS + _stat_strip([
                 (fmt_int(len(chains)), f"Chains ({min_len}+)"), (fmt_int(best), "Longest"), (fmt_int(tot_hits), "Chain hits"),
                 (f"{tot_resp:,.0f}", "Chain respect")])
-            + '<h2>👥 Every member <span class="tag">(every chain on record · tap a column to sort)</span></h2>' + msum
             + f'<h2>All chains <span class="tag">(tap a column to sort)</span></h2>'
             '<table class="srt"><tr><th>Date</th><th>Hits</th><th>Respect</th><th>Members</th><th>Report</th></tr>')
     for k, c in chains:
@@ -7761,12 +7756,10 @@ def war_history_page(out: Path, raw: dict, cfg: dict):
         a["per"] = round(a["hits"] / a["wars"], 1) if a["wars"] else None
         a["rate"] = round(100 * a["took"] / a["wars"]) if a["wars"] else None
         rows_.append(a)
-    rows_.sort(key=lambda a: (-a["hits"], str(a["name"]).lower()))
-    msum = _member_summary(rows_, [("Wars", "wars", fmt_int), ("Hits", "hits", fmt_int), ("Respect", "resp", lambda v: f"{v:,.0f}"),
-                                   ("Hits / war", "per", lambda v: f"{v:,.1f}"), ("Took part", "rate", lambda v: f"{v}%"),
-                                   ("Best war", "best", fmt_int), ("Assists", "assists", fmt_int)], "wsumT")
-    body = (site_menu("") + "<h2>⚔️ War Summary</h2>" + summary_html
-            + '<h2>👥 Every member <span class="tag">(all wars on record · tap a column to sort)</span></h2>' + msum
+    # MEMBERS LIST (Nov 12 2026, user: no repeated per-member tables): these totals are shown on members.html
+    # (write_profiles, built after this) instead of an "Every member" table here
+    WAR_AGG.clear(); WAR_AGG.update({str(a["id"]): a for a in rows_})
+    body = (site_menu("") + tab_bar(HISTORY_TABS, "wars.html") + "<h2>⚔️ War Summary</h2>" + summary_html
             + f'<h2 id="paid">All ranked wars <span class="tag">(tap a column to sort)</span></h2>'
             # "Paid wars only" (the old War Payouts page = wars.html#paid)
             '<label style="color:#9a9a9c;font-size:13px;display:flex;gap:6px;align-items:center;margin:0 0 8px">'
@@ -10854,7 +10847,7 @@ def leader_alerts(raw: dict, summary: dict, cfg: dict):
         member_links = [("Home", home), ("Members Hub", f"{mb}/index.html")]
         leader_links = ([("Leaders Hub", f"{lb}/index.html"), ("Payout Calculator", f"{lb}/payout.html")] if lb else [])
         text = "\n".join(
-            ["## 🔗 Faction Pages", "-# Everything else is reached from the homepage's Explore section and the header menus.",
+            ["## 🔗 Faction Pages", "-# Everything else is in the site's header menus.",
              "", "### 👥 Members", "-# Safe to share with faction members (never publicly)."]
             + [f"> **{t}:** <{u}>" for t, u in member_links]
             + (["", "### 🛡️ Leaders", "-# Leaders only - do NOT share with members."]

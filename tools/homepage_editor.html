@@ -50,7 +50,7 @@ __MENU__
 nothing is saved until <b>Save changes</b> (live on the site a few minutes later).</p>
 <div class="wrap">
 <div class="ed">
-  <div class="tabs"><button id="tM" class="on">Members Hub</button><button id="tL">Leaders Hub</button></div>
+  <div class="tabs" style="display:none"><button id="tM" class="on">Members Hub</button><button id="tL">Leaders Hub</button></div><!-- one home since Nov 12 2026 -->
   <div class="card"><h2>Save</h2>
     <button class="g" id="save">Save changes</button> <button id="reset" title="Back to the built-in layout for this hub">Reset this hub</button>
     <span id="status"></span>
@@ -60,8 +60,8 @@ nothing is saved until <b>Save changes</b> (live on the site a few minutes later
     <button data-add="welcome">+ Welcome</button><button data-add="now">+ Right now</button><button data-add="attention">+ Needs attention</button>
     <button data-add="actions">+ Quick actions</button><button data-add="latest">+ Latest</button><button data-add="groups">+ Link groups</button>
     <button data-add="tiles">+ Tiles</button><button data-add="text">+ Text note</button></div>
-    <div class="small" style="margin-top:6px">Welcome = greeting + the member's own numbers · Right now = live war and chain timers (each member's own key, in their browser) ·
-      Needs attention = unpaid payouts, idle recruits (Leaders Hub only) · Quick actions = big icon buttons ·
+    <div class="small" style="margin-top:6px">Welcome = greeting + the member's own numbers · Right now = live war and chain timers (from the Hub) ·
+      Needs attention = unpaid payouts, idle recruits (leaders only) · Quick actions = big icon buttons ·
       Latest = newest post big, the rest as a list · Link groups = pages in labelled groups · Tiles = link cards · Text note = a message.</div></div>
 </div>
 <div class="rc"><iframe id="pv" title="Preview"></iframe></div>
@@ -104,7 +104,7 @@ function render() {
       <button class="sm" data-a="up" data-s="${si}">▲</button><button class="sm" data-a="dn" data-s="${si}">▼</button>
       <button class="sm" data-a="del" data-s="${si}" title="Remove section">✕</button></div>`
       + (ty === "welcome" ? "" : `<input data-s="${si}" data-k="title" placeholder="Section heading (optional)" value="${esc(sec.title)}">`);
-    const warn = ty === "attention" && hub !== "leaders" ? `<div class="small" style="color:#e4382e">Only shows on the Leaders Hub.</div>` : "";
+    const warn = ty === "attention" ? `<div class="small">Only leaders see it (when something needs them).</div>` : "";
     if (AUTO[ty]) return `<div class="sec">${head}<div class="small">${AUTO[ty]}</div>${warn}</div>`;
     if (ty === "text") return `<div class="sec">${head}<textarea data-s="${si}" data-k="text" placeholder="Your message - a blank line starts a new paragraph">${esc(sec.text)}</textarea></div>`;
     if (ty === "groups") return `<div class="sec">${head}` + (sec.groups || []).map((g, gi) => `<div class="tile" style="border-style:solid">
@@ -128,7 +128,7 @@ function preview() {
     const ty = sec.type || "tiles", h = sec.title ? `<h2>${esc(sec.title)}</h2>` : "";
     if (ty === "welcome") { live = true; return `<div class="hbsec" id="hbWel"><div class="wel"><div class="av">HB</div><div class="wt"><b>Welcome to Heart Breakers</b><span>Loading…</span></div></div><div class="stats"></div></div>`; }
     if (ty === "now") { live = true; return `<div class="hbsec" id="hbNow" hidden>${h}<div class="nowc"></div></div>`; }
-    if (ty === "attention") { if (hub !== "leaders") return ""; live = true;
+    if (ty === "attention") { live = true;
       return `<div class="hbsec" id="hbAtt" hidden><div class="attn"><div class="ah"><b>🔔 ${esc(sec.title || "Needs attention")}</b><span class="cnt"></span></div><div class="rows"></div></div></div><div class="tag" style="font-size:11px">[ Needs attention - shows when something needs a leader ]</div>`; }
     if (ty === "actions") return h + `<div class="qa">${(sec.tiles || []).map(t => `<a href="#"><i>${esc(t.icon)}</i>${esc(t.title)}</a>`).join("")}</div>`;
     if (ty === "latest") { live = true; return h + (CFG.latest[hub] || `<div class="tag">Latest appears here.</div>`); }

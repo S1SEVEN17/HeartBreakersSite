@@ -14,7 +14,7 @@
 //   /m/...            members' pages  (pass + still in the faction)
 //   /m/me             -> their own profile (member.html?id=<their id>)
 //   /l/...            leaders' pages  (pass + position in LEADER_POSITIONS)
-//   /                 the dashboard: Leaders Hub (/l/) for leader access, else the Members Hub (/m/)
+//   /                 the dashboard: the Members Hub (/m/) for everyone (leaders' extras show there - Nov 12 2026)
 //   /<image>          public images at the site root (the faction description banner: banner-animated.webp ...)
 //   /oc/cpr           OC Payout Optimizer pass-rate sharing (D1 "OC_DB") - its own auth: the member's Torn key
 //                     on every call (not the pass cookie). See OC OPTIMIZER below.
@@ -135,20 +135,15 @@ function loginPage(next, err) {
 ${err ? `<div class="err">${esc(err)}</div>` : ""}
 <form method="post" action="/login"><input type="hidden" name="next" value="${esc(next)}">
 <label>Torn API key (a <b>Public</b> key is enough)</label><input name="key" id="k" type="password" autocomplete="off" required minlength="16" maxlength="16" placeholder="16 characters">
-<label style="display:flex;gap:8px;align-items:flex-start;color:#ddd;font-size:13px;margin-top:12px"><input type="checkbox" id="keep" checked style="width:auto;margin-top:2px">
-<span>Keep my key in this browser for the live war and chain timers<br><span style="color:#9a9a9c;font-size:12px">Stored only on this device, used only for
-your own requests to Torn (comment "Heart Breakers Hub"). Remove it any time from the Me menu, or by signing out.</span></span></label>
 <button type="submit">Sign in</button></form>
 <script>
-// "keep my key": saved in THIS browser only (localStorage hb_pub_key) before the form is sent - the hubs' live war and
-// chain timers call Torn from the browser with it. The gatekeeper still uses the key once and throws it away.
-(function(){var K="hb_pub_key";try{if(/[?&]out=1/.test(location.search))localStorage.removeItem(K);}catch(e){}
-document.querySelector("form").addEventListener("submit",function(){try{var v=document.getElementById("k").value.trim();
-if(document.getElementById("keep").checked&&/^[A-Za-z0-9]{16}$/.test(v))localStorage.setItem(K,v);else localStorage.removeItem(K);}catch(e){}});})();
+// "keep my key in this browser" was removed Nov 12 2026 (the homepage's live war + chain come from the Hub now):
+// forget any key an older version kept
+try{localStorage.removeItem("hb_pub_key")}catch(e){}
 </script>
 <div class="tos">Need a key? Torn → <a href="https://www.torn.com/preferences.php#tab=api" target="_blank" rel="noopener">Settings → API Keys</a> → create one with <b>Public</b> access.
 <table><tr><td>Used for</td><td>Checking once that you're in Heart Breakers (your Torn ID, name and faction)</td></tr>
-<tr><td>Key stored</td><td>Not by the site - it's used for that one check and thrown away. If you tick "keep my key", your own browser keeps it for the live timers</td></tr>
+<tr><td>Key stored</td><td>No - it's used for that one check and thrown away</td></tr>
 <tr><td>Data kept</td><td>A signed pass in your browser (30 days) with your Torn ID and name</td></tr>
 <tr><td>Shared with</td><td>Nobody</td></tr><tr><td>Access level</td><td>Public</td></tr></table></div>`);
 }
@@ -200,11 +195,12 @@ const notFound = () => page("Not found", `<h1>Not found</h1><p class="sub">That 
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url), p = url.pathname;
-    // the dashboard address: members with leader access default to the Leaders Hub
+    // the dashboard address: everyone lands on the Members Hub (Nov 12 2026, user: one home - leaders see their
+    // "Needs attention" there; the Leaders Hub page was merged into it)
     if (p === "/") {
       const who = await whoIs(env, ctx, req);
       if (!who) return Response.redirect(`${url.origin}/login`, 302);
-      return Response.redirect(url.origin + (who.leader ? "/l/" : "/m/"), 302);
+      return Response.redirect(url.origin + "/m/", 302);
     }
     if (p === "/login") return req.method === "POST" ? doLogin(env, req) : loginPage(safeNext(url.searchParams.get("next")));
     // signing out also tells the login page to forget a key kept in this browser (?out=1)
@@ -254,6 +250,8 @@ export default {
     // Chain Watching Schedule (members sign up for chain watch shifts; leaders can remove anyone's)
     if (area === "m" && (rest === "cw/schedule.json" || rest === "cw/schedule")) return cwSchedule(env, req, url, who);
     if (area === "m" && rest === "cw/live.json") return cwLive(env);
+    // Hub homepage "Right now" (Nov 12 2026): live ranked war + chain from the Hub - no key from the member
+    if (area === "m" && rest === "now.json") return hubNow(env);
     // Scripts directory (scripts.html): every member reads the listings; leaders add / edit / remove them
     if (area === "m" && (rest === "scripts.json" || rest === "scripts")) return scriptsRoute(env, req, url, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
@@ -1603,7 +1601,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
 //           Checks (bad data is dropped, not stored): crime names must be in the catalog, slot members in the
 //           roster, sizes capped. -> {ok, stored: [...], dropped: [...]}
 //   POST /oc/bundle {key, env, have} -> {ok, snapshot: <as read>, rates: <as /oc/cpr/read>, plan: <as /oc/plan>}
-// API: Hub pull ~25 calls/hour on HUB_TORN_KEY (comment=Heart Breakers Hub, key in the Authorization header).
+// API: Hub pull ~25 calls/hour on HUB_TORN_KEY (comment=Heart Breakers Hub, key in the Authorization header),
+//      + 20/hour for the homepage's Right now (faction?selections=chain,wars, every run - Nov 12 2026).
 // =====================================================================================================
 const FEED_SETS = ["crimes", "roster", "catalog", "prices"];
 const FEED_EVERY = {crimes: 0, history: 30 * 60e3, roster: 60 * 60e3, catalog: 7 * 24 * 3600e3, prices: 24 * 3600e3};
@@ -1771,6 +1770,13 @@ async function ocFeedPull(env) {
     try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
     crimesNow = cl;
   } catch (e) { fail("crimes", e); }
+  // RIGHT NOW (Nov 12 2026, user: the homepage's live war + chain without asking members for a key): the faction's
+  // ranked war and chain, one call every run -> oc_snap 'hub' 'now' (served by /m/now.json)
+  try {
+    // API: Heart Breakers Hub - Right now (faction chain + wars, one call)
+    const d = await ocTorn(env, "faction?selections=chain,wars");
+    ops.push(ocSnapPut(env, "hub", "now", now, JSON.stringify({chain: d.chain || null, wars: d.wars || null}), "hub"));
+  } catch (e) { fail("now", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
   // roster - hourly (1 call)
@@ -2565,6 +2571,40 @@ async function cwMyStats(env, pid) {
 }
 // GET /m/cw/live.json (signed-in members): the room's live board for the schedule page - chain count / timer /
 // cooldown, who's up, bonus, runway and the queue. No Torn call (the room's own reading); polled every 30 s.
+// RIGHT NOW (Nov 12 2026, user: "the Hub already reads wars and the chain" - no key on the homepage any more):
+//   GET /m/now.json -> {ok, as_of (s), war: {kind ongoing|upcoming, opponent, start, end, our, their} | null,
+//                       chain: {current, max, timeout_at, cooldown_at, as_of} | null}   (times in epoch seconds)
+//   war   = the Hub's 3-minute read (faction?selections=chain,wars, ocFeedPull)
+//   chain = the Chain Watch room's live board when it has a fresh reading (it's fed by members' scripts every few
+//           seconds during a chain), else the Hub's 3-minute read (Torn's `end` = the exact expiry)
+async function hubNow(env) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  const snap = await ocSnapGet(env, "hub", "now").catch(() => null);
+  const d = (snap && snap.data) || {}, t = Date.now() / 1e3, FID = String(env.FACTION_ID || "51384");
+  let war = null;
+  let w = d.wars && d.wars.ranked; if (Array.isArray(w)) w = w[0];
+  if (w && w.factions && !(w.end && w.end <= t)) {
+    const F = Array.isArray(w.factions) ? w.factions : Object.entries(w.factions).map(([id, f]) => Object.assign({id}, f));
+    const me = F.find(f => String(f.id) === FID) || {}, them = F.find(f => String(f.id) !== FID) || {};
+    war = {kind: w.start && w.start <= t ? "ongoing" : "upcoming", opponent: them.name || "?", start: w.start || 0, end: w.end || 0,
+           our: me.score || 0, their: them.score || 0};
+  }
+  const sAt = snap ? Number(snap.as_of) / 1e3 : 0, c = d.chain || null;
+  const secs = (v, base) => !v ? 0 : (+v > 1e9 ? +v : base + +v);
+  let chain = c ? {current: +c.current || 0, max: +c.max || 0, as_of: sAt,
+                   timeout_at: (+c.current > 0 && +c.end > 1e9) ? +c.end : secs(c.timeout, sAt), cooldown_at: secs(c.cooldown, sAt)} : null;
+  try {
+    if (env.CHAINROOM) {
+      const b = await (await cwStub(env).fetch("https://do/board")).json();
+      const rc = b && b.chain, rAt = rc ? (Number(rc.as_of) > 1e12 ? rc.as_of / 1e3 : Number(rc.as_of) || 0) : 0;
+      if (rc && rAt > (chain ? chain.as_of : 0) && t - rAt < 120) {
+        const ex = Number(rc.expires_at) || 0, cd = Number(rc.cooldown_until) || 0;
+        chain = {current: rc.current || 0, max: rc.max || 0, as_of: rAt, timeout_at: ex > 1e12 ? ex / 1e3 : ex, cooldown_at: cd > 1e12 ? cd / 1e3 : cd};
+      }
+    }
+  } catch (e) {}
+  return Response.json({ok: true, as_of: sAt || null, war, chain}, H);
+}
 async function cwLive(env) {
   if (!env.CHAINROOM) return Response.json({ok: false, error: "Chain Watch isn't set up yet"}, {status: 503});
   try {
