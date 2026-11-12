@@ -1400,6 +1400,7 @@ async function ocPlanObj(env, envName, id) {
   // pay per member per day + required items per role, from the planner's latest stats (every 3 min) - Nov 2026
   const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
   const payDay = (ps && ps.data && ps.data.pay_day) || {}, payMin = (ps && ps.data && ps.data.pay_day_min) || {}, items = (ps && ps.data && ps.data.items) || {};
+  const instMult = (ps && ps.data && ps.data.inst_mult) || {};
   const rotSet = new Set(cfg.rotate || []);
   const tpRow = await ocSnapGet(env, "hub", "tp:weights").catch(() => null), tpWts = (tpRow && tpRow.data) || null;
   const tpNames = tpWts ? tpWts.names : null, tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
@@ -1408,11 +1409,15 @@ async function ocPlanObj(env, envName, id) {
     const t = b ? Object.assign({}, t0, {kind: "live", crime_id: b.c.id}) : t0;
     const inst = (crimes || []).filter(c => c && (t.crime_id ? String(c.id) === String(t.crime_id) : c.name === t.crime) && (c.status === "Recruiting" || c.status === "Planning"));
     const open = inst.some(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user));
+    // TIME IN THE CRIME (Nov 12 2026): a live recruiting crime's pay per day is for whoever joins NOW (planning left
+    // + 24 h per open slot) - the planner's stats.inst_mult scales the crime type's figure; spawn teams keep full days
+    const mul = t.crime_id != null && instMult[String(t.crime_id)] ? instMult[String(t.crime_id)] : 1;
+    const sc = v => v == null ? null : Math.round(v * mul);
     return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
             kind: t.kind || "spawn", crime_id: t.crime_id || null,
-            pay_day: payDay[t.crime] ?? null,                 // per member per day (the planner's figure = the best recorded)
-            pay_day_min: payMin[t.crime] ?? null,             // ... the worst recorded - shown as a range "min-max"
-            pay_day_max: payDay[t.crime] ?? null,
+            pay_day: sc(payDay[t.crime]),                     // per member per day (the planner's figure = the best recorded)
+            pay_day_min: sc(payMin[t.crime]),                 // ... the worst recorded - shown as a range "min-max"
+            pay_day_max: sc(payDay[t.crime]),
             rotation: rotSet.has(t.crime),                    // a crime leaders rotate
             // ROLE WEIGHTS (Nov 2026): the team's weighted success (role-weighted average of its members' rates) and,
             // when the Hub has a tornprobability.com key, the calculated success chance (null = not available)

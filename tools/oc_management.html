@@ -435,7 +435,20 @@ const delayTag = pid => { const d = ((D.config || {}).delays || {})[String(pid)]
 // teamPay = max payout per day for the team; eachPay = per member per day (what's SHOWN) - same as the script.
 // teamExp = what auto-build RANKS by: that × team success, so among teams that all reach the target the safer,
 //           better-paying ones still win (the target itself is a hard limit either way).
-const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / v.days; };
+// TIME IN THE CRIME (Nov 12 2026, user - same rule as gate/oc_planner.js instDays): a member who joins a RECRUITING
+// crime now is tied up for the planning still left (roles plan one after another, 24 h each) + 24 h per open slot +
+// later crimes in its chain, at least 1 day - so a half-planned crime pays far more per day to fill. Spawn teams and
+// crime types keep their full days. Returns the days, or null when the team isn't a live recruiting crime.
+function liveDays(t) {
+  if (t.kind !== "live") return null;
+  const c = (D.feed || []).find(x => String(x.id) === String(t.crime_id));
+  if (!c || c.status !== "Recruiting") return null;
+  const v = valueOf(t.crime), own = rolesOf(t.crime).length || (c.slots || []).length || 1, down = Math.max(0, v.days - own);
+  const left = (c.slots || []).reduce((a, sl) => a + (sl.user ? Math.max(0, 100 - (Number(sl.user.progress) || 0)) / 100 : 1), 0);
+  return Math.max(1, left + down);
+}
+const teamDays = t => liveDays(t) ?? valueOf(t.crime).days;
+const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / teamDays(t); };
 const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
 const teamExp = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
 const crimeOk = crime => { const off = new Set(D.config.disabled || []);
@@ -736,7 +749,10 @@ function teamCard(t) {
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
     <div class="tag">${(() => { const p = teamPay(t), v = valueOf(t.crime);
-      return p == null ? "" : v.pot ? `💰 ${payRange(t.crime)}/day each · ${v.days} days${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
+      const ld = liveDays(t), m = ld ? v.days / ld : 1;
+      const pr = m === 1 ? payRange(t.crime) : (() => { const hi = eachPay(t.crime) * m, lo = Math.min(eachLow(t.crime), eachPay(t.crime)) * m;
+        return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); })();
+      return p == null ? "" : v.pot ? `💰 ${pr}/day each · ${ld ? `${(Math.round(ld * 10) / 10)} days to payout if joined now` : `${v.days} days`}${v.chain ? ` (with ${esc(v.chain)})` : ""} · ${fmt$(p)}/day team`
         : "💰 no pay data yet"; })()}</div>
     ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;

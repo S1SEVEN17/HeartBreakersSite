@@ -188,6 +188,18 @@ export function ocPlan(X) {
   const noScr = pid => !!SU && !SU.has(Number(pid));
   // ---- pay ----
   const payDay = crime => { const v = X.payOf(crime); return v && v.days ? v.pot / v.days : 0; };          // team, max
+  // TIME IN THE CRIME (Nov 12 2026, user: "Pay per day can be altered based on the actual time a member is in a crime
+  // ... if someone joins on the last day and begins planning, realistically their pay per day would only encompass
+  // 1 day ... This should significantly favor jobs that are already partially planned"): roles plan one after another,
+  // 24 h each, so a member who joins a RECRUITING crime now is tied up until it's ready = the planning still left for
+  // the members in it + 24 h for every open slot (theirs included) + any later crimes in its chain (full days),
+  // never under 1 day. Their pay per day there = their cut / those days. User's choices: open slots count a full
+  // 24 h each (no average fill time), no delay estimate, and crime TYPES (spawn teams, holds' targets, PRIO) keep
+  // their full days.
+  const instDays = c => { const v = X.payOf(c.name), own = rolesOf(c.name).length || (c.slots || []).length || 1;
+    const down = v && v.days ? Math.max(0, v.days - own) : 0, open = (c.slots || []).filter(sl => !sl.user).length;
+    return Math.max(1, (planLeft(c) + PLAN_MS * open) / 864e5 + down); };
+  const payDayInst = c => { const v = X.payOf(c.name); return v && v.pot ? v.pot / instDays(c) : 0; };   // team, max, this instance
   // DELAYS (Nov 2026): X.delays {pid: {n, long, hrs, runs}} - a member's crime delays over the last 30 days. The hours
   // of delay they're likely to cause per crime (hrs / crimes they took part in) hold up EVERYONE's payout, so the
   // cost charged against them = the team's pay per day x those hours / (24 x the crime's days) - a member who often
@@ -323,7 +335,7 @@ export function ocPlan(X) {
   // instances of one crime) the one already BUILT (members in it), most-filled first, goes first - so a half-built
   // crime is finished before a fresh copy of it, but never ahead of a better-paying crime.
   const filled = c => { const sl = c.slots || []; return sl.length ? sl.filter(x => x.user).length / sl.length : 0; };
-  const each = c => payDay(c.name) / ((c.slots || []).length || 1);
+  const each = c => payDayInst(c) / ((c.slots || []).length || 1);   // TIME IN THE CRIME: this instance's days
   const recruiting = [...inst.values()].filter(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user))
     .sort((a, b) => ROT_ON.has(String(b.id)) - ROT_ON.has(String(a.id)) || each(b) - each(a) || filled(b) - filled(a) || (b.difficulty || 0) - (a.difficulty || 0));   // rotated first
   // WHO fills a slot: each member's own pay per day there (crime pay/day per slot x their pass rate), minus half of
@@ -382,7 +394,7 @@ export function ocPlan(X) {
     const fixedSum = wSum(c.name, fixed);                   // weighted (role weights)
     const nsBan = new Set(Object.keys((t && t.noshow) || {}).map(Number));   // NO-SHOWS: not back into this crime
     const pool = freePool().concat(softPool()).filter(p => !nsBan.has(p.pid));
-    const k = payDay(c.name) / roles.length / 100;     // a member's pay per day here = k x their rate
+    const k = payDayInst(c) / roles.length / 100;      // a member's pay per day here = k x their rate (TIME IN THE CRIME)
     let best = null;
     if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k, nsBan);
     if (!best) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
@@ -424,13 +436,14 @@ export function ocPlan(X) {
   if (HOLD > 0) {
     const resv = new Map();                                // pid -> the live role they're reserved in (not joined)
     teams.forEach(t => { if (t.kind === "live" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !r.existing && !r.replaces) resv.set(Number(r.pid), {t, r}); }); });
-    const curPay = pid => { const x = resv.get(pid); return x ? payDay(x.t.crime) * (x.r.rate || 0) / 100 / (x.t.roles.length || 1) : 0.5 * (bestDay[pid] || 0); };
+    const liveDen = t => { const c = inst.get(String(t.crime_id)); return c ? payDayInst(c) / (t.roles.length || 1) : density(t.crime); };   // TIME IN THE CRIME
+    const curPay = pid => { const x = resv.get(pid); return x ? liveDen(x.t) * (x.r.rate || 0) / 100 : 0.5 * (bestDay[pid] || 0); };
     const cands = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n) && !(holdLog[n] > NOW)
       && !teams.some(t => t.kind === "spawn" && t.hold && t.crime === n)).sort((a, b) => density(b) - density(a));
     let pulled = false;
     for (const C of cands) {
       const roles = rolesOf(C), n = roles.length || 1, k = payDay(C) / n / 100;
-      const pool = Object.keys(roster).map(Number).filter(p => resv.has(p) ? density(resv.get(p).t.crime) < density(C) : (!assigned.has(p) && usable(p)));
+      const pool = Object.keys(roster).map(Number).filter(p => resv.has(p) ? liveDen(resv.get(p).t) < density(C) : (!assigned.has(p) && usable(p)));
       if (pool.length < n) continue;
       const best = fillSlots(C, roles.map(l => ({label: l})), 0, n, pool.map(pid => ({pid})),
         (p, rate) => k * (rate - (noScr(p.pid) ? 2 : 0) - (busy.has(p.pid) ? 3 : 0)) - curPay(p.pid) - delayCost(p.pid, C), 40000);
@@ -571,6 +584,9 @@ export function ocPlan(X) {
   return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
     holds: teams.filter(t => t.hold).length, hold_log: holdLog,
+    // TIME IN THE CRIME: {crime_id: crime type's days / days for whoever joins now} - scales a live team's pay per day
+    inst_mult: Object.fromEntries([...inst.values()].filter(c => c.status === "Recruiting").map(c => {
+      const v = X.payOf(c.name); return [String(c.id), v && v.days ? +(v.days / instDays(c)).toFixed(3) : 1]; })),
     rotation: Object.keys(poolOf).map(n => ({crime: n, pool: poolOf[n].size, seats: rolesOf(n).length,
       max: Math.max(1, Math.floor(poolOf[n].size / (rolesOf(n).length || 1))),
       live: [...ROT_ON].filter(id => (inst.get(id) || {}).name === n).length}))}};
