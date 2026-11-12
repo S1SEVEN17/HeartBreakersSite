@@ -68,9 +68,9 @@
 //   it was made). A member who hasn't joined opts.noShowHours (default 6, 0 = off) after since - or after their
 //   current crime is ready, for queued members - loses the slot; it's filled again by the next best member and they
 //   aren't put back into that crime instance (team.noshow {pid: ms}). Locked teams are left alone.
-// SCRIPT USERS (Nov 12 2026, the user): members who don't use the script never see their assignment, so when two
-//   members are close, the script user gets the slot - a non-script member counts as 2 rate points lower in the
-//   scores below (never in the success maths).
+// SCRIPT USERS (Nov 12 2026, the user): members who don't use the script never see their assignment. RECRUITING
+//   crimes: non-script members are secondary - only placed when no script user can fill the slot (NS_LAST). Spawn
+//   teams / holds: a non-script member counts as 2 rate points lower (never in the success maths).
 // ROTATION (Nov 2026): planning runs one member at a time in JOIN order, 24 h each (confirmed from the feed:
 //   slot user.progress follows joined_at). So a member only has to JOIN before the members ahead of them finish
 //   planning. For a rotated crime that's recruiting, a member still in a Planning crime can be queued into it when
@@ -186,6 +186,11 @@ export function ocPlan(X) {
   Object.entries(X.holdLog || {}).forEach(([c, v]) => { if (Number(v) > NOW) holdLog[c] = Number(v); });
   const SU = X.scriptUsers instanceof Set ? X.scriptUsers : null;
   const noScr = pid => !!SU && !SU.has(Number(pid));
+  // RECRUITING SLOTS (Nov 12 2026, user: "Non Script members should be secondary"): in a recruiting crime's open
+  // slots a member who doesn't use the script only gets a slot when no script user can fill it at the targets - a
+  // penalty bigger than any pay difference, so the fewest possible non-script members are used (spawn teams keep the
+  // small 2-point preference). Queued members (1e12) still come after free ones of either kind.
+  const NS_LAST = 1e9;
   // ---- pay ----
   const payDay = crime => { const v = X.payOf(crime); return v && v.days ? v.pot / v.days : 0; };          // team, max
   // TIME IN THE CRIME (Nov 12 2026, user: "Pay per day can be altered based on the actual time a member is in a crime
@@ -367,7 +372,7 @@ export function ocPlan(X) {
       const best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, all, (p, rate) =>
         k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6
         + (last && pl.has(p.pid) && !last.has(p.pid) && !inNow.has(p.pid) ? 1e9 : 0)       // MIX: sat out the last run
-        - (p.q ? k * Math.max(0, fOf(p.pid) - NOW) / 3600e3 : 0) - delayCost(p.pid, c.name) - (noScr(p.pid) ? k * 2 : 0), 20000);
+        - (p.q ? k * Math.max(0, fOf(p.pid) - NOW) / 3600e3 : 0) - delayCost(p.pid, c.name) - (noScr(p.pid) ? NS_LAST : 0), 20000);
       if (!best) return null;
       const order = best.slice().sort((a, b) => fOf(a.pid) - fOf(b.pid));
       const late = order.find((b, i) => fOf(b.pid) > NOW + base + PLAN_MS * i + 600e3);   // 10 min slack
@@ -398,13 +403,13 @@ export function ocPlan(X) {
     let best = null;
     if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k, nsBan);
     if (!best) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
-                           (p, rate) => k * (rate - (p.soft ? 3 : 0) - (noScr(p.pid) ? 2 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - delayCost(p.pid, c.name), 20000);
+                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - (noScr(p.pid) ? NS_LAST : 0) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - delayCost(p.pid, c.name), 20000);
     // QUEUE: nobody free can fill it to the target -> let members finishing their crime soon in, as few as possible
     if (!best && !ROT_ON.has(String(c.id))) {
       const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c) && !nsBan.has(p))
         .map(pid => ({pid, soft: false, q: true}));
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
-                           (p, rate) => k * (rate - (p.soft ? 3 : 0) - (noScr(p.pid) ? 2 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0) - delayCost(p.pid, c.name), 20000);
+                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - (noScr(p.pid) ? NS_LAST : 0) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0) - delayCost(p.pid, c.name), 20000);
     }
     if (!best) {                                           // can't reach the target: SKIPPED (left open)
       // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
