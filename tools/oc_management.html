@@ -474,7 +474,8 @@ function payLine(t, team) {
 }
 const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / teamDays(t); };
 const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
-const teamExp = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
+// CALCULATED SUCCESS: tornprobability's chance for a full team when the Hub has checked it, else the weighted average
+const teamExp = t => { const a = teamSuccess(t) ?? teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot * a / 100 / v.days; };
 const crimeOk = crime => { const off = new Set(D.config.disabled || []);
   return !off.has(crime) && rolesOf(crime).length; };   // chain finals allowed (Nov 12 2026) - switch crimes off in the Crimes tab
 
@@ -548,7 +549,10 @@ function autoBuild() {
     rotate: new Set(D.config.rotate || []), lastRuns, delays: D.config.delays || {},
     opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),
     payOf: crime => valueOf(crime), budgetMs: 900, weights: D.config.weights || null,
-    holdLog: D.config.hold_log || {}, scriptUsers: scriptKnown() ? new Set(Object.keys(D.config.script_seen).filter(usesScript).map(Number)) : null});
+    holdLog: D.config.hold_log || {},
+    // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability's chance for a full team when the Hub
+    // has checked it - the target applies to it and expected pay uses it (gate/oc_planner.js succOf)
+    succOf: (crime, roles) => teamSuccess({crime, roles}), scriptUsers: scriptKnown() ? new Set(Object.keys(D.config.script_seen).filter(usesScript).map(Number)) : null});
   BOARD.teams = r.teams;
   saveBoard();
   const busy = busyMap(), busyN = Object.keys(CFG.members).filter(p => busy[p]).length, total = Object.keys(CFG.members).length;
@@ -677,7 +681,8 @@ function suggestions() {
   if (SUGG.sig === sig) return SUGG.list;
   const pool = new Set(Object.keys(CFG.members).map(Number).filter(p => !blocked.has(p) && (OPT.includeBusy || !busy[p])));
   const list = [];
-  Object.keys(CFG.catalog).filter(crimeOk).forEach(c => { const t = teamFor(c, pool, 0, {}); if (t) list.push({crime: c, team: t, pay: teamExp(t) || 0}); });
+  // (a suggestion whose calculated success is known to be below the target is left out - CALCULATED SUCCESS)
+  Object.keys(CFG.catalog).filter(crimeOk).forEach(c => { const t = teamFor(c, pool, 0, {}); if (t && !((teamSuccess(t) ?? 100) < OPT.target)) list.push({crime: c, team: t, pay: teamExp(t) || 0}); });
   // RANKING (Nov 12 2026): maximum pay per member per day first; expected team pay (max x success) breaks ties
   list.sort((a, b) => eachPay(b.crime) - eachPay(a.crime) || b.pay - a.pay || (diffOf(b.crime) || 0) - (diffOf(a.crime) || 0));
   SUGG = {sig, list};
@@ -895,7 +900,7 @@ function settingsHtml() {
         ${nextHtml()}
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
-        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A team is only formed (and a recruiting crime only filled) when the team's weighted success reaches this.")}
+        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A team is only formed (and a recruiting crime only filled) when it reaches this. For a full team the Hub has checked, this is tornprobability's calculated success chance (🎲); otherwise the team's weighted success.")}
         ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), OPT.minZero == null ? "Nobody is put in a role they pass below this." : "The minimum for roles at or above the crime's average weight.")}
         ${row("Lowest rate for 0%-weight roles", `<input type="number" id="o_mz" min="0" max="100" value="${OPT.minZero ?? ""}" placeholder="off"> %`,
               OPT.minZero == null ? "Off - every role uses the lowest individual role. Set a value to let lighter roles (below the crime's average weight) go lower, in proportion to their weight; the team still has to reach the overall success."
@@ -942,8 +947,11 @@ function ocAlerts() {
     (c.slots || []).forEach(sl => { if (!sl.user || typeof sl.checkpoint_pass_rate !== "number") return;
       const rate = Math.round(sl.checkpoint_pass_rate), pos = feedRole(sl), min = Math.ceil(floorOf(c.name, pos) - 1e-9);
       if (rate < min) out.roles.push({c, pos, pid: sl.user.id, rate, why: `below the ${min}% minimum`}); });   // (above-cap alert removed Nov 12 2026, user)
-    if ((c.slots || []).length && (c.slots || []).every(sl => sl.user)) { const w = weightedOf(c.name, c.slots || []);
-      if (w != null && w < OPT.target) out.crimes.push({c, w}); }
+    if ((c.slots || []).length && (c.slots || []).every(sl => sl.user)) {
+      // CALCULATED SUCCESS (Nov 12 2026): the target applies to tornprobability's chance when the Hub has it
+      const calc = teamSuccess({crime: c.name, roles: c.slots.map(sl => ({position: feedRole(sl), pid: sl.user.id, rate: sl.checkpoint_pass_rate}))});
+      const w = calc ?? weightedOf(c.name, c.slots || []);
+      if (w != null && w < OPT.target) out.crimes.push({c, w, calc: calc != null}); }
   });
   return out;
 }
@@ -952,7 +960,7 @@ function alertsHtml() {
   if (!A.roles.length && !A.crimes.length) return "";
   const id = c => `${esc(c.name)} <span class="tag">#${esc(c.id)}</span>`;
   return `<div class="alerts"><b>⚠️ Leadership alerts</b>`
-    + A.crimes.map(x => `<div>📉 ${id(x.c)} - team success <b class="bad">${Math.round(x.w)}%</b>, below the ${OPT.target}% target${x.c.status === "Planning" ? " (planning)" : ""}</div>`).join("")
+    + A.crimes.map(x => `<div>📉 ${id(x.c)} - ${x.calc ? "🎲 calculated success" : "team success"} <b class="bad">${Math.round(x.w)}%</b>, below the ${OPT.target}% target${x.c.status === "Planning" ? " (planning)" : ""}</div>`).join("")
     + A.roles.map(x => `<div>🎯 <b>${esc(nameOf(x.pid))}</b> joined ${esc(x.pos)} in ${id(x.c)} at <b class="${x.why.startsWith("below") ? "bad" : "mid"}">${x.rate}%</b> - ${x.why}</div>`).join("")
     + `</div>`;
 }

@@ -2230,6 +2230,7 @@ async function ocOcAlerts(env, cfg, crimes) {
   const floorOf = (crime, label) => O.minZero == null || !(O.minZero < O.minRole) ? O.minRole
     : O.minZero + (O.minRole - O.minZero) * Math.min(1, wOf(crime, label));
   const roles = [], crimesOut = [];
+  const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null, tpNames = (tpw && tpw.data && tpw.data.names) || null;
   for (const c of crimes || []) {
     if (!c || (c.status !== "Recruiting" && c.status !== "Planning")) continue;
     let a = 0, w = 0;
@@ -2240,8 +2241,12 @@ async function ocOcAlerts(env, cfg, crimes) {
       const base = {crime: c.name, crime_id: c.id, name: names[String(sl.user.id)] || "[" + sl.user.id + "]", position: pos, rate};
       if (rate < min) roles.push(Object.assign(base, {why: `below the ${min}% minimum`}));   // (above-cap alert removed Nov 12 2026)
     }
-    if ((c.slots || []).length && (c.slots || []).every(sl => sl.user) && w && a / w < O.target)
-      crimesOut.push({crime: c.name, crime_id: c.id, success: Math.round(a / w), target: O.target, status: c.status});
+    // CALCULATED SUCCESS (Nov 12 2026): the target applies to tornprobability's chance when it's known, else the weighted average
+    const calc = (c.slots || []).length && (c.slots || []).every(sl => sl.user) && tpSucc && tpNames
+      ? tpSuccessOf(tpSucc, tpNames, c.name, c.slots.map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position, pid: Number(sl.user.id), rate: sl.checkpoint_pass_rate}))) : null;
+    const sc = calc ? calc.chance : (w ? a / w : null);
+    if ((c.slots || []).length && (c.slots || []).every(sl => sl.user) && sc != null && sc < O.target)
+      crimesOut.push({crime: c.name, crime_id: c.id, success: Math.round(sc), calc: !!calc, target: O.target, status: c.status});
   }
   return {roles, crimes: crimesOut};
 }
@@ -2276,14 +2281,17 @@ async function ocTriggers(env, cfg, crimes) {
   const cr = (crimes || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning"))
     .map(c => [c.id, c.status, (c.slots || []).map(sl => sl.user ? [sl.user.id, Math.floor((Number(sl.user.progress) || 0) / 100)] : 0)])
     .sort((a, b) => a[0] - b[0]);
-  const [ros, sum, rt] = await Promise.all([ocSnapGet(env, "prod", "roster").catch(() => null), ocSnapGet(env, "prod", "summaries").catch(() => null),
+  const [ros, sum, rt, sc] = await Promise.all([ocSnapGet(env, "prod", "roster").catch(() => null), ocSnapGet(env, "prod", "summaries").catch(() => null),
     // rates: the shared rates themselves (a script re-sharing the same rates doesn't count as a change - ts is left out)
-    env.OC_DB.prepare("SELECT player_id, roles FROM oc_cpr WHERE env = 'prod' ORDER BY player_id").all().catch(() => null)]);
+    env.OC_DB.prepare("SELECT player_id, roles FROM oc_cpr WHERE env = 'prod' ORDER BY player_id").all().catch(() => null),
+    // CALCULATED SUCCESS: new chances checked (the planned teams' - a team found below the target is re-planned)
+    env.OC_DB.prepare("SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'tp:success'").first().catch(() => null)]);
   return {crimes: ocHash(JSON.stringify(cr)), members: ocHash(JSON.stringify(Object.keys((ros && ros.data) || {}).sort())),
           settings: ocHash(JSON.stringify([cfg.opts || {}, cfg.disabled || [], cfg.rotate || []])),
-          rates: ocHash(JSON.stringify([((rt && rt.results) || []).map(r => [r.player_id, r.roles]), sum && sum.as_of]))};
+          rates: ocHash(JSON.stringify([((rt && rt.results) || []).map(r => [r.player_id, r.roles]), sum && sum.as_of])),
+          success: ocHash(String((sc && sc.as_of) || 0))};
 }
-const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or left", settings: "settings changed", rates: "pass rates updated"};
+const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or left", settings: "settings changed", rates: "pass rates updated", success: "success chances checked"};
 async function ocAutoPlan(env, crimes, now, run = {}) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -2387,7 +2395,12 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   if (!tpW) { await tpWeightsRefresh(env, true).catch(() => {}); tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null); }   // first run
   const lastStats = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);   // SPAWN HOLD cooldowns (hold_log)
   const seen = await ocScriptSeen(env, "prod");
-  const r = ocPlan({crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
+  // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability.com's success chance for a full team,
+  // from the cache (oc_snap hub 'tp:success', filled by tpSuccessForTeams after each run) - null when not checked yet
+  const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
+  const tpNames = (tpW && tpW.data && tpW.data.names) || null;
+  const succOf = (crime, roles) => { if (!tpSucc || !tpNames) return null; const h = tpSuccessOf(tpSucc, tpNames, crime, roles); return h ? h.chance : null; };
+  const r = ocPlan({succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                     rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now,
                     reshuffle: moves.length > 0, holdLog: ((lastStats && lastStats.data) || {}).hold_log || {},
                     // SCRIPT USERS: null until anyone has been seen (the table is new) - no preference until then
@@ -2416,7 +2429,11 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
     .bind(now, JSON.stringify(r.stats)).run().catch(() => {});
-  await tpSuccessForTeams(env, r.teams).catch(() => {});   // exact success chance for every full team (cached per combination)
+  // exact success chance for every full team (cached per combination) - the plan's teams first, then crimes already
+  // full in Torn (the leadership "below the target" alert uses it)
+  const fullInTorn = (crimes || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning") && (c.slots || []).length && c.slots.every(sl => sl.user && typeof sl.checkpoint_pass_rate === "number"))
+    .map(c => ({crime: c.name, roles: c.slots.map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position, pid: Number(sl.user.id), rate: sl.checkpoint_pass_rate}))}));
+  await tpSuccessForTeams(env, r.teams.concat(fullInTorn)).catch(() => {});
   if (!r.changed) return;
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")

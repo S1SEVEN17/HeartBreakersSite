@@ -132,7 +132,7 @@ jobs:
           # is the Hub's automatic planner on, and did it run? counts / times only (no names)
           cd w
           npx wrangler d1 execute hb-oc --remote --json --command \
-            "SELECT (SELECT v FROM oc_config WHERE env = 'prod' AND k = 'opts') AS opts, (SELECT ts FROM oc_config WHERE env = 'prod' AND k = 'opts') AS opts_ts, (SELECT CASE WHEN by LIKE 'auto%' THEN 'auto' ELSE 'a leader' END FROM oc_config WHERE env = 'prod' AND k = 'opts') AS opts_by, (SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats') AS stats_at, (SELECT as_of FROM oc_snap WHERE env = 'prod' AND ds = 'crimes') AS crimes_at, (SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'plan:reconfigured') AS reconf_at" > auto.json 2>/dev/null || exit 0
+            "SELECT (SELECT v FROM oc_config WHERE env = 'prod' AND k = 'opts') AS opts, (SELECT ts FROM oc_config WHERE env = 'prod' AND k = 'opts') AS opts_ts, (SELECT CASE WHEN by LIKE 'auto%' THEN 'auto' ELSE 'a leader' END FROM oc_config WHERE env = 'prod' AND k = 'opts') AS opts_by, (SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats') AS stats_at, (SELECT as_of FROM oc_snap WHERE env = 'prod' AND ds = 'crimes') AS crimes_at, (SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'plan:reconfigured') AS reconf_at, (SELECT json_extract(data, '\$.calc_checked') || '/' || json_extract(data, '\$.calc_rejected') || '/' || json_extract(data, '\$.reason') FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats') AS calc, (SELECT (SELECT COUNT(*) FROM json_each(data)) FROM oc_snap WHERE env = 'hub' AND ds = 'tp:success') AS succ_n" > auto.json 2>/dev/null || exit 0
           python3 - <<'PY'
           import json, time
           d = json.load(open("auto.json")); r = (d[0]["results"] if isinstance(d, list) else d.get("results", []))[0]
@@ -142,6 +142,8 @@ jobs:
           print("Automatic:", "OFF" if o.get("auto") is False else "on", "| settings saved", age(r["opts_ts"]), "by", r["opts_by"] or "-",
                 "| includeBusy (drafts):", bool(o.get("includeBusy")), "| queueHours:", o.get("queueHours"))
           print("Planner last ran:", age(r["stats_at"]), "| crimes feed:", age(r["crimes_at"]), "| last reconfigure:", age(r["reconf_at"]))
+          c = (r.get("calc") or "-/-/-").split("/", 2)
+          print("Calculated success: lookups", c[0], "| full teams rejected (below target)", c[1], "| cached chances", r.get("succ_n"), "| last reason:", c[2] if len(c) > 2 else "-")
           PY
       - name: Deployed plan
         env:
