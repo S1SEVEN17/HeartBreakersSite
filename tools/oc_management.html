@@ -381,8 +381,16 @@ const PP_DEFAULT = (() => { const v = Object.values(CFG.values || {}).map(x => x
   return v.length ? v[v.length >> 1] : 100; })();           // typical payout % when a crime's own isn't known
 // (Nov 2026) no minimum completions: any crime with >= 1 successful completion has a value. When the summaries
 // carry the Hub's NET value (valueMax: cash + items at today's price, x members' share) that's used as it is.
+// TORNPROBABILITY (Nov 2026, the user): the Hub's summaries now carry tornprobability.com's community outcomes as the
+// authoritative payouts (valueMax = the best recorded run, or our own best if higher; valueAvg = their average run;
+// valueMin = their worst) - src "tp", tpRuns, maxSrc "tp" | "hub". low: true = the worst run, "avg" = the average run.
 function netOf(crime, low) { const p = D.sums && D.sums.payouts && D.sums.payouts[crime];
-  return p && p.valueMax != null ? (low ? (p.valueMin ?? p.valueMax) : p.valueMax) : null; }   // low = the worst recorded result
+  if (!p || p.valueMax == null) return null;
+  return low === "avg" ? (p.valueAvg ?? p.valueMax) : low ? (p.valueMin ?? p.valueMax) : p.valueMax; }   // low = the worst recorded result
+// where a crime's payout figures come from - "🌐 community data · N runs" (tornprobability.com) or nothing (ours)
+const srcTag = crime => { const p = D.sums && D.sums.payouts && D.sums.payouts[crime];
+  if (!p || p.src !== "tp") return "";
+  return ` <span class="tag" title="Payouts from tornprobability.com's community data (${p.tpRuns} successful runs recorded)${p.maxSrc === "hub" ? " - the maximum is our own best run, which beat theirs" : ""}">🌐 community data · ${p.tpRuns} runs${p.maxSrc === "hub" ? " · max ours" : ""}</span>`; };
 function grossOf(crime) {
   const S = D.sums && D.sums.payouts;
   if (S) {
@@ -428,6 +436,9 @@ function valueOf(crime, low) {
 // PAY RANGE (Nov 2026): per member per day from the worst to the best recorded result, e.g. "$1.2m-$10.25m"
 const fmt2 = n => n == null ? "-" : n >= 1e9 ? "$" + +(n / 1e9).toFixed(2) + "b" : n >= 1e6 ? "$" + +(n / 1e6).toFixed(2) + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n);
 const eachLow = crime => { const v = valueOf(crime, true); return v.pot / v.days / (rolesOf(crime).length || 1); };
+// AVERAGE PAY PER DAY (Nov 2026, the user: "include an Average Pay Per Day but we should chase the highest recorded") -
+// shown beside the maximum only; ranking, Auto-build and the planner still use the maximum
+const eachAvg = crime => { const v = valueOf(crime, "avg"); return v.pot / v.days / (rolesOf(crime).length || 1); };
 const payRange = crime => { const hi = eachPay(crime), lo = Math.min(eachLow(crime), hi);
   return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); };
 // DELAY RECORD (Nov 2026): config.json delays {pid: {n, long, hrs, runs}} - crimes held up in the last 30 days
@@ -457,9 +468,9 @@ function payLine(t, team) {
   const ld = liveDays(t), m = ld ? v.days / ld : 1;
   const rng = k => { const hi = eachPay(t.crime) * k, lo = Math.min(eachLow(t.crime), eachPay(t.crime)) * k;
     return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); };
-  const p = v.pot / (ld || v.days);
-  return (ld ? `💰 <b>${rng(m)}/day each</b> joining now · ${Math.round(ld * 10) / 10} days to payout${m > 1.01 ? ` <span class="tag">(normally ${rng(1)} over ${v.days} days)</span>` : ""}`
-             : `💰 <b>${rng(1)}/day each</b> · ${v.days} days`) + (v.chain ? ` (with ${esc(v.chain)})` : "") + (team ? ` · ${fmt$(p)}/day team` : "");
+  const p = v.pot / (ld || v.days), av = eachAvg(t.crime) * m;
+  return (ld ? `💰 <b>${rng(m)}/day each</b> joining now · avg ${fmt2(av)} · ${Math.round(ld * 10) / 10} days to payout${m > 1.01 ? ` <span class="tag">(normally ${rng(1)} over ${v.days} days)</span>` : ""}`
+             : `💰 <b>${rng(1)}/day each</b> · avg ${fmt2(av)} · ${v.days} days`) + (v.chain ? ` (with ${esc(v.chain)})` : "") + (team ? ` · ${fmt$(p)}/day team` : "") + srcTag(chainOf(t.crime).slice(-1)[0]);
 }
 const teamPay = t => { const a = teamAvg(t); if (a == null) return null; const v = valueOf(t.crime); return v.pot / teamDays(t); };
 const eachPay = crime => { const v = valueOf(crime); return v.pot / v.days / (rolesOf(crime).length || 1); };
@@ -626,7 +637,7 @@ function drawCrimes() {
   // RANKING (Nov 12 2026, user: "Crimes should be ranked based off their maximum possible profit per day"): best
   // recorded pay per member per day first (eachPay), then difficulty
   const names = Object.keys(CFG.catalog).sort((a, b) => eachPay(b) - eachPay(a) || (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
-  $("view").innerHTML = `<div class="panel"><div class="hn">Crimes are listed by their best recorded pay per member per day. Switch a crime <b>off</b> and the OC Optimizer stops suggesting it to members (and Auto-build skips it).
+  $("view").innerHTML = `<div class="panel"><div class="hn">Crimes are listed by their best recorded pay per member per day (🌐 = tornprobability.com's community data, or our own best run when it's higher; the average run is shown beside it). Switch a crime <b>off</b> and the OC Optimizer stops suggesting it to members (and Auto-build skips it).
     <b>🔁 Rotate</b> a high-paying crime and the planner keeps its next team lined up: when one is recruiting it's filled first,
     including members still finishing another crime who'll be free before their planning turn. Its prerequisite crimes rotate too.
     ${D.config.disabled_by ? `Last saved by ${esc(D.config.disabled_by)} ${ago(D.config.disabled_ts)}.` : ""}</div>
@@ -636,7 +647,7 @@ function drawCrimes() {
       // for="crN": a <button> inside the label (🔁 Rotate) would otherwise be the label's control and swallow the
       // row's click, so the on/off switch never toggled (fixed Nov 2026)
       return `<label class="cr${off.has(n) ? " off" : ""}" for="cr${ix}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
-        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each` : ""}</i></span>
+        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each · avg ${fmt2(eachAvg(n))}` : ""}</i>${srcTag(chainOf(n).slice(-1)[0])}</span>
         <button type="button" class="rot${rot.has(n) ? " on" : ""}" data-rot="${esc(n)}" title="Rotate this crime">🔁 Rotate</button>
         <span class="sw"><input type="checkbox" id="cr${ix}" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
       : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;

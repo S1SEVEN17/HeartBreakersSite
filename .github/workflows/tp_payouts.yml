@@ -1,0 +1,48 @@
+# tornprobability.com payouts -> the Hub's D1 (Nov 2026) - tools/tp_payouts.py.
+# Once a day, started by the gatekeeper's Cloudflare timer (gate/worker.js scheduled, 00:30 TCT) - or by hand.
+# The log shows counts only.
+name: tornprobability payouts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tp-payouts
+  cancel-in-progress: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch and summarise tornprobability outcomes
+        env:
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}     # one /torn/items call (item names -> ids), header only
+          OUT: ${{ runner.temp }}/tpp.sql
+        run: python3 tools/tp_payouts.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Save to the Hub
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd gate
+          npm install --no-save --silent wrangler@4 >/dev/null 2>&1
+          if npx wrangler d1 execute hb-oc --remote --file="$RUNNER_TEMP/tpp.sql" -y > "$RUNNER_TEMP/d1.log" 2>&1; then
+            echo "Saved $(grep -c '^INSERT' "$RUNNER_TEMP/tpp.sql") crimes"
+          else
+            echo "::error::Saving to D1 failed"; grep -iE "error|auth|permission" "$RUNNER_TEMP/d1.log" | sed -E 's#[^ ]*/[^ ]*#<path>#g' | head -5; exit 1
+          fi

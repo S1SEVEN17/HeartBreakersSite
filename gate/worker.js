@@ -277,9 +277,11 @@ export default {
       ctx.waitUntil(cwShiftAlerts(env).catch(() => {}));   // Chain Watching Schedule: "your shift is starting" pings
       return;
     }
-    const minute = new Date(event.scheduledTime).getUTCMinutes();
+    const minute = new Date(event.scheduledTime).getUTCMinutes(), hour = new Date(event.scheduledTime).getUTCHours();
+    // + tornprobability payouts once a day at 00:30 TCT (tp_payouts.yml - the community payout data, Nov 2026)
     const runs = event.cron.startsWith("7,") ? [["chainwatch.yml", {}]]
-      : [["crimes.yml", {}]].concat(minute === 0 ? [["banner.yml", {scheduled: "1"}]] : []);
+      : [["crimes.yml", {}]].concat(minute === 0 ? [["banner.yml", {scheduled: "1"}]] : [])
+          .concat(minute === 30 && hour === 0 ? [["tp_payouts.yml", {}]] : []);
     ctx.waitUntil(Promise.all(runs.map(([wf, inputs]) => dispatch(env, wf, inputs))));
     // Chain timer opt-ins -> the Chain Watch room every 15 minutes (leavers / deleted keys drop out; 1 GitHub read)
     if (!event.cron.startsWith("7,")) ctx.waitUntil(cwOptinSync(env, null));
@@ -1887,7 +1889,10 @@ async function ocFeedPull(env) {
     // the ids come out of the stored JSON inside D1 (no parsing of every crime here - Worker CPU)
     const rows = (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
       "json_each(oc_hist.data, '$.rewards.items') AS j WHERE oc_hist.env = 'prod'").all()).results || [];
-    const all = [...new Set(rows.map(r => Number(r.i)).filter(i => i > 0))];
+    // + every reward item in the tornprobability payouts (oc_snap hub 'tpp:<crime>' ids, Nov 2026)
+    const tpIds = (await env.OC_DB.prepare("SELECT DISTINCT j.value AS i FROM oc_snap, json_each(oc_snap.data, '$.ids') AS j " +
+      "WHERE oc_snap.env = 'hub' AND oc_snap.ds LIKE 'tpp:%'").all().catch(() => ({}))).results || [];
+    const all = [...new Set(rows.concat(tpIds).map(r => Number(r.i)).filter(i => i > 0))];
     const cur = await ocSnapGet(env, "prod", "prices");
     const have = (cur && cur.data && typeof cur.data === "object") ? cur.data : {};
     const dayStart = now - now % 86400e3, slot = dayStart + 10 * 60e3;          // 00:10 TCT today
@@ -1921,7 +1926,10 @@ async function ocFeedPull(env) {
   try {
     // stored summaries from before the net values (Nov 2026) count as missing, so they're worked out once now
     const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries' AND instr(data, '\"valueMax\"') > 0").first();
-    if (newHist || newRoster || newPrices || !have) for (const e of ENVS) await ocSummariesSave(env, e);
+    // + new tornprobability payouts (the daily tp_payouts.yml run) since the summaries were last worked out
+    const tpNew = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds LIKE 'tpp:%' AND as_of > " +
+      "COALESCE((SELECT as_of FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'), 0) LIMIT 1").first();
+    if (newHist || newRoster || newPrices || !have || tpNew) for (const e of ENVS) await ocSummariesSave(env, e);
   } catch (e) { fail("summaries", e); }
   // the automatic team plan (live crimes) - after everything above is saved (it reads the new roster / summaries)
   if (crimesNow) try { await ocAutoPlan(env, crimesNow, now); } catch (e) { fail("plan", e); }
@@ -2025,6 +2033,39 @@ async function ocSummaries(env, envName) {
       p.share = Math.round(share * 100);                   // the members' share used (%)
     }
   }
+  // TORNPROBABILITY PAYOUTS (Nov 2026, the user): tornprobability.com's recorded outcomes (many factions) are the
+  // AUTHORITATIVE payout data - stored daily by tools/tp_payouts.py as oc_snap hub 'tpp:<crime>'. Per crime:
+  //   valueMax = the best recorded successful run (cash + its items at their recorded quantity, today's net prices,
+  //              x the members' share) - UNLESS our own best (above) is higher: then ours stays (maxSrc "hub")
+  //   valueAvg = their average successful run (cash avg + average item counts) - shown as "average pay per day"
+  //   valueMin = their worst successful run;  respect min / avg / max, average items, cash min / avg / max = theirs
+  //   src "tp", tpRuns (successful runs recorded), tpAt (ms). A crime with no tornprobability data keeps ours.
+  try {
+    const tpRows = ((await db.prepare("SELECT ds, as_of, data FROM oc_snap WHERE env = 'hub' AND ds LIKE 'tpp:%'").all()).results) || [];
+    for (const row of tpRows) {
+      let t; try { t = JSON.parse(row.data); } catch (e) { continue; }
+      if (!t || !(t.runs > 0)) continue;
+      const crime = row.ds.slice(4);
+      const p = payouts[crime] || (payouts[crime] = {samples: 0, items: {}, itemBased: false, ppAvg: null});
+      const share = (fixedShare != null ? fixedShare : (p.ppAvg ?? 80)) / 100;
+      const iv = its => Object.entries(its || {}).reduce((a, [i, q]) => a + (Number(q) || 0) * (Number((prices[i] || {}).price) || 0), 0);
+      const vals = (t.outs || []).map(o => (Number(o[0]) || 0) + iv(o[1]));
+      if (!vals.length) continue;
+      const tpMax = Math.round(Math.max(...vals) * share);
+      const ourMax = p.valueMax;
+      p.valueMax = ourMax != null && ourMax > tpMax ? ourMax : tpMax;
+      p.maxSrc = ourMax != null && ourMax > tpMax ? "hub" : "tp";
+      p.valueAvg = Math.round(((Number(t.cashAvg) || 0) + iv(t.items)) * share);
+      p.valueMin = Math.round(Math.min(...vals) * share);
+      p.share = Math.round(share * 100);
+      p.moneyAvg = t.cashAvg; p.moneyMin = t.cashMin; p.moneyMax = Math.max(t.cashMax || 0, p.maxSrc === "hub" ? (p.moneyMax || 0) : 0);
+      if (t.respMax != null) { p.respAvg = t.respAvg; p.respMin = t.respMin; p.respMax = t.respMax; }
+      p.items = Object.assign({}, t.items || {});
+      p.itemBased = !(t.cashMax > 0) && Object.keys(p.items).length > 0;
+      if (!(p.samples > 0)) p.samples = t.runs;          // a crime we've never run: its tornprobability runs
+      p.src = "tp"; p.tpRuns = t.runs; p.tpAt = Number(row.as_of) || 0;
+    }
+  } catch (e) { /* no tornprobability data yet - our own figures stand */ }
   const memberRates = {};
   for (const r of rates.results || []) {
     if (roster && roster[String(r.pid)] == null) continue;                 // members who left aren't suggested
