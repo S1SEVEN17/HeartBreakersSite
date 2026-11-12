@@ -19,6 +19,8 @@
   TABS (Nov 12 2026, user: the Gym page became the Gym tab here): one section at a time - #war #chain #oc #gym in the
   address picks it (old links still land on the right part). The Gym tab also has the old Gym page's "Every member"
   table for the period and its summary of every member's gym record (gym.html / gym-history.html now forward here).
+  LEADERBOARD OPT-OUT (Nov 12 2026): members with "nolb" in db/members.json are left off every board and table here
+  (they still count in the faction totals and everywhere else on the site).
   Placeholders: __MENU__ (site header), __MODE__.
   The FRESH placeholder (two underscores each side) = the data freshness footer (generate.py fresh_html).
 -->
@@ -78,11 +80,11 @@ const short = n => n >= 1e9 ? "$" + (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? "$" 
 const monthOf = t => new Date(t * 1000).toISOString().slice(0, 7);
 const monthName = m => new Date(m + "-01T00:00:00Z").toLocaleString("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
 const GS = [["gymstrength", "Strength"], ["gymspeed", "Speed"], ["gymdefense", "Defense"], ["gymdexterity", "Dexterity"]];
-let D = {}, names = {}, current = {};
+let D = {}, names = {}, current = {}, hidden = {};   // hidden = LEADERBOARD OPT-OUT (db/members.json "nolb", Nov 12 2026)
 
 // one board: {title, vals: {id: value}, fmt}
 function board(title, vals, fmt = num, onlyCurrent = false) {
-  const rows = Object.entries(vals).filter(([id, v]) => v > 0 && (!onlyCurrent || current[id])).sort((a, b) => b[1] - a[1]);
+  const rows = Object.entries(vals).filter(([id, v]) => v > 0 && !hidden[id] && (!onlyCurrent || current[id])).sort((a, b) => b[1] - a[1]);
   const tot = rows.reduce((a, r) => a + r[1], 0);
   return `<div class="board"><h3>${esc(title)}</h3>` + (rows.length ? `<ol>` + rows.slice(0, TOP).map(([id, v], i) =>
     `<li><span class="r">${["🥇", "🥈", "🥉"][i] || i + 1}</span><a href="member.html?id=${id}">${esc(names[id] || "[" + id + "]")}`
@@ -122,7 +124,7 @@ function draw(period) {
   const ids = period.all || cur ? Object.keys(current) : Object.keys(g);
   gymRows = ids.map(id => { const st = g[id] || {}, r = {id: +id, name: names[id] || "[" + id + "]", left: !current[id]};
     GS.forEach(([k]) => r[k] = st[k] || 0); r.total = GS.reduce((a, [k]) => a + r[k], 0); return r; })
-    .filter(r => cur || period.all || r.total > 0);
+    .filter(r => (cur || period.all || r.total > 0) && !hidden[r.id]);
   gymTable();
   $("meta").textContent = period.all ? "All time (while in the faction) - current members"
     : `${monthName(period.month)}${period.month === new Date().toISOString().slice(0, 7) ? " (so far)" : ""}` + (cur ? " - current members" : " - everyone who took part");
@@ -148,7 +150,7 @@ function gymTable() {
 function gymSummary(G, days) {
   const months = Object.keys(G.history || {}).sort(), tot = a => (a || [0, 0, 0, 0]).reduce((x, y) => x + y, 0);
   const allE = id => GS.reduce((a, [k]) => a + (((G.all || {})[id] || {})[k] || 0), 0);
-  const ids = new Set(Object.keys(current).concat(...months.map(mo => Object.keys(G.history[mo] || {}))));
+  const ids = new Set(Object.keys(current).concat(...months.map(mo => Object.keys(G.history[mo] || {}))).filter(id => !hidden[id]));
   const rows = [...ids].map(id => { const per = months.map(mo => tot((G.history[mo] || {})[id]));
     const mIn = days[id] ? Math.max(1, days[id] / 30.4375) : null;
     return {id: +id, name: names[id] || "?", left: !current[id], all: allE(id), month: tot((G.history[G.month] || {})[id]),
@@ -173,7 +175,7 @@ Promise.all(["members", "wars", "chains", "crimes", "gym"].map(f => fetch(`db/${
 .then(([M, W, C, O, G]) => {
   D = {wars: W, chains: C, crimes: O, gym: G};
   const days = {};
-  M.members.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; if (x.days != null) days[x.id] = x.days; });
+  M.members.forEach(x => { names[x.id] = x.name; if (x.current) current[x.id] = 1; if (x.days != null) days[x.id] = x.days; if (x.nolb) hidden[x.id] = 1; });
   G.history = G.history || {};
   gymSummary(G, days);
   if (MODE === "history") {

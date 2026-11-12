@@ -68,6 +68,14 @@ __MENU__
 <button id="viewbtn">👁️ View my shared data</button>
 <div class="card" id="viewer"></div>
 
+<!-- LEADERBOARD OPT-OUT (Nov 12 2026, user): no key needed; saved at once (PATCH /m/optin {lb_hidden}) -->
+<h2>🏆 Leaderboards</h2>
+<div class="card">
+  <div class="opt"><div class="t"><b>Show me on the leaderboards</b><span>Hide your name from the faction's leaderboards - the Leaderboards page, the Hub script's Boards, the banner and announcement boards and the monthly recap's top lists. Your numbers still count in the faction totals, your profile, the Members list, reliability, war reports and payouts.</span></div>
+    <div class="seg" id="lbseg"><button data-v="false">Show</button><button data-v="true">Hide me</button></div></div>
+  <div id="lbmsg" class="muted"></div>
+</div>
+
 <h2>🔑 Your key</h2>
 <div class="card">
   <div class="keyrow"><div class="t"><b>One Limited API key</b> <span class="muted">· used for everything below</span><br>
@@ -204,6 +212,14 @@ async function showViewer() {
   v.innerHTML = sec.join("");
 }
 $("viewbtn").onclick = showViewer;
-call("GET").then(status).catch(e => { $("stt").textContent = "Couldn't load your settings"; $("std").textContent = e.message; });
+// LEADERBOARD OPT-OUT: its own switch, saved at once (no key, not part of Save below)
+let LB = false;
+const lbSeg = () => $("lbseg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.v === String(LB)));
+$("lbseg").addEventListener("click", async e => { const b = e.target.closest("button"); if (!b || b.dataset.v === String(LB)) return;
+  const want = b.dataset.v === "true"; $("lbmsg").className = "muted"; $("lbmsg").textContent = "Saving…";
+  try { const o = await call("PATCH", {lb_hidden: want}); LB = !!o.lb_hidden; lbSeg();
+    $("lbmsg").className = "ok"; $("lbmsg").textContent = LB ? "Saved ✓ - you're left off the leaderboards from the next site update (a few minutes)." : "Saved ✓ - you're back on the leaderboards from the next site update."; }
+  catch (err) { $("lbmsg").className = "err"; $("lbmsg").textContent = err.message; } });
+call("GET").then(o => { LB = !!o.lb_hidden; lbSeg(); return o; }).then(status).catch(e => { $("stt").textContent = "Couldn't load your settings"; $("std").textContent = e.message; });
 </script>
 </body></html>

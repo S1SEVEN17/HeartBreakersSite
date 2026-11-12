@@ -740,11 +740,13 @@ async function readOptin(env, fresh) {
   return v;
 }
 // change one member's entry (fn(entry) -> new entry or null = delete) - retried when the file changed meanwhile
+// (fn may also be {whole: data => {...}} to change the file itself - LEADERBOARD OPT-OUT's lb_hidden list)
 async function writeOptin(env, id, fn, msg) {
   for (let i = 0; i < 3; i++) {
     const {data, sha} = await readOptin(env, true);
-    const nv = fn(data.members[id] || null);
-    if (nv) data.members[id] = nv; else delete data.members[id];
+    if (fn && fn.whole) fn.whole(data);
+    else { const nv = fn(data.members[id] || null);
+      if (nv) data.members[id] = nv; else delete data.members[id]; }
     const body = JSON.stringify(data, null, 1) + "\n";
     const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/${OPTIN_PATH}`, {method: "PUT", headers: ghHeaders(env),
       body: JSON.stringify({message: msg, sha, branch: "main", content: btoa(unescape(encodeURIComponent(body)))})});
@@ -948,12 +950,26 @@ async function optinRoute(env, req, who) {
   if (!env.GH_DISPATCH && !env.GH_SAVE) return new Response("Saving isn't set up", {status: 503});
   const id = String(Number(who.id));
   try {
+    const lbOf = data => (data.lb_hidden || []).map(String).includes(id);
     if (req.method === "GET") {
       const {data} = await readOptin(env, true);
-      return Response.json(publicEntry(data.members[id]), H);
+      return Response.json(Object.assign(publicEntry(data.members[id]), {lb_hidden: lbOf(data)}), H);
     }
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     const tag = `(by ${who.name} [${who.id}])`;
+    // LEADERBOARD OPT-OUT (Nov 12 2026, user): PATCH {lb_hidden: true|false} - no key needed; data/optin.json
+    // "lb_hidden" [ids]. generate.py (LB_HIDDEN) leaves them off every leaderboard from the next site update; they're
+    // still tracked for ratings and reports.
+    if (req.method === "PATCH") {
+      const j = await req.json().catch(() => null);
+      if (!j || typeof j.lb_hidden !== "boolean") return new Response("Bad request", {status: 400});
+      await writeOptin(env, id, {whole: data => {
+        const set = new Set((data.lb_hidden || []).map(String));
+        if (j.lb_hidden) set.add(id); else set.delete(id);
+        data.lb_hidden = [...set].map(Number).sort((a, b) => a - b);
+      }}, `Leaderboards ${j.lb_hidden ? "opt-out" : "opt-in"} ${tag}`);
+      return Response.json({lb_hidden: j.lb_hidden}, H);
+    }
     if (req.method === "DELETE") {
       await writeOptin(env, id, () => null, `Opt-in data deleted ${tag}`);
       await ocCprDrop(env, id);

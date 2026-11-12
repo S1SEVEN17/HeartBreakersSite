@@ -798,6 +798,25 @@ def reports_from_history(hist: dict, my_id) -> dict:
     return out
 
 
+# LEADERBOARD OPT-OUT (Nov 12 2026, user: "Some members have asked for the ability to opt out of the leaderboards ...
+# I still want to be able to track members based on the same metrics because they're still important for ratings and
+# performance reporting"). Members switch it on in My data & sharing (no key needed) -> data/optin.json "lb_hidden"
+# [ids] (gate/worker.js optinRoute). Hidden members are left out of every LEADERBOARD: the banner / announcement
+# boards (war, chain, gym), the site's Leaderboards page (db/members.json "nolb"), the Hub script's Boards tab and the
+# monthly recap's top lists. Everything else still counts them: faction totals, profiles, the Members list,
+# reliability, war reports, payouts and the leaders' tools.
+LB_HIDDEN = set()
+
+
+def load_lb_hidden():
+    try:
+        d = json.loads((ROOT / "data" / "optin.json").read_text(encoding="utf-8"))
+        LB_HIDDEN.clear(); LB_HIDDEN.update(str(int(i)) for i in d.get("lb_hidden") or [])
+    except (OSError, ValueError, TypeError):
+        pass
+    return LB_HIDDEN
+
+
 def leaderboard(hist: dict, current_ids: set, lcfg: dict, since: int = 0, monthly: bool = False) -> dict:
     """All-time leaderboards from the saved war history, CURRENT members only
     (former members are ignored), top `top` each:
@@ -836,10 +855,10 @@ def leaderboard(hist: dict, current_ids: set, lcfg: dict, since: int = 0, monthl
                 t["run"] = 0
     # every current member is listed, 0s included (members with no wars in
     # the period get an all-zero row; current_ids may be {id: name})
-    people = [t for i, t in tot.items() if i in current_ids]
+    people = [t for i, t in tot.items() if i in current_ids and i not in LB_HIDDEN]     # opted out: not ranked
     if isinstance(current_ids, dict):
         people += [{"name": n, "hits": 0, "respect": 0.0, "wars": 0, "zero": 0, "run": 0, "best_run": 0}
-                   for i, n in current_ids.items() if i not in tot]
+                   for i, n in current_ids.items() if i not in tot and i not in LB_HIDDEN]
 
     def ranked(rows, key, fmt, cond=lambda t: True, below=None):
         """Members meeting the minimum are ranked first; everyone else is
@@ -1072,7 +1091,7 @@ def chain_leaderboard(hist: dict, members: list, ach: dict, lcfg: dict, since: i
     """Chain leaderboards, CURRENT members only, top `top` each: total chain
     hits, total chain respect, retaliations. Plus a faction summary strip."""
     top = 10 ** 6                        # full faction
-    names = {str(m.get("id")): m.get("name", "?") for m in members}
+    names = {str(m.get("id")): m.get("name", "?") for m in members if str(m.get("id")) not in LB_HIDDEN}   # opted out
     tot = {}
     chains = {k: c for k, c in hist.get("chains", {}).items() if c["end"] >= since}
     allh = allr = allrets = 0           # totals incl. members who left
@@ -1196,7 +1215,7 @@ def update_gym(raw: dict, cfg: dict, key: str = None) -> dict:
         pbase = json.loads(json.dumps(gym["baseline"]))
         add_total(pbase)
         gym["prev"] = {"month": gym["month"], "top3": {
-            stat: _gym_board(gym, cur[stat], pbase.get(stat, {}), 3, names)
+            stat: _gym_board(gym, cur[stat], pbase.get(stat, {}), 3, {k: v for k, v in names.items() if k not in LB_HIDDEN})
             for stat, _ in GYM_STATS},
             # full per-member gains (monthly recap Gym Leaderboard)
             "gains": {stat: {i: int(v) - int(pbase.get(stat, {}).get(i, v)) for i, v in cur[stat].items()
@@ -1251,7 +1270,7 @@ def gym_leaderboard(gym: dict, members: list, lcfg: dict) -> dict:
     if not gym.get("current"):
         return None
     top = 10 ** 6                        # full faction
-    names = {str(m.get("id")): m.get("name", "?") for m in members}
+    names = {str(m.get("id")): m.get("name", "?") for m in members if str(m.get("id")) not in LB_HIDDEN}   # opted out
     base = json.loads(json.dumps(gym.get("baseline", {})))
     add_total(base)                       # Total baseline = sum of stat baselines
     boards = {stat: _gym_board(gym, gym["current"].get(stat, {}), base.get(stat, {}),
@@ -5278,6 +5297,7 @@ def build_databases(raw: dict, cfg: dict) -> dict:
                         "position": m.get("position", ""), "days": m.get("days_in_faction"),
                         "level": m.get("level"),
                         "last_action": m.get("last_action"), "t": t,
+                        "nolb": i in LB_HIDDEN,          # LEADERBOARD OPT-OUT: left off the Leaderboards page / Hub script boards
                         "gym": gym["all"].get(i, {}), "gym_month": gym["month_gain"].get(i, {})})
     return {"generated": now,
             "members": {"generated": now, "members": members},
@@ -8006,8 +8026,9 @@ def recap_data(start: int, end: int, label: str, whist: dict, chist: dict, membe
         for b in c.get("bonuses", []):            # chains read since bonus hits were saved
             bons[b["id"]] = bons.get(b["id"], 0) + 1
     def top(d, n=5):
-        return [(names.get(i, f"[{i}]"), v) for i, v in sorted(d.items(), key=lambda kv: -kv[1]) if i in cur and v > 0][:n]
-    perfect = sorted((names[i] for i in cur if war_in.get(i) and war_hit.get(i) == war_in[i]
+        return [(names.get(i, f"[{i}]"), v) for i, v in sorted(d.items(), key=lambda kv: -kv[1])
+                if i in cur and i not in LB_HIDDEN and v > 0][:n]                         # opted out: not in top lists
+    perfect = sorted((names[i] for i in cur if i not in LB_HIDDEN and war_in.get(i) and war_hit.get(i) == war_in[i]
                       and war_in[i] == len(wars)), key=str.lower) if wars else []
     big = max(chains, key=lambda c: c["length"]) if chains else None
     # extra awards
@@ -8279,7 +8300,7 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
                           "top_resp": [(m.get("name", "?"), m["score"]) for m in
                                        sorted(ms, key=lambda m: -m["score"])[:5] if m["score"]],
                           "missed": sorted((m.get("name", "?") for m in ms if m["attacks"] == 0), key=str.lower)})
-    war_board = sorted((dict(v, id=i) for i, v in wl.items() if i in cur),
+    war_board = sorted((dict(v, id=i) for i, v in wl.items() if i in cur and i not in LB_HIDDEN),   # opted out
                        key=lambda v: (-v["hits"], -v["resp"]))
     # habitual war slackers: current members with no hits in 2+ of the month's wars
     habitual = sorted(((v["name"], v["in"] - v["hit"], v["in"]) for i, v in wl.items()
@@ -8310,11 +8331,13 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
                            "top_hits": [(nm(a["id"]), a["hits"]) for a in sorted(att, key=lambda a: -a["hits"])[:5]],
                            "top_resp": [(nm(a["id"]), a["respect"]) for a in sorted(att, key=lambda a: -a["respect"])[:5]],
                            "rets": sum(a.get("rets", 0) for a in att)})
-    chain_board = sorted((dict(v, id=i) for i, v in cl.items() if i in cur), key=lambda v: (-v["hits"], -v["resp"]))
+    chain_board = sorted((dict(v, id=i) for i, v in cl.items() if i in cur and i not in LB_HIDDEN), key=lambda v: (-v["hits"], -v["resp"]))
     # --- gym (energy trained in the month, per stat)
     # --- gym: {stat: {member id: energy trained this period}}
     gym_board = []
     for i in cur:
+        if str(i) in LB_HIDDEN:              # LEADERBOARD OPT-OUT
+            continue
         row = {"name": names[i], "id": i}
         for st, _ in GYM_STATS:
             row[st] = int((gym_gains or {}).get(st, {}).get(str(i), 0))
@@ -10943,6 +10966,7 @@ def main():
                                    "(keys: basic, members, positions, upgrades)")
     ap.add_argument("--out", default="site", help="Output folder (default: site)")
     args = ap.parse_args()
+    load_lb_hidden()                              # LEADERBOARD OPT-OUT: members left off every leaderboard
 
     # CHAIN WATCH (chainwatch.yml, every 15 min): Ongoing Chain section; 5-minute refresh while a chain runs
     if not args.mock and os.environ.get("RUN_KIND") == "chainwatch":
