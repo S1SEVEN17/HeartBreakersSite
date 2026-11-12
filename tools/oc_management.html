@@ -911,7 +911,19 @@ function drawDeployed() {
   // drops them on its next run; hide them now too (a member leaving brings the crime back with an open slot)
   const full = t => t.kind === "live" && t.roles.length && t.roles.every(r => r.existing) && !t.roles.some(r => r.replaces);
   const plan0 = D.config.plan, busy = busyMap();
-  const plan = plan0 ? Object.assign({}, plan0, {teams: (plan0.teams || []).filter(t => !full(t))}) : plan0;
+  // UNPLANNED CRIMES (Nov 12 2026, user: "Crimes that are actively planning but not filled should still show on the
+  // deployed list. Just show their empty positions as Unfilled"): a recruiting crime in Torn with members in it but
+  // open slots, that the plan has no team for (nobody qualifies for its open roles at the targets) - shown from the
+  // crimes feed with its members and "Unfilled" open slots, read-only (t.unplanned)
+  const inPlan = new Set(((plan0 && plan0.teams) || []).filter(t => t.crime_id != null).map(t => String(t.crime_id)));
+  const unplanned = (D.feed || []).filter(c => c && c.status === "Recruiting" && !inPlan.has(String(c.id))
+      && (c.slots || []).some(sl => sl.user) && (c.slots || []).some(sl => !sl.user))
+    .map(c => ({id: "feed-" + c.id, crime: c.name, difficulty: c.difficulty ?? diffOf(c.name), kind: "live", crime_id: c.id, lock: false, unplanned: true,
+      roles: (c.slots || []).map(sl => { const pos = (sl.position_info && sl.position_info.label) || sl.position;
+        return sl.user ? {position: pos, pid: sl.user.id, name: nameOf(sl.user.id), existing: true,
+                          rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}
+                       : {position: pos, pid: null, name: "", rate: null}; })}));
+  const plan = plan0 || unplanned.length ? Object.assign({}, plan0 || {}, {teams: ((plan0 && plan0.teams) || []).filter(t => !full(t)).concat(unplanned)}) : plan0;
   if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel">${autoHtml()}<div class="hn">Nothing deployed to Live yet - ${OPT.auto !== false ? "the Hub builds the first teams on its next 3-minute run, or " : ""}build teams in the Team Builder and press Deploy.</div></div>`; wireAuto(); return; }
   // NEXT CRIME (Nov 11 2026, user: a member in a crime that's planning AND queued for the next crime (it exists and is
   // re-scheduled for when the first one finishes) shows as Queued, not Joined): pid -> the team they're queued into
@@ -923,7 +935,7 @@ function drawDeployed() {
   const sm = spawnMap(plan.teams);
   const cards = plan.teams.map(t => {
     const rows = t.roles.map(r => {
-      if (r.pid == null) return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td class="tag">empty</td><td></td><td></td></tr>`;
+      if (r.pid == null) return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td class="mid">Unfilled</td><td></td><td></td></tr>`;
       total++;
       const b = busy[r.pid];
       // JOINED vs QUEUED (Nov 2026): a live team's member has joined only when they're in THAT crime id; a queued
@@ -942,6 +954,7 @@ function drawDeployed() {
       ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
+      ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
   $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Slots are only reserved for members who haven't joined a crime or are queued (their crime is ready within ${OPT.queueHours} h) - members already in a crime stay where they are. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (free and queued members only) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
@@ -952,7 +965,7 @@ function drawDeployed() {
     <div class="teams">${cards}</div></div>`;
   wireAuto();
   $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
-    BOARD = {teams: plan.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
+    BOARD = {teams: plan.teams.filter(t => !t.unplanned).map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
       roles: t.roles.map(r => r.existing ? Object.assign({}, r) : Object.assign({}, r, rateOf(r.pid, t.crime, r.position) || {}))}))}; saveBoard(); TAB = "builder"; LS.set("hb_oc_tab", TAB); draw(); };
   $("undeploy").onclick = async () => { if (!confirm("Withdraw the deployed plan? Members stop seeing their assigned roles.")) return;
     try { await saveConfig("plan", {teams: []}); D.config.plan = {teams: []}; st("Plan withdrawn."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
