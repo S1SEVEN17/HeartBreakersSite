@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>War Targets - Heart Breakers</title>
+<!--
+  WAR TARGETS (Nov 12 2026, the user: "compare war targets estimated stats and estimated FF rating against our own
+  members. This list would show which targets our members should attack for maximum score during wars").
+  Members' folder (war-targets.html), published by generate.py write_profiles. Data:
+    db/war_targets.json  (generate.py write_war_targets - every full / war run while a ranked war is ongoing or upcoming)
+      {generated, band: [2.5, 3], ffs: FFScouter set up?, war: {kind, start, end, enemy_id, enemy} | null,
+       enemy: {id: {n name, l level, bs FFScouter's estimate ("1.2b"), u estimate updated (s)}},
+       members: {pid: {n name, s "shared" | "ffs" | "none", t: [[enemy id, FF, est. respect], ...] best first}}}
+    war/enemy.json       (gatekeeper warEnemy - the enemy's members right now: status, last action; cached 60 s)
+  User's choices: FFScouter estimates for the enemy; every member sees every member's list; members who don't share
+  their battle stats are matched on FFScouter's estimate of them (and asked to share); only targets at an estimated
+  FF of 2.5 - 3.0 (56% - 75% of the member's stat score - 3x is the cap, a stronger target only adds risk).
+  Est. respect = base respect (1 + level / 200) x FF, before chain / retaliation / overseas bonuses.
+  Placeholder: __MENU__ (site header).
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878;--amber:#e8a33a}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1000px}
+h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:10px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center;margin:8px 0 10px}
+.bar select,.bar button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:7px 10px;font:14px system-ui;max-width:100%}
+.bar label{color:var(--sub);font-size:13px;display:flex;gap:5px;align-items:center}
+.note{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:14px;line-height:1.5}
+.note.warn{border-color:var(--amber)}.note a{color:var(--gold)}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+td,th{padding:8px 9px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
+th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+td.n,th.n{text-align:right}td a{color:var(--gold);text-decoration:none}
+.atk{display:inline-block;background:var(--red);color:#fff!important;border-radius:6px;padding:4px 10px;font-weight:600;font-size:13px}
+.ok{color:var(--green)}.bad{color:var(--red)}.mid{color:var(--amber)}.dim{color:#6d6264}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.dot.Online{background:var(--green)}.dot.Idle{background:var(--amber)}.dot.Offline{background:#555}
+tr.na td{opacity:.55}
+.foot{color:var(--sub);font-size:12px;text-align:center;margin:16px 0 4px;line-height:1.7}
+</style></head><body>
+__MENU__
+<h1>🎯 War Targets</h1>
+<div class="sub" id="meta">Loading…</div>
+<div id="msg"></div>
+<div class="bar" id="ctl" style="display:none">
+  <select id="who" aria-label="Member"></select>
+  <label><input type="checkbox" id="avail"> Available now only</label>
+</div>
+<div id="mine"></div>
+<div class="scroll"><table id="tbl"></table></div>
+<div class="foot" id="foot"></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const ago = t => { const s = Date.now() / 1e3 - t; return s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 172800 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " days ago"; };
+const left = t => { let s = Math.max(0, Math.round(t - Date.now() / 1e3)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); s %= 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; };
+let D = null, LIVE = {}, ME = null;
+
+// live status of an enemy member (gatekeeper war/enemy.json) -> [html, available now?]
+function statusOf(id) {
+  const x = LIVE[String(id)]; if (!x) return ['<span class="dim">-</span>', true];
+  const dot = x.action ? `<span class="dot ${esc(x.action)}" title="${esc(x.action)}"></span>` : "";
+  if (x.status === "Okay") return [dot + '<span class="ok">Okay</span>', true];
+  if (x.status === "Hospital" || x.status === "Jail") return [dot + `<span class="bad">${esc(x.status)}</span>${x.until ? ` <span class="tag" data-until="${x.until}">${left(x.until)}</span>` : ""}`, false];
+  if (x.status === "Abroad") return [dot + `<span class="mid" title="${esc(x.desc)}">Abroad</span>`, true];   // can be hit abroad (+25% respect)
+  return [dot + `<span class="mid" title="${esc(x.desc)}">${esc(x.status || "?")}</span>`, false];               // travelling, fallen...
+}
+
+function draw() {
+  const pid = $("who").value, m = (D.members || {})[pid];
+  // the prompt to share stats - on your own list only
+  const own = ME && String(ME.id) === pid;
+  $("mine").innerHTML = !m ? "" : m.s === "none"
+    ? `<div class="note warn">${own ? "We don't have your battle stats" : esc(m.n) + " doesn't share their battle stats"} and FFScouter has no estimate${own ? " of you" : ""} either, so no targets can be worked out.${own ? ` <a href="my-data.html">Share your battle stats</a> to get your list.` : ""}</div>`
+    : m.s === "ffs" ? `<div class="note warn">${own ? "This list uses FFScouter's <b>estimate</b> of your stats" : esc(m.n) + "'s list uses FFScouter's estimate of their stats"}, so it may be off.${own ? ` <a href="my-data.html">Share your battle stats</a> for an accurate list.` : ""}</div>` : "";
+  const only = $("avail").checked;
+  const rows = ((m && m.t) || []).map(([id, ff, rs]) => { const e = D.enemy[String(id)] || {}, [st, ok] = statusOf(id); return {id, ff, rs, e, st, ok}; })
+    .filter(r => !only || r.ok);
+  $("tbl").innerHTML = !m ? "" : `<tr><th>Target</th><th class="n">Lvl</th><th>Est. stats</th><th class="n">FF</th><th class="n">Respect</th><th>Status</th><th></th></tr>`
+    + (rows.length ? rows.map(r => `<tr class="${r.ok ? "" : "na"}"><td><a href="https://www.torn.com/profiles.php?XID=${r.id}" target="_blank" rel="noopener">${esc(r.e.n)}</a></td>
+      <td class="n">${r.e.l || "-"}</td><td>${esc(r.e.bs || "-")}</td><td class="n"><b>${r.ff.toFixed(2)}</b></td><td class="n">${r.rs.toFixed(2)}</td><td>${r.st}</td>
+      <td><a class="atk" href="https://www.torn.com/loader.php?sid=attack&user2ID=${r.id}" target="_blank" rel="noopener">Attack</a></td></tr>`).join("")
+      : `<tr><td colspan="7" class="dim" style="text-align:center;padding:14px">${m.s === "none" ? "No stats to match against." : only ? "No target in range is available right now." : `No enemy is estimated in the ${D.band[0]}–${D.band[1]} FF range for this member.`}</td></tr>`);
+}
+
+async function live() {
+  try { const r = await (await fetch("war/enemy.json", {cache: "no-store"})).json(); if (r && r.ok) { LIVE = r.members || {}; draw(); } } catch (e) {}
+}
+
+(async () => {
+  try {
+    [D, ME] = await Promise.all([fetch("db/war_targets.json", {cache: "no-store"}).then(r => r.json()),
+                                 fetch("whoami.json", {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null)]);
+  } catch (e) { $("meta").textContent = "Couldn't load the war targets - try again later."; return; }
+  if (!D.war) { $("meta").textContent = "No ranked war is ongoing or scheduled."; $("foot").textContent = `Checked ${ago(D.generated)}.`; return; }
+  const w = D.war;
+  $("meta").innerHTML = `${w.kind === "ongoing" ? "⚔️ At war with" : "⏳ Next war against"} <b>${esc(w.enemy)}</b>`
+    + (w.kind === "upcoming" && w.start ? ` · starts in <span data-until="${w.start}">${left(w.start)}</span>` : "");
+  if (!D.ffs) $("msg").innerHTML = `<div class="note warn">Enemy estimates aren't set up yet (the FFScouter key is missing), so lists may be empty.</div>`;
+  const names = Object.entries(D.members).sort((a, b) => a[1].n.localeCompare(b[1].n));
+  $("who").innerHTML = names.map(([id, m]) => `<option value="${id}">${esc(m.n)}${m.s === "shared" ? "" : m.s === "ffs" ? " (estimated)" : " (no stats)"} · ${m.t.length}</option>`).join("");
+  if (ME && D.members[String(ME.id)]) $("who").value = String(ME.id);
+  $("ctl").style.display = "";
+  $("who").onchange = draw; $("avail").onchange = draw;
+  draw(); live();
+  setInterval(live, 60e3);                                                  // live status: the gatekeeper's 60 s cache
+  setInterval(() => document.querySelectorAll("[data-until]").forEach(x => { x.textContent = left(+x.dataset.until); }), 1000);
+  const est = Object.values(D.enemy).filter(e => e.bs).length;
+  $("foot").innerHTML = `Targets with an estimated fair fight of ${D.band[0]}–${D.band[1]} (56–75% of the member's stat score - 3× is the most a hit can get), best respect first.<br>`
+    + `Respect = base respect (1 + level ÷ 200) × FF, before chain, retaliation and overseas bonuses. Enemy stats: FFScouter estimates (${est} of ${Object.keys(D.enemy).length} enemies).<br>`
+    + `Lists updated ${ago(D.generated)} · status refreshes every minute.`;
+})();
+</script>
+</body></html>

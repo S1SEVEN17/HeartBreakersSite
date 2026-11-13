@@ -252,6 +252,8 @@ export default {
     if (area === "m" && rest === "cw/live.json") return cwLive(env);
     // Hub homepage "Right now" (Nov 12 2026): live ranked war + chain from the Hub - no key from the member
     if (area === "m" && rest === "now.json") return hubNow(env);
+    // War targets page (Nov 12 2026): the ranked-war enemy's members right now (status, last action) - Hub key
+    if (area === "m" && rest === "war/enemy.json") return warEnemy(env);
     // Scripts directory (scripts.html): every member reads the listings; leaders add / edit / remove them
     if (area === "m" && (rest === "scripts.json" || rest === "scripts")) return scriptsRoute(env, req, url, who);
     // leaders: OC Management page (oc.html) - settings / deployed plan / shared rates (D1)
@@ -2794,6 +2796,43 @@ async function hubNow(env) {
     }
   } catch (e) {}
   return Response.json({ok: true, as_of: sAt || null, war, chain}, H);
+}
+// WAR TARGETS (Nov 12 2026, members' war-targets.html): the current / next ranked war's ENEMY members as Torn has them
+// now - {ok, as_of (ms), enemy_id, members: {id: {status, desc, until, travel, action, ago}}}. The enemy comes from the
+// Hub's own war reading (oc_snap hub 'now', every 3 min), so the page can't ask about any other faction.
+// 1 Torn call per 60 s at most, however many members have the page open (cached in oc_snap hub 'war:enemy').
+async function warEnemy(env) {
+  const H = {headers: {"Cache-Control": "no-store"}};
+  if (!env.OC_DB || !env.HUB_TORN_KEY) return Response.json({ok: false, error: "not set up"}, Object.assign({status: 503}, H));
+  const snap = await ocSnapGet(env, "hub", "now").catch(() => null);
+  const d = (snap && snap.data) || {}, FID = String(env.FACTION_ID || "51384"), t = Date.now() / 1e3;
+  let w = d.wars && d.wars.ranked; if (Array.isArray(w)) w = w[0];
+  if (!w || !w.factions || (w.end && w.end <= t)) return Response.json({ok: true, enemy_id: null, members: {}}, H);
+  const F = Array.isArray(w.factions) ? w.factions : Object.entries(w.factions).map(([id, f]) => Object.assign({id}, f));
+  const them = F.find(f => String(f.id) !== FID);
+  if (!them || !them.id) return Response.json({ok: true, enemy_id: null, members: {}}, H);
+  const eid = Number(them.id);
+  const cur = await ocSnapGet(env, "hub", "war:enemy").catch(() => null);
+  if (cur && cur.data && cur.data.enemy_id === eid && Date.now() - Number(cur.as_of) < 60e3)
+    return Response.json(Object.assign({ok: true, as_of: Number(cur.as_of)}, cur.data), H);
+  try {
+    // API: Heart Breakers Hub - War targets (enemy faction members, live status)
+    const r = await ocTorn(env, `faction/${eid}/members`);
+    const list = Array.isArray(r.members) ? r.members : Object.entries(r.members || {}).map(([id, m]) => Object.assign({id}, m));
+    const members = {};
+    for (const m of list) {
+      const st = m.status || {}, la = m.last_action || {};
+      members[String(m.id)] = {status: st.state || "", desc: st.description || "", until: Number(st.until) || 0,
+                               travel: st.travel_type || null, action: la.status || "", ago: Number(la.timestamp) || 0};
+    }
+    const data = {enemy_id: eid, members}, now = Date.now();
+    await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'war:enemy', ?, ?, 'hub') " +
+      "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify(data)).run();
+    return Response.json(Object.assign({ok: true, as_of: now}, data), H);
+  } catch (e) {
+    if (cur && cur.data && cur.data.enemy_id === eid) return Response.json(Object.assign({ok: true, stale: true, as_of: Number(cur.as_of)}, cur.data), H);
+    return Response.json({ok: false, error: "Torn didn't answer"}, Object.assign({status: 502}, H));
+  }
 }
 async function cwLive(env) {
   if (!env.CHAINROOM) return Response.json({ok: false, error: "Chain Watch isn't set up yet"}, {status: 503});

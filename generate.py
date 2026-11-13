@@ -4048,7 +4048,8 @@ def header_default() -> dict:
     L = lambda label, link: {"label": label, "link": link}
     return {"members": [L("🏠 Home", "G:/"), L("📊 Leaderboards", "M:leaderboards.html"), L("📜 History", "M:wars.html"),
                         L("👥 Members", "M:members.html"),
-                        L("⛓️ Chain watch", "M:chainwatch-schedule.html"), L("🧩 Scripts", "M:scripts.html")],
+                        L("⛓️ Chain watch", "M:chainwatch-schedule.html"), L("🎯 War targets", "M:war-targets.html"),   # Nov 12 2026
+                        L("🧩 Scripts", "M:scripts.html")],
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🤝 Recruitment", "L:recruitment.html"),          # Nov 11 2026: Torn Recruit Scout -> shared recruits
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
@@ -5037,7 +5038,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
              ("Armory Monitor", "L:armory.html"),
              ("Profile layout (default)", "L:profile-default.html"),
-             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("Scripts directory", "M:scripts.html"), ("Member data (stats)", "L:stats.html"), ("Member data (war readiness)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
+             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("War targets", "M:war-targets.html"), ("Scripts directory", "M:scripts.html"), ("Member data (stats)", "L:stats.html"), ("Member data (war readiness)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
@@ -6152,6 +6153,153 @@ def optin_publish(out: Path, opt: dict, st: dict) -> dict:
     return full
 
 
+# ==========================================================================
+# WAR TARGETS (Nov 12 2026, the user: "compare war targets estimated stats and estimated FF rating against our own
+# members ... which targets our members should attack for maximum score during wars"). User's choices:
+#   enemy estimates   FFScouter (ffscouter.com get-stats: bss_public = the enemy's estimated battle stat score)
+#   who sees it       all members (every member's list)
+#   our members       their shared battle stats (Hub opt-in / Hub script, latest reading); members who don't share
+#                     get FFScouter's estimate of them instead, and the page asks them to share their stats
+#   band              estimated fair fight 2.5 - 3.0 only (target at 56% - 75% of the member's stat score)
+#   where             a Hub page (members' war-targets.html) for now
+# Torn wiki (Chain - Fair fights): FF = 1 + 8/3 x (defender's stat score / attacker's stat score), 1x - 3x;
+#   stat score = sqrt(str) + sqrt(def) + sqrt(spd) + sqrt(dex). Base respect = 1 + level / 200 (rounded down).
+#   Est. respect per hit (shown, before chain / war / retaliation bonuses) = base respect x FF.
+# Runs on every full / war run while a ranked war is ongoing or upcoming:
+#   1 Torn call  /v2/faction/<enemy id>/members (levels, names)
+#   1-2 FFScouter calls (<= 200 ids each): the enemy members + our members who don't share stats.
+#     FFScouter takes the key as a URL parameter (their API) - server-side only, the address is never printed.
+#     Key: FFSCOUTER_KEY secret (a Torn key registered on ffscouter.com). Missing -> the page says it's not set up.
+# Estimates are cached in data/ffs_cache.json (last good per player) for when FFScouter can't be reached.
+# Output: members' db/war_targets.json - no raw stats of OUR members (only the FF each target gives them).
+# Live enemy status (hospital / travelling / okay) is read by the page from the gatekeeper (/m/war/enemy.json).
+# ==========================================================================
+FFS_CACHE_PATH = ROOT / "data" / "ffs_cache.json"
+WAR_FF_BAND = (2.5, 3.0)
+
+
+def _bss(st, de, sp, dx) -> float:
+    import math
+    return sum(math.sqrt(max(0, float(v or 0))) for v in (st, de, sp, dx))
+
+
+def ffs_stats(ids: list) -> dict:
+    """FFScouter get-stats for these player ids -> {id: {bss, bs, u}} (players FFScouter has no data on are left out).
+    API: Heart Breakers Hub - War targets (FFScouter get-stats, <= 200 ids per call)."""
+    key = os.environ.get("FFSCOUTER_KEY", "").strip()
+    out = {}
+    if not key or not ids:
+        return out
+    for i in range(0, len(ids), 200):
+        chunk = ids[i:i + 200]
+        url = "https://ffscouter.com/api/v1/get-stats?" + urllib.parse.urlencode({"key": key, "targets": ",".join(map(str, chunk))})
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "HeartBreakersHub/1.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                d = json.loads(r.read().decode("utf-8"))
+        except Exception as e:                        # never print the address (it holds the key)
+            print(f"War targets: FFScouter unreachable ({type(e).__name__})")
+            continue
+        if isinstance(d, dict) and d.get("error"):
+            print(f"War targets: FFScouter error code {d.get('code')}")
+            continue
+        for x in d if isinstance(d, list) else []:
+            if isinstance(x, dict) and x.get("player_id") and x.get("bss_public"):
+                out[str(x["player_id"])] = {"bss": float(x["bss_public"]), "bs": x.get("bs_estimate_human") or "",
+                                            "u": int(x.get("last_updated") or 0)}
+    return out
+
+
+def _war_enemy(raw: dict):
+    """(kind, war, enemy {id, name}) of the ongoing / next ranked war, or None."""
+    my_id = str(raw["basic"].get("basic", raw["basic"]).get("id"))
+    now = int(datetime.now(timezone.utc).timestamp())
+    best = None
+    for w in _as_list((raw.get("rankedwars") or {}).get("rankedwars")):
+        start, end = int(w.get("start") or 0), int(w.get("end") or 0)
+        if end and end <= now or not _as_list(w.get("factions")):
+            continue
+        kind = "ongoing" if start and start <= now else "upcoming"
+        if best is None or kind == "ongoing" or start < best[1]:
+            best = (kind, start, w)
+            if kind == "ongoing":
+                break
+    if not best:
+        return None
+    them = next((f for f in _as_list(best[2].get("factions")) if str(f.get("id")) != my_id), None)
+    return (best[0], best[2], them) if them and them.get("id") else None
+
+
+def write_war_targets(out: Path, raw: dict):
+    import time
+    path = member_out(out) / "db" / "war_targets.json"
+    base = {"generated": int(time.time()), "band": list(WAR_FF_BAND), "ffs": bool(os.environ.get("FFSCOUTER_KEY", "").strip())}
+    we = _war_enemy(raw)
+    if not we:
+        _jdump(path, dict(base, war=None, enemy={}, members={}))
+        return
+    kind, w, them = we
+    key = os.environ.get("TORN_API_KEY", "").strip()
+    try:
+        # API: Heart Breakers Hub - War targets (enemy faction members: names + levels), 1 call
+        em = _as_list(fetch_section(f"{them['id']}/members", key).get("members"))
+    except SystemExit as e:
+        print(f"War targets: enemy members not read ({e})")
+        em = []
+    ours = _as_list((raw.get("members") or {}).get("members"))
+    # our members' stat score: their own shared battle stats (latest reading)
+    oi = OPTIN_FULL.get("v") or {}
+    mine = {}
+    for m in ours:
+        bs = ((oi.get(str(m.get("id"))) or {}).get("bs") or {}).get("s") or []
+        if bs and len(bs[-1]) >= 5 and sum(bs[-1][1:5]) > 0:
+            mine[str(m.get("id"))] = _bss(*bs[-1][1:5])
+    try:
+        cache = json.loads(FFS_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    want = [str(x.get("id")) for x in em] + [str(m.get("id")) for m in ours if str(m.get("id")) not in mine]
+    fresh = ffs_stats(want)
+    now = int(time.time())
+    for i, v in fresh.items():
+        cache[i] = dict(v, at=now)
+    cache = {i: v for i, v in cache.items() if now - int(v.get("at") or 0) < 30 * 86400}   # last good, 30 days
+    FFS_CACHE_PATH.write_text(json.dumps(cache, separators=(",", ":")) + "\n", encoding="utf-8")
+    enemy = {}
+    for x in em:
+        i = str(x.get("id")); c = cache.get(i) or {}
+        enemy[i] = {"n": x.get("name") or "?", "l": int(x.get("level") or 0), "bs": c.get("bs") or "", "u": c.get("u") or 0,
+                    "_bss": c.get("bss")}
+    lo, hi = WAR_FF_BAND
+    members = {}
+    for m in ours:
+        pid = str(m.get("id"))
+        if pid in mine:
+            src, mb = "shared", mine[pid]
+        elif (cache.get(pid) or {}).get("bss"):
+            src, mb = "ffs", cache[pid]["bss"]
+        else:
+            members[pid] = {"n": m.get("name") or "?", "s": "none", "t": []}
+            continue
+        t = []
+        for eid, e in enemy.items():
+            if not e["_bss"] or not mb:
+                continue
+            ff = 1 + 8 / 3 * e["_bss"] / mb
+            if lo <= ff <= hi:
+                t.append([int(eid), round(ff, 2), round((1 + e["l"] / 200) * ff, 2)])   # [enemy id, FF, est. respect]
+        t.sort(key=lambda r: (-r[2], -r[1]))
+        members[pid] = {"n": m.get("name") or "?", "s": src, "t": t}
+    for e in enemy.values():
+        e.pop("_bss", None)
+    _jdump(path, dict(base, war={"kind": kind, "start": int(w.get("start") or 0), "end": int(w.get("end") or 0),
+                                 "enemy_id": int(them["id"]), "enemy": them.get("name") or "?"},
+                      enemy=enemy, members=members))
+    print(f"War targets: {len(enemy)} enemies ({sum(1 for e in enemy.values() if e['bs'])} with estimates), "
+          f"{len(members)} members ({sum(1 for v in members.values() if v['s'] == 'shared')} sharing stats, "
+          f"{sum(1 for v in members.values() if v['s'] == 'ffs')} estimated)")
+
+
 def write_greasyfork(out: Path):
     """Scripts directory (Nov 11 2026, user: "Scripts should pull the greasyfork information for their name, version
     numbers, etc. These should stay updated even when an update is made."): Greasy Fork blocks Cloudflare Workers
@@ -6239,6 +6387,7 @@ def write_monitor(out: Path, db: dict, cfg: dict = None):
     write_armory_page(out, db, ad)
     write_oc_management(out, db)
     oi = optin_publish(out, *(OPTIN_DATA.get("v") or optin_saved()))   # opt-in stats (no keys)
+    OPTIN_FULL["v"] = oi                                                # war targets (write_war_targets) use it
     write_optin_pages(out)
     priv, sc = {}, [r["score"] for r in md["members"] if r["score"] is not None]
     for r in md["members"]:
@@ -6373,6 +6522,9 @@ def write_profiles(out: Path, db: dict):
                                       .replace("__GHPROXY__", gh_proxy_url())
                                       .replace("/*__RELG__*/", REL_GRADE_JS)
                                       .replace("__FRESH__", fresh_html(["members", "wars", "chains", "crimes", "gym"])), encoding="utf-8")
+    # war-targets.html (Nov 12 2026): each member's best ranked-war targets (db/war_targets.json, write_war_targets)
+    (mout / "war-targets.html").write_text((ROOT / "tools" / "war_targets.html").read_text(encoding="utf-8")
+                                           .replace("__MENU__", site_menu("")), encoding="utf-8")
     # leaderboards.html (this month / all time) + leaderboard-history.html (any past month) - war, chain, OC, gym
     ltpl = (ROOT / "tools" / "leaderboards.html").read_text(encoding="utf-8").replace("__MENU__", site_menu("")) \
         .replace("__FRESH__", fresh_html(["wars", "chains", "crimes", "gym"]))
@@ -7696,6 +7848,7 @@ table.msum td{white-space:nowrap}.trm{background:#3a2d12;color:#e8be5a;border-ra
 
 CURRENT_MEMBERS = {}       # member id (str) -> name, current members - set in main() (history summaries)
 OPTIN_DATA = {}            # "v": (opt-in settings, stats) from optin_update - full runs only
+OPTIN_FULL = {}            # "v": optin_publish's merged view (site + Hub script sharing) - set by write_monitor
 CHAIN_AVG_MIN = 250        # "hits per chain" (profiles, Chain History summary) counts only chains this long or longer
 
 
@@ -11067,6 +11220,8 @@ def main():
     write_profile_layouts(out, cfg)               # profile layouts (members' own + the leaders' default) + editors
     write_monitor(out, db_, cfg)
     write_greasyfork(out)                         # scripts directory: Greasy Fork name / version / install link
+    if not args.mock:
+        write_war_targets(out, raw)               # War targets page data (enemy estimates via FFScouter)
     write_home_data(out, db_, raw)               # hubs: welcome numbers, war snapshot, needs attention
     write_freshness(out, db_, bool(args.mock))    # db/freshness.json - every page's "data read ... / on record since" line
     # (write_legacy_images: only for the GitHub Pages days - the site is now on Cloudflare, so the old

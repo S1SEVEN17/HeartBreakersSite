@@ -89,6 +89,8 @@ jobs:
           DISCORD_WEBHOOK_LEADERS: ${{ secrets.DISCORD_WEBHOOK_LEADERS }}
           # opt-in stats: deletes keys of members who left / whose key is gone (data/optin.json, via GitHub's API)
           DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
+          # War targets (Nov 12 2026): a Torn key registered on ffscouter.com - enemy stat estimates (optional)
+          FFSCOUTER_KEY: ${{ secrets.FFSCOUTER_KEY }}
         run: python generate.py --out site
 
       # a chain run that posted a new report asks for a full run so its page/newsletter go live now
