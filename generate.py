@@ -4055,15 +4055,16 @@ def header_default() -> dict:
             "leaders": [{"label": "🛡️ Leaders", "items": [
                 L("🤝 Recruitment", "L:recruitment.html"),          # Nov 11 2026: Torn Recruit Scout -> shared recruits
                 {"label": "⚔️ Wars & payouts", "items": [L("🧮 Payout calculator", "L:payout.html"),
-                                                        L("⛓️ Chain Watch", "L:chainwatch.html"),
                                                         L("💰 Paid wars", "M:wars.html#paid")]},
-                L("🕵️ OC Management", "L:oc.html"),
                 {"label": "👥 Members", "items": [L("🗄️ Armory monitor", "L:armory.html"), L("💪 Member data", "L:stats.html")]},
                 L("📢 Torn panels", "L:announcements.html"),
                 {"label": "📰 Newsletters", "items": [L("🎨 Newsletter builder", "L:builder.html"),
                                                      L("🧷 Newsletter filler", "L:hb-newsletter-filler.user.js"),
                                                      L("🗂️ Recap archive", "M:recaps.html")]},
-                L("⚙️ Site settings", "L:homepage.html")]}]}
+                # Nov 13 2026 (user): script configuration / settings pages together in a Settings folder
+                {"label": "⚙️ Settings", "items": [L("⛓️ Chain Watch", "L:chainwatch.html"),
+                                                  L("🕵️ OC Management", "L:oc.html"),
+                                                  L("🏠 Site settings", "L:homepage.html")]}]}]}
 
 
 _HEADER = {}
