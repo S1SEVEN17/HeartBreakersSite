@@ -4633,7 +4633,7 @@ const dur=s=>{s=Math.max(0,Math.floor(s));const d=Math.floor(s/86400),h=Math.flo
   return d?`${d}d ${h}h ${String(m).padStart(2,"0")}m`:h?`${h}h ${String(m).padStart(2,"0")}m ${String(x).padStart(2,"0")}s`:`${m}:${String(x).padStart(2,"0")}`};
 const BONUS=[10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000];
 document.querySelectorAll(".ago[data-t]").forEach(e=>{const t=+e.dataset.t;if(t)e.textContent=e.dataset.long?agoL(t):ago(t)});
-let WHO=null,HOME=null,ATT=null,WAR,CHAIN,NOWERR="",lastOk=0;
+let WHO=null,HOME=null,ATT=null,WAR,CHAIN,NOWERR="",lastOk=0,DATAAT=0;
 
 function welcome(){const el=$("hbWel");if(!el)return;
   const hr=new Date().getHours(),hi=hr<5?"Good evening":hr<12?"Good morning":hr<18?"Good afternoon":"Good evening";
@@ -4671,7 +4671,10 @@ const NOW_EVERY=5;   // Nov 13 2026: chain watch within 5-10 s (the Hub reuses i
 try{localStorage.removeItem("hb_pub_key")}catch(e){}
 async function getNow(){const d=await get(H.now);
   if(!d||!d.ok){NOWERR="Couldn't reach the Hub just now - retrying.";nowCards();return}
-  WAR=d.war||null;CHAIN=d.chain||null;NOWERR="";lastOk=d.chain&&d.chain.as_of?Math.max(d.chain.as_of,d.as_of||0):(d.as_of||now());nowCards()}
+  // "updated ... ago" = when THIS page last got an answer from the Hub (every NOW_EVERY s - Nov 13 2026: it used to
+// show the age of the chain reading, which only moves on a hit or a Hub read, so it looked like a 30 s refresh);
+// DATAAT = when the Hub last confirmed the chain reading - shown only if it's over 90 s old
+WAR=d.war||null;CHAIN=d.chain||null;NOWERR="";lastOk=now();DATAAT=d.chain?(d.chain.seen_at||d.chain.as_of||0):0;nowCards()}
 // the war + chain cards (redrawn every second for the timers)
 function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;
   const t=now(),L=H.links||{};let h="";
@@ -4688,7 +4691,7 @@ function nowCards(){const el=$("hbNow");if(!el)return;el.hidden=false;
   if(!h&&(WAR!==undefined||CHAIN!==undefined))h=`<div class="nowq">😴 No ranked war or chain running right now.</div>`;
   else if(!h)h=`<div class="nowq">Checking…</div>`;
   if(NOWERR)h+=`<div class="nowe">${esc(NOWERR)}</div>`;
-  h+=`<div class="nowf"><span class="lv"><i class="${NOWERR?"off":""}"></i>Live from the Hub${lastOk?` · updated ${dur(Math.max(0,t-lastOk))} ago`:""}</span></div>`;
+  h+=`<div class="nowf"><span class="lv"><i class="${NOWERR?"off":""}"></i>Live from the Hub${lastOk?` · updated ${dur(Math.max(0,t-lastOk))} ago`:""}${CHAIN&&CHAIN.current>0&&DATAAT&&t-DATAAT>90?` · chain last confirmed ${dur(t-DATAAT)} ago`:""}</span></div>`;
   el.querySelector(".nowc").innerHTML=h}
 let lastN=0;
 function tick(){if($("hbNow")&&document.visibilityState==="visible"){const t=now();if(t-lastN>=NOW_EVERY){lastN=t;getNow()}}nowCards()}

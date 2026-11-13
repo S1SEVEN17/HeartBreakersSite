@@ -2804,7 +2804,8 @@ async function hubNowData(env) {
       const rc = b && b.chain, rAt = rc ? (Number(rc.as_of) > 1e12 ? rc.as_of / 1e3 : Number(rc.as_of) || 0) : 0;
       if (rc && rAt > (chain ? chain.as_of : 0) && t - rAt < 120) {
         const ex = Number(rc.expires_at) || 0, cd = Number(rc.cooldown_until) || 0;
-        chain = {current: rc.current || 0, max: rc.max || 0, as_of: rAt, timeout_at: ex > 1e12 ? ex / 1e3 : ex, cooldown_at: cd > 1e12 ? cd / 1e3 : cd};
+        chain = {current: rc.current || 0, max: rc.max || 0, as_of: rAt, timeout_at: ex > 1e12 ? ex / 1e3 : ex, cooldown_at: cd > 1e12 ? cd / 1e3 : cd,
+                 seen_at: Number(rc.seen_at) > 1e12 ? rc.seen_at / 1e3 : rAt};   // last confirmed (s) - Nov 13 2026
       }
     }
   } catch (e) {}

@@ -1400,6 +1400,9 @@ export class ChainRoom {
       presence: q.presence, inactive: q.inactive }));
     return Response.json({ ok: true, now,
       chain: c ? { current: Number(c.current) || 0, max: Number(c.max) || 0, expires_at: c.expires_at || 0, as_of: c.as_of || 0,
+                   // seen_at (Nov 13 2026): when the room last had this reading CONFIRMED - its own Torn read or a
+                   // focused member's page reading of the same count (filtered ones too) - for "updated ... ago"
+                   seen_at: Math.max(c.as_of || 0, c.page_at || 0),
                    cooldown_until: this.coolingDown(now) ? c.cooldown_until : 0 } : null,
       turn: x.turn, bonus: x.bonus, runway: x.runway, alerts_paused: x.alerts_paused,
       queue, connected: this.conns.size });
