@@ -43,6 +43,7 @@ h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;m
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
 td,th{padding:8px 9px;border-bottom:1px solid #2a1416;text-align:left;font-size:14px;white-space:nowrap}
 th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
+th.s{cursor:pointer;user-select:none;-webkit-user-select:none}th.s.on{color:#fff}
 td.n,th.n{text-align:right}td a{color:var(--gold);text-decoration:none}
 .atk{display:inline-block;background:var(--red);color:#fff!important;border-radius:6px;padding:4px 10px;font-weight:600;font-size:13px}
 .ok{color:var(--green)}.bad{color:var(--red)}.mid{color:var(--amber)}.dim{color:#6d6264}
@@ -132,6 +133,22 @@ function labels() {   // member picker: how many targets each member has in the 
 }
 
 // live status of an enemy member (gatekeeper war/enemy.json) -> [html, available now?]
+// ---- SORTING (Nov 12 2026, the user: "Add sorting by estimated stats, FF, respect and status") ----
+// tap a column (Est. stats, FF, Respect, Status) to sort by it, tap again to flip; saved in this browser
+// ("hb_wt_sort"). Default: respect, best first. Status order: available (Okay, Abroad) first, then hospital / jail
+// soonest out first, then travelling and the rest; ties keep respect order.
+let SORT = (() => { try { return JSON.parse(localStorage.getItem("hb_wt_sort") || "null"); } catch (e) { return null; } })() || {k: "rs", d: -1};
+function statusRank(id) {
+  const x = LIVE[String(id)]; if (!x) return 1e12;                       // no live status yet: last
+  if (x.status === "Okay") return 0; if (x.status === "Abroad") return 1;
+  if (x.status === "Hospital" || x.status === "Jail") return 10 + Math.max(0, (x.until || 0) - Date.now() / 1e3);   // soonest out first
+  return 1e10;                                                            // travelling, fallen...
+}
+const SORTERS = {bs: r => r.e.b || 0, ff: r => r.ff, rs: r => r.rs, st: r => statusRank(r.id)};
+function setSort(k) { SORT = SORT.k === k ? {k, d: -SORT.d} : {k, d: k === "st" ? 1 : -1};
+  try { localStorage.setItem("hb_wt_sort", JSON.stringify(SORT)); } catch (e) {} draw(); }
+const th = (k, label, cls) => `<th class="s${cls ? " " + cls : ""}${SORT.k === k ? " on" : ""}" onclick="setSort('${k}')">${label}${SORT.k === k ? (SORT.d > 0 ? " ▲" : " ▼") : ""}</th>`;
+
 function statusOf(id) {
   const x = LIVE[String(id)]; if (!x) return ['<span class="dim">-</span>', true];
   const dot = x.action ? `<span class="dot ${esc(x.action)}" title="${esc(x.action)}"></span>` : "";
@@ -153,8 +170,9 @@ function draw() {
     : m.s === "ffs" ? `<div class="note warn">${own ? "This list uses FFScouter's <b>estimate</b> of your stats" : esc(m.n) + "'s list uses FFScouter's estimate of their stats"}, so it may be off.${own ? ` <a href="my-data.html">Share your battle stats</a> for an accurate list.` : ""}</div>` : "";
   const only = $("avail").checked;
   const rows = ((m && m.t) || []).filter(([id, ff]) => inRange(id, ff)).map(([id, ff, rs]) => { const e = D.enemy[String(id)] || {}, [st, ok] = statusOf(id); return {id, ff, rs, e, st, ok}; })
+    .sort((a, b) => { const f = SORTERS[SORT.k] || SORTERS.rs, v = (f(a) - f(b)) * SORT.d; return v || b.rs - a.rs || a.ff - b.ff; })
     .filter(r => !only || r.ok);
-  $("tbl").innerHTML = !m ? "" : `<tr><th>Target</th><th class="n">Lvl</th><th>Est. stats</th><th class="n">FF</th><th class="n">Respect</th><th>Status</th><th></th></tr>`
+  $("tbl").innerHTML = !m ? "" : `<tr><th>Target</th><th class="n">Lvl</th>${th("bs", "Est. stats")}${th("ff", "FF", "n")}${th("rs", "Respect", "n")}${th("st", "Status")}<th></th></tr>`
     + (rows.length ? rows.map(r => `<tr class="${r.ok ? "" : "na"}"><td><a href="https://www.torn.com/profiles.php?XID=${r.id}" target="_blank" rel="noopener">${esc(r.e.n)}</a></td>
       <td class="n">${r.e.l || "-"}</td><td>${esc(r.e.bs || "-")}</td><td class="n"><b>${Math.min(r.ff, 3).toFixed(2)}</b>${r.ff > 3 ? ' <span class="mid" title="Stronger than 75% of these stats - Torn pays 3× at most, the fight is riskier">⚠️</span>' : ""}</td><td class="n">${r.rs.toFixed(2)}</td><td>${r.st}</td>
       <td><a class="atk" href="https://www.torn.com/loader.php?sid=attack&user2ID=${r.id}" target="_blank" rel="noopener">Attack</a></td></tr>`).join("")
@@ -193,7 +211,7 @@ async function live() {
 })();
 function foot() {
   const est = Object.values(D.enemy).filter(e => e.bs).length;
-  $("foot").innerHTML = `Showing ${fltText()}, best respect first. An FF of 3 = 75% of the member's stat score - 3× is the most a hit can get; ⚠️ = stronger than that (no extra respect, riskier).<br>`
+  $("foot").innerHTML = `Showing ${fltText()} · tap Est. stats, FF, Respect or Status to sort. An FF of 3 = 75% of the member's stat score - 3× is the most a hit can get; ⚠️ = stronger than that (no extra respect, riskier).<br>`
     + `Respect = base respect (1 + level ÷ 200) × FF, before chain, retaliation and overseas bonuses. Enemy stats: FFScouter estimates (${est} of ${Object.keys(D.enemy).length} enemies).<br>`
     + `Lists updated ${ago(D.generated)} · status refreshes every minute.`;
 }
