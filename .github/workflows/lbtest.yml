@@ -1,0 +1,26 @@
+# Temporary: leaderboard opt-out round trip on a test id (1) - removed after one run. Prints answers only.
+name: lbtest
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+          LEADER_DIR: ${{ secrets.LEADER_DIR }}
+        run: |
+          PASS=$(node -e '
+            const c=require("crypto"),b=x=>Buffer.from(x).toString("base64url");
+            const k=c.createHash("sha256").update(process.env.MEMBER_DIR+"|"+process.env.LEADER_DIR+"|hb-session").digest("hex");
+            const body=b(JSON.stringify({i:1,n:"lbtest",p:"",t:Date.now(),e:Date.now()+300e3}));
+            console.log(body+"."+c.createHmac("sha256",k).update(body).digest("base64url"));')
+          G=https://hb-gate.heartbreakers.workers.dev
+          echo "GET before: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/optin | grep -o '"lb_hidden":[a-z]*')"
+          echo "PATCH hide: $(curl -s -X PATCH -H "Cookie: hb_s=$PASS" -H 'X-HB-Save: 1' -H 'Content-Type: application/json' -d '{"lb_hidden":true}' $G/m/optin)"
+          sleep 3
+          echo "GET after hide: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/optin | grep -o '"lb_hidden":[a-z]*')"
+          echo "PATCH show: $(curl -s -X PATCH -H "Cookie: hb_s=$PASS" -H 'X-HB-Save: 1' -H 'Content-Type: application/json' -d '{"lb_hidden":false}' $G/m/optin)"
+          sleep 3
+          echo "GET after show: $(curl -s -H "Cookie: hb_s=$PASS" $G/m/optin | grep -o '"lb_hidden":[a-z]*')"
