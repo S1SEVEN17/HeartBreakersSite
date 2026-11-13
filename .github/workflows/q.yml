@@ -1,0 +1,22 @@
+# Temporary: one member's sharing settings (no stats, no keys) - removed after one run
+name: q
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  q:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd gate && npm install --no-save --silent wrangler@4 >/dev/null 2>&1
+          q() { npx wrangler d1 execute hb-oc --remote --json --command "$1" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.stringify(JSON.parse(s)[0].results))}catch(e){console.log("err")}})'; }
+          echo "SX: $(q "SELECT bs, ws, ready, oc, cw, since, updated, bs_s IS NOT NULL AS has_bs FROM sx_share WHERE pid = 2805521")"
+          echo "SRC: $(q "SELECT kind, src, ts FROM share_src WHERE pid = 2805521")"
+          echo "CPR: $(q "SELECT env, ts FROM oc_cpr WHERE player_id = 2805521")"
+          echo "SEEN: $(q "SELECT env, ts FROM oc_seen WHERE pid = 2805521")"
