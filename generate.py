@@ -4667,7 +4667,7 @@ function attention(){const el=$("hbAtt");if(!el)return;const L=H.links||{},rows=
 // /m/now.json (gate/worker.js hubNow): the ranked war from the Hub's own 3-minute Torn read, the chain from the
 // Chain Watch room (members' scripts, every few seconds during a chain) or else that 3-minute read. Read every
 // NOW_EVERY s while the page is visible - no Torn call from the browser, no key. The old browser key is forgotten.
-const NOW_EVERY=20;
+const NOW_EVERY=5;   // Nov 13 2026: chain watch within 5-10 s (the Hub reuses its answer for 3 s)
 try{localStorage.removeItem("hb_pub_key")}catch(e){}
 async function getNow(){const d=await get(H.now);
   if(!d||!d.ok){NOWERR="Couldn't reach the Hub just now - retrying.";nowCards();return}

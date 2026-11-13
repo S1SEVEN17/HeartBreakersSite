@@ -88,6 +88,14 @@ const PAGE_TRUST_MS = 45000;
 const CHAIN_TIMER_MAX_MS = 300000;
 const CHAIN_TIMER_SLACK_MS = 3000;
 const PAGE_MAX_JUMP = 10;                  // a page reading can move the count up by at most this much at once        // a higher count from a script -> one confirming Hub read, at most every 10 s
+// PAGE-READING FILTER (Nov 13 2026, user: "There will be countless chain updates coming in at any given time, so we
+// need a way to filter these out. I would be fine with a 5-10 second delay"). Every focused member's script reports
+// the same chain, each with its own small clock offset, so the same count arrives many times with end times a
+// little apart. A NEW count is still taken from the first reporter at once (the hit is the news); for the SAME count
+// a page timer only replaces the Hub's when it differs by more than PAGE_SAME_TOL_MS and the last re-time of this
+// count is at least PAGE_RETIME_GAP_MS old - anything else just refreshes the page trust (no save, no broadcast).
+const PAGE_SAME_TOL_MS = 2000;
+const PAGE_RETIME_GAP_MS = 5000;
 const RECRUIT_DAYS = 3;
 // HUB-SENT ALERTS (Nov 2026, user): the Hub times every chain alert itself (it knows the timer to the second) and
 // pushes {t:"alert"} to the members it's for - a background tab still gets a WebSocket message at once, while a
@@ -702,14 +710,18 @@ export class ChainRoom {
     }
     if (c && c.current > 0 && cur < c.current) { this.requestConfirmRead(); return false; }
     if (c && c.current > 0 && cur > c.current + PAGE_MAX_JUMP) { this.requestConfirmRead(); return false; }
-    if (c && cur === c.current && c.expires_at && Math.abs(c.expires_at - end) < 500) {
-      c.page_at = now;                                   // same reading - just keep the page trust fresh
+    // PAGE-READING FILTER (see the constants): the same count again - re-time only for a real difference, at most
+    // once per PAGE_RETIME_GAP_MS; otherwise just keep the page trust fresh (nothing saved / broadcast)
+    if (c && cur === c.current && c.expires_at
+        && (Math.abs(c.expires_at - end) <= PAGE_SAME_TOL_MS || now - (c.retime_at || c.as_of || 0) < PAGE_RETIME_GAP_MS)) {
+      c.page_at = now;
       return false;
     }
     this.mem.chain = {
       current: cur, max: Number(msg.max) || (c && c.max) || cur, cooldown: 0,
       modifier: c && c.modifier != null ? c.modifier : null,
       expires_at: end, as_of: now, src: "page", page_at: now, cooldown_until: 0,
+      retime_at: now,                                    // PAGE-READING FILTER: when this count was last (re)timed
     };
     if (this.mem.bonus && cur >= this.mem.bonus.at) this.mem.bonus = null;
     this.mem.lastChainEndedAt = 0;

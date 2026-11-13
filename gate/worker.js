@@ -2769,8 +2769,21 @@ async function cwMyStats(env, pid) {
 //   war   = the Hub's 3-minute read (faction?selections=chain,wars, ocFeedPull)
 //   chain = the Chain Watch room's live board when it has a fresh reading (it's fed by members' scripts every few
 //           seconds during a chain), else the Hub's 3-minute read (Torn's `end` = the exact expiry)
+// LIVE MEMO (Nov 13 2026, user: chain watch on the Hub should update within 5-10 s). The Hub pages now poll every
+// 5 s; the answers below are the same for every member, so each Worker instance reuses its last one for LIVE_MEMO_MS
+// instead of asking the Chain Watch room (a billed Durable Object request) again. (workers.dev has no edge cache.)
+// Worst-case delay = page poll (5 s) + memo (3 s); the room itself takes a new hit from a focused script at once.
+const LIVE_MEMO_MS = 3000, LIVE_MEMO = {};
+async function liveMemo(key, fn) {
+  const m = LIVE_MEMO[key], now = Date.now();
+  if (m && now - m.at < LIVE_MEMO_MS) return m.p;
+  const p = fn(); LIVE_MEMO[key] = {at: now, p};
+  try { return await p; } catch (e) { delete LIVE_MEMO[key]; throw e; }
+}
 async function hubNow(env) {
-  const H = {headers: {"Cache-Control": "no-store"}};
+  return Response.json(await liveMemo("now", () => hubNowData(env)), {headers: {"Cache-Control": "no-store"}});
+}
+async function hubNowData(env) {
   const snap = await ocSnapGet(env, "hub", "now").catch(() => null);
   const d = (snap && snap.data) || {}, t = Date.now() / 1e3, FID = String(env.FACTION_ID || "51384");
   let war = null;
@@ -2787,7 +2800,7 @@ async function hubNow(env) {
                    timeout_at: (+c.current > 0 && +c.end > 1e9) ? +c.end : secs(c.timeout, sAt), cooldown_at: secs(c.cooldown, sAt)} : null;
   try {
     if (env.CHAINROOM) {
-      const b = await (await cwStub(env).fetch("https://do/board")).json();
+      const b = await liveMemo("board", async () => (await cwStub(env).fetch("https://do/board")).json());
       const rc = b && b.chain, rAt = rc ? (Number(rc.as_of) > 1e12 ? rc.as_of / 1e3 : Number(rc.as_of) || 0) : 0;
       if (rc && rAt > (chain ? chain.as_of : 0) && t - rAt < 120) {
         const ex = Number(rc.expires_at) || 0, cd = Number(rc.cooldown_until) || 0;
@@ -2795,7 +2808,7 @@ async function hubNow(env) {
       }
     }
   } catch (e) {}
-  return Response.json({ok: true, as_of: sAt || null, war, chain}, H);
+  return {ok: true, as_of: sAt || null, war, chain};
 }
 // WAR TARGETS (Nov 12 2026, members' war-targets.html): the current / next ranked war's ENEMY members as Torn has them
 // now - {ok, as_of (ms), enemy_id, members: {id: {status, desc, until, travel, action, ago}}}. The enemy comes from the
@@ -2837,7 +2850,8 @@ async function warEnemy(env) {
 async function cwLive(env) {
   if (!env.CHAINROOM) return Response.json({ok: false, error: "Chain Watch isn't set up yet"}, {status: 503});
   try {
-    const d = await (await cwStub(env).fetch("https://do/board")).json();
+    // LIVE MEMO: the same board for every member - reused for 3 s per Worker instance (pages poll every 5 s)
+    const d = await liveMemo("board", async () => (await cwStub(env).fetch("https://do/board")).json());
     return Response.json(d, {headers: {"Cache-Control": "no-store"}});
   } catch (e) { return Response.json({ok: false, error: "Chain Watch room unavailable"}, {status: 502}); }
 }

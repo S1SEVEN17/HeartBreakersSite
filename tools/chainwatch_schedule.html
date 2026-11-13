@@ -12,7 +12,7 @@
   Energy check: can you cover the shift ALONE (1 hit every 5 min)? From your last Chain Watch script report, else
   your War readiness reading - same formula as the Hub (gate/chainroom.js cwEnergyCover; keep the two in step).
   Data: /m/cw/schedule.json (GET), /m/cw/schedule (POST {start, minutes, role} / DELETE ?id=), and the live board
-  /m/cw/live.json (chain, who's up, queue - the Chain Watch room's own reading, every 30 s). No Torn call here.
+  /m/cw/live.json (chain, who's up, queue - the Chain Watch room's own reading, every 5 s - Nov 13 2026). No Torn call here.
   "Right now" / "Coming up" / "Stats" cards (Nov 10 2026, user: who's on, who's next, stats).
   "Attendance · last 30 days" card + a reliability pill by each watcher's name (Nov 10 2026, user: shift attendance)
   from schedule.json `attendance` (kept = in the queue at least half the shift, partly, missed).
@@ -381,7 +381,11 @@ async function loadLive() {
 load().then(loadLive);
 // other members' sign-ups every 2 minutes (not while you're filling the form); live board every 30 s; timers every second
 setInterval(() => { if (!document.hidden && !touched) load(); }, 120000);
-setInterval(() => { if (!document.hidden) { placeCurrent(); loadLive(); if (D) { renderNext(); renderStats(); } } }, 30000);
+setInterval(() => { if (!document.hidden) { placeCurrent(); if (D) { renderNext(); renderStats(); } } }, 30000);
+// live board every 5 s while visible (Nov 13 2026, user: chain watch on the Hub within 5-10 s - the Hub reuses its
+// answer for 3 s, and the room takes a new hit from a focused member's script at once)
+setInterval(() => { if (!document.hidden) loadLive(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) loadLive(); });
 setInterval(() => {
   const el = $("liveTimer"); if (!el || document.hidden) return;
   const left = (Number(el.dataset.exp) - Date.now()) / 1000;

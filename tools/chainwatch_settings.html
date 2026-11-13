@@ -181,9 +181,10 @@ $("save").onclick = async () => {
   $("save").disabled = false;
 };
 load();
-// queue + status every 20 s while visible; the cooldown timers tick every second in between
+// queue + status every 5 s while visible (Nov 13 2026, user: chain watch on the Hub within 5-10 s); the cooldown
+// timers tick every second in between
 setInterval(() => { if (!document.hidden) fetch("cw/config.json", {cache: "no-store", credentials: "same-origin"})
-  .then(r => r.json()).then(d => d.ok && showStatus(d.status)).catch(() => {}); }, 20000);
+  .then(r => r.json()).then(d => d.ok && showStatus(d.status)).catch(() => {}); }, 5000);
 setInterval(() => { if (!document.hidden) drawQueue(); }, 1000);
 </script>
 </body></html>
