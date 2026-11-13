@@ -801,10 +801,12 @@ def reports_from_history(hist: dict, my_id) -> dict:
 # LEADERBOARD OPT-OUT (Nov 12 2026, user: "Some members have asked for the ability to opt out of the leaderboards ...
 # I still want to be able to track members based on the same metrics because they're still important for ratings and
 # performance reporting"). Members switch it on in My data & sharing (no key needed) -> data/optin.json "lb_hidden"
-# [ids] (gate/worker.js optinRoute). Hidden members are left out of every LEADERBOARD: the banner / announcement
-# boards (war, chain, gym), the site's Leaderboards page (db/members.json "nolb"), the Hub script's Boards tab and the
-# monthly recap's top lists. Everything else still counts them: faction totals, profiles, the Members list,
-# reliability, war reports, payouts and the leaders' tools.
+# [ids] (gate/worker.js optinRoute). User (Nov 13 2026): "The only thing Opting out should remove you from is the
+# Leaderboards for War/Chain/Gym/Organized Crimes. You should still be included on all war reports, chain reports,
+# etc." -> hidden members are left out of the LEADERBOARDS only: the war / chain / gym leaderboard boards (banner +
+# announcement images), the site's Leaderboards page incl. OC (db/members.json "nolb") and the Hub script's Boards
+# tab. Everything else includes them: war reports (incl. each war's top hits / respect), chain reports, the monthly
+# recap, faction totals, profiles, the Members list, reliability, payouts and the leaders' tools.
 LB_HIDDEN = set()
 
 
@@ -1761,13 +1763,9 @@ def normalize_wars(raw: dict, my_id, rw_cfg: dict) -> list:
         # Two leaderboards per war (OUR members only):
         #   top_hits     - most attacks (hits) in the war
         #   most_respect - highest war score (= respect earned for the faction)
-        # LEADERBOARD OPT-OUT (Nov 13 2026): opted-out members are left off these ranked top lists (they still count
-        # in the war's totals, participation and the non-participants list)
-        ranked = [m for m in members if str(m.get("id")) not in LB_HIDDEN]
-        by_hits = sorted(ranked, key=lambda m: (m.get("attacks") or 0, m.get("score") or 0), reverse=True)
-        by_resp = sorted(ranked, key=lambda m: (m.get("score") or 0, m.get("attacks") or 0), reverse=True)
+        by_hits = sorted(members, key=lambda m: (m.get("attacks") or 0, m.get("score") or 0), reverse=True)
+        by_resp = sorted(members, key=lambda m: (m.get("score") or 0, m.get("attacks") or 0), reverse=True)
         members.sort(key=lambda m: (m.get(by) or 0, m.get("score") or 0), reverse=True)
-        ranked.sort(key=lambda m: (m.get(by) or 0, m.get("score") or 0), reverse=True)
         out.append({
             "id": w.get("id"),
             "opponent": them.get("name", "?"),
@@ -1782,20 +1780,20 @@ def normalize_wars(raw: dict, my_id, rw_cfg: dict) -> list:
             # participation: members in the report who made at least 1 hit
             "present": len(members),
             "hit": sum(1 for m in members if (m.get("attacks") or 0) > 0),
-            "hitters": [slim(m) for m in ranked[:top_n]],
+            "hitters": [slim(m) for m in members[:top_n]],
             "top_hits": [slim(m) for m in by_hits[:top_n] if (m.get("attacks") or 0) > 0],
             "most_respect": [slim(m) for m in by_resp[:top_n] if (m.get("score") or 0) > 0],
             # from the war's attack log (saved in war history): assists + hospitalizations
-            "top_assists": [slim(m) for m in sorted(ranked, key=lambda m: -(m.get("assists") or 0))[:top_n]
+            "top_assists": [slim(m) for m in sorted(members, key=lambda m: -(m.get("assists") or 0))[:top_n]
                             if (m.get("assists") or 0) > 0],
-            "top_hosps": [slim(m) for m in sorted(ranked, key=lambda m: -(m.get("hosps") or 0))[:top_n]
+            "top_hosps": [slim(m) for m in sorted(members, key=lambda m: -(m.get("hosps") or 0))[:top_n]
                           if (m.get("hosps") or 0) > 0],
             "has_attack_log": any("hosps" in m for m in members),
             # Big Hitter: best single war hit (respect, chain bonus hits excluded)
-            "top_best": [slim(m) for m in sorted(ranked, key=lambda m: -(m.get("best") or 0))[:top_n]
+            "top_best": [slim(m) for m in sorted(members, key=lambda m: -(m.get("best") or 0))[:top_n]
                          if (m.get("best") or 0) > 0],
             # Respect / Hit (min 10 war hits so one lucky hit doesn't win)
-            "top_rph": [slim(m) for m in sorted((m for m in ranked if nb(m)[1] >= 10),
+            "top_rph": [slim(m) for m in sorted((m for m in members if nb(m)[1] >= 10),
                                                 key=lambda m: -(nb(m)[0] / nb(m)[1]))[:top_n]],
             # our members listed in the war report with 0 attacks
             "non_participants": sorted((m.get("name", "?") for m in members
@@ -8190,8 +8188,8 @@ def recap_data(start: int, end: int, label: str, whist: dict, chist: dict, membe
             bons[b["id"]] = bons.get(b["id"], 0) + 1
     def top(d, n=5):
         return [(names.get(i, f"[{i}]"), v) for i, v in sorted(d.items(), key=lambda kv: -kv[1])
-                if i in cur and i not in LB_HIDDEN and v > 0][:n]                         # opted out: not in top lists
-    perfect = sorted((names[i] for i in cur if i not in LB_HIDDEN and war_in.get(i) and war_hit.get(i) == war_in[i]
+                if i in cur and v > 0][:n]   # (opted-out members stay in the recap - it's a report, user Nov 13 2026)
+    perfect = sorted((names[i] for i in cur if war_in.get(i) and war_hit.get(i) == war_in[i]
                       and war_in[i] == len(wars)), key=str.lower) if wars else []
     big = max(chains, key=lambda c: c["length"]) if chains else None
     # extra awards
@@ -8458,13 +8456,12 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
                           "won": mt.get("won"), "our": mt.get("our"), "their": mt.get("their"),
                           "rank": w.get("rank") or {}, "present": len(ms), "hit": sum(m["attacks"] > 0 for m in ms),
                           "hits": sum(m["attacks"] for m in ms), "resp": sum(m["score"] for m in ms),
-                          # LEADERBOARD OPT-OUT: off the top lists (still in the totals / missed list)
                           "top_hits": [(m.get("name", "?"), m["attacks"]) for m in
-                                       sorted((m for m in ms if str(m.get("id")) not in LB_HIDDEN), key=lambda m: -m["attacks"])[:5] if m["attacks"]],
+                                       sorted(ms, key=lambda m: -m["attacks"])[:5] if m["attacks"]],
                           "top_resp": [(m.get("name", "?"), m["score"]) for m in
-                                       sorted((m for m in ms if str(m.get("id")) not in LB_HIDDEN), key=lambda m: -m["score"])[:5] if m["score"]],
+                                       sorted(ms, key=lambda m: -m["score"])[:5] if m["score"]],
                           "missed": sorted((m.get("name", "?") for m in ms if m["attacks"] == 0), key=str.lower)})
-    war_board = sorted((dict(v, id=i) for i, v in wl.items() if i in cur and i not in LB_HIDDEN),   # opted out
+    war_board = sorted((dict(v, id=i) for i, v in wl.items() if i in cur),   # opted-out members included (report)
                        key=lambda v: (-v["hits"], -v["resp"]))
     # habitual war slackers: current members with no hits in 2+ of the month's wars
     habitual = sorted(((v["name"], v["in"] - v["hit"], v["in"]) for i, v in wl.items()
@@ -8487,22 +8484,19 @@ def recap_detail(start: int, end: int, whist: dict, chist: dict, members: list,
                                         "rets": 0, "assists": 0, "bonus": 0, "war": 0})
             t["bonus"] += 1
             t["bonus_resp"] = t.get("bonus_resp", 0.0) + b.get("respect", 0)   # recorded (bonus respect counts in every figure)
-        lb_att = [a for a in att if str(a["id"]) not in LB_HIDDEN]   # LEADERBOARD OPT-OUT: off the chain's top lists
-        top = max(lb_att, key=lambda a: a["hits"]) if lb_att else None
+        top = max(att, key=lambda a: a["hits"]) if att else None
         chain_rows.append({"end": c["end"], "start": c.get("start"), "length": c["length"],
                            "dur": (c["end"] - c["start"]) if c.get("start") else 0,
                            "resp": sum(a["respect"] for a in att), "hitters": sum(a["hits"] > 0 for a in att),
                            "top": (nm(top["id"]), top["hits"]) if top else ("-", 0),
-                           "top_hits": [(nm(a["id"]), a["hits"]) for a in sorted(lb_att, key=lambda a: -a["hits"])[:5]],
-                           "top_resp": [(nm(a["id"]), a["respect"]) for a in sorted(lb_att, key=lambda a: -a["respect"])[:5]],
+                           "top_hits": [(nm(a["id"]), a["hits"]) for a in sorted(att, key=lambda a: -a["hits"])[:5]],
+                           "top_resp": [(nm(a["id"]), a["respect"]) for a in sorted(att, key=lambda a: -a["respect"])[:5]],
                            "rets": sum(a.get("rets", 0) for a in att)})
-    chain_board = sorted((dict(v, id=i) for i, v in cl.items() if i in cur and i not in LB_HIDDEN), key=lambda v: (-v["hits"], -v["resp"]))
+    chain_board = sorted((dict(v, id=i) for i, v in cl.items() if i in cur), key=lambda v: (-v["hits"], -v["resp"]))   # opted out included (report)
     # --- gym (energy trained in the month, per stat)
     # --- gym: {stat: {member id: energy trained this period}}
     gym_board = []
-    for i in cur:
-        if str(i) in LB_HIDDEN:              # LEADERBOARD OPT-OUT
-            continue
+    for i in cur:                            # opted-out members included (the recap is a report)
         row = {"name": names[i], "id": i}
         for st, _ in GYM_STATS:
             row[st] = int((gym_gains or {}).get(st, {}).get(str(i), 0))
