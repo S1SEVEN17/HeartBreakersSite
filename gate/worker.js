@@ -2210,7 +2210,24 @@ async function ocSpawnAlerts(env) {
   }
   alerts.sort((a, b) => (b.pay_day || 0) - (a.pay_day || 0));
   const oc_alerts = await ocOcAlerts(env, cfg, crimes).catch(() => null);
-  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts};
+  // NOTIFY (Nov 13 2026, user: "I want to be able to alert non-script users to which crimes they should join ...
+  // through either chat or mails"): members WITHOUT the OC script (not seen in OC_SCRIPT_DAYS) who hold a reserved,
+  // joinable seat in a RECRUITING crime (not joined yet, not queued behind their current crime). Torn's API can't send
+  // chats or mails, so a leader sends each one (Hub script / OC Management prepare the text). Spawn teams aren't
+  // listed - that crime doesn't exist yet, so there's nothing to join.
+  let oc_notify = [];
+  try {
+    const seen = await ocScriptSeen(env, "prod");
+    if (Object.keys(seen).length)                        // nobody tracked yet = can't tell who lacks the script
+      for (const t of plan.teams || []) {
+        if (t.kind !== "live" || t.crime_id == null) continue;
+        for (const r of t.roles || []) {
+          if (r.pid == null || r.existing || r.queued || seen[String(r.pid)]) continue;
+          oc_notify.push({pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id, position: r.position, since: Number(r.since) || null});
+        }
+      }
+  } catch (e) { oc_notify = []; }
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts, oc_notify};
 }
 // LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
 // parameters. Alert leadership when crimes fall below the minimum pass rate") - the same rules as OC Management

@@ -121,7 +121,7 @@ __MENU__
 <div class="sub">Choose which crimes the OC Optimizer suggests, build teams and deploy them to members using the script</div>
 <div class="bar"><button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
-<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="sharing">📡 Rate sharing</button></div>
+<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button></div>
 <div id="view"></div>
 <script>
 // ---- shared OC team planner (gate/oc_planner.js, inlined by generate.py) ----
@@ -629,7 +629,7 @@ function addTeam(crime) {
 // ---------- views ----------
 function draw() {
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
-  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
+  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "notify") drawNotify(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
 }
 
 // ROTATION (Nov 2026): leaders mark the crimes they want ROTATED. A rotated crime that's recruiting is filled first
@@ -970,6 +970,65 @@ function alertsHtml() {
 // including pass rates, expected completion, etc. Sort them by earliest completed at the top'): every crime in Torn
 // with all its slots filled (Planning), soonest ready first - each member's role (weight), pass rate (flagged when it's
 // outside the min-max) and planning progress, the weighted team success, each member's cut and when it's ready.
+// ---- 📣 NOTIFY (Nov 13 2026, user: "I want to be able to alert non-script users to which crimes they should join.
+// This would have to be done through either chat or mails. I prefer chat, however with mailing I could include links
+// to the scripts or the HUB") ----
+// Members WITHOUT the OC script (usesScript - not seen in 3 days) holding a reserved, joinable seat in a RECRUITING
+// crime of the deployed plan (not joined, not queued behind their current crime). Torn's API can't send chats or
+// mails and a script sending them would break Torn's one-click-one-action rule, so the leader sends each one:
+//   💬 Chat  - copies the short message and opens their Torn profile (tap Chat there, paste, send)
+//   ✉️ Mail  - copies the longer message (with the Scripts directory + Hub links) and opens Torn's compose page to them
+//   ✓ Sent   - ticks them off on this device (localStorage "hb_oc_notified" {"pid:crime_id": ms}), cleared when the
+//              assignment changes. The Hub script (2.7.0) has the same list on leaders' Home.
+const NOTIFY_LS = "hb_oc_notified";
+function notifyList() {
+  if (!scriptKnown()) return null;
+  const plan = D.config.plan, busy = busyMap(), out = [];
+  ((plan && plan.teams) || []).forEach(t => { if (t.kind !== "live" || t.crime_id == null) return;
+    t.roles.forEach(r => { if (r.pid == null || r.existing || r.queued || usesScript(r.pid)) return;
+      const b = busy[r.pid]; if (b && t.crime_id && b.cid != null && String(b.cid) === String(t.crime_id)) return;   // joined already
+      out.push({pid: +r.pid, name: r.name || nameOf(r.pid), crime: t.crime, crime_id: t.crime_id, position: r.position, since: r.since || null}); }); });
+  return out;
+}
+const OC_JOIN_URL = "https://www.torn.com/factions.php?step=your#/tab=crimes";
+// the messages - same wording as the Hub script's (keep the two in step)
+function notifyMsgs(x) {
+  const hub = location.origin;
+  return {
+    chat: `Hi ${x.name}! You've been picked for an Organized Crime: ${x.crime} - ${x.position}. Please join it at Faction → Crimes: ${OC_JOIN_URL} - thank you! 💗`,
+    subject: `OC: please join ${x.crime} (${x.position})`,
+    mail: `Hi ${x.name},\n\nYou've been picked for an Organized Crime: ${x.crime}, role ${x.position}.\nPlease join it here: ${OC_JOIN_URL}\n\n`
+      + `Tip: the OC Optimizer script shows your OC assignment automatically, so you never miss one - install it from the Heart Breakers Hub Scripts page:\n${hub}/m/scripts.html\n`
+      + `You can also see your crimes and pass rates on the Hub: ${hub}/m/\n\nThanks!`};
+}
+function drawNotify() {
+  const L = notifyList();
+  let sent = {}; try { sent = JSON.parse(localStorage.getItem(NOTIFY_LS) || "{}") || {}; } catch (e) {}
+  const ago = ms => { const m = Math.round((Date.now() - ms) / 60e3); return m < 60 ? m + "m" : Math.round(m / 60) + "h"; };
+  const head = `<div class="hn">Members <b>without the OC script</b> can't see their assignment, so tell them. Torn doesn't let the Hub send chats or mails itself - each button copies the message and opens Torn; you paste and press Send.</div>`;
+  if (L === null) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">Nobody has used the OC script with the Hub yet, so the Hub can't tell who doesn't have it.</div></div>`; return; }
+  if (!L.length) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">✅ Nobody to notify - every member without the script who's placed has joined (or isn't placed in a recruiting crime).</div></div>`; return; }
+  $("view").innerHTML = `<div class="panel">${head}<table class="tb"><tr><th>Member</th><th>Crime · role</th><th></th></tr>`
+    + L.map((x, i) => { const k = x.pid + ":" + x.crime_id, s = sent[k];
+      return `<tr><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}</td>
+        <td>${esc(x.crime)} <span class="tag">#${esc(x.crime_id)}</span><br><span class="mid">${esc(x.position)}</span></td>
+        <td style="white-space:nowrap"><button data-n="chat" data-i="${i}">💬 Chat</button> <button data-n="mail" data-i="${i}">✉️ Mail</button> <button data-n="sent" data-i="${i}" title="Tick off on this device">✓</button></td></tr>`; }).join("")
+    + `</table><div class="hn" id="nmsg"></div></div>`;
+  const say = h => { $("nmsg").innerHTML = h; };
+  const copy = t => navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject();
+  $("view").querySelectorAll("button[data-n]").forEach(b => b.onclick = () => {
+    const x = L[+b.dataset.i], m = notifyMsgs(x), k = x.pid + ":" + x.crime_id;
+    if (b.dataset.n === "sent") { sent[k] = Date.now(); try { localStorage.setItem(NOTIFY_LS, JSON.stringify(sent)); } catch (e) {} drawNotify(); return; }
+    // copy first, then open Torn - both straight from the tap (clipboard + popup rules)
+    const cp = copy(b.dataset.n === "chat" ? m.chat : m.mail);
+    const url = b.dataset.n === "chat" ? `https://www.torn.com/profiles.php?XID=${x.pid}` : `https://www.torn.com/messages.php#/p=compose&XID=${x.pid}`;
+    window.open(url, "_blank");
+    cp.then(() => say(b.dataset.n === "chat" ? `💬 Message copied ✓ - on <b>${esc(x.name)}</b>'s profile tap <b>Chat</b>, paste and send, then tick ✓.`
+                                            : `✉️ Message copied ✓ - set the subject to <b>${esc(m.subject)}</b>, paste the message, send, then tick ✓.`),
+            () => say(`Couldn't copy - here's the message:<br><textarea style="width:100%;height:110px">${esc(b.dataset.n === "chat" ? m.chat : m.mail)}</textarea>`));
+  });
+}
+
 function drawPlanning() {
   const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
   const when = s => s ? new Date(s * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "-";
