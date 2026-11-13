@@ -11,6 +11,12 @@
       {generated, band: [2.5, 3], ffs: FFScouter set up?, war: {kind, start, end, enemy_id, enemy} | null,
        enemy: {id: {n name, l level, bs FFScouter's estimate ("1.2b"), u estimate updated (s)}},
        members: {pid: {n name, s "shared" | "ffs" | "none", t: [[enemy id, FF, est. respect], ...] best first}}}
+      (Nov 12 2026: t holds EVERY enemy with its UNCAPPED FF - above 3 = stronger than 75%; respect uses min(FF, 3).
+       enemy b = FFScouter's total battle stats estimate as a number)
+  FILTERS (Nov 12 2026, the user: "Allow users to adjust the FF range or estimated stats range of the targets they
+  see"): FF from / to (default = band, 2.5 - 3.0; up to 5 - above 3 pays no more) and estimated stats from / to
+  ("500m", "1.2b", blank = any). Saved in this browser (localStorage "hb_wt_filter"). An enemy with no estimate is
+  hidden while a stats range is set.
     war/enemy.json       (gatekeeper warEnemy - the enemy's members right now: status, last action; cached 60 s)
   User's choices: FFScouter estimates for the enemy; every member sees every member's list; members who don't share
   their battle stats are matched on FFScouter's estimate of them (and asked to share); only targets at an estimated
@@ -30,6 +36,7 @@ h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;m
 .bar{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center;margin:8px 0 10px}
 .bar select,.bar button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:7px 10px;font:14px system-ui;max-width:100%}
 .bar label{color:var(--sub);font-size:13px;display:flex;gap:5px;align-items:center}
+.bar input[type=number],.bar input[type=text]{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:7px;padding:6px 7px;font:14px system-ui;width:72px}
 .note{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:14px;line-height:1.5}
 .note.warn{border-color:var(--amber)}.note a{color:var(--gold)}
 .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -51,6 +58,11 @@ __MENU__
 <div class="bar" id="ctl" style="display:none">
   <select id="who" aria-label="Member"></select>
   <label><input type="checkbox" id="avail"> Available now only</label>
+</div>
+<div class="bar" id="flt" style="display:none">
+  <label>FF <input id="ffLo" type="number" step="0.05" min="1" max="5" inputmode="decimal"> to <input id="ffHi" type="number" step="0.05" min="1" max="5" inputmode="decimal"></label>
+  <label>Est. stats <input id="bsLo" type="text" placeholder="any" inputmode="text"> to <input id="bsHi" type="text" placeholder="any" inputmode="text"></label>
+  <button id="fltReset" type="button">Reset</button>
 </div>
 <div id="mine"></div>
 <div class="scroll"><table id="tbl"></table></div>
@@ -77,18 +89,46 @@ async function ownList() {
       const r = await fetch("https://ffscouter.com/api/v1/get-stats?" + new URLSearchParams({key, targets: ids.slice(0, 200).join(",")}), {cache: "no-store"});
       const d = await r.json();
       if (!Array.isArray(d)) return {t: [], err: d && d.error ? "FFScouter: " + d.error : "FFScouter didn't answer."};
-      recs = d.filter(x => x && x.player_id && x.fair_fight).map(x => [x.player_id, x.fair_fight, x.bs_estimate_human || ""]);
+      recs = d.filter(x => x && x.player_id && x.fair_fight).map(x => [x.player_id, x.fair_fight, x.bs_estimate_human || "", x.bs_estimate || 0]);
       try { localStorage.setItem("hb_ffs_cache", JSON.stringify({tag, at: Date.now(), recs})); } catch (e) {}
     } catch (e) { return {t: [], err: "Couldn't reach FFScouter."}; }
   }
-  const [lo, hi] = D.band, t = [];
-  for (const [id, ff, bs] of recs) {
+  const t = [];
+  for (const [id, ff, bs, b] of recs) {
     const e = D.enemy[String(id)]; if (!e) continue;
-    if (bs) e.bs = bs;                                   // their estimate as FFScouter gave it to this member
-    if (ff >= lo && ff <= hi) t.push([Number(id), Math.round(ff * 100) / 100, Math.round((1 + (e.l || 0) / 200) * ff * 100) / 100]);
+    if (bs) e.bs = bs; if (b) e.b = b;                   // their estimate as FFScouter gave it to this member
+    // every enemy (the FF / stats filters choose); respect uses FF capped at 3 (Torn's most)
+    t.push([Number(id), Math.round(ff * 100) / 100, Math.round((1 + (e.l || 0) / 200) * Math.min(ff, 3) * 100) / 100]);
   }
   t.sort((a, b) => b[2] - a[2] || b[1] - a[1]);
   return {t, err: null};
+}
+
+// ---- FILTERS (see the header) ----
+// "500m" / "1.2b" / "750k" / "2,000,000" -> number; blank / unreadable -> null (= any)
+const parseBs = v => { const m = String(v || "").trim().toLowerCase().replace(/[, ]/g, "").match(/^(\d+(?:\.\d+)?)([kmbt]?)$/);
+  return m ? Number(m[1]) * ({"": 1, k: 1e3, m: 1e6, b: 1e9, t: 1e12}[m[2]]) : null; };
+let F = null;
+function loadF() { try { F = JSON.parse(localStorage.getItem("hb_wt_filter") || "null"); } catch (e) {}
+  F = Object.assign({ffLo: D.band[0], ffHi: D.band[1], bsLo: "", bsHi: ""}, F || {});
+  $("ffLo").value = F.ffLo; $("ffHi").value = F.ffHi; $("bsLo").value = F.bsLo; $("bsHi").value = F.bsHi; }
+function readF() {
+  const n = (v, d) => { const x = parseFloat(v); return isFinite(x) ? Math.min(5, Math.max(1, x)) : d; };
+  F = {ffLo: n($("ffLo").value, D.band[0]), ffHi: n($("ffHi").value, D.band[1]), bsLo: $("bsLo").value.trim(), bsHi: $("bsHi").value.trim()};
+  try { localStorage.setItem("hb_wt_filter", JSON.stringify(F)); } catch (e) {}
+}
+// does this [enemy id, FF] pass the member's filters?
+function inRange(id, ff) {
+  if (ff < F.ffLo || ff > F.ffHi) return false;
+  const lo = parseBs(F.bsLo), hi = parseBs(F.bsHi);
+  if (lo == null && hi == null) return true;
+  const b = (D.enemy[String(id)] || {}).b; if (!b) return false;             // no estimate -> hidden while a stats range is set
+  return (lo == null || b >= lo) && (hi == null || b <= hi);
+}
+const fltText = () => `FF ${F.ffLo}–${F.ffHi}${F.bsLo || F.bsHi ? `, est. stats ${F.bsLo || "any"}–${F.bsHi || "any"}` : ""}`;
+function labels() {   // member picker: how many targets each member has in the current range
+  [...$("who").options].forEach(o => { const m = D.members[o.value]; if (!m) return;
+    o.textContent = `${m.n}${m.s === "shared" ? "" : m.s === "ffs" ? " (estimated)" : " (no stats)"} · ${m.t.filter(([i, f]) => inRange(i, f)).length}`; });
 }
 
 // live status of an enemy member (gatekeeper war/enemy.json) -> [html, available now?]
@@ -112,13 +152,13 @@ function draw() {
     ? `<div class="note warn">${own ? "We don't have your battle stats" : esc(m.n) + " doesn't share their battle stats"} and FFScouter has no estimate${own ? " of you" : ""} either, so no targets can be worked out.${own ? ` <a href="my-data.html">Share your battle stats</a> to get your list.` : ""}</div>`
     : m.s === "ffs" ? `<div class="note warn">${own ? "This list uses FFScouter's <b>estimate</b> of your stats" : esc(m.n) + "'s list uses FFScouter's estimate of their stats"}, so it may be off.${own ? ` <a href="my-data.html">Share your battle stats</a> for an accurate list.` : ""}</div>` : "";
   const only = $("avail").checked;
-  const rows = ((m && m.t) || []).map(([id, ff, rs]) => { const e = D.enemy[String(id)] || {}, [st, ok] = statusOf(id); return {id, ff, rs, e, st, ok}; })
+  const rows = ((m && m.t) || []).filter(([id, ff]) => inRange(id, ff)).map(([id, ff, rs]) => { const e = D.enemy[String(id)] || {}, [st, ok] = statusOf(id); return {id, ff, rs, e, st, ok}; })
     .filter(r => !only || r.ok);
   $("tbl").innerHTML = !m ? "" : `<tr><th>Target</th><th class="n">Lvl</th><th>Est. stats</th><th class="n">FF</th><th class="n">Respect</th><th>Status</th><th></th></tr>`
     + (rows.length ? rows.map(r => `<tr class="${r.ok ? "" : "na"}"><td><a href="https://www.torn.com/profiles.php?XID=${r.id}" target="_blank" rel="noopener">${esc(r.e.n)}</a></td>
-      <td class="n">${r.e.l || "-"}</td><td>${esc(r.e.bs || "-")}</td><td class="n"><b>${r.ff.toFixed(2)}</b></td><td class="n">${r.rs.toFixed(2)}</td><td>${r.st}</td>
+      <td class="n">${r.e.l || "-"}</td><td>${esc(r.e.bs || "-")}</td><td class="n"><b>${Math.min(r.ff, 3).toFixed(2)}</b>${r.ff > 3 ? ' <span class="mid" title="Stronger than 75% of these stats - Torn pays 3× at most, the fight is riskier">⚠️</span>' : ""}</td><td class="n">${r.rs.toFixed(2)}</td><td>${r.st}</td>
       <td><a class="atk" href="https://www.torn.com/loader.php?sid=attack&user2ID=${r.id}" target="_blank" rel="noopener">Attack</a></td></tr>`).join("")
-      : `<tr><td colspan="7" class="dim" style="text-align:center;padding:14px">${m.s === "none" ? "No stats to match against." : only ? "No target in range is available right now." : `No enemy is estimated in the ${D.band[0]}–${D.band[1]} FF range for this member.`}</td></tr>`);
+      : `<tr><td colspan="7" class="dim" style="text-align:center;padding:14px">${m.s === "none" ? "No stats to match against." : only ? "No target in range is available right now." : `No enemy matches ${fltText()} for this member.`}</td></tr>`);
 }
 
 async function live() {
@@ -140,16 +180,22 @@ async function live() {
   // a member the lists don't have yet (joined since the last update) still gets their own-key list
   if (ME && ME.id && !D.members[String(ME.id)] && ffsKey()) $("who").insertAdjacentHTML("afterbegin", `<option value="${esc(ME.id)}">${esc(ME.name || "You")} (your key)</option>`);
   if (ME && ME.id && (D.members[String(ME.id)] || ffsKey())) $("who").value = String(ME.id);
-  $("ctl").style.display = "";
+  $("ctl").style.display = ""; $("flt").style.display = "";
+  loadF(); labels();
   $("who").onchange = draw; $("avail").onchange = draw;
+  ["ffLo", "ffHi", "bsLo", "bsHi"].forEach(k => $(k).onchange = () => { readF(); labels(); draw(); foot(); });
+  $("fltReset").onclick = () => { try { localStorage.removeItem("hb_wt_filter"); } catch (e) {} loadF(); labels(); draw(); foot(); };
   draw(); live();
   if (ffsKey()) ownList().then(o => { OWN = o; draw(); });              // own FFScouter key -> own list
   setInterval(live, 60e3);                                                  // live status: the gatekeeper's 60 s cache
   setInterval(() => document.querySelectorAll("[data-until]").forEach(x => { x.textContent = left(+x.dataset.until); }), 1000);
+  foot();
+})();
+function foot() {
   const est = Object.values(D.enemy).filter(e => e.bs).length;
-  $("foot").innerHTML = `Targets with an estimated fair fight of ${D.band[0]}–${D.band[1]} (56–75% of the member's stat score - 3× is the most a hit can get), best respect first.<br>`
+  $("foot").innerHTML = `Showing ${fltText()}, best respect first. An FF of 3 = 75% of the member's stat score - 3× is the most a hit can get; ⚠️ = stronger than that (no extra respect, riskier).<br>`
     + `Respect = base respect (1 + level ÷ 200) × FF, before chain, retaliation and overseas bonuses. Enemy stats: FFScouter estimates (${est} of ${Object.keys(D.enemy).length} enemies).<br>`
     + `Lists updated ${ago(D.generated)} · status refreshes every minute.`;
-})();
+}
 </script>
 </body></html>

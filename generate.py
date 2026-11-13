@@ -6160,7 +6160,8 @@ def optin_publish(out: Path, opt: dict, st: dict) -> dict:
 #   who sees it       all members (every member's list)
 #   our members       their shared battle stats (Hub opt-in / Hub script, latest reading); members who don't share
 #                     get FFScouter's estimate of them instead, and the page asks them to share their stats
-#   band              estimated fair fight 2.5 - 3.0 only (target at 56% - 75% of the member's stat score)
+#   band              estimated fair fight 2.5 - 3.0 by default (target at 56% - 75% of the member's stat score);
+#                     each member can change the FF range and an estimated-stats range on the page (Nov 12 2026)
 #   where             a Hub page (members' war-targets.html) for now
 # Torn wiki (Chain - Fair fights): FF = 1 + 8/3 x (defender's stat score / attacker's stat score), 1x - 3x;
 #   stat score = sqrt(str) + sqrt(def) + sqrt(spd) + sqrt(dex). Base respect = 1 + level / 200 (rounded down).
@@ -6206,6 +6207,7 @@ def ffs_stats(ids: list) -> dict:
         for x in d if isinstance(d, list) else []:
             if isinstance(x, dict) and x.get("player_id") and x.get("bss_public"):
                 out[str(x["player_id"])] = {"bss": float(x["bss_public"]), "bs": x.get("bs_estimate_human") or "",
+                                            "b": int(x.get("bs_estimate") or 0),   # total battle stats estimate (stats filter)
                                             "u": int(x.get("last_updated") or 0)}
     return out
 
@@ -6269,8 +6271,7 @@ def write_war_targets(out: Path, raw: dict):
     for x in em:
         i = str(x.get("id")); c = cache.get(i) or {}
         enemy[i] = {"n": x.get("name") or "?", "l": int(x.get("level") or 0), "bs": c.get("bs") or "", "u": c.get("u") or 0,
-                    "_bss": c.get("bss")}
-    lo, hi = WAR_FF_BAND
+                    "b": int(c.get("b") or 0), "_bss": c.get("bss")}
     members = {}
     for m in ours:
         pid = str(m.get("id"))
@@ -6285,10 +6286,12 @@ def write_war_targets(out: Path, raw: dict):
         for eid, e in enemy.items():
             if not e["_bss"] or not mb:
                 continue
+            # FILTERS (Nov 12 2026, the user: "Allow users to adjust the FF range or estimated stats range of the targets
+            # they see"): EVERY enemy is listed with its UNCAPPED FF (above 3 = stronger than 75% - Torn pays 3x at most);
+            # the page filters by the member's own FF / stats range (default WAR_FF_BAND) and works out respect
             ff = 1 + 8 / 3 * e["_bss"] / mb
-            if lo <= ff <= hi:
-                t.append([int(eid), round(ff, 2), round((1 + e["l"] / 200) * ff, 2)])   # [enemy id, FF, est. respect]
-        t.sort(key=lambda r: (-r[2], -r[1]))
+            t.append([int(eid), round(ff, 2), round((1 + e["l"] / 200) * min(ff, 3), 2)])   # [enemy id, FF, est. respect]
+        t.sort(key=lambda r: (-r[2], r[1]))
         members[pid] = {"n": m.get("name") or "?", "s": src, "t": t}
     for e in enemy.values():
         e.pop("_bss", None)
