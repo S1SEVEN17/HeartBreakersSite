@@ -69,8 +69,10 @@
 //   current crime is ready, for queued members - loses the slot; it's filled again by the next best member and they
 //   aren't put back into that crime instance (team.noshow {pid: ms}). Locked teams are left alone.
 // SCRIPT USERS (Nov 12 2026, the user): members who don't use the script never see their assignment. RECRUITING
-//   crimes: non-script members are secondary - only placed when no script user can fill the slot (NS_LAST). Spawn
-//   teams / holds: a non-script member counts as 2 rate points lower (never in the success maths).
+//   crimes: non-script members are secondary - only placed when no script user can fill the slot (NS_LAST).
+//   Nov 13 2026 (user: "Prioritize member placement for those who have the script enabled"): the same now applies
+//   EVERYWHERE - spawn teams, spawn holds, refills and the improve/swap pass: a member without the script is only
+//   placed where no script user can take the seat at the targets (never in the success maths).
 // ROTATION (Nov 2026): planning runs one member at a time in JOIN order, 24 h each (confirmed from the feed:
 //   slot user.progress follows joined_at). So a member only has to JOIN before the members ahead of them finish
 //   planning. For a rotated crime that's recruiting, a member still in a Planning crime can be queued into it when
@@ -196,7 +198,8 @@ export function ocPlan(X) {
   // RECRUITING SLOTS (Nov 12 2026, user: "Non Script members should be secondary"): in a recruiting crime's open
   // slots a member who doesn't use the script only gets a slot when no script user can fill it at the targets - a
   // penalty bigger than any pay difference, so the fewest possible non-script members are used (spawn teams keep the
-  // small 2-point preference). Queued members (1e12) still come after free ones of either kind.
+  // small 2-point preference - Nov 13 2026: no longer, NS_LAST is used everywhere). Queued members (1e12) still come
+  // after free ones of either kind.
   const NS_LAST = 1e9;
   // ---- pay ----
   const payDay = crime => { const v = X.payOf(crime); return v && v.days ? v.pot / v.days : 0; };          // team, max
@@ -482,7 +485,7 @@ export function ocPlan(X) {
       const pool = Object.keys(roster).map(Number).filter(p => resv.has(p) ? liveDen(resv.get(p).t) < density(C) : (!assigned.has(p) && usable(p)));
       if (pool.length < n) continue;
       const best = fillSlots(C, roles.map(l => ({label: l})), 0, n, pool.map(pid => ({pid})),
-        (p, rate) => k * (rate - (noScr(p.pid) ? 2 : 0) - (busy.has(p.pid) ? 3 : 0)) - curPay(p.pid) - delayCost(p.pid, C), 40000,
+        (p, rate) => k * (rate - (busy.has(p.pid) ? 3 : 0)) - curPay(p.pid) - delayCost(p.pid, C) - (noScr(p.pid) ? NS_LAST : 0), 40000,   // script users first
         pick => !calcBad(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), C));
       if (!best || !best.some(b => resv.has(b.pid))) continue;          // nobody to pull: step 4 handles free members
       const nt = {id: uid(), crime: C, difficulty: diffOf(C), kind: "spawn", crime_id: null, lock: false, hold: {since: NOW, until: NOW + HOLD},
@@ -504,7 +507,7 @@ export function ocPlan(X) {
     if (!open.length) continue;
     const fixed = t.roles.filter(r => r.pid != null), fixedSum = wSum(t.crime, fixed);
     const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p)).map(pid => ({pid, soft: false}));
-    const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => rate - (busy.has(p.pid) ? 3 : 0) - delayCost(p.pid, t.crime) / Math.max(1e-9, payDay(t.crime) / t.roles.length / 100), 20000,   // delay cost in rate points
+    const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => rate - (busy.has(p.pid) ? 3 : 0) - delayCost(p.pid, t.crime) / Math.max(1e-9, payDay(t.crime) / t.roles.length / 100) - (noScr(p.pid) ? NS_LAST : 0), 20000,   // delay cost in rate points; script users first
       pick => !calcBad(t.roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), t.crime));
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
   }
@@ -529,7 +532,7 @@ export function ocPlan(X) {
     const roles = rolesOf(crime); if (!roles.length) return null;
     const k = payDay(crime) / roles.length / 100;
     const best = fillSlots(crime, roles.map(l => ({label: l})), 0, roles.length, [...pool].map(pid => ({pid: Number(pid)})),
-      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0) - (busy.has(p.pid) ? k * 3 : 0) - (noScr(p.pid) ? k * 2 : 0) - delayCost(p.pid, crime), 40000,   // free members preferred over queued
+      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0) - (busy.has(p.pid) ? k * 3 : 0) - (noScr(p.pid) ? NS_LAST : 0) - delayCost(p.pid, crime), 40000,   // free members preferred over queued; script users first
       pick => !calcBad(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), crime));
     if (!best) return null;
     return {id: uid(), crime, difficulty: diffOf(crime), kind: "spawn", crime_id: null, lock: false,
@@ -571,7 +574,9 @@ export function ocPlan(X) {
       free.forEach(pid => { if (not && not.has(pid)) return;
         const r = rateOf(pid, t.crime, t.roles[ri].position); if (!r || r.rate < floorOf(t.crime, t.roles[ri].position) || capped(pid, t.crime, r.rate)) return;
         const tt = teamPayWith(t, ri, r.rate); if (!meets(tt.roles, tt.crime)) return;   // CALCULATED SUCCESS when known
-        const pay = expPay(tt); if (!b || pay > b.pay) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay}; });
+        // script users first (Nov 13 2026), then the best pay
+        const pay = expPay(tt), ns = noScr(pid);
+        if (!b || (b.ns && !ns) || (b.ns === ns && pay > b.pay)) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay, ns}; });
       return b;
     };
     for (let round = 0; round < 6; round++) {
@@ -601,7 +606,9 @@ export function ocPlan(X) {
       }
       made.forEach(t => t.roles.forEach((r, ri) => {
         const bf = backfill(t, ri);
-        if (bf && bf.c.rate > r.rate) { free.add(r.pid); t.roles[ri] = Object.assign({}, r, bf.c); free.delete(bf.c.pid); changed = true; }
+        // upgrade a seat: a script user replaces a non-script member (rates allowing); otherwise a higher rate of the
+        // same kind - never a non-script member for a script user (Nov 13 2026)
+        if (bf && ((noScr(r.pid) && !bf.ns) || (noScr(r.pid) === bf.ns && bf.c.rate > r.rate))) { free.add(r.pid); t.roles[ri] = Object.assign({}, r, bf.c); free.delete(bf.c.pid); changed = true; }
       }));
       if (!changed) break;
     }
