@@ -366,6 +366,38 @@ export function ocPlan(X) {
     return out;
   };
 
+  // ---- 2b. SCRIPT-USER TAKEOVER (Nov 13 2026, user: "If a non-script member is already placed in a crime, if a
+  // qualifying script-using member becomes available, prioritize the script user.") ----
+  // A seat RESERVED (planned, not joined - members already in Torn's crime are never moved) for a member without the
+  // script goes to a FREE script user who isn't planned anywhere, when they qualify for it: rate at the role's floor,
+  // not held back by the cap, and the team still reaches the target with them (calculated chance when known). The
+  // best-rated such script user takes it; the non-script member goes back to the pool (step 3 / 4 may place them
+  // elsewhere). Locked teams are left alone.
+  if (SU) {
+    const freeSU = () => Object.keys(roster).map(Number).filter(p => !noScr(p) && !busy.has(p) && !assigned.has(p));
+    for (const t of teams) {
+      if (t.lock) continue;
+      const c = t.kind === "live" ? inst.get(String(t.crime_id)) : null;
+      t.roles.forEach((r, ri) => {
+        if (r.pid == null || r.existing || !noScr(r.pid)) return;
+        let b = null;
+        for (const p of freeSU()) {
+          if (c && (t.noshow || {})[String(p)]) continue;                 // a no-show isn't put back into this crime
+          const rr = rateOf(p, t.crime, r.position);
+          if (!rr || rr.rate < floorOf(t.crime, r.position) || capped(p, t.crime, rr.rate)) continue;
+          const roles = t.roles.map((x, i) => i === ri ? {position: x.position, pid: p, rate: rr.rate} : x);
+          if (t.roles.every((x, i) => i === ri || x.pid != null) && !meets(roles, t.crime)) continue;   // full team: must reach the target
+          if (!b || rr.rate > b.rate) b = {pid: p, rate: rr.rate, src: rr.src};
+        }
+        if (!b) return;
+        assigned.delete(Number(r.pid)); take(b.pid);
+        const k = Object.assign({}, r, {pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src, joined: false});
+        delete k.since; delete k.queued; delete k.free_at; delete k.replaces;
+        t.roles[ri] = k;
+      });
+    }
+  }
+
   // ---- 3. fill open slots of recruiting crimes; skip crimes that can't reach the target ----
   // ORDER (Nov 2026, revised): highest pay per MEMBER per day first; among crimes that pay the same (e.g. several
   // instances of one crime) the one already BUILT (members in it), most-filled first, goes first - so a half-built
