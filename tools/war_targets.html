@@ -16,6 +16,10 @@
   their battle stats are matched on FFScouter's estimate of them (and asked to share); only targets at an estimated
   FF of 2.5 - 3.0 (56% - 75% of the member's stat score - 3x is the cap, a stronger target only adds risk).
   Est. respect = base respect (1 + level / 200) x FF, before chain / retaliation / overseas bonuses.
+  OWN FFSCOUTER KEY (Nov 12 2026, the user: members can save their own FFScouter key on My data & sharing): kept in
+  the member's browser only (localStorage "hb_ffs_key"). When they look at THEIR OWN list, the page asks FFScouter
+  directly (get-stats, every enemy in one call, cached 30 min in localStorage "hb_ffs_cache") and uses FFScouter's
+  fair_fight - which is against the key owner's real stats - instead of the faction's estimate. Never sent to the Hub.
   Placeholder: __MENU__ (site header).
 -->
 <style>
@@ -57,7 +61,35 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "
 const ago = t => { const s = Date.now() / 1e3 - t; return s < 90 ? "just now" : s < 5400 ? Math.round(s / 60) + " min ago" : s < 172800 ? Math.round(s / 3600) + " h ago" : Math.round(s / 86400) + " days ago"; };
 const left = t => { let s = Math.max(0, Math.round(t - Date.now() / 1e3)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); s %= 60;
   return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; };
-let D = null, LIVE = {}, ME = null;
+let D = null, LIVE = {}, ME = null, OWN = null;   // OWN: {t, err} - the member's list from their own FFScouter key
+const ffsKey = () => { try { return localStorage.getItem("hb_ffs_key") || ""; } catch (e) { return ""; } };
+
+// OWN FFSCOUTER KEY: FFScouter's fair fight of every enemy against the key owner (this member) -> their own list
+async function ownList() {
+  const key = ffsKey(), ids = Object.keys(D.enemy || {});
+  if (!key || !ids.length || !D.war) return null;
+  const tag = D.war.enemy_id + ":" + ids.length;
+  let c = null; try { c = JSON.parse(localStorage.getItem("hb_ffs_cache") || "null"); } catch (e) {}
+  let recs = c && c.tag === tag && Date.now() - c.at < 30 * 60e3 ? c.recs : null;
+  if (!recs) {
+    try {
+      // API: Heart Breakers Hub - War targets (FFScouter get-stats with the member's OWN key, straight to ffscouter.com)
+      const r = await fetch("https://ffscouter.com/api/v1/get-stats?" + new URLSearchParams({key, targets: ids.slice(0, 200).join(",")}), {cache: "no-store"});
+      const d = await r.json();
+      if (!Array.isArray(d)) return {t: [], err: d && d.error ? "FFScouter: " + d.error : "FFScouter didn't answer."};
+      recs = d.filter(x => x && x.player_id && x.fair_fight).map(x => [x.player_id, x.fair_fight, x.bs_estimate_human || ""]);
+      try { localStorage.setItem("hb_ffs_cache", JSON.stringify({tag, at: Date.now(), recs})); } catch (e) {}
+    } catch (e) { return {t: [], err: "Couldn't reach FFScouter."}; }
+  }
+  const [lo, hi] = D.band, t = [];
+  for (const [id, ff, bs] of recs) {
+    const e = D.enemy[String(id)]; if (!e) continue;
+    if (bs) e.bs = bs;                                   // their estimate as FFScouter gave it to this member
+    if (ff >= lo && ff <= hi) t.push([Number(id), Math.round(ff * 100) / 100, Math.round((1 + (e.l || 0) / 200) * ff * 100) / 100]);
+  }
+  t.sort((a, b) => b[2] - a[2] || b[1] - a[1]);
+  return {t, err: null};
+}
 
 // live status of an enemy member (gatekeeper war/enemy.json) -> [html, available now?]
 function statusOf(id) {
@@ -70,10 +102,13 @@ function statusOf(id) {
 }
 
 function draw() {
-  const pid = $("who").value, m = (D.members || {})[pid];
+  const pid = $("who").value, own = ME && String(ME.id) === pid;
+  // own list from the member's own FFScouter key (when saved on this device) replaces the faction's estimate
+  const m = own && OWN ? Object.assign({}, (D.members || {})[pid] || {n: ME.name || "You"}, {s: "own", t: OWN.err ? [] : OWN.t}) : (D.members || {})[pid];
   // the prompt to share stats - on your own list only
-  const own = ME && String(ME.id) === pid;
-  $("mine").innerHTML = !m ? "" : m.s === "none"
+  $("mine").innerHTML = !m ? "" : m.s === "own"
+    ? `<div class="note">${OWN.err ? `<span class="bad">${esc(OWN.err)}</span> Check your key on <a href="my-data.html">My data &amp; sharing</a>.` : "🔑 Your list uses <b>your own FFScouter key</b> - fair fight against your real stats."}</div>`
+    : m.s === "none"
     ? `<div class="note warn">${own ? "We don't have your battle stats" : esc(m.n) + " doesn't share their battle stats"} and FFScouter has no estimate${own ? " of you" : ""} either, so no targets can be worked out.${own ? ` <a href="my-data.html">Share your battle stats</a> to get your list.` : ""}</div>`
     : m.s === "ffs" ? `<div class="note warn">${own ? "This list uses FFScouter's <b>estimate</b> of your stats" : esc(m.n) + "'s list uses FFScouter's estimate of their stats"}, so it may be off.${own ? ` <a href="my-data.html">Share your battle stats</a> for an accurate list.` : ""}</div>` : "";
   const only = $("avail").checked;
@@ -102,10 +137,13 @@ async function live() {
   if (!D.ffs) $("msg").innerHTML = `<div class="note warn">Enemy estimates aren't set up yet (the FFScouter key is missing), so lists may be empty.</div>`;
   const names = Object.entries(D.members).sort((a, b) => a[1].n.localeCompare(b[1].n));
   $("who").innerHTML = names.map(([id, m]) => `<option value="${id}">${esc(m.n)}${m.s === "shared" ? "" : m.s === "ffs" ? " (estimated)" : " (no stats)"} · ${m.t.length}</option>`).join("");
-  if (ME && D.members[String(ME.id)]) $("who").value = String(ME.id);
+  // a member the lists don't have yet (joined since the last update) still gets their own-key list
+  if (ME && ME.id && !D.members[String(ME.id)] && ffsKey()) $("who").insertAdjacentHTML("afterbegin", `<option value="${esc(ME.id)}">${esc(ME.name || "You")} (your key)</option>`);
+  if (ME && ME.id && (D.members[String(ME.id)] || ffsKey())) $("who").value = String(ME.id);
   $("ctl").style.display = "";
   $("who").onchange = draw; $("avail").onchange = draw;
   draw(); live();
+  if (ffsKey()) ownList().then(o => { OWN = o; draw(); });              // own FFScouter key -> own list
   setInterval(live, 60e3);                                                  // live status: the gatekeeper's 60 s cache
   setInterval(() => document.querySelectorAll("[data-until]").forEach(x => { x.textContent = left(+x.dataset.until); }), 1000);
   const est = Object.values(D.enemy).filter(e => e.bs).length;

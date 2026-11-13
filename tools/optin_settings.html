@@ -76,6 +76,22 @@ __MENU__
   <div id="lbmsg" class="muted"></div>
 </div>
 
+<!-- FFSCOUTER KEY (Nov 12 2026, the user: "Allow users to save their own FFScouter key to the Data and Sharing tab.
+     This will let them use their own FFScouter key for finding targets."). Kept in THIS BROWSER only (localStorage
+     "hb_ffs_key") - never sent to the Hub; the War targets page sends it straight to ffscouter.com (FFScouter's API
+     takes it in the address - their design; their API allows browser calls). Checked with FFScouter's check-key. -->
+<h2>🎯 FFScouter key (War targets)</h2>
+<div class="card">
+  <div class="t"><b style="color:#fff">Your own FFScouter key</b><br><span class="badge dev">📱 Kept on this device only</span></div>
+  <div class="muted" style="margin:6px 0 8px">With it, <a href="war-targets.html">War targets</a> builds <b>your</b> list from FFScouter's fair fight
+    against your real stats, instead of the faction's estimate. It's a Torn key you've registered on
+    <a href="https://ffscouter.com" target="_blank" rel="noopener">ffscouter.com</a> (Generate Custom API Key → Sign Up).
+    It stays in this browser, is only ever sent to FFScouter, and is never sent to the Hub - add it on each device you use.</div>
+  <input id="ffk" type="password" autocomplete="off" maxlength="16" placeholder="16-character key registered on FFScouter">
+  <div class="btns"><button class="go" id="ffsave">Save on this device</button><button class="del" id="ffdel">Remove</button></div>
+  <div id="ffmsg" class="muted" style="margin-top:8px"></div>
+</div>
+
 <h2>🔑 Your key</h2>
 <div class="card">
   <div class="keyrow"><div class="t"><b>One Limited API key</b> <span class="muted">· used for everything below</span><br>
@@ -221,5 +237,27 @@ $("lbseg").addEventListener("click", async e => { const b = e.target.closest("bu
     $("lbmsg").className = "ok"; $("lbmsg").textContent = LB ? "Saved ✓ - you're left off the leaderboards from the next site update (a few minutes)." : "Saved ✓ - you're back on the leaderboards from the next site update."; }
   catch (err) { $("lbmsg").className = "err"; $("lbmsg").textContent = err.message; } });
 call("GET").then(o => { LB = !!o.lb_hidden; lbSeg(); return o; }).then(status).catch(e => { $("stt").textContent = "Couldn't load your settings"; $("std").textContent = e.message; });
+
+// ---- FFSCOUTER KEY (this device only - see the comment above its card) ----
+(function () {
+  const K = "hb_ffs_key", box = document.getElementById("ffk"), msg = document.getElementById("ffmsg");
+  const get = () => { try { return localStorage.getItem(K) || ""; } catch (e) { return ""; } };
+  const show = (t, bad) => { msg.textContent = t; msg.className = bad ? "err" : "muted"; };
+  show(get() ? "✅ A key is saved on this device." : "No key saved on this device.");
+  document.getElementById("ffsave").onclick = async () => {
+    const k = box.value.trim();
+    if (!/^[A-Za-z0-9]{16}$/.test(k)) { show("That doesn't look like a 16-character key.", true); return; }
+    show("Checking with FFScouter…");
+    try {
+      // API: Heart Breakers Hub - FFScouter check-key (is this key registered on FFScouter?) - straight to ffscouter.com
+      const r = await fetch("https://ffscouter.com/api/v1/check-key?" + new URLSearchParams({key: k}), {cache: "no-store"});
+      const d = await r.json().catch(() => null);
+      if (!d || d.error || d.is_registered === false) { show(d && d.error ? "FFScouter: " + d.error : "FFScouter doesn't know this key - register it on ffscouter.com first.", true); return; }
+    } catch (e) { show("Couldn't reach FFScouter - try again later.", true); return; }
+    try { localStorage.setItem(K, k); } catch (e) { show("This browser won't store it (private mode?).", true); return; }
+    box.value = ""; show("✅ Saved on this device. War targets will use it for your list.");
+  };
+  document.getElementById("ffdel").onclick = () => { try { localStorage.removeItem(K); } catch (e) {} box.value = ""; show("Removed from this device."); };
+})();
 </script>
 </body></html>
