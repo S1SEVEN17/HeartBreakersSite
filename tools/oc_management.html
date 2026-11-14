@@ -143,7 +143,8 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 2, noShowHours: 6, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
+const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3}, LS.get("hb_oc_opts", {}));
+OPT.queueHours = 0; OPT.holdHours = 0;   // QUEUE + SPAWN HOLDS REMOVED (Nov 13 2026, user) - old saved values ignored
 OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
 delete OPT.chains;                // "Chain finals" option removed (Nov 12 2026) - prerequisite crimes are planned like any other
 // settings are kept in this browser AND saved for the gatekeeper's automatic plan (oc_config 'opts'), so the live
@@ -185,6 +186,7 @@ async function load() {
     D.sums = (sums && sums.summaries) || null; D.prices = (sums && sums.prices) || {};
     D.config = cfg; D.rates = rates || {};
     if (cfg.opts && typeof cfg.opts === "object") Object.assign(OPT, cfg.opts);       // the live plan's settings
+    OPT.queueHours = 0; OPT.holdHours = 0;   // removed Nov 13 2026 (user)
     D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
     D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
     // Active crimes (who's in what) come from the OC DATA FEED when it has them (Nov 2026): the Hub's own Torn pull
@@ -255,7 +257,7 @@ function spawnAlertsHtml(teams, sm) {
     return `<tr><td><span class="dif">D${t.difficulty ?? "?"}</span> <b>${esc(t.crime)}</b>${heldTag(t)}</td><td>${fmt$(eachPay(t.crime))}/day each</td>
       <td>${ready ? `<span class="ok">${ready} ready now</span>` : ""}${ready && q.length ? " · " : ""}${q.length ? `<span class="qd">${q.length} free in ${freeIn(nf)}${q.length > 1 ? "+" : ""}</span>` : ""}</td>
       <td class="tag">${t.roles.map(r => esc(r.name || nameOf(r.pid))).join(", ")}</td></tr>`; }).join("");
-  return `<div class="hn" style="color:var(--gold);margin-top:8px">🧪 <b>Spawn alerts</b> - teams are ready for these crimes but none is recruiting. Spawn them in Torn (best pay first); the plan moves the team in on its next run.</div>
+  return `<div class="hn" style="color:var(--gold);margin-top:8px">🧪 <b>Spawn alerts</b> - these members' pass rates are too high (above the ${OPT.cap}% cap) for every open crime, so they need a harder crime. Spawn it in Torn (best pay first); the plan moves the team in on its next run.</div>
     <table class="spawnal"><tr><th>Crime</th><th>Pay</th><th>Members</th><th>Team</th></tr>${rows}</table>`;
 }
 const spawnHtml = sp => sp && !sp.ok ? `<div class="hn" style="color:var(--gold)">⚠️ Not available: ${esc(sp.why)}.</div>` : "";
@@ -712,7 +714,7 @@ function drawBuilder() {
       Anyone above the <b>role cap</b> in a crime is moved up to a harder crime they can pass (placed back only if no harder team can use them). Pay =
       max reward recorded (last 100 completions, items at market price) × payout % ÷ planning days - the same figure members see in the script. Auto-build also weighs team success. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
     ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
-      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed. Members whose crime is ready within ${OPT.queueHours} h are queued for their next one automatically.</div>` : ""}
+      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed.</div>` : ""}
     ${settingsHtml()}
     <div class="bar" style="justify-content:flex-start;margin-top:10px">
       <button class="gold" id="auto">⚡ Auto-build teams</button>
@@ -734,8 +736,8 @@ function drawBuilder() {
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100);
   // 0%-weight minimum: empty = off; never above the lowest individual role
-  $("o_mz").onchange = () => { const v = $("o_mz").value.trim(); OPT.minZero = v === "" ? null : Math.max(0, Math.min(OPT.minRole, +v || 0)); saveOpts(); draw(); }; num("o_cap", "cap", 50, 100); num("o_q", "queueHours", 0, 168);
-  num("o_ns", "noShowHours", 0, 72); num("o_hold", "holdHours", 0, 24);   // no-shows / spawn holds (Nov 12 2026)
+  $("o_mz").onchange = () => { const v = $("o_mz").value.trim(); OPT.minZero = v === "" ? null : Math.max(0, Math.min(OPT.minRole, +v || 0)); saveOpts(); draw(); }; num("o_cap", "cap", 50, 100);
+  num("o_ns", "noShowHours", 0, 72);   // no-shows (Nov 12 2026; spawn holds + queue removed Nov 13 2026)
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
   $("auto").onclick = () => { autoBuild(); draw(); };
@@ -767,12 +769,15 @@ function teamCard(t) {
     // a member already IN the crime (or a leader's replacement of one): changeable, defaults to them (Nov 2026)
     const held = r.existing ? {pid: +r.pid, name: r.name || nameOf(r.pid)} : r.replaces ? {pid: +r.replaces.pid, name: r.replaces.name || nameOf(r.replaces.pid)} : null;
     const cands = candidates(t.crime, r.position).filter(c => !others.has(c.pid) && !t.roles.some((x, j) => j !== i && +x.pid === c.pid) && !(held && c.pid === held.pid));
+    // PLANNING LOCK (Nov 13 2026, user: "Once they begin planning they are locked in"): a member in the crime who has
+    // started planning can't be replaced - the picker is disabled
+    const locked = r.existing && !!planPct(t, r);
     const opts = (held ? `<option value="${held.pid}"${r.existing ? " selected" : ""}>✅ ${esc(held.name)} · in the crime</option>` : `<option value="">— empty —</option>`) + cands.map(c => `<option value="${c.pid}"${+r.pid === c.pid ? " selected" : ""}>${esc(c.name)} · ${c.rate}%${c.src === "history" ? " ~" : ""}${busy[c.pid] ? " (in a crime)" : ""}${usesScript(c.pid) ? "" : " 📵"}</option>`).join("");
     const warn = r.replaces ? `<div class="tag bad" style="grid-column:1/-1">⚠️ Replacing ${esc(held.name)}${planPct(t, r) ? ` (planning ${planPct(t, r)} done)` : ""} - their planning has already begun. This delays the crime and wastes their planning progress. They need to leave the crime before ${esc(r.name || nameOf(r.pid))} can join.</div>` : "";
     // LAYOUT (Nov 12 2026, user): role · member · rate on one line; queued / no-script / delay / in-the-crime notes on
     // their own line underneath, so the member picker keeps its width and names show in full
-    const notes = [queueTag(r, busy[r.pid]), r.existing ? "" : noScrTag(r.pid), r.pid != null ? delayTag(r.pid) : "", r.existing ? '<span class="tag">in the crime</span>' : ""].filter(Boolean).join(" ");
-    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}">${opts}</select>
+    const notes = [queueTag(r, busy[r.pid]), r.existing ? "" : noScrTag(r.pid), r.pid != null ? delayTag(r.pid) : "", r.existing ? (locked ? `<span class="tag">🔒 planning ${planPct(t, r)} - locked in</span>` : '<span class="tag">in the crime</span>') : ""].filter(Boolean).join(" ");
+    return `<div class="rr${r.existing ? " held" : ""}"><span class="pos">${esc(r.position)}${wTag(t.crime, r.position)}</span><select data-t="${t.id}" data-r="${i}"${locked ? ` disabled title="Planning ${planPct(t, r)} done - locked in"` : ""}>${opts}</select>
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${notes ? `<div class="rnotes">${notes}</div>` : ""}${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
@@ -804,6 +809,7 @@ function wireTeams() {
         if (!r.existing) Object.assign(r, {pid: held.pid, name: held.name, rate: rt.rate ?? r.rate, src: "in crime", existing: true});
         delete r.replaces; saveBoard(); draw(); return;
       }
+      if (r.existing && planPct(t, r)) { alert(`${held.name} has started planning (${planPct(t, r)}) - members who have begun planning are locked into their crime.`); draw(); return; }
       if (r.existing) {
         const pc = planPct(t, r);
         if (!confirm(`${held.name} is already in ${t.crime}${pc ? ` and ${pc} through planning` : " and their planning has begun"}.\n\nReplacing them will DELAY the crime and WASTE their current planning progress. They'll need to leave the crime before the new member can join.\n\nReplace them?`)) { draw(); return; }
@@ -884,7 +890,7 @@ function autoHtml() {
   // timer and every assignment setting are in the Team Builder's ⚙️ Settings (one shared set: config "opts")
   const rc = D.config.reconfigured, moves = (rc && rc.moves) || [];
   return `<div class="hn"><b>🤖 Automatic assignment: ${OPT.auto !== false ? '<span class="ok">On</span>' : '<span class="mid">Off</span>'}</b>
-    <span class="tag">${OPT.auto !== false ? `re-plans every ${OPT.autoMinutes || 3} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""} · team ${OPT.target}% · lowest role ${OPT.minRole}% · queue ${OPT.queueHours} h` : "the live plan only changes when a leader deploys one"} · change it in the <b>Team Builder ⚙️ Settings</b></span></div>`
+    <span class="tag">${OPT.auto !== false ? `re-plans every ${OPT.autoMinutes || 3} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""} · team ${OPT.target}% · lowest role ${OPT.minRole}%` : "the live plan only changes when a leader deploys one"} · change it in the <b>Team Builder ⚙️ Settings</b></span></div>`
     + nextHtml()
     + (moves.length ? `<div class="hn">🔀 <b>Reconfigured ${ago(rc.at)}</b> - ${moves.slice(0, 4).map(m => `${esc(m.took.name || "[" + m.took.pid + "]")} took the ${esc(m.position)} slot in ${esc(m.crime)} reserved for ${esc(m.planned.name || "[" + m.planned.pid + "]")}`).join("; ")}${moves.length > 4 ? ` and ${moves.length - 4} more` : ""}. Every reserved and queued member was placed again.</div>` : "");
 }
@@ -895,7 +901,7 @@ let SET_OPEN = LS.get("hb_oc_set_open", true);
 function settingsHtml() {
   const row = (label, ctl, note) => `<div class="srow"><label>${label}</label><div class="sctl">${ctl}</div><div class="snote">${note}</div></div>`;
   const numIn = (id, v, lo, hi, unit, w) => `<input type="number" id="${id}" min="${lo}" max="${hi}" value="${v ?? ""}"${w ? ` style="width:${w}px"` : ""}${v == null ? ' placeholder="recorded"' : ""}> ${unit}`;
-  return `<details class="sets"${SET_OPEN ? " open" : ""}><summary><b>⚙️ Settings</b> <span class="tag">automatic ${OPT.auto !== false ? "on" : "off"} · team ${OPT.target}% · lowest role ${OPT.minRole}% · cap ${OPT.cap}% · queue ${OPT.queueHours} h - used by the Team Builder and the automatic assignment</span></summary>
+  return `<details class="sets"${SET_OPEN ? " open" : ""}><summary><b>⚙️ Settings</b> <span class="tag">automatic ${OPT.auto !== false ? "on" : "off"} · team ${OPT.target}% · lowest role ${OPT.minRole}% · cap ${OPT.cap}% - used by the Team Builder and the automatic assignment</span></summary>
     <div class="sgrid">
       <div class="sgrp"><h4>🤖 Automatic assignment</h4>
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
@@ -913,11 +919,9 @@ function settingsHtml() {
         ${row("Individual role cap", numIn("o_cap", OPT.cap, 50, 100, "%"), "Someone who passes a role above this is moved up to a harder crime they can pass. 100 = off.")}
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>
-        ${row("Queue members finishing within", numIn("o_q", OPT.queueHours, 0, 168, "hours"), "Members whose current crime is ready within this time get a slot in their next crime. 0 = only members who aren't in a crime.")}
         ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the next best member gets it and they aren't put back into that crime. 0 = never.")}
       </div>
       <div class="sgrp"><h4>🧪 Spawn alerts</h4>
-        ${row("Hold members for a better crime", numIn("o_hold", OPT.holdHours, 0, 24, "hours"), "When members reserved in a lower-paying recruiting crime (plus free or soon-free members) could make a team for a better-paying crime nobody has spawned, they're held for it this long and it shows as a spawn alert. Not spawned in time: they go back to normal and that crime isn't held again for the same time. 0 = no holds (spawn alerts still show the plan's spawn teams).")}
       </div>
       <div class="sgrp"><h4>💰 Pay</h4>
         ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
@@ -1166,7 +1170,7 @@ function drawDeployed() {
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
   }).join("");
-  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, members left over get crimes to spawn (🧪). Slots are only reserved for members who haven't joined a crime or are queued (their crime is ready within ${OPT.queueHours} h) - members already in a crime stay where they are. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (free and queued members only) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
+  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, existing crimes are always filled first; a crime to spawn (🧪) is only suggested for members whose pass rates are too high (above the ${OPT.cap}% cap) for every open crime. Slots are only reserved for members who haven't joined a crime - members already in a crime stay where they are, and a member who has started planning is never moved. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (members not in a crime) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
     <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = finishing a crime and already lined up for the next one (shown in both) · ⏳ <b>Not joined yet</b> = free, hasn't joined. Counted once per member.</div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>

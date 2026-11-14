@@ -17,6 +17,9 @@
 //     PRIORITY (Nov 11 2026, the user): the plan kept is the one that seats the most members in the crime with the
 //     highest recorded MAX pay per member per day, then the next crime, and so on (better()); total max pay only
 //     breaks exact ties.
+//   *** Nov 13 2026 (user): QUEUE and SPAWN HOLDS are REMOVED (QWIN / HOLD forced to 0 below); spawn teams are made
+//   *** only for members whose rates are too high (role cap) for every open crime (step 4); a member who has started
+//   *** planning is never moved (a leader replacement is dropped once progress > 0). Notes below kept for history.
 //   QUEUE (Nov 2026): a member in a PLANNING crime that's ready within opts.queueHours (default 12, leaders can change it; 0 = off) can be QUEUED for their
 //     next crime - they join it when their current crime pays out. Queued roles carry queued: true + free_at (ms).
 //     Live open slots: only when no free member can fill the crime to the target (fewest queued members, and only
@@ -148,7 +151,9 @@ export function ocPlan(X) {
     for (const sl of c.slots || []) if (sl.user) busy.set(Number(sl.user.id), {cid: String(c.id), label: slotLabel(sl)});
   }
   // ---- queue: members in a Planning crime that's ready within the window ----
-  const NOW = X.now || Date.now(), QWIN = (O.queueHours ?? 12) * 3600e3;
+  // QUEUE REMOVED (Nov 13 2026, user: "Remove the queue options"): members still in a crime are never queued for their
+  // next one - QWIN is always 0 whatever opts.queueHours says (rotated crimes' join-order deadlines are separate)
+  const NOW = X.now || Date.now(), QWIN = 0;
   const freeAt = new Map();                                // pid -> ms their current (Planning) crime is ready
   for (const c of inst.values()) if (c.status === "Planning" && c.ready_at)
     for (const sl of c.slots || []) if (sl.user) freeAt.set(Number(sl.user.id), c.ready_at * 1000);
@@ -190,7 +195,8 @@ export function ocPlan(X) {
   const lastOf = n => ((X.lastRuns || {})[n] || [])[0] || null;    // pids in the latest completed run of n
 
   // ---- spawn holds / no-shows / script users (see the header) ----
-  const HOLD = Math.max(0, Number(O.holdHours ?? 2) || 0) * 3600e3, NS = Math.max(0, Number(O.noShowHours ?? 6) || 0) * 3600e3;
+  // SPAWN HOLDS REMOVED (Nov 13 2026, user: "Remove ... spawn alerts ... always fill existing crimes"): HOLD is always 0
+  const HOLD = 0, NS = Math.max(0, Number(O.noShowHours ?? 6) || 0) * 3600e3;
   const holdLog = {};
   Object.entries(X.holdLog || {}).forEach(([c, v]) => { if (Number(v) > NOW) holdLog[c] = Number(v); });
   const SU = X.scriptUsers instanceof Set ? X.scriptUsers : null;
@@ -274,8 +280,11 @@ export function ocPlan(X) {
           const pid = Number(sl.user.id);
           // REPLACEMENT (Nov 2026): a leader swapped out the member in this slot (their planning is lost) - keep the
           // replacement while the old member is still in the slot and the replacement is still usable
+          // PLANNING LOCK (Nov 13 2026, user: "Members who have started their planning phase should never be moved from
+          // their crimes. Once they begin planning they are locked in."): a replacement only stands while the member in
+          // the slot hasn't started planning (progress 0) - once they have, it's dropped and they stay
           if (o.replaces && Number(o.replaces.pid) === pid && o.pid != null && Number(o.pid) !== pid && roster[String(o.pid)] != null
-              && usable(o.pid, c) && !assigned.has(Number(o.pid)))
+              && !(Number(sl.user.progress) > 0) && usable(o.pid, c) && !assigned.has(Number(o.pid)))
             return Object.assign({}, o, {existing: false, joined: false});
           return {position: label, pid, name: nameOf(pid), existing: true, joined: o.pid != null && Number(o.pid) === pid && (!o.existing || !!o.joined),   // planned, then joined
                   rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : ((rateOf(pid, c.name, label) || {}).rate ?? null), src: "in crime"};
@@ -555,14 +564,31 @@ export function ocPlan(X) {
     if (pulled) { skipped.length = 0; fillRecruiting(); }  // the slots they left are filled again from everyone else
   }
 
-  // ---- 4. spawn teams for members left over ----
+  // ---- 4. spawn teams ONLY for members whose pass rates are too high for every open crime ----
+  // SPAWN ONLY WHEN OVERQUALIFIED (Nov 13 2026, user: "The only time a spawn alert should appear is if members pass rate
+  // is too high for any of the available crimes. Outside of that, always fill existing crimes."): a member left over
+  // after the recruiting crimes were filled goes into a spawn team only when every open slot of every recruiting,
+  // switched-on crime they qualify for (rate at the role's floor) is closed to them by the role cap (rate above
+  // opts.cap with a harder crime they pass) - and there's at least one such slot. A member left over for any other
+  // reason (the crime couldn't reach the target, someone better took the slot, no recruiting crime at all) gets no
+  // spawn team. Leaders' locked spawn teams are kept as they are.
+  const openNow = [...inst.values()].filter(c => c.status === "Recruiting" && !X.disabled.has(c.name) && (c.slots || []).some(sl => !sl.user));
+  const overQ = pid => { let high = false;
+    for (const c of openNow) for (const sl of c.slots || []) { if (sl.user) continue;
+      const pos = slotLabel(sl), r = rateOf(pid, c.name, pos);
+      if (!r || r.rate < floorOf(c.name, pos)) continue;
+      if (!capped(pid, c.name, r.rate)) return false;
+      high = true; }
+    return high; };
+  teams.forEach(t => { if (t.kind === "spawn" && !t.lock) t.roles.forEach(r => {
+    if (r.pid != null && !overQ(r.pid)) { assigned.delete(Number(r.pid)); Object.assign(r, {pid: null, name: "", rate: null, src: null}); } }); });
   // existing spawn teams: refill their empty roles (only if the team then reaches the target), else drop the empties
   for (const t of teams) {
     if (t.kind !== "spawn" || t.lock) continue;
     const open = t.roles.map((r, i) => r.pid == null ? i : -1).filter(i => i >= 0);
     if (!open.length) continue;
     const fixed = t.roles.filter(r => r.pid != null), fixedSum = wSum(t.crime, fixed);
-    const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p)).map(pid => ({pid, soft: false}));
+    const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p) && overQ(p)).map(pid => ({pid, soft: false}));
     const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 20000,   // MEMBER CHOICE: script, free, best rate
       pick => !calcBad(t.roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), t.crime));
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
@@ -576,7 +602,7 @@ export function ocPlan(X) {
   }
   // new spawn teams: the pay-per-day optimizer (as the page's Auto-build did) over crime TYPES not recruiting now
   const spawnCrimes = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n));
-  const pool0 = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p));   // free + queueable
+  const pool0 = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p) && overQ(p));   // free + too high for every open crime
   // (the spawn optimizer's "opp" opportunity cost was removed Nov 13 2026 - MEMBER CHOICE above; the alpha runs only
   //  vary the crime order now)
   // one spawn team for a crime type - MEMBER CHOICE (script, free, best rate); cost = steal step (Infinity = can't move)
@@ -614,7 +640,8 @@ export function ocPlan(X) {
     fill();
     improve(made, free, order);
     fill();
-    capOn = false; fill(); capOn = true;                 // members the cap held back that no harder team could use
+    // (the old "capOn = false" pass - capped members into easier spawn crimes - was removed Nov 13 2026: spawn teams
+    //  exist only for members the cap keeps out of the open crimes, so they go to crimes they're not capped in)
     if (bestScore < 0 || better(made, best)) { bestScore = planScore(made); best = made; }
     runs++;
   }

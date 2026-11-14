@@ -1627,10 +1627,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            cap: n(v.cap, 50, 100, 85), includeBusy: !!v.includeBusy,   // "chains" option removed Nov 12 2026
            // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
            share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null),
-           queueHours: n(v.queueHours, 0, 168, 12),    // queue members whose current crime is ready within this many hours
+           queueHours: 0,    // QUEUE REMOVED (Nov 13 2026, user: "Remove the queue options") - always 0
            // SPAWN HOLDS (Nov 12 2026): hold qualifying members for a better-paying crime that needs spawning this many
            // hours (0 = off); NO-SHOWS: a reservation not joined after this many hours is released (0 = off). oc_planner.js
-           holdHours: n(v.holdHours, 0, 24, 2), noShowHours: n(v.noShowHours, 0, 72, 6),
+           holdHours: 0, noShowHours:   /* SPAWN HOLDS REMOVED Nov 13 2026 (user) - always 0 */ n(v.noShowHours, 0, 72, 6),
            // AUTOMATIC (Nov 2026): the Hub keeps the live plan up to date every 3 minutes (default on); off = the plan
            // only changes when a leader deploys one
            auto: v.auto !== false,
@@ -2283,7 +2283,7 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 2, noShowHours: 6, includeBusy: false, share: null, queueHours: 12, auto: true, autoMinutes: 3};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3};
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
@@ -2320,6 +2320,8 @@ async function ocDelayStats(env, now) {
   return out;
 }
 
+// (Nov 13 2026, user: "The only time a spawn alert should appear is if members pass rate is too high for any of the
+// available crimes") - the planner now makes spawn teams only for those members, so every alert below is one of them.
 // SPAWN ALERTS (Nov 12 2026, the user: "Give alerts to spawn higher paying jobs when members who qualify are available
 // or becoming available"): every spawn team in the live plan whose crime has no recruiting instance with an open slot
 // of its roles = "spawn this". Best pay per member per day first. For the Hub script (op live "spawn", leaders) - the
