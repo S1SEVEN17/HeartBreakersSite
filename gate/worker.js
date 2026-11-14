@@ -1994,6 +1994,7 @@ function ocHookUrl(env, suffix) {
 }
 // pings created before this were posted without the name + ID - edited once (see 1b)
 const OC_PING_NAMES_AT = Date.UTC(2026, 10, 14, 1, 0);
+// (rows written from now on store created >= OC_PING_NAMES_AT, so the backfill never edits a new-wording ping again)
 // the ping's text. Name + ID always next to the mention (Nov 13 2026, user): a member whose Discord account isn't in
 // the server - or one Discord hasn't loaded yet (phones) - shows as "@unknown-user", so the name + ID says who it is
 function ocPingText(did, x) {
@@ -2026,6 +2027,34 @@ async function ocAssignPings(env, crimes) {
     }
   }
   const have = new Map((((await env.OC_DB.prepare("SELECT k, msg_id FROM oc_ping").all()).results) || []).map(x => [x.k, x.msg_id]));
+  // 0. POSITION CHANGED -> EDIT, NOT A NEW POST (Nov 13 2026, user: "Members whose positions change, update their
+  // discord post. Dont create a new one."): a member whose old ping no longer matches (different crime or role) but who
+  // has a NEW joinable assignment gets their existing message EDITED to the new crime / role (the row is re-keyed), so
+  // no second message is posted. An edit doesn't notify Discord again. Old message gone (404) -> the row is dropped and
+  // step 2 posts a fresh one. A member with no linked Discord (no message) just has the row re-keyed.
+  const pidOfKey = k => Number(String(k).split("|")[2]);
+  const freshByPid = new Map();
+  for (const [k, x] of want) if (!have.has(k) && !freshByPid.has(x.pid)) freshByPid.set(x.pid, k);
+  let edits = 0;
+  for (const [k, mid] of [...have]) {
+    if (want.has(k)) continue;
+    const nk = freshByPid.get(pidOfKey(k));
+    if (!nk) continue;                                       // no new assignment for them - step 1 deletes it
+    const x = want.get(nk);
+    if (mid) {
+      if (edits >= 8) break;
+      edits++;
+      const ids1 = await ocDiscordIds(env, [x.pid]), d = ids1[String(x.pid)];
+      if (!d || !d.id) continue;                             // not looked up - next run
+      let st = 0;
+      try { const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(mid)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}})}); st = res.status; } catch (e) { continue; }
+      if (st === 404) { await env.OC_DB.prepare("DELETE FROM oc_ping WHERE k = ?").bind(k).run().catch(() => {}); have.delete(k); continue; }
+      if (st < 200 || st >= 300) continue;                   // try again next run
+    }
+    await env.OC_DB.prepare("UPDATE oc_ping SET k = ?, crime_id = ?, created = ? WHERE k = ?").bind(nk, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT), k).run().catch(() => {});
+    have.delete(k); have.set(nk, mid); freshByPid.delete(x.pid);
+  }
   // 1. delete pings whose seat isn't a joinable assignment any more (joined, moved, filled, gone)
   let dels = 0;
   for (const [k, mid] of have) {
@@ -2047,7 +2076,7 @@ async function ocAssignPings(env, crimes) {
       try {
         const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(o.msg_id)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
           body: JSON.stringify({content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}})});
-        if (res.ok || res.status === 404) await env.OC_DB.prepare("UPDATE oc_ping SET created = ? WHERE k = ?").bind(Date.now(), o.k).run().catch(() => {});
+        if (res.ok || res.status === 404) await env.OC_DB.prepare("UPDATE oc_ping SET created = ? WHERE k = ?").bind(Math.max(Date.now(), OC_PING_NAMES_AT), o.k).run().catch(() => {});
       } catch (e) { /* next run */ }
     }
   }
@@ -2059,7 +2088,7 @@ async function ocAssignPings(env, crimes) {
   for (const [k, x] of fresh) {
     const d = ids[String(x.pid)];
     if (!d) continue;                                        // not looked up yet - next run
-    if (!d.id) { await env.OC_DB.prepare("INSERT OR IGNORE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, NULL, ?, ?, ?)").bind(k, x.pid, x.crime_id, Date.now()).run().catch(() => {}); continue; }
+    if (!d.id) { await env.OC_DB.prepare("INSERT OR IGNORE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, NULL, ?, ?, ?)").bind(k, x.pid, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT)).run().catch(() => {}); continue; }
     if (posts >= 8) break;
     posts++;
     const body = {content: ocPingText(d.id, x),
@@ -2068,7 +2097,7 @@ async function ocAssignPings(env, crimes) {
       const res = await fetch(ocHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
       if (!res.ok) continue;                                 // try again next run
       let mid = null; try { const m = await res.json(); mid = m && /^\d+$/.test(String(m.id)) ? String(m.id) : null; } catch (e) { mid = null; }
-      await env.OC_DB.prepare("INSERT OR REPLACE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, ?, ?, ?, ?)").bind(k, mid, x.pid, x.crime_id, Date.now()).run();
+      await env.OC_DB.prepare("INSERT OR REPLACE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, ?, ?, ?, ?)").bind(k, mid, x.pid, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT)).run();
     } catch (e) { continue; }
   }
 }
