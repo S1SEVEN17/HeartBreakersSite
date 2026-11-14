@@ -1128,8 +1128,13 @@ function drawDeployed() {
         return sl.user ? {position: pos, pid: sl.user.id, name: nameOf(sl.user.id), existing: true,
                           rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}
                        : {position: pos, pid: null, name: "", rate: null}; })}));
-  const plan = plan0 || unplanned.length ? Object.assign({}, plan0 || {}, {teams: ((plan0 && plan0.teams) || []).filter(t => !full(t)).concat(unplanned)}) : plan0;
+  let plan = plan0 || unplanned.length ? Object.assign({}, plan0 || {}, {teams: ((plan0 && plan0.teams) || []).filter(t => !full(t)).concat(unplanned)}) : plan0;
   if (!plan || !(plan.teams || []).length) { $("view").innerHTML = `<div class="panel">${autoHtml()}<div class="hn">Nothing deployed to Live yet - ${OPT.auto !== false ? "the Hub builds the first teams on its next 3-minute run, or " : ""}build teams in the Team Builder and press Deploy.</div></div>`; wireAuto(); return; }
+  // ORDER (Nov 13 2026, user: "Move the highest "join now" pay per day crimes to the top of the OC Management Deployed
+  // section"): highest JOIN NOW pay per member per day first - a live recruiting crime's rate for whoever joins now
+  // (payout / days to payout from now, liveDays), anything else its normal rate (teamDays falls back to full days)
+  const joinNowEach = t => { const v = valueOf(t.crime); return v.pot ? v.pot / teamDays(t) / (rolesOf(t.crime).length || t.roles.length || 1) : 0; };
+  plan = Object.assign({}, plan, {teams: plan.teams.slice().sort((a, b) => joinNowEach(b) - joinNowEach(a) || (b.difficulty || 0) - (a.difficulty || 0))});
   // NEXT CRIME (Nov 11 2026, user: a member in a crime that's planning AND queued for the next crime (it exists and is
   // re-scheduled for when the first one finishes) shows as Queued, not Joined): pid -> the team they're queued into
   const nextQ = {};
