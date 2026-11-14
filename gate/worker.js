@@ -1984,6 +1984,16 @@ function ocHookUrl(env, suffix) {
   if (extra.startsWith("?")) { new URLSearchParams(extra.slice(1)).forEach((v, k) => u.searchParams.set(k, v)); return u.toString(); }
   u.pathname = u.pathname.replace(/\/$/, "") + extra; return u.toString();
 }
+// pings created before this were posted without the name + ID - edited once (see 1b)
+const OC_PING_NAMES_AT = Date.UTC(2026, 10, 14, 1, 0);
+// the ping's text. Name + ID always next to the mention (Nov 13 2026, user): a member whose Discord account isn't in
+// the server - or one Discord hasn't loaded yet (phones) - shows as "@unknown-user", so the name + ID says who it is
+function ocPingText(did, x) {
+  const rate = x.rate != null ? `your pass rate **${Math.round(x.rate)}%**` : "";
+  const succ = x.succ != null ? `${x.calc ? "🎲 " : ""}team success **${Math.round(x.succ)}%**` : "";
+  return `🕵️ <@${did}> (**${x.name || "?"}** [${x.pid}]) you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
+    + (rate || succ ? `\n-# ${[rate, succ].filter(Boolean).join(" · ")} · join it now - this message goes away once you're in` : "");
+}
 async function ocAssignPings(env, crimes) {
   if (!env.OC_DB || !env.OC_DISCORD_WEBHOOK) return;
   await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS oc_ping (k TEXT PRIMARY KEY, msg_id TEXT, pid INTEGER, crime_id INTEGER, created INTEGER)").run();
@@ -2012,6 +2022,22 @@ async function ocAssignPings(env, crimes) {
     if (mid) { dels++; try { const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(mid)}`), {method: "DELETE"}); done = res.ok || res.status === 404; } catch (e) { done = false; } }
     if (done) await env.OC_DB.prepare("DELETE FROM oc_ping WHERE k = ?").bind(k).run().catch(() => {});
   }
+  // 1b. NAME + ID BACKFILL (Nov 13 2026): pings posted before the name + ID were added (created before
+  // OC_PING_NAMES_AT) are EDITED in place to the new wording - an edit doesn't notify anyone again
+  const old = (((await env.OC_DB.prepare("SELECT k, msg_id FROM oc_ping WHERE msg_id IS NOT NULL AND created < ?").bind(OC_PING_NAMES_AT).all()).results) || [])
+    .filter(x => want.has(x.k)).slice(0, 8);
+  if (old.length) {
+    const ids0 = await ocDiscordIds(env, [...new Set(old.map(x => want.get(x.k).pid))]);
+    for (const o of old) {
+      const x = want.get(o.k), d = ids0[String(x.pid)];
+      if (!d || !d.id) continue;
+      try {
+        const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(o.msg_id)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}})});
+        if (res.ok || res.status === 404) await env.OC_DB.prepare("UPDATE oc_ping SET created = ? WHERE k = ?").bind(Date.now(), o.k).run().catch(() => {});
+      } catch (e) { /* next run */ }
+    }
+  }
   // 2. ping the new ones (once per seat; no linked Discord = recorded without a message, not pinged)
   const fresh = [...want].filter(([k]) => !have.has(k));
   if (!fresh.length) return;
@@ -2023,12 +2049,7 @@ async function ocAssignPings(env, crimes) {
     if (!d.id) { await env.OC_DB.prepare("INSERT OR IGNORE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, NULL, ?, ?, ?)").bind(k, x.pid, x.crime_id, Date.now()).run().catch(() => {}); continue; }
     if (posts >= 8) break;
     posts++;
-    const rate = x.rate != null ? `your pass rate **${Math.round(x.rate)}%**` : "";
-    const succ = x.succ != null ? `${x.calc ? "🎲 " : ""}team success **${Math.round(x.succ)}%**` : "";
-    // name + ID always written next to the mention (Nov 13 2026, user): a webhook can't tell whether the Discord account
-    // is in the server - one that isn't shows as "@unknown-user", so the name + ID says who it is
-    const body = {content: `🕵️ <@${d.id}> (**${x.name || "?"}** [${x.pid}]) you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
-                  + (rate || succ ? `\n-# ${[rate, succ].filter(Boolean).join(" · ")} · join it now - this message goes away once you're in` : ""),
+    const body = {content: ocPingText(d.id, x),
                   allowed_mentions: {users: [d.id]}};
     try {
       const res = await fetch(ocHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
