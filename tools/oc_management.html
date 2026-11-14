@@ -443,7 +443,7 @@ const payRange = crime => { const hi = eachPay(crime), lo = Math.min(eachLow(cri
   return Math.round(lo) === Math.round(hi) ? fmt2(hi) : fmt2(lo) + "–" + fmt2(hi); };
 // DELAY RECORD (Nov 2026): config.json delays {pid: {n, long, hrs, runs}} - crimes held up in the last 30 days
 const delayTag = pid => { const d = ((D.config || {}).delays || {})[String(pid)];
-  return d && d.n ? `<span class="tag bad" title="Held up ${d.n} crime${d.n === 1 ? "" : "s"} in the last 30 days (${d.hrs} h in total${d.runs ? `, took part in ${d.runs}` : ""}) - the planner counts the likely delay against the crime's pay">⏱ ${d.n} delay${d.n === 1 ? "" : "s"} · ${Math.round(d.hrs)}h</span>` : ""; };
+  return d && d.n ? `<span class="tag bad" title="Held up ${d.n} crime${d.n === 1 ? "" : "s"} in the last 30 days (${d.hrs} h in total${d.runs ? `, took part in ${d.runs}` : ""}) - shown for leaders only; placement doesn't use it">⏱ ${d.n} delay${d.n === 1 ? "" : "s"} · ${Math.round(d.hrs)}h</span>` : ""; };
 // teamPay = max payout per day for the team; eachPay = per member per day (what's SHOWN) - same as the script.
 // teamExp = what auto-build RANKS by: the team's MAX pay per day (no expected pay, Nov 12 2026 - success only decides
 //           whether a team may be formed; the target is a hard limit).
@@ -488,19 +488,22 @@ const crimeOk = crime => { const off = new Set(D.config.disabled || []);
 let CAP_UP = null;
 const capped = (pid, crime, rate) => !!CAP_UP && OPT.cap < 100 && rate > OPT.cap && (CAP_UP[pid] || 0) > (diffOf(crime) || 0);
 
-// Best team for one crime from a pool, for AUTO-BUILD: every role at or above minRole, team average at or above the
-// target, maximising   team $/day  −  α × (what these members could earn in their own best crime)  −  release costs.
-//   α (0..1) = how much to save strong members for better crimes: at 0 the strongest go here; higher α fills the
-//              target with "just enough" members, so an 80% member can take an easier role when that pays more overall.
-//   cost(pid) = extra cost of using a member (auto-build's stealing step: the pay their current team loses).
+// Best team for one crime from a pool (Add-team suggestions + the old swap step): every role at or above minRole, the
+// team at or above the target, members chosen by MEMBER CHOICE (Nov 13 2026): script users, then free, then the
+// highest pass rate. alpha / opp are no longer used. cost(pid) Infinity = that member can't be taken from their team.
+let BUSY_NOW = {};   // members in a crime right now (teamFor's free-first order) - refreshed on every call below
 function teamFor(crime, pool, alpha, opp, cost) {
+  BUSY_NOW = busyMap();
   const roles = rolesOf(crime); if (!roles.length) return null;
   const v = valueOf(crime), k = v.pot / v.days / roles.length / 100;   // $/day per pass-rate point in one role
   const need = OPT.target * roles.length - 1e-9;               // weighted: sum of rate x role weight (mean weight 1)
   const cands = roles.map(pos => {
     const all = [], w = roleW(crime, pos);
     pool.forEach(pid => { const r = rateOf(pid, crime, pos); if (r && r.rate >= floorOf(crime, pos) && !capped(+pid, crime, r.rate))
-      all.push({pid: +pid, name: nameOf(pid), rate: r.rate, wr: r.rate * w, src: r.src, sc: k * r.rate * w - alpha * (opp[pid] || 0) - (cost ? cost(+pid) : 0)}); });
+      // MEMBER CHOICE (Nov 13 2026, user - same as gate/oc_planner.js tier()): script users, then free members, then the
+      // highest pass rate. Pass rates never enter pay per day; no opportunity cost. cost Infinity = can't be moved.
+      all.push({pid: +pid, name: nameOf(pid), rate: r.rate, wr: r.rate * w, src: r.src,
+                sc: (scriptKnown() && !usesScript(+pid) ? 0 : 1e9) + (BUSY_NOW[+pid] ? 0 : 1e6) + r.rate - (cost && !isFinite(cost(+pid)) ? 1e15 : 0)}); });
     if (!all.length) return all;
     // best by score + best by weighted rate (the strong ones keep the target reachable)
     const bySc = all.slice().sort((a, b) => b.sc - a.sc), byRt = all.slice().sort((a, b) => b.wr - a.wr);

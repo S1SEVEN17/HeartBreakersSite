@@ -468,7 +468,7 @@ export function ocPlan(X) {
     const fixedSum = wSum(c.name, fixed);                   // weighted (role weights)
     const nsBan = new Set(Object.keys((t && t.noshow) || {}).map(Number));   // NO-SHOWS: not back into this crime
     const pool = freePool().concat(softPool()).filter(p => !nsBan.has(p.pid));
-    const k = payDayInst(c) / roles.length / 100;      // a member's pay per day here = k x their rate (TIME IN THE CRIME)
+    const k = payDayInst(c) / roles.length / 100;      // (unused for choice - pass rates never enter pay per day, Nov 13 2026)
     // CALCULATED SUCCESS: the whole crime with these new members (always full - every open slot is filled)
     const leafOk = pick => !calcBad(roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), c.name);
     let best = null;
