@@ -115,6 +115,7 @@ details.sets summary b{color:var(--gold)}
 table{width:100%;border-collapse:collapse}td,th{padding:6px 8px;border-bottom:1px solid #2a1416;text-align:left;font-size:13px}
 th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 @media (max-width:560px){body{padding:8px}.teams,.crl{grid-template-columns:1fr}.panel{padding:10px}}
+.chainline { font-size: 12px; opacity: .9; }
 </style></head><body>
 __MENU__
 <h1>OC Management</h1>
@@ -432,6 +433,16 @@ const potRaw = (crime, low) => { const n = netOf(crime, low); return n != null ?
 //   days           = from joining THIS crime to the payout = its own planning + every later crime's planning
 //                    (No Reserve 3 + 6 = 9, Bidding War 6); planning days = seats
 //   pot (returned) = this crime's seats' share, so pot / days / seats = pay per member per day
+// CHAIN ORDER ON THE TILE (Nov 14 2026, user: "These crimes are chained. They should indicate the order on the tile.
+// For example: "Manifest Cruelty > Gone Fission > Crane Reaction" with a chain icon. Do this for all chained crimes."):
+// a chained crime's tile shows the whole chain in order (first -> final payout), this crime in bold. Not chained -> "".
+// (Replaces the old "· after <prereq>" note.)
+function chainLine(crime) {
+  const ch = chainOf(crime);
+  if (ch.length < 2) return "";
+  return `<span class="chainline" title="Chained crimes - done in this order; the last one pays out for the whole chain">🔗 `
+    + ch.map(x => x === crime ? `<b>${esc(x)}</b>` : esc(x)).join(" &gt; ") + "</span><br>";
+}
 function chainOf(crime) {
   const cat = CFG.catalog, seen = new Set([crime]), out = [crime];
   let c = crime, g = 0;
@@ -669,7 +680,7 @@ function drawCrimes() {
       // for="crN": a <button> inside the label (🔁 Rotate) would otherwise be the label's control and swallow the
       // row's click, so the on/off switch never toggled (fixed Nov 2026)
       return `<label class="cr${off.has(n) ? " off" : ""}" for="cr${ix}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
-        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each · avg ${fmt2(eachAvg(n))}` : ""}</i>${srcTag(chainOf(n).slice(-1)[0])}${rewardTag(n)}</span>
+        ${chainLine(n)}<i>${(c.roles || []).length} roles${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each · avg ${fmt2(eachAvg(n))}` : ""}</i>${srcTag(chainOf(n).slice(-1)[0])}${rewardTag(n)}</span>
         <span class="sw"><input type="checkbox" id="cr${ix}" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
       : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;
   const count = () => { const n = document.querySelectorAll("[data-cr]:not(:checked)").length; $("crn").textContent = `${names.length - n} of ${names.length} on`; };
