@@ -553,7 +553,7 @@ function autoBuild() {
   const keep = BOARD.teams.filter(t => t.lock);
   const lastRuns = {}; Object.entries(D.config.last_runs || {}).forEach(([k, v]) => { lastRuns[k] = (v || []).map(l => new Set(l)); });
   const r = ocPlan({crimes: D.feed || [], prev: keep, fresh: true, catalog: CFG.catalog, members: CFG.members,
-    rotate: new Set(D.config.rotate || []), lastRuns, delays: D.config.delays || {},
+    rotate: new Set(),   // rotation removed Nov 13 2026 lastRuns, delays: D.config.delays || {},
     opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),
     payOf: crime => valueOf(crime), budgetMs: 900, weights: D.config.weights || null,
     holdLog: D.config.hold_log || {},
@@ -637,7 +637,7 @@ function draw() {
   if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "notify") drawNotify(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
 }
 
-// ROTATION (Nov 2026): leaders mark the crimes they want ROTATED. A rotated crime that's recruiting is filled first
+// ROTATION - REMOVED Nov 13 2026 (user); notes kept for reference. (Nov 2026): leaders mark the crimes they want ROTATED. A rotated crime that's recruiting is filled first
 // and can take members still finishing another crime, as long as they free up before their planning turn (planning
 // runs one member at a time, 24 h each, in join order). Turning one on also rotates its prerequisite crimes.
 function withPrereqs(set) { let grew = true;
@@ -649,8 +649,6 @@ function drawCrimes() {
   // recorded pay per member per day first (eachPay), then difficulty
   const names = Object.keys(CFG.catalog).sort((a, b) => eachPay(b) - eachPay(a) || (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));
   $("view").innerHTML = `<div class="panel"><div class="hn">Crimes are listed by their best recorded pay per member per day (🌐 = tornprobability.com's community data, or our own best run when it's higher; the average run is shown beside it). Switch a crime <b>off</b> and the OC Optimizer stops suggesting it to members (and Auto-build skips it).
-    <b>🔁 Rotate</b> a high-paying crime and the planner keeps its next team lined up: when one is recruiting it's filled first,
-    including members still finishing another crime who'll be free before their planning turn. Its prerequisite crimes rotate too.
     ${D.config.disabled_by ? `Last saved by ${esc(D.config.disabled_by)} ${ago(D.config.disabled_ts)}.` : ""}</div>
     <div class="bar" style="justify-content:flex-start"><button class="go" id="savecr">Save</button><button id="allon">All on</button>
       <span class="tag" id="crn">${names.length - off.size} of ${names.length} on</span></div>
@@ -659,21 +657,16 @@ function drawCrimes() {
       // row's click, so the on/off switch never toggled (fixed Nov 2026)
       return `<label class="cr${off.has(n) ? " off" : ""}" for="cr${ix}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
         <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each · avg ${fmt2(eachAvg(n))}` : ""}</i>${srcTag(chainOf(n).slice(-1)[0])}</span>
-        <button type="button" class="rot${rot.has(n) ? " on" : ""}" data-rot="${esc(n)}" title="Rotate this crime">🔁 Rotate</button>
         <span class="sw"><input type="checkbox" id="cr${ix}" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
       : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;
   const count = () => { const n = document.querySelectorAll("[data-cr]:not(:checked)").length; $("crn").textContent = `${names.length - n} of ${names.length} on`; };
   document.querySelectorAll("[data-cr]").forEach(x => x.onchange = () => { x.closest(".cr").classList.toggle("off", !x.checked); count(); });
-  document.querySelectorAll("[data-rot]").forEach(b => b.onclick = e => { e.preventDefault(); e.stopPropagation();
-    const n = b.dataset.rot;
-    if (rot.has(n)) rot.delete(n); else { rot.add(n); withPrereqs(rot); }
-    document.querySelectorAll("[data-rot]").forEach(x => x.classList.toggle("on", rot.has(x.dataset.rot))); });
+  // (🔁 Rotate removed Nov 13 2026, user: crimes are filled on an "as available" basis)
   $("allon").onclick = () => { document.querySelectorAll("[data-cr]").forEach(x => { x.checked = true; x.closest(".cr").classList.remove("off"); }); count(); };
   $("savecr").onclick = async () => {
     const v = [...document.querySelectorAll("[data-cr]:not(:checked)")].map(x => x.dataset.cr);
-    const rv = [...rot];
-    try { st("Saving…"); await saveConfig("disabled", v); await saveConfig("rotate", rv); D.config.disabled = v; D.config.rotate = rv; D.config.disabled_ts = Date.now();
-      st(`Saved - ${v.length} crime${v.length === 1 ? "" : "s"} off, ${rv.length} rotated (Live).`); }
+    try { st("Saving…"); await saveConfig("disabled", v); D.config.disabled = v; D.config.disabled_ts = Date.now();
+      st(`Saved - ${v.length} crime${v.length === 1 ? "" : "s"} off (Live).`); }
     catch (e) { st("Save failed: " + e.message, true); }
   };
 }
@@ -781,7 +774,7 @@ function teamCard(t) {
       <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>${notes ? `<div class="rnotes">${notes}</div>` : ""}${warn}</div>`;
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
+      ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}
       <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
       <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
       ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>`}
@@ -1163,7 +1156,7 @@ function drawDeployed() {
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${(D.config.rotate || []).includes(t.crime) ? ' <span class="tag" title="A rotated crime">🔁</span>' : ""}
+      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       <div class="tag">${payLine(t, false)}</div>
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}

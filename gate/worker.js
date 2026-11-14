@@ -1280,7 +1280,7 @@ async function ocConfig(env, envName) {
     out[r.k] = v; out[r.k + "_ts"] = r.ts; out[r.k + "_by"] = r.by;
   }
   if (!Array.isArray(out.disabled)) out.disabled = [];
-  if (!Array.isArray(out.rotate)) out.rotate = [];
+  out.rotate = [];   // ROTATION REMOVED (Nov 13 2026, user) - any saved rotated crimes are ignored
   return out;
 }
 // ROTATION mix rule (Nov 2026): who was in the latest completed runs of each rotated crime (oc_hist, newest first)
@@ -1606,6 +1606,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
     if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
+    if (b.k === "rotate") v = [];   // ROTATION REMOVED (Nov 13 2026, user) - nothing is rotated any more
     if (b.k === "disabled" || b.k === "rotate") {
       // disabled: crimes switched off; rotate (Nov 2026): crimes leaders ROTATE (the page adds their prerequisites)
       if (!Array.isArray(v)) return Response.json({ok: false, error: b.k + " must be a list"}, {status: 400});

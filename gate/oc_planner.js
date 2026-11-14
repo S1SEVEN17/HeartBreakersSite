@@ -161,7 +161,10 @@ export function ocPlan(X) {
   const beforeExpiry = (pid, c) => !c || !c.expired_at || freeAt.get(Number(pid)) < c.expired_at * 1000;
   // can this member be planned here? free now, or queueable (and free before the live crime `c` expires)
   const usable = (pid, c) => !busy.has(Number(pid)) || (queueable(pid) && beforeExpiry(pid, c)) || rotOk(pid, c);
-  const ROT = X.rotate instanceof Set ? X.rotate : new Set(X.rotate || []);
+  // ROTATION REMOVED (Nov 13 2026, user: "remove rotation crimes altogether. Crimes should be on a "as available"
+  // basis."): ROT is always empty, so no crime is rotated, nobody still in a crime is reserved for one (rotOk is
+  // false) and rotFill never runs. X.rotate is ignored. The rotation code below is kept for reference only.
+  const ROT = new Set();
   const rotated = n => ROT.has(n) && !X.disabled.has(n);
   const crimeOk = n => !X.disabled.has(n) && rolesOf(n).length;   // chain finals allowed (Nov 12 2026) - switched-off crimes only
   // ---- rotation: join-order planning deadlines ----
