@@ -230,5 +230,11 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) load(true);
 });
 load();
+// LIVE UPDATES (Nov 14 2026, user: the site updates in real time): other leaders' claims, notes and removals show up
+// within 20 s while this page is visible (and at once when you come back to it) - Worker reads only, no Torn call.
+// Skipped while you're typing in a field so nothing you're writing is wiped.
+const typing = () => { const a = document.activeElement; return !!a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName); };
+setInterval(() => { if (!document.hidden && !typing()) load(true); }, 20000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !typing()) load(true); });
 </script>
 </body></html>

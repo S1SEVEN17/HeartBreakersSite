@@ -379,8 +379,10 @@ async function loadLive() {
   renderNow();
 }
 load().then(loadLive);
-// other members' sign-ups every 2 minutes (not while you're filling the form); live board every 30 s; timers every second
-setInterval(() => { if (!document.hidden && !touched) load(); }, 120000);
+// other members' sign-ups every 20 s (Nov 14 2026, was 2 minutes - user: the site updates in real time; not while
+// you're filling the form); live board every 5 s; timers every second
+setInterval(() => { if (!document.hidden && !touched) load(); }, 20000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !touched) load(); });
 setInterval(() => { if (!document.hidden) { placeCurrent(); if (D) { renderNext(); renderStats(); } } }, 30000);
 // live board every 5 s while visible (Nov 13 2026, user: chain watch on the Hub within 5-10 s - the Hub reuses its
 // answer for 3 s, and the room takes a new hit from a focused member's script at once)

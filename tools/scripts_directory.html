@@ -140,5 +140,9 @@ async function load() {
 $("q").oninput = () => { if (D) render(); };
 $("addBtn").onclick = () => openForm(null);
 load();
+// LIVE UPDATES (Nov 14 2026, user: the site updates in real time): scripts other leaders add, edit or remove show up
+// within 30 s while this page is visible - not while the add/edit form is open.
+setInterval(() => { if (!document.hidden && $("formCard").style.display === "none") load(); }, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && $("formCard").style.display === "none") load(); });
 </script>
 </body></html>

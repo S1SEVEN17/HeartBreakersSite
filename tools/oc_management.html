@@ -189,10 +189,23 @@ async function load() {
       // payout summaries + item prices (the script's data - pay per day shown here matches the script)
       getJSON("oc/summaries.json?env=" + ENV).catch(() => null)]);
     D.sums = (sums && sums.summaries) || null; D.prices = (sums && sums.prices) || {};
+    D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
+    applyLive(cfg, rates, feed);
+    LIVE_SIG = liveSig(cfg, rates, feed);
+    if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
+      CFG.members = pool.members; CFG.hist = pool.hist || {}; CFG.built = pool.t;
+    }
+    const shared = Object.keys(D.rates).length;
+    st(`${shared} member${shared === 1 ? "" : "s"} sharing rates · ${D.active.length} active crime${D.active.length === 1 ? "" : "s"}`
+      + (D.activeT ? ` (checked ${ago(D.activeT * 1000)})` : ""));
+  } catch (e) { st("Couldn't load: " + e.message, true); }
+  draw();
+}
+// the live parts of the page's data: config (plan, settings, contact log...), shared rates, the OC data feed
+function applyLive(cfg, rates, feed) {
     D.config = cfg; D.rates = rates || {};
     if (cfg.opts && typeof cfg.opts === "object") Object.assign(OPT, cfg.opts);       // the live plan's settings
     OPT.queueHours = 0; OPT.holdHours = 0;   // removed Nov 13 2026 (user)
-    D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
     D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
     // Active crimes (who's in what) come from the OC DATA FEED when it has them (Nov 2026): the Hub's own Torn pull
     // every 3 minutes PLUS members' OC Optimizer refreshes written back - so a script refresh shows up here at once.
@@ -204,15 +217,32 @@ async function load() {
                                           sl.user && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : 0])}));
       D.activeT = Math.floor(D.feedT / 1000);
     }
-    if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
-      CFG.members = pool.members; CFG.hist = pool.hist || {}; CFG.built = pool.t;
-    }
-    const shared = Object.keys(D.rates).length;
-    st(`${shared} member${shared === 1 ? "" : "s"} sharing rates · ${D.active.length} active crime${D.active.length === 1 ? "" : "s"}`
-      + (D.activeT ? ` (checked ${ago(D.activeT * 1000)})` : ""));
-  } catch (e) { st("Couldn't load: " + e.message, true); }
-  draw();
 }
+// LIVE UPDATES (Nov 14 2026, user: "The site should update in real time when things are changed ... It shouldn't
+// take a refresh for this to update."): every 15 s while the tab is visible (and at once when it comes back into
+// view) the page re-reads the config (plan, settings, contact log, crimes on/off), the shared rates and the OC data
+// feed - Worker/D1 reads only, no Torn call. When anything changed, the open tab is drawn again, unless you're in
+// the middle of changing something there (typing, an unsaved switch) - then it waits for your next action.
+let LIVE_SIG = "", VIEW_DIRTY = false;
+const liveSig = (cfg, rates, feed) => JSON.stringify([cfg, rates, feed && feed.as_of]);
+async function liveSync() {
+  if (document.hidden || polling) return;
+  try {
+    const [cfg, rates, feed] = await Promise.all([getJSON("oc/config.json?env=" + ENV), getJSON("oc/rates.json?env=" + ENV),
+      getJSON("oc/crimes.json?env=" + ENV).catch(() => null)]);
+    const sig = liveSig(cfg, rates, feed);
+    if (sig === LIVE_SIG) return;
+    LIVE_SIG = sig; applyLive(cfg, rates, feed);
+    const a = document.activeElement;
+    if (VIEW_DIRTY || (a && $("view").contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName))) return;
+    const keep = $("nmsg") ? $("nmsg").innerHTML : null;         // keep the Notify tab's "message copied" note
+    draw();
+    if (keep && $("nmsg")) $("nmsg").innerHTML = keep;
+  } catch (e) {}
+}
+setInterval(liveSync, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) liveSync(); });
+["input", "change"].forEach(ev => $("view").addEventListener(ev, () => { VIEW_DIRTY = true; }));
 async function saveConfig(k, v) {
   const r = await fetch("oc/config", {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"}, body: JSON.stringify({env: ENV, k, v})});
   const j = await r.json().catch(() => ({}));
@@ -663,6 +693,7 @@ function addTeam(crime) {
 
 // ---------- views ----------
 function draw() {
+  VIEW_DIRTY = false;                                            // a fresh view - nothing unsaved in it yet
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
   if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "notify") drawNotify(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
 }
@@ -1132,6 +1163,7 @@ function drawNotify() {
     const cp = b.dataset.n === "chat" ? copy(m.chat) : copyRich(m.mailHtml, m.mail);   // mail: clickable links
     const url = b.dataset.n === "chat" ? `https://www.torn.com/profiles.php?XID=${x.pid}` : `https://www.torn.com/messages.php#/p=compose&XID=${x.pid}`;
     window.open(url, "_blank");
+    drawNotify();                                                 // the new "last contacted" line shows at once (Nov 14 2026)
     cp.then(() => say(b.dataset.n === "chat" ? `💬 Message copied ✓ - on <b>${esc(x.name)}</b>'s profile tap <b>Chat</b>, paste and send, then tick ✓.`
                                             : `✉️ Message copied ✓ - set the subject to <b>${esc(m.subject)}</b>, paste the message, send, then tick ✓.`),
             () => say(`Couldn't copy - here's the message:<br><textarea style="width:100%;height:110px">${esc(b.dataset.n === "chat" ? m.chat : m.mail)}</textarea>`));
