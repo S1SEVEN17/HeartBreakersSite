@@ -2007,6 +2007,11 @@ async function ocAssignPings(env, crimes) {
   const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
   const byId = new Map((crimes || []).map(c => [String(c.id), c]));
   const label = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
+  // ANY CRIME (Nov 13 2026, user: "It should remove them regardless of what crime they join"): a member sitting in
+  // ANY crime slot in Torn right now (any crime, any role) has no joinable assignment - their ping is deleted (and none
+  // is posted) straight from the crimes feed, without waiting for the planner to drop their reservation
+  const inCrime = new Set();
+  for (const c of crimes || []) for (const sl of c.slots || []) if (sl.user && sl.user.id) inCrime.add(Number(sl.user.id));
   const want = new Map();                                    // k -> {pid, name, crime, crime_id, position, rate, succ}
   for (const t of plan.teams || []) {
     if (t.kind !== "live" || t.crime_id == null) continue;
@@ -2014,7 +2019,7 @@ async function ocAssignPings(env, crimes) {
     if (!c || c.status !== "Recruiting") continue;
     const open = new Set((c.slots || []).filter(sl => !sl.user).map(label));
     for (const r of t.roles || []) {
-      if (r.pid == null || r.existing || r.queued || !open.has(r.position)) continue;
+      if (r.pid == null || r.existing || r.queued || !open.has(r.position) || inCrime.has(Number(r.pid))) continue;
       want.set(`${t.crime_id}|${r.position}|${r.pid}`, {pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id,
         position: r.position, rate: r.rate, succ: t.succ, calc: !!t.succ_calc});
     }
