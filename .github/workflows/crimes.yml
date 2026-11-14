@@ -44,8 +44,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # the deployed OC plan (who's assigned to which role) for the Recruiting post - read from D1 (Nov 13 2026);
+      # a failure just leaves the post without assignments
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Read the OC plan
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          cd gate && npm install --no-save --silent wrangler@4 >/dev/null 2>&1 || true
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT v FROM oc_config WHERE env = 'prod' AND k = 'plan'" 2>/dev/null \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const r=JSON.parse(s)[0].results[0];process.stdout.write(r?r.v:"")}catch(e){}})' > "$RUNNER_TEMP/oc_plan.json" || true
+          echo "OC plan: $(wc -c < "$RUNNER_TEMP/oc_plan.json") bytes"
+
       - name: Check for delayed crimes
         env:
+          OC_PLAN_FILE: ${{ runner.temp }}/oc_plan.json
           TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
           RUN_KIND: crimes
           OC_FORCE_ACTIVE: ${{ inputs.oc_refresh }}

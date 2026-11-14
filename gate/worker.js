@@ -1500,6 +1500,8 @@ function ocCleanTeams(teams) {
     crime_id: t.kind === "live" && t.crime_id != null ? Number(t.crime_id) || null : null, lock: !!t.lock,
     // SPAWN HOLD (spawn teams) {since, until} ms; NO-SHOWS {pid: ms} kept out of this crime instance (oc_planner.js)
     hold: t.kind !== "live" && t.hold && Number(t.hold.until) ? {since: Number(t.hold.since) || 0, until: Number(t.hold.until)} : null,
+    // TEAM SUCCESS for display (planner, Nov 13 2026): % and whether it's tornprobability's calculated chance
+    succ: t.succ != null && isFinite(Number(t.succ)) ? Number(t.succ) : null, succ_calc: !!t.succ_calc,
     noshow: t.noshow && typeof t.noshow === "object" ? Object.fromEntries(Object.entries(t.noshow).slice(0, 20).filter(([k, v]) => Number(k) && Number(v)).map(([k, v]) => [String(Number(k)), Number(v)])) : null,
     roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 10).map(r => ({position: String(r.position || "").slice(0, 40),
       pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
@@ -1935,10 +1937,105 @@ async function ocFeedPull(env) {
   } catch (e) { fail("summaries", e); }
   // the automatic team plan (live crimes) - after everything above is saved (it reads the new roster / summaries)
   if (crimesNow) try { await ocAutoPlan(env, crimesNow, now); } catch (e) { fail("plan", e); }
+  // Discord: ping members whose assigned seat just became joinable; delete pings once they've joined (Nov 13 2026)
+  if (crimesNow) try { await ocAssignPings(env, crimesNow); } catch (e) { fail("pings", e); }
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pull:errors', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(errs)).run();
 }
 
+
+// =====================================================================================================
+// OC ASSIGNMENT PINGS (Nov 13 2026, user: "Ping them on discord when they are assigned, if their discord ID is
+// available, with a link to their crimeID and the assigned role and success rate." Decisions: everyone gets pinged
+// unless they're already in their role; only once the seat becomes JOINABLE; joined = delete; every new mention is a
+// NEW message so the member gets notified).
+// Runs after the planner on the 3-minute pull. Joinable = a live team's reserved seat (not joined, not queued behind
+// the member's current crime) in a crime that's Recruiting in Torn with that role still open. One message per seat
+// (crime id + role + member), posted with the crimes channel webhook (Worker secret OC_DISCORD_WEBHOOK, copied from
+// the DISCORD_WEBHOOK_CRIMES GitHub secret; never logged). Members without a linked Discord account (Torn
+// /v2/user/{id}/discord, Hub key - cached a day per member) aren't pinged (the 📣 Notify list covers them).
+// A ping is deleted when its seat is no longer a joinable assignment: the member joined (the user's rule), or the
+// plan moved them / the crime filled or went. D1 oc_ping {k, msg_id, pid, crime_id, created}. At most 8 posts and
+// 8 deletes per run (Worker sub-request budget). Counts only in logs - nothing else.
+const OC_CRIME_URL = id => `https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId=${id}`;
+async function ocDiscordIds(env, pids) {
+  const cur = ((await ocSnapGet(env, "hub", "discord:ids").catch(() => null)) || {}).data || {};
+  const now = Date.now(); let changed = false, calls = 0;
+  for (const pid of pids) {
+    const c = cur[String(pid)];
+    if (c && now - c.at < 864e5) continue;
+    if (calls >= 8) break;                                   // the rest next run
+    let did = null; calls++;
+    try {
+      // API: Heart Breakers Hub - OC assignment pings (Discord link, Torn V2, key in the header)
+      const d = await ocTorn(env, `user/${Number(pid)}/discord`);
+      const x = d && (d.discord || d);
+      did = x && (x.discord_id || x.discordId || x.discordID);
+      did = did && /^\d+$/.test(String(did)) ? String(did) : null;
+    } catch (e) { continue; }
+    cur[String(pid)] = {id: did, at: now}; changed = true;
+  }
+  if (changed) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'discord:ids', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(cur)).run().catch(() => {});
+  return cur;
+}
+function ocHookUrl(env, suffix) {
+  const u = new URL(String(env.OC_DISCORD_WEBHOOK).trim()), extra = suffix || "";
+  if (extra.startsWith("?")) { new URLSearchParams(extra.slice(1)).forEach((v, k) => u.searchParams.set(k, v)); return u.toString(); }
+  u.pathname = u.pathname.replace(/\/$/, "") + extra; return u.toString();
+}
+async function ocAssignPings(env, crimes) {
+  if (!env.OC_DB || !env.OC_DISCORD_WEBHOOK) return;
+  await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS oc_ping (k TEXT PRIMARY KEY, msg_id TEXT, pid INTEGER, crime_id INTEGER, created INTEGER)").run();
+  const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
+  const byId = new Map((crimes || []).map(c => [String(c.id), c]));
+  const label = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
+  const want = new Map();                                    // k -> {pid, name, crime, crime_id, position, rate, succ}
+  for (const t of plan.teams || []) {
+    if (t.kind !== "live" || t.crime_id == null) continue;
+    const c = byId.get(String(t.crime_id));
+    if (!c || c.status !== "Recruiting") continue;
+    const open = new Set((c.slots || []).filter(sl => !sl.user).map(label));
+    for (const r of t.roles || []) {
+      if (r.pid == null || r.existing || r.queued || !open.has(r.position)) continue;
+      want.set(`${t.crime_id}|${r.position}|${r.pid}`, {pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id,
+        position: r.position, rate: r.rate, succ: t.succ, calc: !!t.succ_calc});
+    }
+  }
+  const have = new Map((((await env.OC_DB.prepare("SELECT k, msg_id FROM oc_ping").all()).results) || []).map(x => [x.k, x.msg_id]));
+  // 1. delete pings whose seat isn't a joinable assignment any more (joined, moved, filled, gone)
+  let dels = 0;
+  for (const [k, mid] of have) {
+    if (want.has(k)) continue;
+    if (dels >= 8) break;
+    let done = true;
+    if (mid) { dels++; try { const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(mid)}`), {method: "DELETE"}); done = res.ok || res.status === 404; } catch (e) { done = false; } }
+    if (done) await env.OC_DB.prepare("DELETE FROM oc_ping WHERE k = ?").bind(k).run().catch(() => {});
+  }
+  // 2. ping the new ones (once per seat; no linked Discord = recorded without a message, not pinged)
+  const fresh = [...want].filter(([k]) => !have.has(k));
+  if (!fresh.length) return;
+  const ids = await ocDiscordIds(env, [...new Set(fresh.map(([, x]) => x.pid))]);
+  let posts = 0;
+  for (const [k, x] of fresh) {
+    const d = ids[String(x.pid)];
+    if (!d) continue;                                        // not looked up yet - next run
+    if (!d.id) { await env.OC_DB.prepare("INSERT OR IGNORE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, NULL, ?, ?, ?)").bind(k, x.pid, x.crime_id, Date.now()).run().catch(() => {}); continue; }
+    if (posts >= 8) break;
+    posts++;
+    const rate = x.rate != null ? `your pass rate **${Math.round(x.rate)}%**` : "";
+    const succ = x.succ != null ? `${x.calc ? "🎲 " : ""}team success **${Math.round(x.succ)}%**` : "";
+    const body = {content: `🕵️ <@${d.id}> you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
+                  + (rate || succ ? `\n-# ${[rate, succ].filter(Boolean).join(" · ")} · join it now - this message goes away once you're in` : ""),
+                  allowed_mentions: {users: [d.id]}};
+    try {
+      const res = await fetch(ocHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      if (!res.ok) continue;                                 // try again next run
+      let mid = null; try { const m = await res.json(); mid = m && /^\d+$/.test(String(m.id)) ? String(m.id) : null; } catch (e) { mid = null; }
+      await env.OC_DB.prepare("INSERT OR REPLACE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, ?, ?, ?, ?)").bind(k, mid, x.pid, x.crime_id, Date.now()).run();
+    } catch (e) { continue; }
+  }
+}
 
 // =====================================================================================================
 // OC SUMMARIES FEED (Nov 2026) - project doc claude/oc-optimizer-hub-summaries-contract.md ("Option B")

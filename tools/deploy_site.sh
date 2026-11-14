@@ -71,6 +71,17 @@ if [ -n "${DISCORD_WEBHOOK_CHAINS:-}" ]; then
   rm -f "$RUNNER_TEMP/secret.log"
 fi
 
+# ---- OC assignment pings (Nov 13 2026): the Worker pings members in the crimes channel when their assigned OC seat
+# becomes joinable (and deletes the ping once they join). Webhook copied from DISCORD_WEBHOOK_CRIMES (stdin, yes/no only).
+if [ -n "${DISCORD_WEBHOOK_CRIMES:-}" ]; then
+  if printf '%s' "$DISCORD_WEBHOOK_CRIMES" | tr -d '[:space:]' | npx wrangler secret put OC_DISCORD_WEBHOOK -c "$CFG" > "$RUNNER_TEMP/secret.log" 2>&1; then
+    echo "OC assignment pings: webhook set"
+  else
+    echo "::warning::OC assignment pings: couldn't set the Worker's webhook (pings stay off)"
+  fi
+  rm -f "$RUNNER_TEMP/secret.log"
+fi
+
 # ---- tornprobability.com (Nov 2026): the CalculateSuccess key (X-API-KEY), optional - without it the Hub uses the
 # role weights only. Copied from the GitHub secret TP_API_KEY into a Worker secret (stdin, yes/no only).
 if [ -n "${TP_API_KEY:-}" ]; then

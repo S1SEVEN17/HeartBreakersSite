@@ -10684,19 +10684,51 @@ def oc_recruit_payload(crimes: list, mem: dict, now: int, ocfg: dict) -> dict:
                                 aren't shown) - who's in, which roles are still open
       embed "🕐 Recent Delays"  members who held up a crime in the last recent_delay_days (7) and the original
                                 reason - from the delay log (no durations)"""
+    # ASSIGNMENTS (Nov 13 2026, user: "Show members who are assigned to crimes and their roles for each crime"): every
+    # recruiting crime with someone in it OR someone ASSIGNED to it by the deployed OC plan (crimes.yml reads it from
+    # D1 into OC_PLAN_FILE), role by role: ✅ joined (their pass rate), 📌 assigned - can join now, ⏳ assigned -
+    # joins after their current crime, ➖ open. Team success = the plan's (🎲 = tornprobability's calculated chance).
+    # Pings for the assigned members are the gatekeeper's (gate/worker.js ocAssignPings) - this post never mentions.
+    plan_by = {}
+    try:
+        pf = os.environ.get("OC_PLAN_FILE", "")
+        pl = json.loads(Path(pf).read_text(encoding="utf-8")) if pf and Path(pf).exists() and Path(pf).stat().st_size else {}
+        for t in pl.get("teams") or []:
+            if t.get("kind") == "live" and t.get("crime_id") is not None:
+                plan_by[str(t["crime_id"])] = t
+    except (OSError, ValueError):
+        plan_by = {}
     fields = []
     for c in crimes:
         slots = _as_list(c.get("slots"))
         filled = [sl for sl in slots if _slot_user(sl)]
         open_ = [sl for sl in slots if not _slot_user(sl)]
-        if not open_ or not filled:
-            continue                     # full (it's in the Overview) / nobody in it yet (not shown)
-        who = ", ".join((mem.get(_slot_user(sl)) or mem.get(str(_slot_user(sl))) or {}).get("name", f"[{_slot_user(sl)}]")
-                        for sl in filled)
-        need = ", ".join(sorted({str(sl.get("position") or "?") for sl in open_}))
-        fields.append((-len(filled) / max(1, len(slots)), int(c.get("difficulty") or 0),
-                       {"name": f"{c.get('name', 'Organized Crime')} · D{c.get('difficulty', '?')}"[:256],
-                        "value": (f"👥 **{len(filled)}/{len(slots)}** filled\n🙋 {who}\n📝 Needs: {need}")[:1000] + "\n\u200b",
+        team = plan_by.get(str(c.get("id"))) or {}
+        roles = [r for r in (team.get("roles") or []) if r.get("pid") is not None and not r.get("existing")]
+        if not open_ or not (filled or roles):
+            continue                     # full (it's in the Overview) / nobody in it or assigned to it (not shown)
+        nm = lambda uid: (mem.get(uid) or mem.get(str(uid)) or {}).get("name", f"[{uid}]")
+        lines, left = [], list(roles)
+        for sl in slots:
+            lab, uid = oc_slot_label(sl), _slot_user(sl)
+            if uid:
+                pr = sl.get("checkpoint_pass_rate")
+                lines.append(f"✅ **{lab}** · {nm(uid)}" + (f" ({round(pr)}%)" if isinstance(pr, (int, float)) else ""))
+                continue
+            r = next((x for x in left if x.get("position") == lab), None)
+            if r:
+                left.remove(r)
+                rt = f" ({round(r['rate'])}%)" if isinstance(r.get("rate"), (int, float)) else ""
+                lines.append(f"{'⏳' if r.get('queued') else '📌'} **{lab}** · {r.get('name') or nm(r.get('pid'))}{rt}"
+                             + (" · after current crime" if r.get("queued") else ""))
+            else:
+                lines.append(f"➖ **{lab}** · open")
+        su = team.get("succ")
+        head_ = f"[Open crime #{c.get('id')}](https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId={c.get('id')})"
+        tail = f"\n{'🎲' if team.get('succ_calc') else '🎯'} Team success **{round(su)}%**" if isinstance(su, (int, float)) else ""
+        fields.append((-(len(filled) + len(roles)) / max(1, len(slots)), int(c.get("difficulty") or 0),
+                       {"name": f"{c.get('name', 'Organized Crime')} · D{c.get('difficulty', '?')} · {len(filled)}/{len(slots)}"[:256],
+                        "value": (head_ + "\n" + "\n".join(lines) + tail)[:1000] + "\n\u200b",
                         "inline": True}))
     fields = [f[2] for f in sorted(fields, key=lambda f: (f[0], -f[1]))]      # closest to full first
     embeds = []
@@ -10704,7 +10736,8 @@ def oc_recruit_payload(crimes: list, mem: dict, now: int, ocfg: dict) -> dict:
         e = {"color": 0x6b6b70, "fields": fields[k:k + 24]}
         if k == 0:
             e["title"] = f"📝 Recruiting ({len(fields)})"
-            e["description"] = "Crimes filling up - jump in if you can take one of the open roles."
+            e["description"] = ("Crimes filling up. ✅ joined · 📌 assigned - join now · ⏳ assigned - after their current crime"
+                                " · ➖ open - jump in if you can take it.")
         embeds.append(e)
     if not fields:
         embeds.append({"title": "📝 Recruiting", "color": 0x6b6b70,

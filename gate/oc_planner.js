@@ -659,6 +659,10 @@ export function ocPlan(X) {
   teams.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "live" ? -1 : 1) || payDay(b.crime) - payDay(a.crime) || (b.difficulty || 0) - (a.difficulty || 0));
   const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.hold ? 1 : 0, Object.keys(t.noshow || {}).length, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
   const changed = sig(teams) !== sig(X.prev || []);
+  // TEAM SUCCESS for display (Nov 13 2026 - the Discord recruiting post / assignment pings): the calculated chance
+  // (succ_calc) when the team is full and it's known, else the weighted average of the members placed so far
+  teams.forEach(t => { const c = calcOf(t.roles, t.crime), a = c != null ? c : avgOf(t.roles.filter(r => r.pid != null), t.crime);
+    t.succ = a == null ? null : Math.round(a * 10) / 10; t.succ_calc = c != null; });
   return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
     holds: teams.filter(t => t.hold).length, hold_log: holdLog,
