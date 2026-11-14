@@ -766,6 +766,12 @@ export function ocPlan(X) {
       const v = X.payOf(c.name); return [String(c.id), v && v.days ? +(v.days / instDays(c)).toFixed(3) : 1]; })),
     // JOIN NOW (Nov 12 2026): {crime_id: days to payout for whoever joins now} - every recruiting crime
     inst_days: Object.fromEntries([...inst.values()].filter(c => c.status === "Recruiting").map(c => [String(c.id), +instDays(c).toFixed(3)])),
+    // HB SUITE 0.2.5 (Nov 14 2026, user: "Pay per day should show the maximum ... based off the "Join Now" amount"): the
+    // same figures for PLANNING crimes (every seat taken) - pay per day from now until payout for the members in them.
+    // Kept apart from inst_mult so recruiting-only users (/oc/plan join_now, team pay) are unchanged.
+    plan_mult: Object.fromEntries([...inst.values()].filter(c => c.status === "Planning").map(c => {
+      const v = X.payOf(c.name); return [String(c.id), v && v.days ? +(v.days / instDays(c)).toFixed(3) : 1]; })),
+    plan_days: Object.fromEntries([...inst.values()].filter(c => c.status === "Planning").map(c => [String(c.id), +instDays(c).toFixed(3)])),
     rotation: Object.keys(poolOf).map(n => ({crime: n, pool: poolOf[n].size, seats: rolesOf(n).length,
       max: Math.max(1, Math.floor(poolOf[n].size / (rolesOf(n).length || 1))),
       live: [...ROT_ON].filter(id => (inst.get(id) || {}).name === n).length}))}};

@@ -2518,17 +2518,21 @@ async function ocMine(env, pid) {
   // planner stats as /oc/plan join_now: pay_day x inst_mult), else the crime type's normal figure. Same for the seat
   // you're assigned to.
   const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null), P = (ps && ps.data) || {};
-  const pd = P.pay_day || {}, pmin = P.pay_day_min || {}, mult = P.inst_mult || {}, days = P.inst_days || {};
+  // (0.2.5) planning crimes' join-now figures too (plan_mult / plan_days) - the Suite shows the maximum, "(est)"
+  const pd = P.pay_day || {}, pmin = P.pay_day_min || {}, mult = Object.assign({}, P.plan_mult || {}, P.inst_mult || {}),
+        days = Object.assign({}, P.plan_days || {}, P.inst_days || {});
   const members = await currentMembers(env).catch(() => null);
   const nameOf = id => ((members && members.get(Number(id))) || {}).name || null;
   const payOf = (c, crimeName) => {
     const name = c ? c.name : crimeName, hi = pd[name], lo = pmin[name];
     if (!hi) return null;
     const id = c ? String(c.id) : null, m = id ? Number(mult[id]) || 0 : 0;
+    // join-now pay (0.2.5): any recruiting or planning crime the planner has a multiplier for; join_now flags the
+    // recruiting ones with an open seat (the "⚡ Join now" label)
     const open = !!(c && c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user) && (c.slots || []).some(sl => sl.user));
-    const jn = open && m > 0;
+    const jn = m > 0 && !!c && (c.status === "Recruiting" || c.status === "Planning");
     return {pay_day: Math.round(hi * (jn ? m : 1)), pay_day_min: lo != null ? Math.round(lo * (jn ? m : 1)) : null, normal: Math.round(hi),
-            join_now: jn, days: id && days[id] != null ? Number(days[id]) : null};
+            join_now: jn && open, est: jn, days: id && days[id] != null ? Number(days[id]) : null};
   };
   const teamOf = c => (plan.teams || []).find(t => t.crime_id != null && String(t.crime_id) === String(c.id));
   const detail = c => ({difficulty: c.difficulty ?? null, created_at: c.created_at || null, planning_at: c.planning_at || null, ready_at: c.ready_at || null,
