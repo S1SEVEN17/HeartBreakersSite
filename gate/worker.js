@@ -425,6 +425,17 @@ async function sxRoute(env, ctx, req) {
     if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
     if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
     if (what === "myoc") return sxJson(await ocMine(env, who.id));   // the Hub script's Home "My OC" tile (Nov 14 2026)
+    // HB SUITE (Nov 14 2026): the header's live status chips - ranked war + chain now (same as the site's now.json)
+    if (what === "now") return sxJson(await liveMemo("now", () => hubNowData(env)));
+    return sxJson({ok: false, error: "unknown"}, 400);
+  }
+  // 🤝 RECRUITMENT from the HB Suite script (Nov 14 2026) - leaders; the same list / actions as the Leaders' Recruitment
+  // page (rcLeaderRoute): {do: "list"} -> {ok, recruits, me}; {do: "update", body: {pid, action, status?, note?}}
+  if (op === "rc") {
+    if (!who.leader) return leadersOnly();
+    if (b.do === "list") return sxPass(await rcLeaderRoute(env, new Request("https://sx.local/list.json"), who, "list.json"));
+    if (b.do === "update") return sxPass(await rcLeaderRoute(env, new Request("https://sx.local/update", {method: "POST",
+      headers: {"X-HB-Save": "1", "Content-Type": "application/json"}, body: JSON.stringify(b.body || {})}), who, "update"));
     return sxJson({ok: false, error: "unknown"}, 400);
   }
   // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
