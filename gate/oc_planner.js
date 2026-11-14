@@ -201,6 +201,20 @@ export function ocPlan(X) {
   // small 2-point preference - Nov 13 2026: no longer, NS_LAST is used everywhere). Queued members (1e12) still come
   // after free ones of either kind.
   const NS_LAST = 1e9;
+  // MEMBER CHOICE (Nov 13 2026, user): "Pay per day should not be based solely on payout ÷ members ÷ days" (answer:
+  // drop the pass-rate multiply - pay per day = payout ÷ members ÷ days, it only ORDERS THE CRIMES), "It should simply
+  // be highest pay rate with qualifying pass rates", "No delay costs", "Script members who qualify are picked before
+  // non script members, no score penalty, just a comparison and selection", "Free members who have qualifying pass
+  // rates should be placed immediately", rotation: "Pick the best suited for the role".
+  // So inside a crime the members are chosen by a plain ORDER, compared in turn:
+  //   1. uses the OC script (when known) - 2. free now (not queued behind their current crime) - 3. highest pass rate
+  // (the search maximises the number of script users, then free members, then the rates - the tier sizes below just
+  // keep each comparison ahead of the next; nothing is a pay figure). Who QUALIFIES is unchanged: role minimum, cap,
+  // the team reaching the success target. Crimes themselves are still taken best pay per member per day first.
+  // The opportunity cost ("minus half their best crime elsewhere"), the delay cost and the rotation "sat out the
+  // last run" priority are gone.
+  const TIER_S = 1e9, TIER_F = 1e6;
+  const tier = (pid, rate, queued) => (noScr(pid) ? 0 : TIER_S) + (queued ? 0 : TIER_F) + rate;
   // ---- pay ----
   const payDay = crime => { const v = X.payOf(crime); return v && v.days ? v.pot / v.days : 0; };          // team, max
   // TIME IN THE CRIME (Nov 12 2026, user: "Pay per day can be altered based on the actual time a member is in a crime
@@ -220,6 +234,7 @@ export function ocPlan(X) {
   // cost charged against them = the team's pay per day x those hours / (24 x the crime's days) - a member who often
   // holds crimes up drops behind an equally good reliable one, most of all in the big, short crimes.
   const delayHrs = pid => { const d = (X.delays || {})[String(pid)]; return d && d.hrs ? d.hrs / Math.max(1, d.runs || 0, d.n || 0) : 0; };
+  // NO DELAY COSTS (Nov 13 2026, user) - delayCost is no longer used in any placement; kept for reference only
   const delayCost = (pid, crime) => { const h = delayHrs(pid); if (!h) return 0; const v = X.payOf(crime);
     return v && v.days ? (v.pot / v.days) * h / (24 * v.days) : 0; };
   // team success = the WEIGHTED average of the members' rates (role weights above)
@@ -406,15 +421,8 @@ export function ocPlan(X) {
   const each = c => payDayInst(c) / ((c.slots || []).length || 1);   // TIME IN THE CRIME: this instance's days
   const recruiting = [...inst.values()].filter(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user))
     .sort((a, b) => ROT_ON.has(String(b.id)) - ROT_ON.has(String(a.id)) || each(b) - each(a) || filled(b) - filled(a) || (b.difficulty || 0) - (a.difficulty || 0));   // rotated first
-  // WHO fills a slot: each member's own pay per day there (crime pay/day per slot x their pass rate), minus half of
-  // what they'd earn per day in their best crime anywhere - so strong members aren't spent on a low-paying crime a
-  // weaker member can pass, and are left for the crimes where they earn the most. The slots still get filled
-  // whenever the crime can reach the target (the score only decides who, not whether).
-  const bestDay = {};
-  Object.keys(roster).forEach(pid => { let b = 0;
-    Object.keys(cat).forEach(c => { if (!crimeOk(c)) return; const n = rolesOf(c).length || 1, pd = payDay(c);
-      rolesOf(c).forEach(pos => { const r = rateOf(pid, c, pos); if (r && r.rate >= floorOf(c, pos) && !capped(pid, c, r.rate)) b = Math.max(b, pd * r.rate / 100 / n); }); });
-    bestDay[pid] = b; });
+  // WHO fills a slot: MEMBER CHOICE (see tier() above) - script users, then free members, then the highest pass rate.
+  // (The old "minus half of their best crime elsewhere" opportunity cost was removed Nov 13 2026, user.)
   // why recruiting crimes were left open (stats.skipped, counts per reason + the gap) - diagnostics only
   const skipped = [];
   const skip = (c, reason, x) => skipped.push(Object.assign({crime: c.name, crime_id: c.id,
@@ -433,9 +441,7 @@ export function ocPlan(X) {
       const q = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && rotOk(p, c) && !nsBan.has(p)).map(pid => ({pid, soft: false, q: true}));
       const all = pool.concat(q).filter(p => !ban.has(p.pid));
       const best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, all, (p, rate) =>
-        k * (rate - (p.soft ? 3 : 0)) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6
-        + (last && pl.has(p.pid) && !last.has(p.pid) && !inNow.has(p.pid) ? 1e9 : 0)       // MIX: sat out the last run
-        - (p.q ? k * Math.max(0, fOf(p.pid) - NOW) / 3600e3 : 0) - delayCost(p.pid, c.name) - (noScr(p.pid) ? NS_LAST : 0), 20000, leafOk);
+        tier(p.pid, rate, p.q), 20000, leafOk);              // MEMBER CHOICE: script, free, best rate (no "sat out" mix)
       if (!best) return null;
       const order = best.slice().sort((a, b) => fOf(a.pid) - fOf(b.pid));
       const late = order.find((b, i) => fOf(b.pid) > NOW + base + PLAN_MS * i + 600e3);   // 10 min slack
@@ -468,13 +474,13 @@ export function ocPlan(X) {
     let best = null;
     if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k, nsBan, leafOk);
     if (!best) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
-                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - (noScr(p.pid) ? NS_LAST : 0) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - delayCost(p.pid, c.name), 20000, leafOk);
+                           (p, rate) => tier(p.pid, rate, false), 20000, leafOk);   // MEMBER CHOICE
     // QUEUE: nobody free can fill it to the target -> let members finishing their crime soon in, as few as possible
     if (!best && !ROT_ON.has(String(c.id))) {
       const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c) && !nsBan.has(p))
         .map(pid => ({pid, soft: false, q: true}));
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
-                           (p, rate) => k * (rate - (p.soft ? 3 : 0)) - (noScr(p.pid) ? NS_LAST : 0) - 0.5 * (bestDay[p.pid] || 0) + rate * 1e-6 - (p.q ? 1e12 : 0) - delayCost(p.pid, c.name), 20000, leafOk);
+                           (p, rate) => tier(p.pid, rate, p.q), 20000, leafOk);     // MEMBER CHOICE (free before queued)
     }
     if (!best) {                                           // can't reach the target: SKIPPED (left open)
       // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
@@ -508,7 +514,7 @@ export function ocPlan(X) {
     teams.forEach(t => { if (t.kind === "live" && !t.lock) t.roles.forEach(r => { if (r.pid != null && !r.existing && !r.replaces) resv.set(Number(r.pid), {t, r}); }); });
     const liveDen = t => { const c = inst.get(String(t.crime_id)); return c ? payDayInst(c) / (t.roles.length || 1) : density(t.crime); };   // TIME IN THE CRIME
     // what a pulled member is planned for now: their reserved crime's MAX pay per member per day (no expected pay)
-    const curPay = pid => { const x = resv.get(pid); return x ? liveDen(x.t) : 0.5 * (bestDay[pid] || 0); };
+    const curPay = pid => { const x = resv.get(pid); return x ? liveDen(x.t) : 0; };   // not planned anywhere = 0
     const cands = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n) && !(holdLog[n] > NOW)
       && !teams.some(t => t.kind === "spawn" && t.hold && t.crime === n)).sort((a, b) => density(b) - density(a));
     let pulled = false;
@@ -517,7 +523,7 @@ export function ocPlan(X) {
       const pool = Object.keys(roster).map(Number).filter(p => resv.has(p) ? liveDen(resv.get(p).t) < density(C) : (!assigned.has(p) && usable(p)));
       if (pool.length < n) continue;
       const best = fillSlots(C, roles.map(l => ({label: l})), 0, n, pool.map(pid => ({pid})),
-        (p, rate) => k * (rate - (busy.has(p.pid) ? 3 : 0)) - curPay(p.pid) - delayCost(p.pid, C) - (noScr(p.pid) ? NS_LAST : 0), 40000,   // script users first
+        (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 40000,   // MEMBER CHOICE: script, free, best rate
         pick => !calcBad(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), C));
       if (!best || !best.some(b => resv.has(b.pid))) continue;          // nobody to pull: step 4 handles free members
       const nt = {id: uid(), crime: C, difficulty: diffOf(C), kind: "spawn", crime_id: null, lock: false, hold: {since: NOW, until: NOW + HOLD},
@@ -539,7 +545,7 @@ export function ocPlan(X) {
     if (!open.length) continue;
     const fixed = t.roles.filter(r => r.pid != null), fixedSum = wSum(t.crime, fixed);
     const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p)).map(pid => ({pid, soft: false}));
-    const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => rate - (busy.has(p.pid) ? 3 : 0) - delayCost(p.pid, t.crime) / Math.max(1e-9, payDay(t.crime) / t.roles.length / 100) - (noScr(p.pid) ? NS_LAST : 0), 20000,   // delay cost in rate points; script users first
+    const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 20000,   // MEMBER CHOICE: script, free, best rate
       pick => !calcBad(t.roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), t.crime));
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
   }
@@ -553,18 +559,15 @@ export function ocPlan(X) {
   // new spawn teams: the pay-per-day optimizer (as the page's Auto-build did) over crime TYPES not recruiting now
   const spawnCrimes = Object.keys(cat).filter(n => crimeOk(n) && !openRecruitingNames.has(n));
   const pool0 = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p));   // free + queueable
-  const opp = {};
-  pool0.forEach(pid => { let b = 0;
-    spawnCrimes.forEach(c => { const n = rolesOf(c).length || 1, pd = payDay(c);
-      rolesOf(c).forEach(pos => { const r = rateOf(pid, c, pos); if (r && r.rate >= floorOf(c, pos)) b = Math.max(b, pd * r.rate / 100 / n); }); });
-    opp[pid] = b; });
-  // one spawn team for a crime type: maximise team pay - alpha x (what these members earn in their best crime) - cost
-  //   (alpha 0..1 saves strong members for better crimes; cost = steal step: the pay their current team loses)
+  // (the spawn optimizer's "opp" opportunity cost was removed Nov 13 2026 - MEMBER CHOICE above; the alpha runs only
+  //  vary the crime order now)
+  // one spawn team for a crime type - MEMBER CHOICE (script, free, best rate); cost = steal step (Infinity = can't move)
   function teamFor2(crime, pool, alpha, cost) {
     const roles = rolesOf(crime); if (!roles.length) return null;
     const k = payDay(crime) / roles.length / 100;
     const best = fillSlots(crime, roles.map(l => ({label: l})), 0, roles.length, [...pool].map(pid => ({pid: Number(pid)})),
-      (p, rate) => k * rate - alpha * (opp[p.pid] || 0) - (cost ? cost(p.pid) : 0) - (busy.has(p.pid) ? k * 3 : 0) - (noScr(p.pid) ? NS_LAST : 0) - delayCost(p.pid, crime), 40000,   // free members preferred over queued; script users first
+      // MEMBER CHOICE: script, free, best rate. cost (the steal step): Infinity = can't be taken from their team
+      (p, rate) => tier(p.pid, rate, busy.has(p.pid)) - (cost && !isFinite(cost(p.pid)) ? 1e15 : 0), 40000,
       pick => !calcBad(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), crime));
     if (!best) return null;
     return {id: uid(), crime, difficulty: diffOf(crime), kind: "spawn", crime_id: null, lock: false,
@@ -606,9 +609,9 @@ export function ocPlan(X) {
       free.forEach(pid => { if (not && not.has(pid)) return;
         const r = rateOf(pid, t.crime, t.roles[ri].position); if (!r || r.rate < floorOf(t.crime, t.roles[ri].position) || capped(pid, t.crime, r.rate)) return;
         const tt = teamPayWith(t, ri, r.rate); if (!meets(tt.roles, tt.crime)) return;   // CALCULATED SUCCESS when known
-        // script users first (Nov 13 2026), then the best pay
-        const pay = expPay(tt), ns = noScr(pid);
-        if (!b || (b.ns && !ns) || (b.ns === ns && pay > b.pay)) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay, ns}; });
+        // MEMBER CHOICE (Nov 13 2026): script users first, then free members, then the highest pass rate
+        const pay = expPay(tt), ns = noScr(pid), q = busy.has(pid), sc = tier(pid, r.rate, q);
+        if (!b || sc > b.sc) b = {c: {pid, name: nameOf(pid), rate: r.rate, src: r.src}, pay, ns, sc}; });
       return b;
     };
     for (let round = 0; round < 6; round++) {
