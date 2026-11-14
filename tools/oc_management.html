@@ -1090,6 +1090,24 @@ function copyRich(html, text) {
     return ok ? Promise.resolve() : Promise.reject();
   } catch (e) { return Promise.reject(); }
 }
+// LAST CONTACTED (Nov 14 2026, user: "When a player is notified, leave a timestamp of when they were last contacted,
+// their crime and role."): pressing 💬 Chat, ✉️ Mail or ✓ logs {when, crime, role, how, by} on the Hub (oc config
+// "contacted", one entry per member, kept 30 days) so every leader sees it under the member's name. The Hub records
+// the press - Torn can't tell it whether the message was actually sent.
+function logContact(x, how) {
+  const e = {pid: x.pid, crime: x.crime, crime_id: x.crime_id, role: x.position, how};
+  D.config.contacted = D.config.contacted || {};
+  D.config.contacted[String(x.pid)] = Object.assign({}, e, {at: Date.now(), by: "you"});   // show it straight away
+  saveConfig("contacted", e).catch(() => {});
+}
+function lastContact(lc, x) {
+  if (!lc || !lc.at) return `<br><span class="tag">Not contacted yet</span>`;
+  const when = new Date(lc.at).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+  const same = String(lc.crime_id) === String(x.crime_id) && lc.role === x.position;
+  const how = {chat: "💬 chat", mail: "✉️ mail", sent: "✓ marked"}[lc.how] || lc.how;
+  return `<br><span class="tag" title="Logged when a leader pressed ${esc(how)}${lc.by ? " - " + esc(lc.by) : ""}">📨 Last contacted ${esc(when)} (${ago(lc.at)}) · ${esc(lc.crime)}${lc.crime_id ? " #" + esc(lc.crime_id) : ""} · ${esc(lc.role)} · ${esc(how)}</span>`
+    + (same ? "" : ` <span class="tag" style="color:var(--gold)" title="Their assignment has changed since">⚠️ different crime/role now</span>`);
+}
 function drawNotify() {
   const L = notifyList();
   let sent = {}; try { sent = JSON.parse(localStorage.getItem(NOTIFY_LS) || "{}") || {}; } catch (e) {}
@@ -1098,8 +1116,8 @@ function drawNotify() {
   if (L === null) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">Nobody has used the OC script with the Hub yet, so the Hub can't tell who doesn't have it.</div></div>` + notifyEditor(); notifyEditorWire(); return; }
   if (!L.length) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">✅ Nobody to notify - every member without the script who's placed has joined (or isn't placed in a recruiting crime).</div></div>` + notifyEditor(); notifyEditorWire(); return; }
   $("view").innerHTML = `<div class="panel">${head}<table class="tb"><tr><th>Member</th><th>Crime · role</th><th></th></tr>`
-    + L.map((x, i) => { const k = x.pid + ":" + x.crime_id, s = sent[k];
-      return `<tr><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}</td>
+    + L.map((x, i) => { const k = x.pid + ":" + x.crime_id, s = sent[k], lc = (D.config.contacted || {})[String(x.pid)];
+      return `<tr><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s && !lc ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}${lastContact(lc, x)}</td>
         <td>${esc(x.crime)} <span class="tag">#${esc(x.crime_id)}</span><br><span class="mid">${esc(x.position)}</span></td>
         <td style="white-space:nowrap"><button data-n="chat" data-i="${i}">💬 Chat</button> <button data-n="mail" data-i="${i}">✉️ Mail</button> <button data-n="sent" data-i="${i}" title="Tick off on this device">✓</button></td></tr>`; }).join("")
     + `</table><div class="hn" id="nmsg"></div></div>` + notifyEditor();
@@ -1108,6 +1126,7 @@ function drawNotify() {
   const copy = t => navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject();
   $("view").querySelectorAll("button[data-n]").forEach(b => b.onclick = () => {
     const x = L[+b.dataset.i], m = notifyMsgs(x), k = x.pid + ":" + x.crime_id;
+    logContact(x, b.dataset.n);                                  // shared "last contacted" log (all leaders)
     if (b.dataset.n === "sent") { sent[k] = Date.now(); try { localStorage.setItem(NOTIFY_LS, JSON.stringify(sent)); } catch (e) {} drawNotify(); return; }
     // copy first, then open Torn - both straight from the tap (clipboard + popup rules)
     const cp = b.dataset.n === "chat" ? copy(m.chat) : copyRich(m.mailHtml, m.mail);   // mail: clickable links

@@ -1609,8 +1609,25 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     let b;
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
-    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify", "contacted"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
+    if (b.k === "contacted") {
+      // 📣 CONTACT LOG (Nov 14 2026, user: "When a player is notified, leave a timestamp of when they were last
+      // contacted, their crime and role."): the page sends ONE entry {pid, crime, crime_id, role, how: chat|mail|sent};
+      // it's merged into the shared map {pid: {at, crime, crime_id, role, how, by}} (latest contact per member, every
+      // leader sees it). Entries older than 30 days are dropped; at most 500 members kept.
+      const e = v && typeof v === "object" ? v : {};
+      const pid = Number(e.pid);
+      if (!(pid > 0)) return Response.json({ok: false, error: "pid required"}, {status: 400});
+      const cur = (await ocConfig(env, b.env)).contacted;
+      const map = cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {};
+      const now = Date.now();
+      map[String(pid)] = {at: now, crime: String(e.crime || "").slice(0, 80), crime_id: Number(e.crime_id) || null,
+        role: String(e.role || "").slice(0, 40), how: ["chat", "mail", "sent"].includes(e.how) ? e.how : "sent", by: `${who.name} [${who.id}]`};
+      for (const k of Object.keys(map)) if (!map[k] || !(now - Number(map[k].at) < 30 * 864e5)) delete map[k];
+      const keep = Object.entries(map).sort((a, c) => c[1].at - a[1].at).slice(0, 500);
+      v = Object.fromEntries(keep);
+    }
     if (b.k === "rotate") v = [];   // ROTATION REMOVED (Nov 13 2026, user) - nothing is rotated any more
     if (b.k === "disabled" || b.k === "rotate") {
       // disabled: crimes switched off; rotate (Nov 2026): crimes leaders ROTATE (the page adds their prerequisites)
@@ -1642,6 +1659,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            auto: v.auto !== false,
            // AUTOMATIC TIMER (Nov 2026): how often the Hub re-plans, in minutes - 3 (the Worker timer's own beat) to 60
            autoMinutes: Math.round(n(v.autoMinutes, 3, 60, 3))};
+    } else if (b.k === "contacted") {
+      // (built above - the merged contact log)
     } else {
       if (!v || typeof v !== "object" || !Array.isArray(v.teams)) return Response.json({ok: false, error: "plan must have teams"}, {status: 400});
       v = {teams: ocCleanTeams(v.teams)};
