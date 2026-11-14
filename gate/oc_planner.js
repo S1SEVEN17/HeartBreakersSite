@@ -182,7 +182,15 @@ export function ocPlan(X) {
     if (rolesOf(c).some(pos => { const r = rateOf(pid, c, pos); return r && r.rate >= floorOf(c, pos); })) capUp[pid] = diffOf(c) || 0;
   }));
   let capOn = true;
-  const capped = (pid, crime, rate) => capOn && O.cap < 100 && rate > O.cap && (capUp[pid] || 0) > (diffOf(crime) || 0);
+  // PAUSED CRIMES - CAP MAXED (Nov 13 2026, user: "Paused crimes should have their cap maxed out."): a recruiting crime
+  // whose members have ALL finished their planning but that still has an open slot is stuck waiting for members. Its
+  // open slots ignore the role cap (as if the cap were 100%): a member above the cap may take one. curPaused is set
+  // while such a crime is being filled (step 2b takeover, step 3 fill) and checked by capped(); overQ (spawn
+  // eligibility) treats a paused crime's slots as open to everyone over the cap.
+  const paused = c => !!c && c.status === "Recruiting" && (c.slots || []).some(sl => sl.user) && (c.slots || []).some(sl => !sl.user)
+    && (c.slots || []).every(sl => !sl.user || (Number(sl.user.progress) || 0) >= 100);
+  let curPaused = false;
+  const capped = (pid, crime, rate) => capOn && !curPaused && O.cap < 100 && rate > O.cap && (capUp[pid] || 0) > (diffOf(crime) || 0);
   // rotation pools + how many RECRUITING instances of each rotated crime get rotation queueing at once:
   // floor(pool / seats), at least 1, most-filled first. (The join-order deadlines decide who can actually make it.)
   const poolOf = {};
@@ -405,6 +413,7 @@ export function ocPlan(X) {
     for (const t of teams) {
       if (t.lock) continue;
       const c = t.kind === "live" ? inst.get(String(t.crime_id)) : null;
+      curPaused = paused(c);                               // PAUSED CRIMES: no cap in this crime's seats
       t.roles.forEach((r, ri) => {
         if (r.pid == null || r.existing || !noScr(r.pid)) return;
         let b = null;
@@ -423,6 +432,7 @@ export function ocPlan(X) {
         t.roles[ri] = k;
       });
     }
+    curPaused = false;
   }
 
   // ---- 3. fill open slots of recruiting crimes; skip crimes that can't reach the target ----
@@ -463,6 +473,7 @@ export function ocPlan(X) {
     return null;
   }
   const fillRecruiting = () => { for (const c of recruiting) {
+    curPaused = paused(c);                                 // PAUSED CRIMES: cap maxed for this crime (reset below)
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
     if (t && t.lock) { skip(c, "locked"); continue; }
     if (!t && X.disabled.has(c.name)) { skip(c, "switched off"); continue; }   // switched off (an existing team is kept)
@@ -533,7 +544,7 @@ export function ocPlan(X) {
     });
     if (!t) { t = {id: uid(), crime: c.name, difficulty: c.difficulty ?? diffOf(c.name), kind: "live", crime_id: c.id, lock: false, roles}; teams.push(t); claimed.add(String(c.id)); }
     else t.roles = roles;
-  } };
+  } curPaused = false; };
   fillRecruiting();
 
   // ---- 3b. SPAWN HOLDS (see the header) ----
@@ -580,7 +591,7 @@ export function ocPlan(X) {
     for (const c of openNow) for (const sl of c.slots || []) { if (sl.user) continue;
       const pos = slotLabel(sl), r = rateOf(pid, c.name, pos);
       if (!r || r.rate < floorOf(c.name, pos)) continue;
-      if (!capped(pid, c.name, r.rate)) return false;
+      if (paused(c) || !capped(pid, c.name, r.rate)) return false;   // a paused crime has no cap
       high = true; }
     return high; };
   teams.forEach(t => { if (t.kind === "spawn" && !t.lock) t.roles.forEach(r => {
