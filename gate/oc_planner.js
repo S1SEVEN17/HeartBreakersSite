@@ -148,8 +148,9 @@ export function ocPlan(X) {
   for (const c of X.crimes || []) {
     if (!c || c.id == null || (c.status !== "Recruiting" && c.status !== "Planning")) continue;
     inst.set(String(c.id), c);
+    const full = (c.slots || []).length > 0 && (c.slots || []).every(x => x.user);   // every slot taken
     for (const sl of c.slots || []) if (sl.user) busy.set(Number(sl.user.id), {cid: String(c.id), label: slotLabel(sl), status: c.status,
-      prog: Number(sl.user.progress) || 0});
+      prog: Number(sl.user.progress) || 0, full});
   }
   // NOT PLANNING YET -> CAN BE MOVED (Nov 13 2026, user: "members who joined or were assigned, but are not actively
   // planning, can be reassigned to better jobs if available ... as long as their planning has not started yet"):
@@ -158,7 +159,9 @@ export function ocPlan(X) {
   // crime, position}: they leave that crime in Torn, then join. Once their planning starts (progress > 0) they're
   // locked in and the move is dropped.
   // (Recruiting OR Planning: a crime that filled up and is planning again still has members waiting for their turn)
-  const idleIn = pid => { const b = busy.get(Number(pid)); return b && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > 0) ? b.cid : null; };
+  // FULL CRIMES (Nov 13 2026, user: "If a crime is full, do not pull members from it."): a member in a crime with
+  // every slot taken is never moved, planning started or not - only crimes with an open slot can lose a member
+  const idleIn = pid => { const b = busy.get(Number(pid)); return b && !b.full && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > 0) ? b.cid : null; };
   // ---- queue: members in a Planning crime that's ready within the window ----
   // QUEUE REMOVED (Nov 13 2026, user: "Remove the queue options"): members still in a crime are never queued for their
   // next one - QWIN is always 0 whatever opts.queueHours says (rotated crimes' join-order deadlines are separate)
