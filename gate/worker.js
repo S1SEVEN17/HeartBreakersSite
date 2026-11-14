@@ -2585,8 +2585,41 @@ async function ocSpawnAlerts(env) {
         }
       }
   } catch (e) { oc_notify = []; }
+  // HB SUITE 0.2.4 (Nov 14 2026, user: "OC Page: For Leaders ... Any delayed OCs, paused planning, or missing items should
+  // be displayed here as well. Import the "Loan" system from the OC Optimizer script."):
+  //   delays  the timer's delay check (ocDelayCheck, oc_snap hub/delays): ready crimes held up by a member
+  //   paused  recruiting crimes whose members have ALL finished planning but that still have an open seat (the
+  //           planner's "paused" rule, oc_planner.js) - stuck until someone joins
+  //   missing every member in a crime whose seat's required item isn't there (item_requirement.is_available === false,
+  //           the Hub key's view of filled slots) - the OC Optimizer's "To Loan" list, from the Hub (no member call)
+  //   needs   "pid:itemId" for every filled seat that needs an item - the script's "Unused loans" check skips these
+  let delays = [], paused = [], missing = [], needs = [];
+  try {
+    const d = await ocSnapGet(env, "hub", "delays").catch(() => null); delays = (d && d.data) || [];
+    const cat = await ocSnapGet(env, "prod", "catalog").catch(() => null), itemName = {};
+    for (const c of ((cat && cat.data && cat.data.organizedcrimes) || [])) for (const sl of c.slots || [])
+      if (sl.required_item && sl.required_item.id) itemName[String(sl.required_item.id)] = sl.required_item.name || null;
+    const members = await currentMembers(env).catch(() => null);
+    const nm = id => ((members && members.get(Number(id))) || {}).name || ("#" + id);
+    for (const c of crimes) {
+      if (!c || !["Recruiting", "Planning"].includes(c.status)) continue;
+      const slots = c.slots || [], filled = slots.filter(sl => sl.user);
+      if (c.status === "Recruiting" && filled.length && filled.length < slots.length && filled.every(sl => (Number(sl.user.progress) || 0) >= 100))
+        paused.push({crime: c.name, crime_id: c.id, filled: filled.length, seats: slots.length,
+                     open: slots.filter(sl => !sl.user).map(sl => (sl.position_info && sl.position_info.label) || sl.position || ""),
+                     expired_at: c.expired_at || null, members: filled.map(sl => ({pid: Number(sl.user.id), name: nm(sl.user.id)}))});
+      for (const sl of filled) {
+        const ri = sl.item_requirement; if (!ri || ri.id == null) continue;
+        needs.push(Number(sl.user.id) + ":" + Number(ri.id));
+        if (ri.is_available === false)
+          missing.push({pid: Number(sl.user.id), name: nm(sl.user.id), item_id: Number(ri.id), item: itemName[String(ri.id)] || null,
+                        crime: c.name, crime_id: c.id, position: (sl.position_info && sl.position_info.label) || sl.position || "", status: c.status});
+      }
+    }
+  } catch (e) { /* the rest still goes out */ }
   return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts, oc_notify,
-          notify_tpl: cfg.notify || null};   // leaders' edited Notify wording (null = built-in)
+          notify_tpl: cfg.notify || null,   // leaders' edited Notify wording (null = built-in)
+          delays, paused, missing, needs};
 }
 // LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
 // parameters. Alert leadership when crimes fall below the minimum pass rate") - the same rules as OC Management
