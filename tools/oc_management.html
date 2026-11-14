@@ -993,22 +993,57 @@ function notifyList() {
 // the crime's own page (Nov 13 2026 - the user's link format)
 const OC_CRIME_LINK = id => `https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId=${id}`;
 // the messages - same wording as the Hub script's (keep the two in step)
-// MAIL = HTML (Nov 13 2026, user: "Links in the Notifications by Mail need to be made clickable"): Torn's mail box is a
-// rich-text editor, so the mail is copied as HTML (real links, paragraphs) with a plain-text twin for anything that
-// can't take HTML. Chat stays plain text (Torn chat links URLs itself).
+// EDITABLE MESSAGES (Nov 13 2026, user: "Where can I edit this default message?" -> an editor here). Saved in the
+// OC config ("notify": {chat, subject, mail}, blank = the built-in wording below); the Hub script uses the same
+// (live "spawn" notify_tpl - keep its NOTIFY_DEFAULT / notifyFill in step with these). Fill-ins:
+//   {name} {crime} {role} {crime_id} {link} (the crime) {scripts} (Hub Scripts page) {hub} (the Hub)
+// Mail text: blank line = new paragraph, **bold**, [link text](address), bare addresses become links. The mail is
+// copied as HTML so links are clickable in Torn's rich-text mail box (user: "Links in the Notifications by Mail need
+// to be made clickable"); chat is plain text ([text](address) -> "text: address").
+const NOTIFY_DEFAULT = {
+  chat: "Hi {name}! You've been picked for an Organized Crime: {crime} - {role}. Please join it here: {link} - thank you! 💗",
+  subject: "OC: please join {crime} ({role})",
+  mail: "Hi {name},\n\nYou've been picked for an Organized Crime: **{crime}**, role **{role}**.\nPlease join it here: [{crime} #{crime_id}]({link})\n\n"
+    + "Tip: the OC Optimizer script shows your OC assignment automatically, so you never miss one - install it from the [Heart Breakers Hub Scripts page]({scripts}).\n"
+    + "You can also see your crimes and pass rates on [the Hub]({hub}).\n\nThanks!"};
+const notifyTpl = () => { const t = (D.config && D.config.notify) || {}; return {chat: t.chat || NOTIFY_DEFAULT.chat, subject: t.subject || NOTIFY_DEFAULT.subject, mail: t.mail || NOTIFY_DEFAULT.mail}; };
+function notifyFill(tpl, x) {
+  const hub = location.origin, v = {name: x.name, crime: x.crime, role: x.position, crime_id: x.crime_id, link: OC_CRIME_LINK(x.crime_id),
+    scripts: hub + "/m/scripts.html", hub: hub + "/m/"};
+  return String(tpl).replace(/\{(name|crime|role|crime_id|link|scripts|hub)\}/g, (m, k) => v[k] == null ? "" : String(v[k]));
+}
+const mdPlain = t => t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, "$1: $2").replace(/\*\*([^*]+)\*\*/g, "$1");
+function mdHtml(t) {
+  const link = (u, txt) => `<a href="${esc(u)}">${txt}</a>`;
+  return t.split(/\n\s*\n/).map(par => {
+    const parts = [], re = /\[([^\]]+)\]\((https?:[^)\s]+)\)|(https?:\/\/[^\s<]*[^\s<.,!?;:)])/g; let last = 0, m;   // a bare address, minus a trailing full stop etc.
+    while ((m = re.exec(par))) { parts.push(esc(par.slice(last, m.index))); parts.push(m[1] ? link(m[2], esc(m[1])) : link(m[3], esc(m[3]))); last = re.lastIndex; }
+    parts.push(esc(par.slice(last)));
+    return "<p>" + parts.join("").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>") + "</p>";
+  }).join("");
+}
 function notifyMsgs(x) {
-  const hub = location.origin, url = OC_CRIME_LINK(x.crime_id), e = esc;
-  return {
-    chat: `Hi ${x.name}! You've been picked for an Organized Crime: ${x.crime} - ${x.position}. Please join it here: ${url} - thank you! 💗`,
-    subject: `OC: please join ${x.crime} (${x.position})`,
-    mail: `Hi ${x.name},\n\nYou've been picked for an Organized Crime: ${x.crime}, role ${x.position}.\nPlease join it here: ${url}\n\n`
-      + `Tip: the OC Optimizer script shows your OC assignment automatically, so you never miss one - install it from the Heart Breakers Hub Scripts page:\n${hub}/m/scripts.html\n`
-      + `You can also see your crimes and pass rates on the Hub: ${hub}/m/\n\nThanks!`,
-    mailHtml: `<p>Hi ${e(x.name)},</p><p>You've been picked for an Organized Crime: <b>${e(x.crime)}</b>, role <b>${e(x.position)}</b>.<br>`
-      + `Please join it here: <a href="${url}">${e(x.crime)} #${e(x.crime_id)}</a></p>`
-      + `<p>Tip: the OC Optimizer script shows your OC assignment automatically, so you never miss one - install it from the `
-      + `<a href="${hub}/m/scripts.html">Heart Breakers Hub Scripts page</a>.<br>You can also see your crimes and pass rates on `
-      + `<a href="${hub}/m/">the Hub</a>.</p><p>Thanks!</p>`};
+  const T = notifyTpl(), mail = notifyFill(T.mail, x);
+  return {chat: mdPlain(notifyFill(T.chat, x)), subject: mdPlain(notifyFill(T.subject, x)), mail: mdPlain(mail), mailHtml: mdHtml(mail)};
+}
+// the editor (Notify tab, collapsible)
+function notifyEditor() {
+  const T = (D.config && D.config.notify) || {};
+  return `<details class="panel" style="margin-top:10px"><summary><b>✏️ Edit the messages</b> <span class="tag">${T.chat || T.subject || T.mail ? "custom wording" : "built-in wording"}</span></summary>
+    <div class="hn">Fill-ins: <code>{name}</code> <code>{crime}</code> <code>{role}</code> <code>{crime_id}</code> <code>{link}</code> (their crime) <code>{scripts}</code> (Hub Scripts page) <code>{hub}</code> (the Hub).
+      In the mail: a blank line starts a new paragraph, <code>**bold**</code>, <code>[link text](address)</code> - plain addresses become links too. Leave a box empty for the built-in wording.</div>
+    <label class="hn">💬 Chat<br><textarea id="ntChat" rows="3" style="width:100%">${esc(T.chat || NOTIFY_DEFAULT.chat)}</textarea></label>
+    <label class="hn">✉️ Mail subject<br><input id="ntSubj" style="width:100%" value="${esc(T.subject || NOTIFY_DEFAULT.subject)}"></label>
+    <label class="hn">✉️ Mail<br><textarea id="ntMail" rows="9" style="width:100%">${esc(T.mail || NOTIFY_DEFAULT.mail)}</textarea></label>
+    <div><button id="ntSave">💾 Save</button> <button id="ntReset">↩️ Back to the built-in wording</button> <span class="hn" id="ntMsg"></span></div></details>`;
+}
+function notifyEditorWire() {
+  const go = async v => { try { $("ntMsg").textContent = "Saving…"; await saveConfig("notify", v); D.config.notify = v; drawNotify(); }
+    catch (e) { $("ntMsg").textContent = "Not saved: " + e.message; } };
+  // a box left exactly as the built-in wording is saved empty, so later changes to the built-in wording still reach it
+  const keep = (val, def) => (val.trim() === def.trim() ? "" : val);
+  $("ntSave").onclick = () => go({chat: keep($("ntChat").value, NOTIFY_DEFAULT.chat), subject: keep($("ntSubj").value, NOTIFY_DEFAULT.subject), mail: keep($("ntMail").value, NOTIFY_DEFAULT.mail)});
+  $("ntReset").onclick = () => go({chat: "", subject: "", mail: ""});
 }
 // copy as rich text (HTML + plain text); browsers without ClipboardItem get the HTML copied from a hidden editable box
 function copyRich(html, text) {
@@ -1029,14 +1064,15 @@ function drawNotify() {
   let sent = {}; try { sent = JSON.parse(localStorage.getItem(NOTIFY_LS) || "{}") || {}; } catch (e) {}
   const ago = ms => { const m = Math.round((Date.now() - ms) / 60e3); return m < 60 ? m + "m" : Math.round(m / 60) + "h"; };
   const head = `<div class="hn">Members <b>without the OC script</b> can't see their assignment, so tell them. Torn doesn't let the Hub send chats or mails itself - each button copies the message and opens Torn; you paste and press Send.</div>`;
-  if (L === null) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">Nobody has used the OC script with the Hub yet, so the Hub can't tell who doesn't have it.</div></div>`; return; }
-  if (!L.length) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">✅ Nobody to notify - every member without the script who's placed has joined (or isn't placed in a recruiting crime).</div></div>`; return; }
+  if (L === null) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">Nobody has used the OC script with the Hub yet, so the Hub can't tell who doesn't have it.</div></div>` + notifyEditor(); notifyEditorWire(); return; }
+  if (!L.length) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">✅ Nobody to notify - every member without the script who's placed has joined (or isn't placed in a recruiting crime).</div></div>` + notifyEditor(); notifyEditorWire(); return; }
   $("view").innerHTML = `<div class="panel">${head}<table class="tb"><tr><th>Member</th><th>Crime · role</th><th></th></tr>`
     + L.map((x, i) => { const k = x.pid + ":" + x.crime_id, s = sent[k];
       return `<tr><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}</td>
         <td>${esc(x.crime)} <span class="tag">#${esc(x.crime_id)}</span><br><span class="mid">${esc(x.position)}</span></td>
         <td style="white-space:nowrap"><button data-n="chat" data-i="${i}">💬 Chat</button> <button data-n="mail" data-i="${i}">✉️ Mail</button> <button data-n="sent" data-i="${i}" title="Tick off on this device">✓</button></td></tr>`; }).join("")
-    + `</table><div class="hn" id="nmsg"></div></div>`;
+    + `</table><div class="hn" id="nmsg"></div></div>` + notifyEditor();
+  notifyEditorWire();
   const say = h => { $("nmsg").innerHTML = h; };
   const copy = t => navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject();
   $("view").querySelectorAll("button[data-n]").forEach(b => b.onclick = () => {

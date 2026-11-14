@@ -1604,12 +1604,19 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     let b;
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
-    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
     if (b.k === "disabled" || b.k === "rotate") {
       // disabled: crimes switched off; rotate (Nov 2026): crimes leaders ROTATE (the page adds their prerequisites)
       if (!Array.isArray(v)) return Response.json({ok: false, error: b.k + " must be a list"}, {status: 400});
       v = [...new Set(v.map(x => String(x).slice(0, 80)))].slice(0, 200);
+    } else if (b.k === "notify") {
+      // 📣 NOTIFY MESSAGES (Nov 13 2026, user: leaders edit the default chat / mail wording) - {chat, subject, mail}
+      // plain text with fill-ins ({name} {crime} {role} {crime_id} {link} {scripts} {hub}); blank = the built-in wording.
+      // OC Management's Notify tab and the Hub script (live "spawn" notify_tpl) both use it.
+      v = v && typeof v === "object" ? v : {};
+      const t = (x, max) => typeof x === "string" ? x.replace(/\r/g, "").slice(0, max) : "";
+      v = {chat: t(v.chat, 600), subject: t(v.subject, 120), mail: t(v.mail, 3000)};
     } else if (b.k === "opts") {
       // Team Builder settings - the gatekeeper's automatic planner uses the same ones (ocAutoPlan)
       const n = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
@@ -2347,7 +2354,8 @@ async function ocSpawnAlerts(env) {
         }
       }
   } catch (e) { oc_notify = []; }
-  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts, oc_notify};
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts, oc_notify,
+          notify_tpl: cfg.notify || null};   // leaders' edited Notify wording (null = built-in)
 }
 // LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
 // parameters. Alert leadership when crimes fall below the minimum pass rate") - the same rules as OC Management
