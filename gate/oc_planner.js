@@ -467,7 +467,22 @@ export function ocPlan(X) {
     if (fixed.some(r => r.rate == null)) { skip(c, "a member in it has no known rate"); continue; }         // someone in it has no known rate - can't judge the success
     const fixedSum = wSum(c.name, fixed);                   // weighted (role weights)
     const nsBan = new Set(Object.keys((t && t.noshow) || {}).map(Number));   // NO-SHOWS: not back into this crime
-    const pool = freePool().concat(softPool()).filter(p => !nsBan.has(p.pid));
+    // JOIN NOW MOVES (Nov 13 2026, user: "When assigning members, go based on the "Join Now" rate of pay. This should
+    // help fill crimes that are already actively planning, and should prioritize pay per day for members." + answer:
+    // a reserved member who hasn't joined is MOVED when another recruiting crime pays them more if they join now).
+    // Crimes are filled best join-now pay per member per day first (each() above), so a member RESERVED (planned, not
+    // joined, not queued, not a leader replacement) in a recruiting crime that pays less if joined now is also a
+    // candidate here; if picked, their old seat is emptied and refilled when the loop reaches that crime. A 1% margin
+    // stops members flipping back and forth between two crimes whose join-now pay is practically the same. Locked
+    // teams and rotated crimes are never pulled from. Active crimes still all come before new spawns (user's answer).
+    const movePool = [], moveFrom = new Map();
+    teams.forEach(x => {
+      if (x.kind !== "live" || x.lock || String(x.crime_id) === String(c.id) || ROT_ON.has(String(x.crime_id))) return;
+      const xc = inst.get(String(x.crime_id)); if (!xc || !(each(xc) * 1.01 < each(c))) return;
+      x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
+        moveFrom.set(Number(r.pid), {t: x, ri}); movePool.push({pid: Number(r.pid), soft: false}); });
+    });
+    const pool = freePool().concat(softPool()).concat(movePool).filter(p => !nsBan.has(p.pid));
     const k = payDayInst(c) / roles.length / 100;      // (unused for choice - pass rates never enter pay per day, Nov 13 2026)
     // CALCULATED SUCCESS: the whole crime with these new members (always full - every open slot is filled)
     const leafOk = pick => !calcBad(roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), c.name);
@@ -497,6 +512,9 @@ export function ocPlan(X) {
     best.forEach((b, k) => {
       const i = open[k];
       roles[i] = {position: roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src};
+      // a member moved for a better join-now rate: empty their old reserved seat (refilled when that crime's turn comes)
+      const mv = moveFrom.get(Number(b.pid));
+      if (mv) { const o = mv.t.roles[mv.ri]; mv.t.roles[mv.ri] = {position: o.position, pid: null, name: "", rate: null}; }
       // a member taken from a spawn team: empty their old spawn role
       teams.forEach(x => { if (x.kind === "spawn") x.roles.forEach(r => { if (Number(r.pid) === b.pid) Object.assign(r, {pid: null, name: "", rate: null, src: null}); }); });
       take(b.pid);
@@ -659,7 +677,9 @@ export function ocPlan(X) {
   // NO-SHOW clock: every reservation in a recruiting crime gets since = when it was made (kept while it stays)
   teams.forEach(t => t.roles.forEach(r => {
     if (t.kind === "live" && r.pid != null && !r.existing) { if (!r.since) r.since = NOW; } else delete r.since; }));
-  teams.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "live" ? -1 : 1) || payDay(b.crime) - payDay(a.crime) || (b.difficulty || 0) - (a.difficulty || 0));
+  // live teams ordered by JOIN NOW pay per member per day (Nov 13 2026), spawn teams by the crime's normal rate
+  const showPay = t => { const c = t.kind === "live" ? inst.get(String(t.crime_id)) : null; return c ? each(c) : density(t.crime); };
+  teams.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "live" ? -1 : 1) || showPay(b) - showPay(a) || (b.difficulty || 0) - (a.difficulty || 0));
   const sig = ts => JSON.stringify(ts.map(t => [t.id, t.crime_id, t.lock, t.hold ? 1 : 0, Object.keys(t.noshow || {}).length, t.roles.map(r => [r.position, r.pid, r.joined ? 1 : 0, r.queued ? 1 : 0])]));
   const changed = sig(teams) !== sig(X.prev || []);
   // TEAM SUCCESS for display (Nov 13 2026 - the Discord recruiting post / assignment pings): the calculated chance
