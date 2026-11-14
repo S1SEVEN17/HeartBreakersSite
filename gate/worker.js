@@ -2512,15 +2512,42 @@ async function ocMine(env, pid) {
   const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
   const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first().catch(() => null);
   let crimes = []; try { const d = snap ? JSON.parse(snap.data) : []; crimes = Array.isArray(d) ? d : (d.crimes || []); } catch (e) {}
+  // HB SUITE 0.2.3 (Nov 14 2026, user: "OC Page should show more crime details about the crime you're in. 'Join Now' Pay
+  // per day is the most important"): the crime's detail (difficulty, every slot: role, member, planning %, pass rate)
+  // and its PAY PER MEMBER PER DAY - the Join Now figure when it's a recruiting crime with an open seat (the same
+  // planner stats as /oc/plan join_now: pay_day x inst_mult), else the crime type's normal figure. Same for the seat
+  // you're assigned to.
+  const ps = await ocSnapGet(env, "hub", "plan:stats").catch(() => null), P = (ps && ps.data) || {};
+  const pd = P.pay_day || {}, pmin = P.pay_day_min || {}, mult = P.inst_mult || {}, days = P.inst_days || {};
+  const members = await currentMembers(env).catch(() => null);
+  const nameOf = id => ((members && members.get(Number(id))) || {}).name || null;
+  const payOf = (c, crimeName) => {
+    const name = c ? c.name : crimeName, hi = pd[name], lo = pmin[name];
+    if (!hi) return null;
+    const id = c ? String(c.id) : null, m = id ? Number(mult[id]) || 0 : 0;
+    const open = !!(c && c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user) && (c.slots || []).some(sl => sl.user));
+    const jn = open && m > 0;
+    return {pay_day: Math.round(hi * (jn ? m : 1)), pay_day_min: lo != null ? Math.round(lo * (jn ? m : 1)) : null, normal: Math.round(hi),
+            join_now: jn, days: id && days[id] != null ? Number(days[id]) : null};
+  };
+  const teamOf = c => (plan.teams || []).find(t => t.crime_id != null && String(t.crime_id) === String(c.id));
+  const detail = c => ({difficulty: c.difficulty ?? null, created_at: c.created_at || null, planning_at: c.planning_at || null, ready_at: c.ready_at || null,
+    expired_at: c.expired_at || null, pay: payOf(c), success: (teamOf(c) || {}).succ ?? null,
+    slots: (c.slots || []).map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position || "", pid: sl.user ? Number(sl.user.id) : null,
+      name: sl.user ? nameOf(sl.user.id) : null, progress: sl.user ? Number(sl.user.progress) || 0 : null,
+      rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null, you: !!(sl.user && Number(sl.user.id) === pid)}))});
   let current = null;
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && Number(sl.user.id) === pid)
-    current = {crime: c.name, crime_id: c.id, status: c.status, position: (sl.position_info && sl.position_info.label) || sl.position || "",
+    current = Object.assign({crime: c.name, crime_id: c.id, status: c.status, position: (sl.position_info && sl.position_info.label) || sl.position || "",
                progress: Number(sl.user.progress) || 0, ready_at: c.ready_at || null, filled: (c.slots || []).filter(x => x.user).length,
-               seats: (c.slots || []).length, rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null};
+               seats: (c.slots || []).length, rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}, detail(c));
   let assignment = null;
-  for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment)
+  for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment) {
+    const c = t.crime_id != null ? crimes.find(x => String(x.id) === String(t.crime_id)) : null;
     assignment = {crime: t.crime, crime_id: t.crime_id || null, kind: t.kind || "spawn", position: r.position, rate: r.rate ?? null,
-                  joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null, succ: t.succ ?? null};
+                  joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null, succ: t.succ ?? null,
+                  difficulty: t.difficulty ?? null, pay: payOf(c, t.crime), detail: c ? detail(c) : null};
+  }
   return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment};
 }
 async function ocSpawnAlerts(env) {
