@@ -456,7 +456,8 @@
     function changed(structural) { if (structural) { drawSide(); drawForm(); } else drawSide(); schedule(); commit(structural); bar(); }
 
     // ---- review & save ----
-    function modal(h) { const m = document.createElement("div"); m.className = "pk-modal"; m.innerHTML = `<div>${h}</div>`; document.body.appendChild(m);
+    // inside the kit's root so the dialog gets the kit's colours and button styles (it sat unstyled on <body> - Nov 14 2026)
+    function modal(h) { const m = document.createElement("div"); m.className = "pk-modal"; m.innerHTML = `<div>${h}</div>`; root.appendChild(m);
       m.addEventListener("click", e => { if (e.target === m || e.target.closest("[data-pkclose]")) m.remove(); }); return m; }
     $("pkSave").onclick = () => {
       commit(true);
