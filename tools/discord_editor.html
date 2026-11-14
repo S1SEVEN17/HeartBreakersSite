@@ -17,6 +17,15 @@
   and never appear here. Channels (CFG.channels, from DC_CHANNELS in generate.py): chains, war, crimes, recap, leaders.
   The preview is a Discord look-alike with a typical message for each channel, so leaders see the name, picture,
   colour, header and footer the way members will. Tap a channel's message in the preview to edit it.
+  MESSAGES VIEW (Nov 14 2026, user: "can we edit the layout of new messages? Old messages can be edited to match the
+  format too. Just want to be able to control the message configs."): config.json "discord_messages" -
+    chain_hub / war_hub  {content, username, sections: [{id, show, title, color, before, after}] (drag = order),
+                          buttons: [{id, show, label}]}   (generate.py _dc_style; the hub posts are EDITED to match)
+    oc_ping              {main, leave, stats}   (the Hub's OC assignment pings - gate/worker.js ocPingText; posted
+                                                 pings are edited to a changed template)
+    chain_shift          {main, line}           (chain watch shift pings - cwShiftAlerts)
+  and the OC delay pings' own texts in config "crimes_alert" {message, escalate_message} (discord_crime_alerts).
+  Blank = the built-in wording. Each type lists its {placeholders} in its help line.
   __CONFIG__ / __MENU__ filled in by generate.py.
 -->
 <style>body{background:#100a0b;margin:0 auto;padding:10px;max-width:1700px}
@@ -33,6 +42,7 @@
 .dc-f{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px;font-size:13.5px}.dc-f b{display:block;color:#f2f3f5;font-size:12.5px}
 .dc-img{margin-top:8px;height:90px;border-radius:4px;background:repeating-linear-gradient(45deg,#3a3c42 0 10px,#35373c 10px 20px);display:flex;align-items:center;justify-content:center;color:#949ba4;font-size:12px}
 .dc-ft{margin-top:8px;color:#b5bac1;font-size:12px}
+.dc-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.dc-btns span{background:#4e5058;color:#fff;border-radius:4px;padding:4px 12px;font-size:13.5px}
 </style></head><body>
 __MENU__
 <div id="pk"></div>
@@ -50,6 +60,70 @@ const LAY = C => {
 };
 const CH = k => CFG.channels.find(c => c.key === k) || {};
 const isDefault = L => JSON.stringify(Object.assign(DEF(), L)) === JSON.stringify(DEF());
+// ---- MESSAGES view: the message types and their parts (ids must match generate.py / gate/worker.js) ----
+const SEC = {chain_hub: [["leaderboard", "🏆 Chain Leaderboard"], ["ongoing", "🔥 Ongoing Chain"], ["latest", "📄 Latest Chain Report"], ["directory", "📚 Chain Directory"]],
+             war_hub: [["leaderboard", "⚔️ War Leaderboard"], ["latest", "📄 Latest War Report"], ["directory", "📚 War Report Directory"]]};
+const BTN = {chain_hub: [["report", "Latest Report"], ["history", "Chain History"]], war_hub: [["report", "Latest Report"], ["history", "War History"]]};
+const TYPES = [
+  {key: "chain_hub", icon: "⛓️", label: "Chains hub post", ch: "chains", kind: "hub", vars: "{content} the built-in text · {updated} · {hits} · {respect} · {chains}",
+   def: "## ⛓️ Chains\n-# updated {updated}"},
+  {key: "war_hub", icon: "⚔️", label: "War reports hub post", ch: "war", kind: "hub", vars: "{content} the built-in text · {updated} · {result} · {opponent} · {wars} · {won}",
+   def: "## ⚔️ War Reports\n-# updated {updated}"},
+  {key: "chain_shift", icon: "🗓", label: "Chain watch shift ping", ch: "chains", kind: "tpl",
+   parts: [["main", "Message", "⛓️ **Chain watch shift {status} {relative}** ({time})\n{roles}", "{status} starting / started · {relative} · {time} · {roles} = one line per member"],
+           ["line", "One line per member", "**{role}:** {who} · until {until}", "{role} · {who} (their Discord ping, or name [ID]) · {name} · {pid} · {until}"]]},
+  {key: "oc_ping", icon: "🕵️", label: "OC assignment ping", ch: "crimes", kind: "tpl",
+   parts: [["main", "Message", "🕵️ {mention} (**{name}** [{pid}]) you're assigned to **[{crime} #{crime_id}](<{link}>)** as **{role}**", "{mention} · {name} · {pid} · {crime} · {crime_id} · {link} · {role}"],
+           ["leave", "Line when they must leave another crime first", "↪ Leave **[{leave_crime} #{leave_id}](<{leave_link}>)** ({leave_role}) first - you haven't started planning there and this one pays more", "{leave_crime} · {leave_id} · {leave_link} · {leave_role}"],
+           ["stats", "Line with their pass rate / team success", "-# {stats} · join it now - this message goes away once you're in", "{stats} = pass rate · team success"]]},
+  {key: "oc_delay", icon: "⏳", label: "OC delay ping", ch: "crimes", kind: "delay",
+   parts: [["message", "First ping", "{ping} **{crime}** is ready and waiting on you.", "{ping} = the members holding it up · {crime}"],
+           ["escalate_message", "Second ping (after the leaders' hours)", "⏰ {ping} **{crime}** has been delayed for over {hours} hours - please sort it out now. Leaders have been notified.", "{ping} · {crime}"]]},
+];
+const TY = k => TYPES.find(t => t.key === k) || {};
+const MSGS = C => {
+  C.discord_messages = C.discord_messages && typeof C.discord_messages === "object" ? C.discord_messages : {};
+  TYPES.forEach(t => {
+    if (t.kind === "delay") { C.crimes_alert = C.crimes_alert && typeof C.crimes_alert === "object" ? C.crimes_alert : {}; return; }
+    const m = C.discord_messages[t.key] = Object.assign({}, C.discord_messages[t.key] || {});
+    if (t.kind === "hub") {
+      m.content = m.content || ""; m.username = m.username || "";
+      const have = Array.isArray(m.sections) ? m.sections.filter(x => x && SEC[t.key].some(([id]) => id === x.id)) : [];
+      SEC[t.key].forEach(([id]) => { if (!have.some(x => x.id === id)) have.push({id}); });
+      m.sections = have.map(x => Object.assign({id: x.id, show: true, title: "", color: "", before: "", after: ""}, x, {show: x.show !== false}));
+      const hb = Array.isArray(m.buttons) ? m.buttons.filter(x => x && BTN[t.key].some(([id]) => id === x.id)) : [];
+      BTN[t.key].forEach(([id]) => { if (!hb.some(x => x.id === id)) hb.push({id}); });
+      m.buttons = BTN[t.key].map(([id]) => Object.assign({id, show: true, label: ""}, hb.find(x => x.id === id), {show: (hb.find(x => x.id === id) || {}).show !== false}));
+    } else t.parts.forEach(([k]) => { m[k] = m[k] || ""; });
+  });
+  return C.discord_messages;
+};
+const secName = (t, id) => ((SEC[t] || []).find(x => x[0] === id) || [id, id])[1];
+const btnName = (t, id) => ((BTN[t] || []).find(x => x[0] === id) || [id, id])[1];
+const typeDefault = (C, t) => { const m = MSGS(C)[t.key];
+  if (t.kind === "delay") return !C.crimes_alert.message && !C.crimes_alert.escalate_message;
+  if (t.kind === "tpl") return t.parts.every(([k]) => !m[k]);
+  return !m.content && !m.username && m.sections.every((x, i) => x.show && !x.title && !x.color && !x.before && !x.after && x.id === SEC[t.key][i][0]) && m.buttons.every(b => b.show && !b.label); };
+// the samples the Messages preview builds a message from (the real builders' shapes)
+const HUBSAMPLE = {
+  chain_hub: {content: "## ⛓️ Chains\n-# updated 2 minutes ago", vars: {updated: "2 minutes ago", hits: "1,000", respect: "4,812", chains: 23}, username: "Chain Report",
+    cards: {leaderboard: {title: "🏆 Chain Leaderboard", color: 0xe8be5a, img: "chain leaderboard image"},
+            ongoing: {title: "🔥 Ongoing Chain - 312 hits", color: 0xff8c1a, text: "Times out in 4:12 · next bonus 500"},
+            latest: {title: "📄 Latest Chain Report - 1,000 hits", color: 0xe4382e, text: "Nov 14, 2026 19:02 · 3h 12m\n**4,812** respect · **41** members", img: "latest chain report image"},
+            directory: {title: "📚 Chain Directory", color: 0x2b2d31, text: "`Nov 12` **500** hits · 2,410 respect · Report\n`Nov 09` **250** hits · 1,180 respect · Report", foot: "23 chains of 50+ hits on record"}}},
+  war_hub: {content: "## ⚔️ War Reports\n-# updated 2 minutes ago", vars: {updated: "2 minutes ago", result: "Victory", opponent: "The Foes", wars: 31, won: 24}, username: "War Reports",
+    cards: {leaderboard: {title: "⚔️ War Leaderboard", color: 0xe8be5a, img: "war leaderboard image"},
+            latest: {title: "📄 Latest War Report · 🏆 Victory vs The Foes", color: 0x78c878, text: "Nov 13, 2026 · 2d 4h\nScore **15,204** - **9,880** · Rank **Gold II**\n**38/41** members hit\n\n💰 **Payout:** $412,000,000 to **38** members", img: "war report & payout image"},
+            directory: {title: "📚 War Report Directory", color: 0x2b2d31, text: "✅ **Victory** vs **Night Owls**\n-# Nov 06, 2026 · 12,004 - 8,310 · 💰 Paid · Report & Payout", foot: "31 ranked wars on record · 24 won · 7 lost"}}},
+};
+const TPLSAMPLE = {
+  chain_shift: {status: "starting", relative: "in 2 minutes", time: "19:00", who: "@Chris5295", name: "Chris5295", pid: 974757, until: "21:00", role: "Primary"},
+  oc_ping: {mention: "@Chris5295", name: "Chris5295", pid: 974757, crime: "Gone Fission", crime_id: 77, link: "", role: "Hijacker",
+            leave_crime: "Sneaky Git Grab", leave_id: 55, leave_link: "", leave_role: "Imitator", stats: "your pass rate **68%** · team success **81%**"},
+  oc_delay: {ping: "@Bob **Bob** [2]", crime: "Sneaky Git Grab", hours: CFG.hours || "2"},
+};
+const fillT = (t, v) => String(t).replace(/\{([a-z_]+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
+const hexN = v => /^#?[0-9a-f]{6}$/i.test(String(v || "").trim()) ? parseInt(String(v).trim().replace("#", ""), 16) : null;
 // a typical message for each channel (what the preview shows) - content, card (title, text, colour, fields, image)
 const SAMPLE = {
   chains: {content: "", card: {title: "⛓️ Chain #1,284 · 1,000 hits", text: "Ended Nov 14 · 3h 12m · 41 members hit", color: 0xE8BE5A,
@@ -67,23 +141,54 @@ const SAMPLE = {
 // the tiny bit of Discord markdown the samples / header use
 const md = t => esc(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\[([^\]]+)\]\(([^)]*)\)/g, '<a href="#" onclick="return false">$1</a>')
   .replace(/&lt;@&amp;(\d+)&gt;/g, '<span class="mn">@role</span>').replace(/&lt;@(\d+)&gt;/g, '<span class="mn">@member</span>')
-  .replace(/(^|\s)(@[A-Za-z0-9_]+)/g, '$1<span class="mn">$2</span>').replace(/&lt;small&gt;(.*?)&lt;\/small&gt;/g, "<small>$1</small>");
+  .replace(/(^|\s)(@[A-Za-z0-9_]+)/g, '$1<span class="mn">$2</span>').replace(/&lt;small&gt;(.*?)&lt;\/small&gt;/g, "<small>$1</small>")
+  .replace(/^## (.*)$/gm, '<span style="font-size:19px;font-weight:700;color:#f2f3f5">$1</span>').replace(/^-# (.*)$/gm, "<small>$1</small>");
 const hex = v => /^#?[0-9a-f]{6}$/i.test(String(v || "").trim()) ? "#" + String(v).trim().replace(/^#/, "") : null;
-function msgHtml(ch, L, card, content) {
-  const name = (L.name || "").trim() || "Heart Breakers", av = /^https:\/\//.test(L.avatar || "") ? L.avatar : "";
+// one Discord message: cards = [{title, text, color, fields, img, foot}], opts {username, buttons: [label]}; the channel
+// layout L is applied (name / picture / header / one colour / footer / time) the way generate.py _dc_style does
+function msgHtml(ch, L, card, content, opts) {
+  opts = opts || {};
+  const cards = Array.isArray(card) ? card : card ? [card] : [];
+  const name = (opts.username || "").trim() || (L.name || "").trim() || "Heart Breakers", av = /^https:\/\//.test(L.avatar || "") ? L.avatar : "";
   const head = (L.header || "").trim(), text = [head, content].filter(Boolean).join("\n");
-  let c = "";
-  if (card) {
-    const col = L.one_color && hex(L.color) ? hex(L.color) : "#" + card.color.toString(16).padStart(6, "0");
-    const foot = (L.footer || "").trim(), ft = !foot ? card.foot : (L.footer_mode === "replace" ? foot : `${card.foot} · ${foot}`);
-    c = `<div class="dc-e" style="border-left-color:${col}"><div class="dc-et">${md(card.title)}</div><div class="dc-ed">${md(card.text)}</div>`
-      + (card.fields.length ? `<div class="dc-f">${card.fields.map(([n, v]) => `<div><b>${esc(n)}</b>${md(v)}</div>`).join("")}</div>` : "")
-      + (card.img ? `<div class="dc-img">🖼 ${esc(card.img)}</div>` : "")
-      + `<div class="dc-ft">${esc(ft)}${L.timestamp ? " • Today at 19:02" : ""}</div></div>`;
-  }
+  const cardHtml = cd => {
+    const col = L.one_color && hex(L.color) ? hex(L.color) : "#" + (cd.color || 0).toString(16).padStart(6, "0");
+    const foot = (L.footer || "").trim(), own = cd.foot || "", ft = !foot ? own : (L.footer_mode === "replace" || !own ? foot : `${own} · ${foot}`);
+    return `<div class="dc-e" style="border-left-color:${col}"><div class="dc-et">${md(cd.title || "")}</div>${cd.text ? `<div class="dc-ed">${md(cd.text)}</div>` : ""}`
+      + ((cd.fields || []).length ? `<div class="dc-f">${cd.fields.map(([n, v]) => `<div><b>${esc(n)}</b>${md(v)}</div>`).join("")}</div>` : "")
+      + (cd.img ? `<div class="dc-img">🖼 ${esc(cd.img)}</div>` : "")
+      + (ft || L.timestamp ? `<div class="dc-ft">${esc(ft)}${L.timestamp ? (ft ? " • " : "") + "Today at 19:02" : ""}</div>` : "") + `</div>`;
+  };
+  const btns = (opts.buttons || []).length ? `<div class="dc-btns">${opts.buttons.map(l => `<span>${esc(l)} ↗</span>`).join("")}</div>` : "";
   return `<div class="dc-m"><div class="dc-av" style="${av ? `background-image:url('${esc(av)}')` : ""}">${av ? "" : "HB"}</div><div class="dc-b">
     <div class="dc-h"><span class="dc-n">${esc(name)}</span><span class="dc-app">APP</span><span class="dc-t">Today at 19:02</span></div>
-    ${text ? `<div class="dc-c">${md(text)}</div>` : ""}${c}</div></div>`;
+    ${text ? `<div class="dc-c">${md(text)}</div>` : ""}${cards.map(cardHtml).join("")}${btns}</div></div>`;
+}
+// a Messages-view preview: the sample message with this type's config applied (same rules as generate.py)
+function typePreview(C, t) {
+  const L = LAY(C)[t.ch], m = MSGS(C)[t.key];
+  if (t.kind === "hub") {
+    const S = HUBSAMPLE[t.key], V = Object.assign({content: S.content}, S.vars);
+    const cards = m.sections.filter(x => x.show).map(x => { const c = Object.assign({}, S.cards[x.id]);
+      if (x.title) c.title = fillT(x.title, Object.assign({}, V, {title: c.title}));
+      if (hexN(x.color) != null) c.color = hexN(x.color);
+      let d = c.text || ""; if (x.before) d = fillT(x.before, V) + (d ? "\n" + d : ""); if (x.after) d = (d ? d + "\n" : "") + fillT(x.after, V); c.text = d;
+      return c; });
+    return msgHtml(t.ch, L, cards, m.content ? fillT(m.content, V) : S.content,
+                   {username: m.username || (L.name ? "" : S.username), buttons: m.buttons.filter(b => b.show).map(b => b.label || btnName(t.key, b.id))});
+  }
+  const v = TPLSAMPLE[t.key];
+  if (t.kind === "delay") {
+    const a = C.crimes_alert || {};
+    return msgHtml(t.ch, L, {title: "", img: "delayed crime image", color: 0x2b2d31}, fillT(a.message || t.parts[0][2], v), {username: "Organized Crimes"})
+      + `<div style="height:10px"></div>` + msgHtml(t.ch, L, null, fillT(a.escalate_message || t.parts[1][2], v), {username: "Organized Crimes"});
+  }
+  const P = k => m[k] || (t.parts.find(x => x[0] === k) || [])[2] || "";
+  if (t.key === "chain_shift") {
+    const line = fillT(P("line"), v) + "\n" + fillT(P("line"), Object.assign({}, v, {role: "Backup", who: "Bob [2]", name: "Bob", pid: 2}));
+    return msgHtml(t.ch, L, null, fillT(P("main"), Object.assign({}, v, {roles: line})));
+  }
+  return msgHtml(t.ch, L, null, [fillT(P("main"), v), fillT(P("leave"), v), fillT(P("stats"), v)].join("\n"));
 }
 const FIELDS = [
   {k: "name", label: "Bot name (blank = the webhook's own name)", ph: "Heart Breakers"},
@@ -96,10 +201,20 @@ const FIELDS = [
   {k: "timestamp", label: "Show the time on every card", t: "check"},
   {t: "note", html: "New posts use the bot name and picture; Discord doesn't let an edit change them. The header line is added where a message sends text, so an edit never removes a mention. Webhook links stay secret on the Hub."},
 ];
+const TYPE_FORM = t => t.kind === "hub" ? [
+    {k: "content", label: "Message text (blank = built-in)", t: "area", ph: t.def},
+    {k: "username", label: "Bot name for this post (blank = the channel's / built-in)"},
+    {k: "sections", label: "Cards - drag ⠿ to reorder", t: "list", locked: true, title: it => secName(t.key, it.id),
+     item: [{k: "show", label: "Show this card", t: "check"}, {k: "title", label: "Title ({title} = the built-in title)"}, {k: "color", label: "Colour (hex, blank = built-in)"},
+            {k: "before", label: "Text before (optional)", t: "area"}, {k: "after", label: "Text after (optional)", t: "area"}]},
+    {k: "buttons", label: "Buttons", t: "list", fixed: true, title: it => btnName(t.key, it.id),
+     item: [{k: "show", label: "Show this button", t: "check"}, {k: "label", label: "Label (blank = built-in)"}]}]
+  : t.parts.map(([k, label, def, vars]) => ({k, label: `${label} - ${vars}`, t: "area", ph: def}));
 PK.mount({
   id: "discord", title: "Discord Messages",
-  lead: "How the Hub's Discord messages look in each channel - bot name, picture, colour, header and footer. Tap a channel (or its message in the preview) to edit it.",
-  async load() { const C = await GH.load(); LAY(C); return {data: C}; },
+  lead: "<b>Channels</b>: how every message in a channel looks (bot name, picture, colour, header, footer). <b>Messages</b>: what each message says and shows - text, cards, buttons. Saving also updates the posts already in Discord.",
+  views: [{id: "channels", label: "💬 Channels"}, {id: "messages", label: "🧩 Messages"}],
+  async load() { const C = await GH.load(); LAY(C); MSGS(C); return {data: C}; },
   async save(C) {
     const out = {};
     Object.entries(LAY(C)).forEach(([k, L]) => {
@@ -112,20 +227,51 @@ PK.mount({
                  footer_mode: L.footer_mode === "replace" ? "replace" : "append", timestamp: !!L.timestamp};
       if (!isDefault(x)) out[k] = x;
     });
-    await GH.save(C, "Discord message layouts edited", c => { c.discord_layout = out; });
-    return "Saved ✓ - new Discord posts use it after the next site update (a few minutes)";
+    // message configs: only what differs from the built-in, so the defaults keep improving with the Hub
+    const M = MSGS(C), msgs = {};
+    TYPES.forEach(t => {
+      if (t.kind === "delay" || typeDefault(C, t)) return;
+      const m = M[t.key];
+      if (t.kind === "tpl") { const o = {}; t.parts.forEach(([k]) => { if (String(m[k] || "").trim()) o[k] = String(m[k]).slice(0, 1500); }); msgs[t.key] = o; return; }
+      if (m.username && /discord|clyde/i.test(m.username)) throw new Error(`${t.label}: Discord doesn't allow "discord" or "clyde" in a bot name.`);
+      m.sections.forEach(x => { if (x.color && hexN(x.color) == null) throw new Error(`${t.label} · ${secName(t.key, x.id)}: the colour must be a hex value like #E4382E.`); });
+      msgs[t.key] = {content: String(m.content || "").slice(0, 1800), username: String(m.username || "").trim().slice(0, 80),
+        sections: m.sections.map(x => ({id: x.id, show: x.show !== false, title: String(x.title || "").slice(0, 200), color: String(x.color || "").trim(),
+                                        before: String(x.before || "").slice(0, 1000), after: String(x.after || "").slice(0, 1000)})),
+        buttons: m.buttons.map(b => ({id: b.id, show: b.show !== false, label: String(b.label || "").slice(0, 80)}))};
+    });
+    const ca = C.crimes_alert || {}, delay = {};
+    ["message", "escalate_message"].forEach(k => { if (String(ca[k] || "").trim()) delay[k] = String(ca[k]).slice(0, 1500); });
+    await GH.save(C, "Discord messages edited", c => {
+      c.discord_layout = out; c.discord_messages = msgs;
+      c.crimes_alert = Object.assign({}, c.crimes_alert || {}); ["message", "escalate_message"].forEach(k => { if (delay[k]) c.crimes_alert[k] = delay[k]; else delete c.crimes_alert[k]; });
+    });
+    return "Saved ✓ - after the next site update (a few minutes) new posts use it and the hub posts / OC pings already in Discord are edited to match";
   },
-  sections: C => CFG.channels.map(ch => ({key: ch.key, icon: "💬", label: ch.label, sub: isDefault(LAY(C)[ch.key]) ? "Default look" : "Customised", fixed: true})),
+  sections: (C, view) => view === "messages"
+    ? TYPES.map(t => ({key: t.key, icon: t.icon, label: t.label, sub: (CH(t.ch).label || "") + " · " + (typeDefault(C, t) ? "built-in" : "customised"), fixed: true}))
+    : CFG.channels.map(ch => ({key: ch.key, icon: "💬", label: ch.label, sub: isDefault(LAY(C)[ch.key]) ? "Default look" : "Customised", fixed: true})),
   move: () => {}, toggle: () => {}, remove: () => {},
-  form: (C, view, k) => ({obj: LAY(C)[k], title: CH(k).label, help: "Posted here: " + esc(CH(k).what), fields: FIELDS}),
-  actions: [{label: "Reset every channel", run: async C => { if (!confirm("Put every channel back to the default look? (Not saved until you save.)")) return; C.discord_layout = {}; LAY(C); return C; }}],
-  saveNote: "Applies to new posts and edits from the next site update; the Hub's own pings (OC assignments, chain watch shifts) pick it up too.",
+  form: (C, view, k) => {
+    if (view !== "messages") return {obj: LAY(C)[k], title: CH(k).label, help: "Posted here: " + esc(CH(k).what), fields: FIELDS};
+    const t = TY(k); if (!t.key) return {obj: {}, fields: []};
+    const obj = t.kind === "delay" ? (MSGS(C), C.crimes_alert) : MSGS(C)[k];
+    return {obj, title: t.icon + " " + t.label, help: t.kind === "hub" ? "Placeholders: " + esc(t.vars) + ". The post already in Discord is edited to match on the next update."
+      : t.kind === "delay" ? "Blank = the built-in wording. New delay pings use it." : "Blank = the built-in wording." + (t.key === "oc_ping" ? " OC pings already posted are edited to match." : ""), fields: TYPE_FORM(t)};
+  },
+  actions: [{label: "Reset everything", run: async C => { if (!confirm("Put every channel and message back to the built-in look and wording? (Not saved until you save.)")) return;
+    C.discord_layout = {}; C.discord_messages = {}; if (C.crimes_alert) { delete C.crimes_alert.message; delete C.crimes_alert.escalate_message; } LAY(C); MSGS(C); return C; }}],
+  saveNote: "Applies after the next site update. Hub posts and OC pings already in Discord are edited to match; Discord can't change the bot name / picture of an old post.",
   preview: {sizes: false, delay: 0, render: async (C, view, ctx) => {
-    const L = LAY(C);
-    ctx.box.innerHTML = CFG.channels.map(ch => { const S = SAMPLE[ch.key] || {card: null, content: ""};
-      return `<div class="dc" data-k="${ch.key}"><div class="dc-ch"># ${esc(ch.label.replace(/^\S+\s/, "").toLowerCase().replace(/\s+/g, "-"))}</div>`
-        + msgHtml(ch, L[ch.key], S.card, S.content) + (S.extra ? `<div style="height:10px"></div>` + msgHtml(ch, L[ch.key], null, S.extra) : "") + `</div>`; }).join("");
-    ctx.box.querySelectorAll(".dc[data-k]").forEach(el => ctx.mark(el, el.dataset.k));   // tap a message -> edit its channel
+    if (view === "messages") {
+      ctx.box.innerHTML = TYPES.map(t => `<div class="dc" data-k="${t.key}"><div class="dc-ch"># ${esc((CH(t.ch).label || "").replace(/^\S+\s/, "").toLowerCase().replace(/\s+/g, "-"))} · ${esc(t.label)}</div>${typePreview(C, t)}</div>`).join("");
+    } else {
+      const L = LAY(C);
+      ctx.box.innerHTML = CFG.channels.map(ch => { const S = SAMPLE[ch.key] || {card: null, content: ""};
+        return `<div class="dc" data-k="${ch.key}"><div class="dc-ch"># ${esc(ch.label.replace(/^\S+\s/, "").toLowerCase().replace(/\s+/g, "-"))}</div>`
+          + msgHtml(ch, L[ch.key], S.card, S.content) + (S.extra ? `<div style="height:10px"></div>` + msgHtml(ch, L[ch.key], null, S.extra) : "") + `</div>`; }).join("");
+    }
+    ctx.box.querySelectorAll(".dc[data-k]").forEach(el => ctx.mark(el, el.dataset.k));   // tap a message -> edit it
     ctx.status("");
   }}
 });

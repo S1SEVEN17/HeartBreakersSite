@@ -2103,13 +2103,28 @@ const OC_PING_NAMES_AT = Date.UTC(2026, 10, 14, 1, 0);
 // (rows written from now on store created >= OC_PING_NAMES_AT, so the backfill never edits a new-wording ping again)
 // the ping's text. Name + ID always next to the mention (Nov 13 2026, user): a member whose Discord account isn't in
 // the server - or one Discord hasn't loaded yet (phones) - shows as "@unknown-user", so the name + ID says who it is
-function ocPingText(did, x) {
+// MESSAGE CONFIG (Nov 14 2026, Discord message editor -> config "discord_messages".oc_ping, via the leaders'
+// db/discord_layout.json "_msg"): three templates - main / leave (only when they must leave another crime first) /
+// stats (only when there's a pass rate or team success). Blank = the built-in wording below. Placeholders:
+// {mention} {name} {pid} {crime} {crime_id} {link} {role} | leave: {leave_crime} {leave_id} {leave_link} {leave_role}
+// | stats: {stats} (pass rate · team success). Pings already posted are edited to a changed template (step 1c).
+const OC_PING_DEF = {
+  main: "🕵️ {mention} (**{name}** [{pid}]) you're assigned to **[{crime} #{crime_id}](<{link}>)** as **{role}**",
+  leave: "↪ Leave **[{leave_crime} #{leave_id}](<{leave_link}>)** ({leave_role}) first - you haven't started planning there and this one pays more",
+  stats: "-# {stats} · join it now - this message goes away once you're in"};
+const dcFill = (t, v) => String(t).replace(/\{([a-z_]+)\}/g, (m, k) => (k in v ? String(v[k]) : m));
+const ocPingTpl = T => ({main: (T && T.main) || OC_PING_DEF.main, leave: (T && T.leave) || OC_PING_DEF.leave, stats: (T && T.stats) || OC_PING_DEF.stats});
+function ocPingText(did, x, T) {
+  const P = ocPingTpl(T);
   const rate = x.rate != null ? `your pass rate **${Math.round(x.rate)}%**` : "";
   const succ = x.succ != null ? `${x.calc ? "🎲 " : ""}team success **${Math.round(x.succ)}%**` : "";
-  return `🕵️ <@${did}> (**${x.name || "?"}** [${x.pid}]) you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
+  const v = {mention: `<@${did}>`, name: x.name || "?", pid: x.pid, crime: x.crime, crime_id: x.crime_id, link: OC_CRIME_URL(x.crime_id), role: x.position,
+             stats: [rate, succ].filter(Boolean).join(" · ")};
+  if (x.leave) Object.assign(v, {leave_crime: x.leave.crime, leave_id: x.leave.crime_id, leave_link: OC_CRIME_URL(x.leave.crime_id), leave_role: x.leave.position});
+  return (dcFill(P.main, v)
     // MOVING (Nov 13 2026): a better-paying seat while they wait in another crime (their planning hasn't started)
-    + (x.leave ? `\n↪ Leave **[${x.leave.crime} #${x.leave.crime_id}](<${OC_CRIME_URL(x.leave.crime_id)}>)** (${x.leave.position}) first - you haven't started planning there and this one pays more` : "")
-    + (rate || succ ? `\n-# ${[rate, succ].filter(Boolean).join(" · ")} · join it now - this message goes away once you're in` : "");
+    + (x.leave ? "\n" + dcFill(P.leave, v) : "")
+    + (rate || succ ? "\n" + dcFill(P.stats, v) : "")).slice(0, 1900);
 }
 async function ocAssignPings(env, crimes) {
   if (!env.OC_DB || !env.OC_DISCORD_WEBHOOK) return;
@@ -2138,6 +2153,9 @@ async function ocAssignPings(env, crimes) {
     }
   }
   const have = new Map((((await env.OC_DB.prepare("SELECT k, msg_id FROM oc_ping").all()).results) || []).map(x => [x.k, x.msg_id]));
+  const TPL = (((await dcLayout(env)) || {})._msg || {}).oc_ping || null;      // the leaders' template (or built-in)
+  const TSIG = JSON.stringify([ocPingTpl(TPL), ((await dcLayout(env)) || {}).crimes || null]);                     // template + channel look
+  await env.OC_DB.prepare("ALTER TABLE oc_ping ADD COLUMN tpl TEXT").run().catch(() => {});                       // (once - "duplicate column" is fine)
   // 0. POSITION CHANGED -> EDIT, NOT A NEW POST (Nov 13 2026, user: "Members whose positions change, update their
   // discord post. Dont create a new one."): a member whose old ping no longer matches (different crime or role) but who
   // has a NEW joinable assignment gets their existing message EDITED to the new crime / role (the row is re-keyed), so
@@ -2159,11 +2177,11 @@ async function ocAssignPings(env, crimes) {
       if (!d || !d.id) continue;                             // not looked up - next run
       let st = 0;
       try { const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(mid)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}}))}); st = res.status; } catch (e) { continue; }
+          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x, TPL), allowed_mentions: {users: [d.id]}}))}); st = res.status; } catch (e) { continue; }
       if (st === 404) { await env.OC_DB.prepare("DELETE FROM oc_ping WHERE k = ?").bind(k).run().catch(() => {}); have.delete(k); continue; }
       if (st < 200 || st >= 300) continue;                   // try again next run
     }
-    await env.OC_DB.prepare("UPDATE oc_ping SET k = ?, crime_id = ?, created = ? WHERE k = ?").bind(nk, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT), k).run().catch(() => {});
+    await env.OC_DB.prepare("UPDATE oc_ping SET k = ?, crime_id = ?, created = ?, tpl = ? WHERE k = ?").bind(nk, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT), mid ? TSIG : null, k).run().catch(() => {});
     have.delete(k); have.set(nk, mid); freshByPid.delete(x.pid);
   }
   // 1. delete pings whose seat isn't a joinable assignment any more (joined, moved, filled, gone)
@@ -2186,8 +2204,24 @@ async function ocAssignPings(env, crimes) {
       if (!d || !d.id) continue;
       try {
         const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(o.msg_id)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}}))});
+          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x, TPL), allowed_mentions: {users: [d.id]}}))});
         if (res.ok || res.status === 404) await env.OC_DB.prepare("UPDATE oc_ping SET created = ? WHERE k = ?").bind(Math.max(Date.now(), OC_PING_NAMES_AT), o.k).run().catch(() => {});
+      } catch (e) { /* next run */ }
+    }
+  }
+  // 1c. MESSAGE CONFIG CHANGED (Nov 14 2026, user: "Old messages can be edited to match the format too"): pings
+  // posted with an older template / channel look are edited in place (up to 8 per run; an edit doesn't notify)
+  const stale = (((await env.OC_DB.prepare("SELECT k, msg_id FROM oc_ping WHERE msg_id IS NOT NULL AND COALESCE(tpl, '') != ?").bind(TSIG).all()).results) || [])
+    .filter(x => want.has(x.k)).slice(0, 8);
+  if (stale.length) {
+    const idsT = await ocDiscordIds(env, [...new Set(stale.map(x => want.get(x.k).pid))]);
+    for (const o of stale) {
+      const x = want.get(o.k), d = idsT[String(x.pid)];
+      if (!d || !d.id) continue;
+      try {
+        const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(o.msg_id)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x, TPL), allowed_mentions: {users: [d.id]}}))});
+        if (res.ok || res.status === 404) await env.OC_DB.prepare("UPDATE oc_ping SET tpl = ? WHERE k = ?").bind(TSIG, o.k).run().catch(() => {});
       } catch (e) { /* next run */ }
     }
   }
@@ -2202,13 +2236,13 @@ async function ocAssignPings(env, crimes) {
     if (!d.id) { await env.OC_DB.prepare("INSERT OR IGNORE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, NULL, ?, ?, ?)").bind(k, x.pid, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT)).run().catch(() => {}); continue; }
     if (posts >= 8) break;
     posts++;
-    const body = {content: ocPingText(d.id, x),
+    const body = {content: ocPingText(d.id, x, TPL),
                   allowed_mentions: {users: [d.id]}};
     try {
       const res = await fetch(ocHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(await dcStyle(env, "crimes", "POST", body))});
       if (!res.ok) continue;                                 // try again next run
       let mid = null; try { const m = await res.json(); mid = m && /^\d+$/.test(String(m.id)) ? String(m.id) : null; } catch (e) { mid = null; }
-      await env.OC_DB.prepare("INSERT OR REPLACE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, ?, ?, ?, ?)").bind(k, mid, x.pid, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT)).run();
+      await env.OC_DB.prepare("INSERT OR REPLACE INTO oc_ping (k, msg_id, pid, crime_id, created, tpl) VALUES (?, ?, ?, ?, ?, ?)").bind(k, mid, x.pid, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT), TSIG).run();
     } catch (e) { continue; }
   }
 }
@@ -3262,6 +3296,7 @@ async function cwShiftAlerts(env) {
   if (!env.OC_DB || !env.CW_DISCORD_WEBHOOK) return;
   const nowS = Math.floor(Date.now() / 1000);
   await cwPingCleanup(env, nowS);                          // delete pings whose time slot has ended
+  const CT = (((await dcLayout(env)) || {})._msg || {}).chain_shift || {};   // the leaders' template (Discord message editor) or built-in
   const {results} = await env.OC_DB.prepare("SELECT id, pid, name, role, start_at, end_at FROM cw_shift " +
     "WHERE notified = 0 AND start_at <= ? AND start_at > ? AND end_at > ? ORDER BY start_at").bind(nowS + 180, nowS - 600, nowS).all();
   if (!results || !results.length) return;
@@ -3280,9 +3315,13 @@ async function cwShiftAlerts(env) {
         did = did && /^\d+$/.test(String(did)) ? String(did) : null;
       } catch (e) { did = null; }
       if (did) users.push(did);
-      lines.push(`**${CW_ROLES[r.role] || r.role}:** ${did ? `<@${did}>` : `${r.name} [${r.pid}]`} · until <t:${r.end_at}:t>`);
+      lines.push(dcFill(CT.line || "**{role}:** {who} · until {until}", {role: CW_ROLES[r.role] || r.role, who: did ? `<@${did}>` : `${r.name} [${r.pid}]`,
+                                                                         name: r.name, pid: r.pid, until: `<t:${r.end_at}:t>`}));
     }
-    const body = {content: `⛓️ **Chain watch shift ${Number(st) > nowS ? "starting" : "started"} <t:${st}:R>** (<t:${st}:t>)\n${lines.join("\n")}`,
+    // MESSAGE CONFIG (Nov 14 2026): "discord_messages".chain_shift {main, line} - {status} {relative} {time} {roles} /
+    // per member {role} {who} {name} {pid} {until}; blank = this built-in wording
+    const body = {content: dcFill(CT.main || "⛓️ **Chain watch shift {status} {relative}** ({time})\n{roles}",
+                    {status: Number(st) > nowS ? "starting" : "started", relative: `<t:${st}:R>`, time: `<t:${st}:t>`, roles: lines.join("\n")}).slice(0, 2000),
                   allowed_mentions: {users}};
     try {
       // ?wait=true -> Discord returns the message (its id), so it can be deleted when the slot ends

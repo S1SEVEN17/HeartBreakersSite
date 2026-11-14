@@ -5050,8 +5050,8 @@ def write_homepages(out: Path, cfg: dict = None):
                                         .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "homepage.html")), encoding="utf-8")
     # the Discord message editor (leaders, Nov 14 2026) - config.json "discord_layout" (see DISCORD MESSAGE LAYOUTS);
     # db/discord_layout.json = the same settings for the Worker's own posts (no webhook addresses in it)
-    _jdump(lout / "db" / "discord_layout.json", dc_layout())
-    dconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(),
+    _jdump(lout / "db" / "discord_layout.json", dict(dc_layout(), _msg={k: v for k, v in dc_messages().items() if k in ("oc_ping", "chain_shift")}))
+    dconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "hours": format(float(load_config().get("leader_alerts", {}).get("crime_escalate_hours", 2)), "g"),
              "channels": [{"key": k, "label": l, "what": w} for k, _, l, w in DC_CHANNELS], "faction": "Heart Breakers"}
     (lout / "discord.html").write_text(inline_panelkit((ROOT / "tools" / "discord_editor.html").read_text(encoding="utf-8"))
                                        .replace("__CONFIG__", json.dumps(dconf).replace("</", "<\\/"))
@@ -6960,29 +6960,129 @@ def dc_layout() -> dict:
     return {k: v for k, v in L.items() if isinstance(v, dict) and k in {c[0] for c in DC_CHANNELS}}
 
 
-def _dc_style(url: str, method: str, payload: dict):
-    """The channel's layout applied to a webhook payload (a copy) - see DISCORD MESSAGE LAYOUTS."""
+# MESSAGE CONFIGS (Nov 14 2026, user: "Discord settings, can we edit the layout of new messages? Old messages can be
+# edited to match the format too. Just want to be able to control the message configs."): config.json
+# "discord_messages" {<type>: {...}} edited on the same leaders' page (Messages view). A builder marks its payload
+# with "_type" (and each card with "_id": "<type>.<section>", each button with "_id"), so the config can:
+#   content   - the message text, a template ({content} = the built-in text, plus the type's own {placeholders})
+#   username  - the bot name for this message (new posts)
+#   sections  - [{id, show, title, color, before, after}] in the order to show them: hide a card (its picture is
+#               dropped too), retitle it ({title} = the built-in title), recolour it, add text before / after
+#   buttons   - [{id, show, label}]
+# The hub posts include the config in their change check, so a saved change EDITS the posts already in Discord.
+# The Worker's own messages (oc_ping, chain_shift) are templates read from the leaders' db/discord_layout.json.
+DC_SIG_KEYS = ("discord_layout", "discord_messages")
+
+
+def dc_messages() -> dict:
+    try:
+        M = load_config().get("discord_messages") or {}
+    except (OSError, ValueError):
+        M = {}
+    return M if isinstance(M, dict) else {}
+
+
+def dc_sig() -> bytes:
+    """Part of the hub posts' change checks: a saved layout / message change edits them in Discord."""
+    try:
+        c = load_config()
+    except (OSError, ValueError):
+        c = {}
+    return json.dumps({k: c.get(k) for k in DC_SIG_KEYS}, sort_keys=True).encode()
+
+
+def _dc_fill(tpl: str, v: dict) -> str:
+    """{name} -> value (unknown names left as typed; never raises)."""
+    import re
+    return re.sub(r"\{([a-z_]+)\}", lambda m: str(v[m.group(1)]) if m.group(1) in v else m.group(0), str(tpl))
+
+
+def _dc_hex(v):
+    try:
+        return int(str(v or "").strip().lstrip("#"), 16) if str(v or "").strip() else None
+    except ValueError:
+        return None
+
+
+def _dc_style(url: str, method: str, payload: dict, png=None):
+    """The message's config + the channel's layout applied to a webhook payload (a copy) - see DISCORD MESSAGE
+    LAYOUTS / MESSAGE CONFIGS. Returns (payload, png). Private keys (_type / _id / _vars) are always removed."""
     if not isinstance(payload, dict) or method not in ("POST", "PATCH"):
-        return payload
+        return payload, png
+    p = json.loads(json.dumps(payload))
+    embeds = p.get("embeds") if isinstance(p.get("embeds"), list) else []
+    mtype = p.pop("_type", None) or next((str(e["_id"]).split(".")[0] for e in embeds if isinstance(e, dict) and e.get("_id")), None)
+    V = dict(p.pop("_vars", None) or {})
+    M = dc_messages().get(mtype) or {} if mtype else {}
+    # ---- the message's own config ----
+    if M.get("content") and (method == "POST" or "content" in p):
+        V["content"] = p.get("content") or ""
+        p["content"] = _dc_fill(M["content"], V)[:2000]
+    if M.get("username") and method == "POST" and not any(b in str(M["username"]).lower() for b in _DC_BAD_NAME):
+        p["username"] = str(M["username"])[:80]
+    secs = {str(x.get("id")): x for x in (M.get("sections") or []) if isinstance(x, dict)}
+    order = [str(x.get("id")) for x in (M.get("sections") or []) if isinstance(x, dict)]
+    dropped, kept = set(), []
+    for i, e in enumerate(embeds):
+        if not isinstance(e, dict):
+            continue
+        sid = str(e.pop("_id", "") or "").split(".", 1)[-1] or None
+        S = secs.get(sid) or {}
+        if sid and S.get("show") is False:
+            img = str((e.get("image") or {}).get("url") or "")
+            if img.startswith("attachment://"):
+                dropped.add(img[len("attachment://"):])
+            continue
+        if S.get("title"):
+            e["title"] = _dc_fill(S["title"], dict(V, title=e.get("title", "")))[:256]
+        if _dc_hex(S.get("color")) is not None:
+            e["color"] = _dc_hex(S["color"])
+        d0 = e.get("description") or ""
+        if S.get("before"):
+            d0 = _dc_fill(S["before"], V) + ("\n" + d0 if d0 else "")
+        if S.get("after"):
+            d0 = (d0 + "\n" if d0 else "") + _dc_fill(S["after"], V)
+        if d0:
+            e["description"] = d0[:4096]
+        kept.append((order.index(sid) if sid in order else len(order) + i, i, e))
+    if embeds:
+        p["embeds"] = [e for _, _, e in sorted(kept)]
+    btn = {str(x.get("id")): x for x in (M.get("buttons") or []) if isinstance(x, dict)}
+    if isinstance(p.get("components"), list):
+        rows = []
+        for row in p["components"]:
+            cs = []
+            for c in (row.get("components") or []):
+                B = btn.get(str(c.pop("_id", "") or "")) or {}
+                if B.get("show") is False:
+                    continue
+                if B.get("label"):
+                    c["label"] = str(B["label"])[:80]
+                cs.append(c)
+            if cs:
+                rows.append(dict(row, components=cs))
+        p["components"] = rows
+    # a hidden card's picture isn't uploaded either (attachments renumbered to match the files left)
+    if dropped and isinstance(png, list):
+        png = [(f, d) for f, d in png if f not in dropped]
+        p["attachments"] = [{"id": k, "filename": f} for k, (f, _) in enumerate(png)]
+    elif dropped and isinstance(p.get("attachments"), list):
+        p["attachments"] = [a for a in p["attachments"] if a.get("filename") not in dropped]
+    # ---- the channel's layout ----
     ch = next((k for k, env_, _, _ in DC_CHANNELS if os.environ.get(env_, "").strip() and url.startswith(os.environ[env_].strip())), None)
     L = dc_layout().get(ch) if ch else None
     if not L:
-        return payload
-    p = json.loads(json.dumps(payload))
+        return p, png
     name, av = str(L.get("name") or "").strip()[:80], str(L.get("avatar") or "").strip()
     if method == "POST":
-        if name and not any(b in name.lower() for b in _DC_BAD_NAME):
+        if name and not M.get("username") and not any(b in name.lower() for b in _DC_BAD_NAME):
             p["username"] = name
         if av.startswith("https://"):
             p["avatar_url"] = av
     head = str(L.get("header") or "").strip()
     if head and (method == "POST" or "content" in p):
         p["content"] = (head + ("\n" + p["content"] if p.get("content") else ""))[:2000]
-    col = None
-    try:
-        col = int(str(L.get("color") or "").lstrip("#"), 16) if L.get("one_color") and L.get("color") else None
-    except ValueError:
-        col = None
+    col = _dc_hex(L.get("color")) if L.get("one_color") else None
     foot, mode = str(L.get("footer") or "").strip(), L.get("footer_mode") or "append"
     for e in p.get("embeds") or []:
         if not isinstance(e, dict):
@@ -6994,7 +7094,7 @@ def _dc_style(url: str, method: str, payload: dict):
             e["footer"] = dict(e.get("footer") or {}, text=(foot if mode == "replace" or not old else f"{old} · {foot}")[:2048])
         if L.get("timestamp") and not e.get("timestamp"):
             e["timestamp"] = datetime.now(timezone.utc).isoformat()
-    return p
+    return p, png
 
 
 def _discord_request(url: str, method: str, payload: dict = None, png=None):
@@ -7002,7 +7102,7 @@ def _discord_request(url: str, method: str, payload: dict = None, png=None):
     Returns the parsed JSON reply (POST uses ?wait=true so Discord returns
     the new message, whose id is saved for the next replace)."""
     import uuid
-    payload = _dc_style(url, method, payload)          # the channel's layout (Discord message editor)
+    payload, png = _dc_style(url, method, payload, png)   # the message config + channel layout (Discord message editor)
     headers = {"User-Agent": "FactionBanner/1.0 (GitHub Actions)"}
     body = None
     if payload is not None:
@@ -7570,8 +7670,8 @@ def chain_ongoing_refresh(key: str, cfg: dict, cstate: dict, oc=False):
     hub, embeds, att = hs.get("hub_id"), hs.get("hub_embeds"), hs.get("hub_att")
     if not hub or not embeds:
         return
-    e = ongoing_chain_embed(ongoing_chain(key) if oc is False else oc)
-    sig = _ongoing_sig(e) + hub
+    e = dict(ongoing_chain_embed(ongoing_chain(key) if oc is False else oc), _id="chain_hub.ongoing")
+    sig = _ongoing_sig(e) + hub + dc_sig().decode()
     if cstate.get("chain_sig") == sig:
         return
     if not any(x.get("_ongoing") for x in embeds):
@@ -7689,39 +7789,41 @@ def discord_chain_hub(chist: dict, members: list, cfg: dict, new_chain: bool) ->
         link = (f" · [Report]({base}/reports/chain-{k}.html)" if (REPORTS_DIR / f"chain-{k}.json").exists() else "")
         lines.append(f"`{when}` **{fmt_int(c['length'])}** hits · {resp:,.0f} respect{link}")
     more = len(chains) - 1 - len(lines)
-    ongoing = ongoing_chain_embed(ongoing_chain(os.environ.get("TORN_API_KEY", "").strip())) \
+    ongoing = dict(ongoing_chain_embed(ongoing_chain(os.environ.get("TORN_API_KEY", "").strip())), _id="chain_hub.ongoing") \
         if ccfg.get("ongoing", True) else None
     embeds = [
-        {"title": "🏆 Chain Leaderboard", "color": 0xe8be5a, "image": {"url": "attachment://chain-leaderboard.png"}},
+        {"_id": "chain_hub.leaderboard", "title": "🏆 Chain Leaderboard", "color": 0xe8be5a, "image": {"url": "attachment://chain-leaderboard.png"}},
     ] + ([ongoing] if ongoing else []) + [
-        {"title": f"📄 Latest Chain Report - {fmt_int(r['length'])} hits", "url": f"{base}/reports/chain-{lk}.html",
+        {"_id": "chain_hub.latest", "title": f"📄 Latest Chain Report - {fmt_int(r['length'])} hits", "url": f"{base}/reports/chain-{lk}.html",
          "color": 0xe4382e,
          "description": (f"<t:{r['end']}:f>" + (f" · {_dur(r.get('start'), r['end'])}" if r.get("start") else "")
                          + f"\n**{r['respect']:,.0f}** respect · **{r['attackers']}** members"),
          "image": {"url": "attachment://chain-latest.png"}},
-        {"title": "📚 Chain Directory", "color": 0x2b2d31,
+        {"_id": "chain_hub.directory", "title": "📚 Chain Directory", "color": 0x2b2d31,
          "description": ("\n".join(lines) or "No earlier chains yet.")
                         + (f"\n-# …and {more} older - see the full Chain History" if more > 0 else ""),
          "footer": {"text": f"{len(chains)} chains of {min_len}+ hits on record"}}]
-    payload = {"username": ccfg.get("username", "Chain Report"),
+    payload = {"_type": "chain_hub", "_vars": {"updated": f"<t:{int(datetime.now(timezone.utc).timestamp())}:R>", "hits": fmt_int(r["length"]),
+                                              "respect": f"{r['respect']:,.0f}", "chains": len(chains)},
+               "username": ccfg.get("username", "Chain Report"),
                "content": f"## ⛓️ Chains\n-# updated <t:{int(datetime.now(timezone.utc).timestamp())}:R>",
                "embeds": embeds,
                "attachments": [{"id": 0, "filename": "chain-leaderboard.png"}, {"id": 1, "filename": "chain-latest.png"}],
                "components": [{"type": 1, "components": [
-                   {"type": 2, "style": 5, "label": "Latest Report", "url": f"{base}/reports/chain-{lk}.html"},
-                   {"type": 2, "style": 5, "label": "Chain History", "url": f"{base}/chains.html"}]}],
+                   {"_id": "report", "type": 2, "style": 5, "label": "Latest Report", "url": f"{base}/reports/chain-{lk}.html"},
+                   {"_id": "history", "type": 2, "style": 5, "label": "Chain History", "url": f"{base}/chains.html"}]}],
                "allowed_mentions": {"parse": []}}
     files = [("chain-leaderboard.png", board), ("chain-latest.png", latest_png)]
     # b"v3": bump when the hub's buttons/layout change so the existing post is edited
     # (v3, Nov 2026: the announcement's chain leaderboard + the latest chain's report image)
-    h = hashlib.sha1(b"v3" + board + latest_png + "\n".join(lines).encode() + base.encode()).hexdigest()[:12]
+    h = hashlib.sha1(b"v3" + board + latest_png + "\n".join(lines).encode() + base.encode() + dc_sig()).hexdigest()[:12]   # + message configs
     hub = state.get("hub_id")
     osig = _ongoing_sig(ongoing or {})
     if hub and not new_chain and state.get("hub_hash") == h and "hub_att" in state:
         if state.get("ongoing_sig") != osig:
             # only the Ongoing Chain changed: edit the embeds, keep the uploaded images
             try:
-                _discord_request(f"{url}/messages/{hub}", "PATCH", {"embeds": embeds})   # images kept
+                _discord_request(f"{url}/messages/{hub}", "PATCH", {"_type": "chain_hub", "embeds": embeds})   # images kept
                 state["ongoing_sig"] = osig
                 print("Discord: ongoing chain updated")
             except Exception as e:      # never print the URL
@@ -8169,27 +8271,30 @@ def discord_post_wars(raw: dict, summary: dict, cfg: dict):
     title = (f"{'🏆 Victory' if w0.get('won') else '💀 Defeat'} vs {w0.get('opponent', '?')}" if w0 else "Latest War") \
         + (" · 🤝 Termed" if termed0 else "")
     embeds = [
-        {"title": "⚔️ War Leaderboard", "color": 0xe8be5a, "image": {"url": "attachment://war-leaderboard.png"}},
-        {"title": ("📄 Latest War Report & Payout · " if lk in rec else "📄 Latest War Report · ") + title[:200],
+        {"_id": "war_hub.leaderboard", "title": "⚔️ War Leaderboard", "color": 0xe8be5a, "image": {"url": "attachment://war-leaderboard.png"}},
+        {"_id": "war_hub.latest", "title": ("📄 Latest War Report & Payout · " if lk in rec else "📄 Latest War Report · ") + title[:200],
          "url": f"{base}/reports/war-{lk}.html", "color": 0x78c878 if (w0 or {}).get("won") else 0xe4382e,
          "description": (desc + pay_txt)[:4000], "image": {"url": "attachment://latest-war.png"}},
-        {"title": "📚 War Report Directory", "color": 0x2b2d31,
+        {"_id": "war_hub.directory", "title": "📚 War Report Directory", "color": 0x2b2d31,
          "description": ("\n\n".join(lines) or "No earlier wars yet.")[:3900]
                         + (f"\n\n-# …and {more} older - see the full War History" if more > 0 else ""),
          "footer": {"text": f"{len(order)} ranked wars on record · {won} won · {len(order) - won} lost"
                             + (f" · {sum(1 for k in order if str(k) in tw_)} termed" if any(str(k) in tw_ for k in order) else "")}}]
     # the latest war's report page includes its payout once paid (War Report & Payout)
-    btns = [{"type": 2, "style": 5, "label": "Latest Report & Payout" if lk in rec else "Latest Report",
+    btns = [{"_id": "report", "type": 2, "style": 5, "label": "Latest Report & Payout" if lk in rec else "Latest Report",
              "url": f"{base}/reports/war-{lk}.html"},
-            {"type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"}]
-    payload = {"username": dcfg.get("username", "War Reports"),
+            {"_id": "history", "type": 2, "style": 5, "label": "War History", "url": f"{base}/wars.html"}]
+    payload = {"_type": "war_hub", "_vars": {"updated": f"<t:{int(datetime.now(timezone.utc).timestamp())}:R>",
+                                            "result": ("Victory" if (w0 or {}).get("won") else "Defeat") if w0 else "",
+                                            "opponent": (w0 or {}).get("opponent", ""), "wars": len(order), "won": won},
+               "username": dcfg.get("username", "War Reports"),
                "content": f"## ⚔️ War Reports\n-# updated <t:{int(datetime.now(timezone.utc).timestamp())}:R>",
                "embeds": embeds,
                "attachments": [{"id": 0, "filename": "war-leaderboard.png"}, {"id": 1, "filename": "latest-war.png"}],
                "components": [{"type": 1, "components": btns}], "allowed_mentions": {"parse": []}}
     files = [("war-leaderboard.png", board), ("latest-war.png", latest)]
     # b"v3": bump when the hub's buttons/layout change so the existing post is edited (v3: payouts merged in, Nov 2026)
-    h = hashlib.sha1(b"v3" + board + latest + json.dumps(embeds, sort_keys=True).encode() + base.encode()).hexdigest()[:12]
+    h = hashlib.sha1(b"v3" + board + latest + json.dumps(embeds, sort_keys=True).encode() + base.encode() + dc_sig()).hexdigest()[:12]   # + message configs
     hub = state.get("hub_id")
     if not (hub and not todo and state.get("hub_hash") == h):
         try:

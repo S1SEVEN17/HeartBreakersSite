@@ -41,7 +41,8 @@
        "link" (pages [[title, link]]) | "lines" (array of strings, one per line) | "strings" (fixed array, labels) |
        "order" (array of keys, names {key: label} - drag to sort) | "note" (text) |
        "list" (item: fields, OR variants: {name: {label, fields, is: it => bool}}, add: [{label, make}],
-               templates: [{label, make}], title: it => text, fixed)
+               templates: [{label, make}], title: it => text, fixed (no add / remove / drag),
+               locked (no add / remove, still drag-to-reorder - Discord message editor, Nov 14 2026))
 */
 (function () {
   "use strict";
@@ -184,10 +185,10 @@
       const vk = variantOf(f, it), vf = vk ? f.variants[vk] : null, fields = vf ? vf.fields : f.item;
       const name = (f.title ? f.title(it, i) : "") || (vf ? vf.label : "") || "#" + (i + 1);
       return `<div class="pk-item" data-pk-i="${i}"><div class="pk-ih"><span class="pk-grip${f.fixed ? " pk-fix" : ""}" title="Drag to move">⠿</span>
-        <b>${vf ? esc(vf.label) + " · " : ""}${esc(name)}</b>${f.fixed ? "" : `<button class="pk-s" data-pkdel="${esc(enc(p.concat(i)))}" title="Remove">✕</button>`}</div>`
+        <b>${vf ? esc(vf.label) + " · " : ""}${esc(name)}</b>${f.fixed || f.locked ? "" : `<button class="pk-s" data-pkdel="${esc(enc(p.concat(i)))}" title="Remove">✕</button>`}</div>`
         + `<div class="${fields && fields.length > 1 && !fields.some(x => x.t === "list" || x.t === "lines" || x.t === "area") ? "pk-row2" : ""}">${fieldsHtml(fields, it, p.concat(i))}</div></div>`;
     }).join("");
-    const adds = f.fixed ? "" : (f.add || [{label: "+ Add", make: f.make}]).map((a, j) => `<button class="pk-s pk-gold" data-pkadd="${esc(enc(p))}" data-pkj="${j}">${esc(a.label)}</button>`).join(" ");
+    const adds = f.fixed || f.locked ? "" : (f.add || [{label: "+ Add", make: f.make}]).map((a, j) => `<button class="pk-s pk-gold" data-pkadd="${esc(enc(p))}" data-pkj="${j}">${esc(a.label)}</button>`).join(" ");
     const tpls = (f.templates || []).length ? `<select class="pk-s" data-pktpl="${esc(enc(p))}" style="width:auto;display:inline-block;margin:0"><option value="">✨ From a template…</option>`
       + f.templates.map((t, j) => `<option value="${j}">${esc(t.label)}</option>`).join("") + `</select>` : "";
     return `<div class="pk-list" data-pklist="${esc(enc(p))}">${rows}</div><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${adds}${tpls}</div>`;
