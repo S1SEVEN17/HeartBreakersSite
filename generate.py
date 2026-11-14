@@ -6737,11 +6737,12 @@ def announcement_slugs(acfg: dict, summary: dict) -> list:
     if acfg.get("show_ranked_wars", True) and summary.get("wars_announce") is not None:
         sl.append("wars")
     if lcfg.get("enabled", True) and summary.get("leaderboard"):
-        sl.append("war")
-        if summary.get("chain_leaderboard"):
-            sl.append("chain")
-        if summary.get("gym_leaderboard") and lcfg.get("gym", True):
-            sl.append("gym")
+        # ORDER (Nov 13 2026, user: "The announcements page still has the HTML for the gym leaderboard at the bottom,
+        # even though the order is for it to be at the top"): the leaderboards follow announcements.leaderboard.order,
+        # the same as the images (render_announcement_header) - this list was still fixed war, chain, gym
+        have = {"war": True, "chain": bool(summary.get("chain_leaderboard")),
+                "gym": bool(summary.get("gym_leaderboard")) and lcfg.get("gym", True)}
+        sl.extend(k for k in leaderboard_order(lcfg) if have[k])
     if acfg.get("slacker_watch", {}).get("enabled", True) and summary.get("slacker_watch"):
         sl.append("slackers")
     return sl
