@@ -148,8 +148,17 @@ export function ocPlan(X) {
   for (const c of X.crimes || []) {
     if (!c || c.id == null || (c.status !== "Recruiting" && c.status !== "Planning")) continue;
     inst.set(String(c.id), c);
-    for (const sl of c.slots || []) if (sl.user) busy.set(Number(sl.user.id), {cid: String(c.id), label: slotLabel(sl)});
+    for (const sl of c.slots || []) if (sl.user) busy.set(Number(sl.user.id), {cid: String(c.id), label: slotLabel(sl), status: c.status,
+      prog: Number(sl.user.progress) || 0});
   }
+  // NOT PLANNING YET -> CAN BE MOVED (Nov 13 2026, user: "members who joined or were assigned, but are not actively
+  // planning, can be reassigned to better jobs if available ... as long as their planning has not started yet"):
+  // idleIn(pid) = the id of the crime (recruiting or planning) a member sits in with planning progress 0, else null. Such a member
+  // may be planned into a crime that pays them more if they join now (step 3) - the role carries leave {crime_id,
+  // crime, position}: they leave that crime in Torn, then join. Once their planning starts (progress > 0) they're
+  // locked in and the move is dropped.
+  // (Recruiting OR Planning: a crime that filled up and is planning again still has members waiting for their turn)
+  const idleIn = pid => { const b = busy.get(Number(pid)); return b && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > 0) ? b.cid : null; };
   // ---- queue: members in a Planning crime that's ready within the window ----
   // QUEUE REMOVED (Nov 13 2026, user: "Remove the queue options"): members still in a crime are never queued for their
   // next one - QWIN is always 0 whatever opts.queueHours says (rotated crimes' join-order deadlines are separate)
@@ -310,8 +319,11 @@ export function ocPlan(X) {
           (t.noshow || (t.noshow = {}))[String(o.pid)] = NOW;
           return {position: label, pid: null, name: "", rate: null};
         }
-        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && usable(o.pid, c) && !assigned.has(Number(o.pid))) {
-          const k = Object.assign({}, o, {joined: false}); delete k.replaces; return k;   // the old member has left: a normal open slot now
+        // a MOVING member (o.leave): kept while they still sit idle (progress 0) in the crime they're leaving, or once
+        // they've left it and are free; started planning there -> dropped (locked in)
+        const moving = o.leave && o.pid != null && String(idleIn(o.pid) || "") === String(o.leave.crime_id);
+        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && (usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
+          const k = Object.assign({}, o, {joined: false}); delete k.replaces; if (!moving) delete k.leave; return k;   // the old member has left: a normal open slot now
         }
         return {position: label, pid: null, name: "", rate: null};
       });
@@ -508,6 +520,16 @@ export function ocPlan(X) {
       x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
         moveFrom.set(Number(r.pid), {t: x, ri}); movePool.push({pid: Number(r.pid), soft: false}); });
     });
+    // ... and members SITTING in another crime (recruiting or planning) that pays them less if joined now, who haven't started
+    // planning there (idleIn) - re-evaluated every run. Not from a crime with a locked team.
+    const idleFrom = new Map();
+    for (const [pid0] of busy) {
+      const pid = Number(pid0), cid = idleIn(pid);
+      if (!cid || cid === String(c.id) || assigned.has(pid) || nsBan.has(pid) || roster[String(pid)] == null || moveFrom.has(pid)) continue;
+      const xc = inst.get(cid); if (!xc || !(each(xc) * 1.01 < each(c))) continue;
+      if (teams.some(x => x.lock && String(x.crime_id) === cid)) continue;
+      idleFrom.set(pid, {crime_id: xc.id, crime: xc.name, position: busy.get(pid).label}); movePool.push({pid, soft: false});
+    }
     const pool = freePool().concat(softPool()).concat(movePool).filter(p => !nsBan.has(p.pid));
     const k = payDayInst(c) / roles.length / 100;      // (unused for choice - pass rates never enter pay per day, Nov 13 2026)
     // CALCULATED SUCCESS: the whole crime with these new members (always full - every open slot is filled)
@@ -538,6 +560,7 @@ export function ocPlan(X) {
     best.forEach((b, k) => {
       const i = open[k];
       roles[i] = {position: roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src};
+      if (idleFrom.has(b.pid)) roles[i].leave = idleFrom.get(b.pid);   // must leave the crime they're idle in first
       // a member moved for a better join-now rate: empty their old reserved seat (refilled when that crime's turn comes)
       const mv = moveFrom.get(Number(b.pid));
       if (mv) { const o = mv.t.roles[mv.ri]; mv.t.roles[mv.ri] = {position: o.position, pid: null, name: "", rate: null}; }

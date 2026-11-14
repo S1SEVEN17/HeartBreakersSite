@@ -1369,7 +1369,9 @@ async function ocPlanObj(env, envName, id) {
                       difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
                       kind: b ? "live" : (t.kind || "spawn"), crime_id: b ? b.c.id : (t.crime_id || null),   // live: join THIS crime id + exact slot
                       queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
-                      replaces: r.replaces || null};   // the slot is still held by this member until they leave   // QUEUE: join after the current crime pays out
+                      replaces: r.replaces || null,
+                      // MOVING (Nov 13 2026): leave this crime first (planning not started there) - {crime_id, crime, position}
+                      leave_first: r.leave || null};   // the slot is still held by this member until they leave   // QUEUE: join after the current crime pays out
       }
     }
   }
@@ -1509,7 +1511,10 @@ function ocCleanTeams(teams) {
       existing: !!r.existing, joined: !!r.joined,
       queued: !!r.queued, free_at: r.queued && Number(r.free_at) ? Number(r.free_at) : null,   // QUEUE: still in a Planning crime
       since: !r.existing && Number(r.since) ? Number(r.since) : null,                        // NO-SHOW clock (reservation made)
-      replaces: r.replaces && Number(r.replaces.pid) ? {pid: Number(r.replaces.pid), name: String(r.replaces.name || "").slice(0, 40)} : null}))}));
+      replaces: r.replaces && Number(r.replaces.pid) ? {pid: Number(r.replaces.pid), name: String(r.replaces.name || "").slice(0, 40)} : null,
+      // MOVING (Nov 13 2026): this member sits in another crime (planning not started) and leaves it to take this seat
+      leave: r.leave && Number(r.leave.crime_id) ? {crime_id: Number(r.leave.crime_id), crime: String(r.leave.crime || "").slice(0, 80),
+        position: String(r.leave.position || "").slice(0, 40)} : null}))}));
 }
 
 async function ocLeaderRoute(env, req, url, who, sub) {
@@ -2001,6 +2006,8 @@ function ocPingText(did, x) {
   const rate = x.rate != null ? `your pass rate **${Math.round(x.rate)}%**` : "";
   const succ = x.succ != null ? `${x.calc ? "🎲 " : ""}team success **${Math.round(x.succ)}%**` : "";
   return `🕵️ <@${did}> (**${x.name || "?"}** [${x.pid}]) you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
+    // MOVING (Nov 13 2026): a better-paying seat while they wait in another crime (their planning hasn't started)
+    + (x.leave ? `\n↪ Leave **[${x.leave.crime} #${x.leave.crime_id}](<${OC_CRIME_URL(x.leave.crime_id)}>)** (${x.leave.position}) first - you haven't started planning there and this one pays more` : "")
     + (rate || succ ? `\n-# ${[rate, succ].filter(Boolean).join(" · ")} · join it now - this message goes away once you're in` : "");
 }
 async function ocAssignPings(env, crimes) {
@@ -2012,8 +2019,8 @@ async function ocAssignPings(env, crimes) {
   // ANY CRIME (Nov 13 2026, user: "It should remove them regardless of what crime they join"): a member sitting in
   // ANY crime slot in Torn right now (any crime, any role) has no joinable assignment - their ping is deleted (and none
   // is posted) straight from the crimes feed, without waiting for the planner to drop their reservation
-  const inCrime = new Set();
-  for (const c of crimes || []) for (const sl of c.slots || []) if (sl.user && sl.user.id) inCrime.add(Number(sl.user.id));
+  const inCrime = new Map();                                 // pid -> the crime id they sit in
+  for (const c of crimes || []) for (const sl of c.slots || []) if (sl.user && sl.user.id) inCrime.set(Number(sl.user.id), String(c.id));
   const want = new Map();                                    // k -> {pid, name, crime, crime_id, position, rate, succ}
   for (const t of plan.teams || []) {
     if (t.kind !== "live" || t.crime_id == null) continue;
@@ -2021,9 +2028,12 @@ async function ocAssignPings(env, crimes) {
     if (!c || c.status !== "Recruiting") continue;
     const open = new Set((c.slots || []).filter(sl => !sl.user).map(label));
     for (const r of t.roles || []) {
-      if (r.pid == null || r.existing || r.queued || !open.has(r.position) || inCrime.has(Number(r.pid))) continue;
+      // MOVING (Nov 13 2026): a member still sitting in the crime they're planned to LEAVE (r.leave) is pinged, with a
+      // "leave it first" line; sitting in any other crime -> no ping (as before)
+      const sit = inCrime.get(Number(r.pid)), moving = !!(r.leave && sit != null && sit === String(r.leave.crime_id));
+      if (r.pid == null || r.existing || r.queued || !open.has(r.position) || (sit != null && !moving)) continue;
       want.set(`${t.crime_id}|${r.position}|${r.pid}`, {pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id,
-        position: r.position, rate: r.rate, succ: t.succ, calc: !!t.succ_calc});
+        position: r.position, rate: r.rate, succ: t.succ, calc: !!t.succ_calc, leave: moving ? r.leave : null});
     }
   }
   const have = new Map((((await env.OC_DB.prepare("SELECT k, msg_id FROM oc_ping").all()).results) || []).map(x => [x.k, x.msg_id]));

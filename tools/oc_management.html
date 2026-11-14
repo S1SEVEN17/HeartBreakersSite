@@ -840,7 +840,7 @@ async function deploy() {
   const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
     hold: t.hold || null, noshow: t.noshow || null,   // spawn hold / no-shows (Nov 12 2026) kept through a deploy
     roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing,
-      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null, since: r.since || null}))}))};
+      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null, since: r.since || null, leave: r.leave || null}))}))};
   try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
@@ -1168,7 +1168,10 @@ function drawDeployed() {
       ALL.add(r.pid);
       if (nextOn || (!ok && r.queued)) QUEUE.add(r.pid); else if (ok) JOIN.add(r.pid);
       const stt = (nextOn ? `<span class="qd" title="In this crime now - queued for their next crime, joins it when this one pays out">🕒 Queued · next: ${esc(nq.crime)}${nq.id ? " #" + esc(nq.id) : " (to spawn)"} · free in ${freeIn(nq.free_at)}</span>`
-        : ok ? '<span class="ok">✅ Joined</span>' : r.queued ? queueTag(r, b) : b ? `<span class="mid">⚠️ in ${esc(b.crime)}</span>` : '<span class="tag">⏳ Not joined yet</span>')
+        : ok ? '<span class="ok">✅ Joined</span>' : r.queued ? queueTag(r, b) : b ? (r.leave && b.cid != null && String(b.cid) === String(r.leave.crime_id)
+            // MOVING (Nov 13 2026): planning not started in their current crime - leaving it for this better-paying seat
+            ? `<span class="mid" title="Hasn't started planning in ${esc(b.crime)} - leaves it for this seat, which pays more if joined now">↪ moving from ${esc(b.crime)}</span>`
+            : `<span class="mid">⚠️ in ${esc(b.crime)}</span>`) : '<span class="tag">⏳ Not joined yet</span>')
         + (r.replaces && !ok ? ` <span class="bad">🔁 replacing ${esc(r.replaces.name || nameOf(r.replaces.pid))}</span>` : "");
       return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b>${ok ? "" : " " + noScrTag(r.pid)}</td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
     }).join("");
