@@ -393,6 +393,19 @@ function netOf(crime, low) { const p = D.sums && D.sums.payouts && D.sums.payout
 const srcTag = crime => { const p = D.sums && D.sums.payouts && D.sums.payouts[crime];
   if (!p || p.src !== "tp") return "";
   return ` <span class="tag" title="Payouts from tornprobability.com's community data (${p.tpRuns} successful runs recorded)${p.maxSrc === "hub" ? " - the maximum is our own best run, which beat theirs" : ""}">🌐 community data · ${p.tpRuns} runs${p.maxSrc === "hub" ? " · max ours" : ""}</span>`; };
+// REWARD TYPE (Nov 13 2026, user: "Mark the crimes page entries with the reward type, for example "Item Reward"
+// "Cash Reward""): from the payout summaries (ours or tornprobability.com's) - cash recorded (moneyMax > 0) and/or
+// reward items recorded. A prerequisite crime pays nothing itself: it's marked with its chain's FINAL crime's reward.
+// Unknown (no completions recorded anywhere) -> no tag.
+function rewardTag(crime) {
+  const ch = chainOf(crime), fin = ch[ch.length - 1], p = D.sums && D.sums.payouts && D.sums.payouts[fin];
+  if (!p) return "";
+  const cash = Number(p.moneyMax) > 0, items = Object.keys(p.items || {}).length > 0;
+  if (!cash && !items) return "";
+  const what = cash && items ? "💵🎁 Cash + Item Reward" : cash ? "💵 Cash Reward" : "🎁 Item Reward";
+  const via = fin !== crime ? ` · via ${esc(fin)}` : "";
+  return ` <span class="tag" title="${fin !== crime ? "Paid out when " + esc(fin) + " (the last crime of the chain) completes" : "What this crime pays out"}">${what}${via}</span>`;
+}
 function grossOf(crime) {
   const S = D.sums && D.sums.payouts;
   if (S) {
@@ -656,7 +669,7 @@ function drawCrimes() {
       // for="crN": a <button> inside the label (🔁 Rotate) would otherwise be the label's control and swallow the
       // row's click, so the on/off switch never toggled (fixed Nov 2026)
       return `<label class="cr${off.has(n) ? " off" : ""}" for="cr${ix}"><span class="dif">D${c.difficulty ?? "?"}</span><span class="nm"><b>${esc(n)}</b>
-        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each · avg ${fmt2(eachAvg(n))}` : ""}</i>${srcTag(chainOf(n).slice(-1)[0])}</span>
+        <i>${(c.roles || []).length} roles${c.prereq ? ` · after ${esc(c.prereq)}` : ""}${eachPay(n) > 0 ? ` · up to ${fmt2(eachPay(n))}/day each · avg ${fmt2(eachAvg(n))}` : ""}</i>${srcTag(chainOf(n).slice(-1)[0])}${rewardTag(n)}</span>
         <span class="sw"><input type="checkbox" id="cr${ix}" data-cr="${esc(n)}"${off.has(n) ? "" : " checked"}><span></span></span></label>`; }).join("")
       : '<div class="tag">The crime list loads with the next full site update.</div>'}</div></div>`;
   const count = () => { const n = document.querySelectorAll("[data-cr]:not(:checked)").length; $("crn").textContent = `${names.length - n} of ${names.length} on`; };
