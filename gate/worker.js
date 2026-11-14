@@ -424,6 +424,7 @@ async function sxRoute(env, ctx, req) {
     if (what === "scripts") return sxPass(await scriptsRoute(env, get, u, who));
     if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
     if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
+    if (what === "myoc") return sxJson(await ocMine(env, who.id));   // the Hub script's Home "My OC" tile (Nov 14 2026)
     return sxJson({ok: false, error: "unknown"}, 400);
   }
   // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
@@ -2404,6 +2405,26 @@ async function ocDelayStats(env, now) {
 // OC Management page works the same out from the plan itself. No Torn call (the plan + the crimes feed snapshot).
 //   -> {ok, as_of, alerts: [{crime, difficulty, seats, pay_day (per member, best recorded), ready (members free now),
 //        queued (still in a crime), next_free (ms, soonest queued member), held_until (ms) | null, names: [...]}]}
+// MY OC (Nov 14 2026, user: Hub script Home - "A new tile should show your Organized Crime information"): the member's
+// own crime right now from the OC data feed (the Hub's 3-minute Torn copy - no Torn call here) and their seat in the
+// live plan. {ok, as_of, current: {crime, crime_id, status, position, progress, ready_at, filled, seats} | null,
+//  assignment: {crime, crime_id, position, rate, joined, queued, leave, kind} | null, succ}
+async function ocMine(env, pid) {
+  pid = Number(pid);
+  const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
+  const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first().catch(() => null);
+  let crimes = []; try { const d = snap ? JSON.parse(snap.data) : []; crimes = Array.isArray(d) ? d : (d.crimes || []); } catch (e) {}
+  let current = null;
+  for (const c of crimes) for (const sl of c.slots || []) if (sl.user && Number(sl.user.id) === pid)
+    current = {crime: c.name, crime_id: c.id, status: c.status, position: (sl.position_info && sl.position_info.label) || sl.position || "",
+               progress: Number(sl.user.progress) || 0, ready_at: c.ready_at || null, filled: (c.slots || []).filter(x => x.user).length,
+               seats: (c.slots || []).length, rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null};
+  let assignment = null;
+  for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment)
+    assignment = {crime: t.crime, crime_id: t.crime_id || null, kind: t.kind || "spawn", position: r.position, rate: r.rate ?? null,
+                  joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null, succ: t.succ ?? null};
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment};
+}
 async function ocSpawnAlerts(env) {
   const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
   const snap = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first().catch(() => null);
