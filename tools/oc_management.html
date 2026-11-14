@@ -120,6 +120,11 @@ th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 .chainrow .ci{margin-right:1px}.chainrow .ar{color:var(--sub)}
 .chainrow .st{white-space:nowrap;padding:1px 6px;border:1px solid var(--edge);border-radius:999px;color:var(--sub)}
 .chainrow .st.cur{color:#fff;border-color:var(--gold);background:rgba(232,190,90,.12)}
+.ntpill{display:inline-block;margin-top:3px;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:800;letter-spacing:.3px}
+.ntpill.ok{background:rgba(120,200,120,.18);color:var(--green);border:1px solid var(--green)}
+.ntpill.old{background:rgba(232,190,90,.16);color:var(--gold);border:1px solid var(--gold)}
+.ntpill.no{background:rgba(228,56,46,.14);color:#ff7a70;border:1px solid var(--red)}
+tr.nt-ok td{background:rgba(120,200,120,.06)}tr.nt-old td{background:rgba(232,190,90,.06)}tr.nt-no td{background:rgba(228,56,46,.05)}
 </style></head><body>
 __MENU__
 <h1>OC Management</h1>
@@ -1131,13 +1136,19 @@ function logContact(x, how) {
   D.config.contacted[String(x.pid)] = Object.assign({}, e, {at: Date.now(), by: "you"});   // show it straight away
   saveConfig("contacted", e).catch(() => {});
 }
+// VERY VISIBLE (Nov 14 2026, user: "it should show when a member has already been notified. This should be very
+// visible on both the HUB script and webpage"): a big status pill - green ✅ NOTIFIED (this crime + role), amber ⚠️
+// NOTIFIED FOR ANOTHER CRIME (their assignment changed since - tell them again), red ✖ NOT NOTIFIED - plus the detail
+// line (when, crime, role, how, who). The row is tinted to match (notifyRowCls).
+function contactState(lc, x) { return !lc || !lc.at ? "no" : String(lc.crime_id) === String(x.crime_id) && lc.role === x.position ? "ok" : "old"; }
+function notifyRowCls(lc, x) { return "nt-" + contactState(lc, x); }
 function lastContact(lc, x) {
-  if (!lc || !lc.at) return `<br><span class="tag">Not contacted yet</span>`;
+  const st = contactState(lc, x);
+  if (st === "no") return `<br><span class="ntpill no">✖ NOT NOTIFIED</span>`;
   const when = new Date(lc.at).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
-  const same = String(lc.crime_id) === String(x.crime_id) && lc.role === x.position;
   const how = {chat: "💬 chat", mail: "✉️ mail", sent: "✓ marked"}[lc.how] || lc.how;
-  return `<br><span class="tag" title="Logged when a leader pressed ${esc(how)}${lc.by ? " - " + esc(lc.by) : ""}">📨 Last contacted ${esc(when)} (${ago(lc.at)}) · ${esc(lc.crime)}${lc.crime_id ? " #" + esc(lc.crime_id) : ""} · ${esc(lc.role)} · ${esc(how)}</span>`
-    + (same ? "" : ` <span class="tag" style="color:var(--gold)" title="Their assignment has changed since">⚠️ different crime/role now</span>`);
+  return `<br><span class="ntpill ${st}">${st === "ok" ? "✅ NOTIFIED" : "⚠️ NOTIFIED FOR ANOTHER CRIME"} · ${ago(lc.at)}</span>`
+    + `<br><span class="tag" title="Logged when a leader pressed ${esc(how)}${lc.by ? " - " + esc(lc.by) : ""}">📨 ${esc(when)} · ${esc(lc.crime)}${lc.crime_id ? " #" + esc(lc.crime_id) : ""} · ${esc(lc.role)} · ${esc(how)}${lc.by ? " · by " + esc(String(lc.by).replace(/ \[\d+\]$/, "")) : ""}</span>`;
 }
 function drawNotify() {
   const L = notifyList();
@@ -1148,7 +1159,7 @@ function drawNotify() {
   if (!L.length) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">✅ Nobody to notify - every member without the script who's placed has joined (or isn't placed in a recruiting crime).</div></div>` + notifyEditor(); notifyEditorWire(); return; }
   $("view").innerHTML = `<div class="panel">${head}<table class="tb"><tr><th>Member</th><th>Crime · role</th><th></th></tr>`
     + L.map((x, i) => { const k = x.pid + ":" + x.crime_id, s = sent[k], lc = (D.config.contacted || {})[String(x.pid)];
-      return `<tr><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s && !lc ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}${lastContact(lc, x)}</td>
+      return `<tr class="${notifyRowCls(lc, x)}"><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s && !lc ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}${lastContact(lc, x)}</td>
         <td>${esc(x.crime)} <span class="tag">#${esc(x.crime_id)}</span><br><span class="mid">${esc(x.position)}</span></td>
         <td style="white-space:nowrap"><button data-n="chat" data-i="${i}">💬 Chat</button> <button data-n="mail" data-i="${i}">✉️ Mail</button> <button data-n="sent" data-i="${i}" title="Tick off on this device">✓</button></td></tr>`; }).join("")
     + `</table><div class="hn" id="nmsg"></div></div>` + notifyEditor();

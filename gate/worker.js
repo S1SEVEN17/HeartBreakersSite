@@ -426,6 +426,13 @@ async function sxRoute(env, ctx, req) {
     if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
     return sxJson({ok: false, error: "unknown"}, 400);
   }
+  // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
+  if (op === "oc_contacted") {
+    if (!who.leader) return leadersOnly();
+    const e = b.entry && typeof b.entry === "object" ? b.entry : {};
+    if (!(Number(e.pid) > 0)) return sxJson({ok: false, error: "pid required"}, 400);
+    return sxJson({ok: true, contacted: await ocContactLog(env, "prod", e, `${who.name} [${who.id}]`)});
+  }
   if (op === "gh") {
     if (!who.leader) return leadersOnly();
     const method = b.method === "PUT" ? "PUT" : "GET", path = String(b.path || "");
@@ -1271,6 +1278,26 @@ async function ocIdentify(env, ctx, key) {
 //                                    current; ONE per minute for all leaders together (oc_config env 'all', k 'refresh')
 //                                    -> {ok, next_at} or 429 {ok:false, retry_in (seconds)}
 // =====================================================================================================
+// 📣 CONTACT LOG (Nov 14 2026, user: "When a player is notified, leave a timestamp of when they were last contacted,
+// their crime and role." + "it should show when a member has already been notified ... very visible on both the HUB
+// script and webpage"): one entry {pid, crime, crime_id, role, how: chat|mail|sent} from OC Management's Notify tab
+// (PUT oc/config k "contacted") or the Hub script's Notify card (op "oc_contacted") is merged into oc_config
+// "contacted" = {pid: {at, crime, crime_id, role, how, by}} - the latest contact per member, shared by every leader.
+// Entries older than 30 days are dropped; at most 500 members kept. ocSpawnAlerts hands it to the Hub script.
+async function ocContactLog(env, envName, e, by) {
+  const pid = Number(e.pid);
+  const cur = (await ocConfig(env, envName)).contacted;
+  const map = cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {};
+  const now = Date.now();
+  map[String(pid)] = {at: now, crime: String(e.crime || "").slice(0, 80), crime_id: Number(e.crime_id) || null,
+    role: String(e.role || "").slice(0, 40), how: ["chat", "mail", "sent"].includes(e.how) ? e.how : "sent", by: String(by || "").slice(0, 60)};
+  for (const k of Object.keys(map)) if (!map[k] || !(now - Number(map[k].at) < 30 * 864e5)) delete map[k];
+  const v = Object.fromEntries(Object.entries(map).sort((a, c) => c[1].at - a[1].at).slice(0, 500));
+  await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES (?, ?, ?, ?, ?) " +
+    "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
+    .bind(envName, "contacted", JSON.stringify(v), now, String(by || "")).run();
+  return map[String(pid)];
+}
 async function ocConfig(env, envName) {
   const {results} = await env.OC_DB.prepare("SELECT k, v, ts, by FROM oc_config WHERE env = ?").bind(envName).all();
   const out = {disabled: [], plan: null};
@@ -1612,21 +1639,11 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify", "contacted"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
     if (b.k === "contacted") {
-      // 📣 CONTACT LOG (Nov 14 2026, user: "When a player is notified, leave a timestamp of when they were last
-      // contacted, their crime and role."): the page sends ONE entry {pid, crime, crime_id, role, how: chat|mail|sent};
-      // it's merged into the shared map {pid: {at, crime, crime_id, role, how, by}} (latest contact per member, every
-      // leader sees it). Entries older than 30 days are dropped; at most 500 members kept.
+      // 📣 CONTACT LOG (Nov 14 2026) - see ocContactLog; the page sends ONE entry {pid, crime, crime_id, role, how}
       const e = v && typeof v === "object" ? v : {};
-      const pid = Number(e.pid);
-      if (!(pid > 0)) return Response.json({ok: false, error: "pid required"}, {status: 400});
-      const cur = (await ocConfig(env, b.env)).contacted;
-      const map = cur && typeof cur === "object" && !Array.isArray(cur) ? cur : {};
-      const now = Date.now();
-      map[String(pid)] = {at: now, crime: String(e.crime || "").slice(0, 80), crime_id: Number(e.crime_id) || null,
-        role: String(e.role || "").slice(0, 40), how: ["chat", "mail", "sent"].includes(e.how) ? e.how : "sent", by: `${who.name} [${who.id}]`};
-      for (const k of Object.keys(map)) if (!map[k] || !(now - Number(map[k].at) < 30 * 864e5)) delete map[k];
-      const keep = Object.entries(map).sort((a, c) => c[1].at - a[1].at).slice(0, 500);
-      v = Object.fromEntries(keep);
+      if (!(Number(e.pid) > 0)) return Response.json({ok: false, error: "pid required"}, {status: 400});
+      await ocContactLog(env, b.env, e, `${who.name} [${who.id}]`);
+      return Response.json({ok: true}, H);
     }
     if (b.k === "rotate") v = [];   // ROTATION REMOVED (Nov 13 2026, user) - nothing is rotated any more
     if (b.k === "disabled" || b.k === "rotate") {
@@ -2416,7 +2433,9 @@ async function ocSpawnAlerts(env) {
         if (t.kind !== "live" || t.crime_id == null) continue;
         for (const r of t.roles || []) {
           if (r.pid == null || r.existing || r.queued || seen[String(r.pid)]) continue;
-          oc_notify.push({pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id, position: r.position, since: Number(r.since) || null});
+          oc_notify.push({pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id, position: r.position, since: Number(r.since) || null,
+                          // last contact (Nov 14 2026) - {at, crime, crime_id, role, how, by} or null
+                          contacted: (cfg.contacted && cfg.contacted[String(r.pid)]) || null});
         }
       }
   } catch (e) { oc_notify = []; }
