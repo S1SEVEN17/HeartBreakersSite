@@ -5,213 +5,129 @@
 <title>Heart Breakers - Homepage Editor</title>
 <!--
   HOMEPAGE EDITOR (leaders' folder: homepage.html, published by generate.py write_homepages).
-  Leaders lay out the Members Hub and the Leaders Hub themselves - sections and tiles - instead of asking for UI changes.
+  Since Nov 14 2026 it runs on the UNIVERSAL PANEL EDITOR (tools/panelkit.js, inlined at /*__PANELKIT__*/ - read its
+  notes); this page only describes the homepage (the adapter below).
+  Leaders lay out the Hub homepage themselves - sections and tiles - instead of asking for UI changes.
   Saves config.json "homepage" (see the HOMEPAGES note in generate.py) through the gatekeeper (CFG.ghproxy - no
-  GitHub token on the device); the data repo's notify workflow then rebuilds the site (a few minutes).
-    section: {type: "welcome"} | {type: "now", title} | {type: "attention", title} (Leaders Hub only)
+  GitHub token on the device); the data repo's notify workflow then rebuilds the site (a few minutes). The save
+  re-reads config.json and only replaces "homepage", so other settings changed meanwhile aren't lost.
+    section: {type: "welcome"} | {type: "now", title} | {type: "attention", title} (leaders only)
            | {type: "actions", tiles: [{icon, title, link}]} | {type: "latest", title}
            | {type: "groups", title, groups: [{title, links: [{icon, title, link}]}]}
            | {type: "tiles", title, tiles: [{icon, title, desc, link}]} | {type: "text", title, text}
     (what each one shows: the HOMEPAGES note in generate.py). homepage.v = CFG.layout_v marks a layout saved for the
     redesigned hubs - an older saved layout (no v) is ignored by the site, so the editor starts from the built-in one.
+    One home since Nov 12 2026: homepage.members (the leaders' copy is kept as it is).
     link:    "M:<page>" members' folder · "L:<page>" leaders' folder · "G:/" dashboard · full https:// address
-  The preview is drawn here with the hubs' own CSS + script (CFG.css / CFG.js / CFG.jscfg - so the welcome and
-  Needs attention parts show your real numbers) and the current "Latest" (CFG.latest).
-  Nothing is saved until Save changes. __CONFIG__ / __MENU__ are filled in by generate.py.
+  The preview is drawn here with the hub's own CSS + script (CFG.css / CFG.js / CFG.jscfg - so the welcome and
+  Needs attention parts show your real numbers) and the current "Latest" (CFG.latest); each section is wrapped in a
+  [data-pk-sec] box so tapping it opens it in the editor.
+  __CONFIG__ / __MENU__ are filled in by generate.py.
 -->
-<style>
-:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
-*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0 auto;padding:10px;max-width:1500px}
-h1{color:var(--red);text-align:center;font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:6px 0 2px}
-.lead{color:var(--sub);text-align:center;margin:0 0 10px}
-.wrap{display:flex;gap:12px;align-items:flex-start}
-.ed{flex:0 0 480px;max-width:100%}.rc{flex:1;min-width:0;position:sticky;top:8px}
-@media(max-width:900px){.wrap{flex-direction:column}.ed{flex:auto;width:100%}.rc{position:static;width:100%}}
-.card{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px;margin-bottom:10px}
-.card h2{margin:0 0 8px;color:var(--gold);font-size:13px;text-transform:uppercase;letter-spacing:1.5px}
-.sec{border:1px solid var(--edge);border-radius:10px;padding:8px;margin-bottom:10px;background:#140b0c}
-.sec>.bh{display:flex;gap:6px;align-items:center;margin-bottom:6px}
-.sec>.bh b{color:var(--gold);font-size:12px;text-transform:uppercase;letter-spacing:1px;flex:1}
-.tile{border:1px dashed #3a1c1c;border-radius:8px;padding:6px;margin:6px 0}
-.tile .bh{display:flex;gap:6px;align-items:center}.tile .bh span{flex:1;color:var(--sub);font-size:12px}
-input,textarea,select{width:100%;background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:6px;padding:7px;font:13px system-ui;margin:2px 0}
-textarea{min-height:70px}
-.row{display:flex;gap:6px}.row>*{flex:1}.row[style*=wrap]>*{flex:1 1 30%}.row .ic{flex:0 0 64px;text-align:center;font-size:18px}
-button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:6px;padding:6px 10px;font:13px system-ui;cursor:pointer}
-button:hover{border-color:var(--gold)}button.g{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
-button.sm{padding:3px 8px;font-size:12px}
-.tabs{display:flex;gap:6px;margin-bottom:10px}.tabs button{flex:1}.tabs button.on{background:var(--red);border-color:var(--red);color:#fff}
-.small{color:var(--sub);font-size:12px}#status{color:var(--gold);margin-left:8px}
-iframe{width:100%;height:calc(100vh - 120px);min-height:500px;border:1px solid var(--edge);border-radius:10px;background:var(--bg)}
-</style></head><body>
+<style>body{background:#100a0b;margin:0 auto;padding:10px;max-width:1700px}</style></head><body>
 __MENU__
-<h1>Homepage Editor</h1>
-<p class="lead">Lay out the hubs yourself: add, remove and reorder sections and tiles. The preview updates as you edit;
-nothing is saved until <b>Save changes</b> (live on the site a few minutes later).</p>
-<div class="wrap">
-<div class="ed">
-  <div class="tabs" style="display:none"><button id="tM" class="on">Members Hub</button><button id="tL">Leaders Hub</button></div><!-- one home since Nov 12 2026 -->
-  <div class="card"><h2>Save</h2>
-    <button class="g" id="save">Save changes</button> <button id="reset" title="Back to the built-in layout for this hub">Reset this hub</button>
-    <span id="status"></span>
-    <div class="small" style="margin-top:6px">Links: pick a page from the list or type a full https:// address.</div></div>
-  <div id="form"><div class="small">Loading…</div></div>
-  <div class="card"><h2>Add a section</h2><div class="row" style="flex-wrap:wrap">
-    <button data-add="welcome">+ Welcome</button><button data-add="now">+ Right now</button><button data-add="attention">+ Needs attention</button>
-    <button data-add="actions">+ Quick actions</button><button data-add="latest">+ Latest</button><button data-add="groups">+ Link groups</button>
-    <button data-add="tiles">+ Tiles</button><button data-add="text">+ Text note</button></div>
-    <div class="small" style="margin-top:6px">Welcome = greeting + the member's own numbers · Right now = live war and chain timers (from the Hub) ·
-      Needs attention = unpaid payouts, idle recruits (leaders only) · Quick actions = big icon buttons ·
-      Latest = newest post big, the rest as a list · Link groups = pages in labelled groups · Tiles = link cards · Text note = a message.</div></div>
-</div>
-<div class="rc"><iframe id="pv" title="Preview"></iframe></div>
-</div>
+<div id="pk"></div>
 <datalist id="pages"></datalist>
+<script>/*__PANELKIT__*/</script>
 <script>
 const CFG = __CONFIG__;
-const $ = id => document.getElementById(id);
-const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const GHC = CFG.ghproxy || `https://api.github.com/repos/${CFG.repo}/contents/`;
-const tok = CFG.ghproxy ? "gate" : (() => { try { return JSON.parse(localStorage.getItem("hb_gh_token")); } catch (e) { return null; } })();
-let C = null, sha = null, hub = "members", dirty = false;
-$("pages").innerHTML = CFG.pages.map(([t, u]) => `<option value="${esc(u)}">${esc(t)}</option>`).join("");
-const pageName = u => (CFG.pages.find(p => p[1] === u) || [])[0] || "";
-const HP = () => { C.homepage = C.homepage || JSON.parse(JSON.stringify(CFG.default)); return C.homepage; };
-const secs = () => { const h = HP(); h[hub] = h[hub] || {sections: []}; return h[hub].sections; };
+const {esc, clone} = PK;
+const GH = PK.gh(CFG);
+const HUB = "members";
+const HP = C => { if (!C.homepage || !(C.homepage.v >= CFG.layout_v)) C.homepage = clone(CFG.default); return C.homepage; };
+const secs = C => { const h = HP(C); h[HUB] = h[HUB] || {sections: []}; h[HUB].sections = h[HUB].sections || []; return h[HUB].sections; };
 
-const KIND = {welcome: "👋 Welcome", now: "⚡ Right now", attention: "🔔 Needs attention", actions: "🔘 Quick actions",
-              latest: "📰 Latest", groups: "🗂️ Link groups", tiles: "🔗 Tiles", text: "📝 Text note"};
+const KIND = {welcome: ["👋", "Welcome"], now: ["⚡", "Right now"], attention: ["🔔", "Needs attention"], actions: ["🔘", "Quick actions"],
+              latest: ["📰", "Latest"], groups: ["🗂️", "Link groups"], tiles: ["🔗", "Tiles"], text: ["📝", "Text note"]};
 const AUTO = {welcome: "Filled in automatically: a greeting with the member's name and position, and their last war hits, gym this month and crime success against the faction average.",
               now: "Live from Torn in each member's browser with their own Public key (asked for once, kept only on their device): the ranked war countdown then score, and the chain timer every 15 seconds.",
-              attention: "Filled in automatically: wars with no payout receipt yet and inactive recruits. Leaders Hub only - hidden when it's all clear.",
+              attention: "Filled in automatically: wars with no payout receipt yet and inactive recruits. Leaders only - hidden when it's all clear.",
               latest: "Filled in automatically on every update."};
-// one link row (quick action / group link / tile). path = data-s / data-g / data-t, desc = show a description field
-function linkRow(t, si, gi, ti, desc, what) {
-  const at = `data-s="${si}"${gi != null ? ` data-g="${gi}"` : ""} data-t="${ti}"`;
-  return `<div class="tile"><div class="bh"><span>${what} ${ti + 1}${pageName(t.link) ? " · " + esc(pageName(t.link)) : ""}</span>
-      <button class="sm" data-a="tup" ${at}>▲</button><button class="sm" data-a="tdn" ${at}>▼</button>
-      <button class="sm" data-a="tdel" ${at} title="Remove">✕</button></div>
-    <div class="row"><input class="ic" ${at} data-k="icon" placeholder="🙂" value="${esc(t.icon)}">
-      <input ${at} data-k="title" placeholder="Title" value="${esc(t.title)}"></div>
-    ${desc ? `<input ${at} data-k="desc" placeholder="Description" value="${esc(t.desc)}">` : ""}
-    <input ${at} data-k="link" list="pages" placeholder="Link - pick a page or https://…" value="${esc(t.link)}"></div>`;
-}
-function render() {
-  const S = secs();
-  $("form").innerHTML = S.map((sec, si) => {
-    const ty = sec.type || "tiles";
-    const head = `<div class="bh"><b>${KIND[ty] || ty} - section ${si + 1}</b>
-      <button class="sm" data-a="up" data-s="${si}">▲</button><button class="sm" data-a="dn" data-s="${si}">▼</button>
-      <button class="sm" data-a="del" data-s="${si}" title="Remove section">✕</button></div>`
-      + (ty === "welcome" ? "" : `<input data-s="${si}" data-k="title" placeholder="Section heading (optional)" value="${esc(sec.title)}">`);
-    const warn = ty === "attention" ? `<div class="small">Only leaders see it (when something needs them).</div>` : "";
-    if (AUTO[ty]) return `<div class="sec">${head}<div class="small">${AUTO[ty]}</div>${warn}</div>`;
-    if (ty === "text") return `<div class="sec">${head}<textarea data-s="${si}" data-k="text" placeholder="Your message - a blank line starts a new paragraph">${esc(sec.text)}</textarea></div>`;
-    if (ty === "groups") return `<div class="sec">${head}` + (sec.groups || []).map((g, gi) => `<div class="tile" style="border-style:solid">
-        <div class="bh"><span>Group ${gi + 1}</span><button class="sm" data-a="gup" data-s="${si}" data-g="${gi}">▲</button>
-          <button class="sm" data-a="gdn" data-s="${si}" data-g="${gi}">▼</button><button class="sm" data-a="gdel" data-s="${si}" data-g="${gi}" title="Remove group">✕</button></div>
-        <input data-s="${si}" data-g="${gi}" data-k="gtitle" placeholder="Group name" value="${esc(g.title)}">`
-        + (g.links || []).map((t, ti) => linkRow(t, si, gi, ti, false, "Link")).join("")
-        + `<button data-a="tadd" data-s="${si}" data-g="${gi}">+ Add link</button></div>`).join("")
-        + `<button data-a="gadd" data-s="${si}">+ Add group</button></div>`;
-    const act = ty === "actions";
-    return `<div class="sec">${head}` + (sec.tiles || []).map((t, ti) => linkRow(t, si, null, ti, !act, act ? "Button" : "Tile")).join("")
-      + `<button data-a="tadd" data-s="${si}">+ Add ${act ? "button" : "tile"}</button></div>`;
-  }).join("") || `<div class="card small">No sections - add one below.</div>`;
-  preview();
+const LINK = {k: "link", label: "Link", t: "link", pages: CFG.pages};
+const TILE = [{k: "icon", label: "Icon (emoji)"}, {k: "title", label: "Title"}, {k: "desc", label: "Description"}, LINK];
+const BTN = [{k: "icon", label: "Icon (emoji)"}, {k: "title", label: "Title"}, LINK];
+const pg = want => { const p = CFG.pages.find(([t]) => t.toLowerCase().includes(want)); return p ? p[1] : CFG.pages[0][1]; };
+const TILE_TPL = [["⚔️", "War history", "Every war and your hits", "history"], ["⛓️", "Chain Watch", "Sign up for a shift", "chain"],
+  ["🕵️", "Organized crimes", "Stats and payouts", "oc"], ["🏆", "Leaderboards", "Who's on top this month", "leaderboard"], ["👤", "My profile", "Your stats and reliability", "profile"]]
+  .map(([i, t, d, w]) => ({label: `${i} ${t}`, make: () => ({icon: i, title: t, desc: d, link: pg(w)})}));
+const BTN_TPL = TILE_TPL.map(x => ({label: x.label, make: () => { const t = x.make(); delete t.desc; return t; }}));
+// + Add a section (with templates, #9)
+const NEW = [
+  {label: "Welcome", icon: "👋", desc: "Greeting + the member's own numbers", make: () => ({type: "welcome", title: ""})},
+  {label: "Right now", icon: "⚡", desc: "Live war and chain timers", make: () => ({type: "now", title: "Right now"})},
+  {label: "Needs attention", icon: "🔔", desc: "Unpaid payouts, idle recruits (leaders only)", make: () => ({type: "attention", title: "Needs attention"})},
+  {label: "Quick actions", icon: "🔘", desc: "Big icon buttons", make: () => ({type: "actions", title: "", tiles: [{icon: "🔗", title: "New link", link: ""}]})},
+  {label: "Latest", icon: "📰", desc: "Newest post big, the rest as a list", make: () => ({type: "latest", title: "Latest"})},
+  {label: "Link groups", icon: "🗂️", desc: "Pages in labelled groups", make: () => ({type: "groups", title: "Explore", groups: [{title: "New group", links: [{icon: "🔗", title: "New link", link: ""}]}]})},
+  {label: "Tiles", icon: "🔗", desc: "Link cards", make: () => ({type: "tiles", title: "New section", tiles: [{icon: "🔗", title: "New tile", desc: "", link: ""}]})},
+  {label: "Text note", icon: "📝", desc: "A message to everyone", make: () => ({type: "text", title: "", text: "Your message"})},
+  {label: "✨ Faction rules note", icon: "✨", desc: "Template: a rules message", make: () => ({type: "text", title: "Faction rules", text: "Be active daily.\n\nJoin chains and ranked wars.\n\nShare your OC pass rates on the Hub."})},
+  {label: "✨ Starter tiles", icon: "✨", desc: "Template: war, chain, OC, leaderboards, profile", make: () => ({type: "tiles", title: "Explore", tiles: TILE_TPL.map(t => t.make())})}];
+
+function form(C, v, k) {
+  const s = secs(C)[+k]; if (!s) return {obj: {}, fields: []};
+  const ty = s.type || "tiles", head = ty === "welcome" ? [] : [{k: "title", label: "Section heading (optional)"}];
+  if (AUTO[ty]) return {obj: s, help: esc(AUTO[ty]), fields: head};
+  if (ty === "text") return {obj: s, fields: head.concat([{k: "text", label: "Message (a blank line starts a new paragraph)", t: "area"}])};
+  if (ty === "groups") return {obj: s, fields: head.concat([{k: "groups", label: "Groups", t: "list", title: g => g.title,
+    item: [{k: "title", label: "Group name"}, {k: "links", label: "Links", t: "list", title: t => `${t.icon || ""} ${t.title || ""}`, item: BTN,
+            make: () => ({icon: "🔗", title: "New link", link: ""}), templates: BTN_TPL}],
+    make: () => ({title: "New group", links: [{icon: "🔗", title: "New link", link: ""}]})}])};
+  const act = ty === "actions";
+  return {obj: s, fields: head.concat([{k: "tiles", label: act ? "Buttons" : "Tiles", t: "list", title: t => `${t.icon || ""} ${t.title || ""}`, item: act ? BTN : TILE,
+    make: () => act ? {icon: "🔗", title: "New link", link: ""} : {icon: "🔗", title: "New tile", desc: "", link: ""}, templates: act ? BTN_TPL : TILE_TPL}])};
 }
 
 // preview: the hub drawn with its own CSS + script (links don't navigate here). Same markup as generate.py _hub_sections.
-function preview() {
+function hubHtml(C) {
   let live = false;
-  const body = secs().map(sec => {
+  const body = secs(C).map((sec, i) => {
     const ty = sec.type || "tiles", h = sec.title ? `<h2>${esc(sec.title)}</h2>` : "";
-    if (ty === "welcome") { live = true; return `<div class="hbsec" id="hbWel"><div class="wel"><div class="av">HB</div><div class="wt"><b>Welcome to Heart Breakers</b><span>Loading…</span></div></div><div class="stats"></div></div>`; }
-    if (ty === "now") { live = true; return `<div class="hbsec" id="hbNow" hidden>${h}<div class="nowc"></div></div>`; }
-    if (ty === "attention") { live = true;
-      return `<div class="hbsec" id="hbAtt" hidden><div class="attn"><div class="ah"><b>🔔 ${esc(sec.title || "Needs attention")}</b><span class="cnt"></span></div><div class="rows"></div></div></div><div class="tag" style="font-size:11px">[ Needs attention - shows when something needs a leader ]</div>`; }
-    if (ty === "actions") return h + `<div class="qa">${(sec.tiles || []).map(t => `<a href="#"><i>${esc(t.icon)}</i>${esc(t.title)}</a>`).join("")}</div>`;
-    if (ty === "latest") { live = true; return h + (CFG.latest[hub] || `<div class="tag">Latest appears here.</div>`); }
-    if (ty === "groups") return h + `<div class="groups">${(sec.groups || []).map(g => `<div><p>${esc(g.title)}</p>${(g.links || []).map(t => `<a href="#"><i>${esc(t.icon)}</i>${esc(t.title)}</a>`).join("")}</div>`).join("")}</div>`;
-    if (ty === "text") return h + `<div class="note">${String(sec.text || "").split(/\n\n/).filter(p => p.trim()).map(p => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("")}</div>`;
-    return h + `<div class="grid">${(sec.tiles || []).map(t => `<a class="tile ${hub === "leaders" ? "l" : ""}" href="#"><b><i>${esc(t.icon)}</i>${esc(t.title)}</b><span>${esc(t.desc)}</span></a>`).join("")}</div>`;
+    let x;
+    if (ty === "welcome") { live = true; x = `<div class="hbsec" id="hbWel"><div class="wel"><div class="av">HB</div><div class="wt"><b>Welcome to Heart Breakers</b><span>Loading…</span></div></div><div class="stats"></div></div>`; }
+    else if (ty === "now") { live = true; x = `<div class="hbsec" id="hbNow">${h}<div class="nowc"><div class="tag">Live war and chain timers appear here.</div></div></div>`; }
+    else if (ty === "attention") { live = true;
+      x = `<div class="hbsec" id="hbAtt"><div class="attn"><div class="ah"><b>🔔 ${esc(sec.title || "Needs attention")}</b><span class="cnt"></span></div><div class="rows"></div></div></div><div class="tag" style="font-size:11px">(Leaders only - hidden when it's all clear)</div>`; }
+    else if (ty === "actions") x = h + `<div class="qa">${(sec.tiles || []).map(t => `<a href="#"><i>${esc(t.icon)}</i>${esc(t.title)}</a>`).join("")}</div>`;
+    else if (ty === "latest") { live = true; x = h + (CFG.latest[HUB] || `<div class="tag">Latest appears here.</div>`); }
+    else if (ty === "groups") x = h + `<div class="groups">${(sec.groups || []).map(g => `<div><p>${esc(g.title)}</p>${(g.links || []).map(t => `<a href="#"><i>${esc(t.icon)}</i>${esc(t.title)}</a>`).join("")}</div>`).join("")}</div>`;
+    else if (ty === "text") x = h + `<div class="note">${String(sec.text || "").split(/\n\n/).filter(p => p.trim()).map(p => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("")}</div>`;
+    else x = h + `<div class="grid">${(sec.tiles || []).map(t => `<a class="tile" href="#"><b><i>${esc(t.icon)}</i>${esc(t.title)}</b><span>${esc(t.desc)}</span></a>`).join("")}</div>`;
+    return `<div data-pk-sec="${i}" style="border-radius:10px">${x}</div>`;
   }).join("");
-  const top = secs().some(x => x.type === "welcome") ? "" : `<div class="top"><h1>Heart Breakers</h1><div class="tag">${hub === "members" ? "Members Hub" : "Leaders Hub - leaders only"}</div></div>`;
-  const js = live ? `<script>window.HBH=${JSON.stringify(CFG.jscfg[hub]).replace(/</g, "\\u003c")};<\/script><script>${CFG.js}<\/script>` : "";
-  // <base>: the Latest pictures are addressed from the members' folder
-  $("pv").srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><base href="${esc(CFG.member_base)}/"><style>${CFG.css}</style></head><body>
+  const top = secs(C).some(x => x.type === "welcome") ? "" : `<div class="top"><h1>Heart Breakers</h1><div class="tag">Members Hub</div></div>`;
+  const js = live ? `<script>window.HBH=${JSON.stringify(CFG.jscfg[HUB]).replace(/</g, "\\u003c")};<\/script><script>${CFG.js}<\/script>` : "";
+  // <base>: the Latest pictures are addressed from the members' folder; the [data-pk-sec] outline styles live in here too
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><base href="${esc(CFG.member_base)}/"><style>${CFG.css}
+    [data-pk-sec]{cursor:pointer;outline-offset:3px}[data-pk-sec]:hover{outline:2px dashed rgba(232,190,90,.6)}[data-pk-sec].pk-hl{outline:2px solid #e8be5a}</style></head><body>
     <div style="text-align:center;color:#9a9a9c;font-size:12px;margin-bottom:8px">[ site header ]</div>${top}<div class="hubw">${body}</div>${js}
     <script>document.addEventListener("click",function(e){if(e.target.closest("a"))e.preventDefault();});<\/script></body></html>`;
 }
-
-function mark() { dirty = true; $("status").textContent = "Unsaved changes"; }
-$("form").addEventListener("input", e => {
-  const el = e.target, si = +el.dataset.s; if (isNaN(si)) return;
-  const sec = secs()[si], gi = el.dataset.g, ti = el.dataset.t;
-  if (el.dataset.k === "gtitle") sec.groups[+gi].title = el.value;
-  else if (ti != null) (gi != null ? sec.groups[+gi].links : sec.tiles)[+ti][el.dataset.k] = el.value;
-  else sec[el.dataset.k] = el.value;
-  mark(); preview();
+let frame = null;
+PK.mount({
+  id: "homepage", title: "Homepage Editor", indexed: true,
+  lead: "Lay out the Hub homepage yourself: add, remove and drag sections; tap a section in the preview to edit it. Live on the site a few minutes after saving.",
+  async load() { const C = await GH.load(); HP(C); return {data: C}; },
+  async save(C) { const hp = HP(C); hp.v = CFG.layout_v; await GH.save(C, "Homepage edited", c => { c.homepage = hp; }); return "Saved ✓ - live in a few minutes"; },
+  sections: C => secs(C).map((s, i) => { const k = KIND[s.type || "tiles"] || ["🔗", s.type];
+    return {key: String(i), icon: k[0], label: s.title || k[1], sub: k[1] + ((s.tiles || s.groups) ? ` · ${(s.tiles || s.groups).length}` : ""), removable: true}; }),
+  move: (C, v, from, to) => { const S = secs(C); const [x] = S.splice(from, 1); S.splice(to, 0, x); },
+  toggle: () => {},
+  remove: (C, v, k) => { secs(C).splice(+k, 1); },
+  addSection: {label: "+ Add a section", options: NEW},
+  insert: (C, v, obj) => { secs(C).push(obj); return String(secs(C).length - 1); },
+  form,
+  actions: [{label: "Reset to built-in", run: async C => { if (!confirm("Put the homepage back to the built-in layout? (Not saved until you save.)")) return;
+    HP(C)[HUB] = clone(CFG.default[HUB]); return C; }}],
+  saveNote: "The homepage updates a few minutes after saving.",
+  preview: {sizes: true, delay: 300, render: async (C, v, ctx) => {
+    // one iframe kept between redraws (srcdoc swap) - its sections report taps back to the editor
+    if (!frame || !ctx.box.contains(frame)) { ctx.box.innerHTML = ""; frame = document.createElement("iframe"); frame.title = "Preview";
+      frame.style.height = "calc(100vh - 190px)"; frame.style.minHeight = "520px"; ctx.box.appendChild(frame); }
+    await new Promise(ok => { frame.onload = ok; frame.srcdoc = hubHtml(C); });
+    frame.contentDocument.querySelectorAll("[data-pk-sec]").forEach(el => el.addEventListener("click", e => { e.preventDefault(); ctx.select(el.getAttribute("data-pk-sec")); }));
+    ctx.status("");
+  }}
 });
-$("form").addEventListener("change", e => { if (e.target.dataset.k === "link") render(); });
-$("form").addEventListener("click", e => {
-  const b = e.target.closest("button[data-a]"); if (!b) return;
-  const S = secs(), si = +b.dataset.s, ti = +b.dataset.t, a = b.dataset.a, mv = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; };
-  const gi = b.dataset.g != null ? +b.dataset.g : null;
-  // the list a tile / link button works on: a group's links, or the section's tiles
-  const L = () => gi != null ? (S[si].groups[gi].links = S[si].groups[gi].links || []) : (S[si].tiles = S[si].tiles || []);
-  if (a === "up") mv(S, si, -1); else if (a === "dn") mv(S, si, 1);
-  else if (a === "del") { if (!confirm("Remove this section?")) return; S.splice(si, 1); }
-  else if (a === "tup") mv(L(), ti, -1); else if (a === "tdn") mv(L(), ti, 1);
-  else if (a === "tdel") L().splice(ti, 1);
-  else if (a === "tadd") L().push(gi != null || S[si].type === "actions" ? {icon: "🔗", title: "New link", link: ""} : {icon: "🔗", title: "New tile", desc: "", link: ""});
-  else if (a === "gup") mv(S[si].groups, gi, -1); else if (a === "gdn") mv(S[si].groups, gi, 1);
-  else if (a === "gdel") { if (!confirm("Remove this group?")) return; S[si].groups.splice(gi, 1); }
-  else if (a === "gadd") (S[si].groups = S[si].groups || []).push({title: "New group", links: [{icon: "🔗", title: "New link", link: ""}]});
-  mark(); render();
-});
-// + section buttons
-const NEW = {welcome: () => ({type: "welcome", title: ""}), now: () => ({type: "now", title: "Right now"}),
-             attention: () => ({type: "attention", title: "Needs attention"}),
-             actions: () => ({type: "actions", title: "", tiles: [{icon: "🔗", title: "New link", link: ""}]}),
-             latest: () => ({type: "latest", title: "Latest"}),
-             groups: () => ({type: "groups", title: "Explore", groups: [{title: "New group", links: [{icon: "🔗", title: "New link", link: ""}]}]}),
-             tiles: () => ({type: "tiles", title: "New section", tiles: [{icon: "🔗", title: "New tile", desc: "", link: ""}]}),
-             text: () => ({type: "text", title: "", text: "Your message"})};
-document.querySelectorAll("button[data-add]").forEach(b => b.onclick = () => { secs().push(NEW[b.dataset.add]()); mark(); render(); });
-$("reset").onclick = () => { if (!confirm("Put this hub back to the built-in layout? (Not saved until Save changes.)")) return;
-  HP()[hub] = JSON.parse(JSON.stringify(CFG.default[hub])); mark(); render(); };
-$("tM").onclick = () => { hub = "members"; $("tM").classList.add("on"); $("tL").classList.remove("on"); render(); };
-$("tL").onclick = () => { hub = "leaders"; $("tL").classList.add("on"); $("tM").classList.remove("on"); render(); };
-
-const b64d = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g, "")), c => c.charCodeAt(0)));
-const b64e = t => { const u = new TextEncoder().encode(t); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
-async function load() {
-  try {
-    const r = await fetch(`${GHC}config.json?ref=${CFG.branch}`, {headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json"}, cache: "no-store"});
-    if (!r.ok) throw new Error("GitHub said " + r.status);
-    const j = await r.json(); sha = j.sha; C = JSON.parse(b64d(j.content));
-    // a layout saved before the redesign (no "v") isn't used by the site any more - start from the built-in one
-    if (C.homepage && !(C.homepage.v >= CFG.layout_v)) { C.homepage = JSON.parse(JSON.stringify(CFG.default)); }
-    render();
-  } catch (e) { $("form").innerHTML = `<div class="card">Couldn't load the settings: ${esc(e.message)}</div>`; }
-}
-$("save").onclick = async () => {
-  if (!C) return;
-  $("status").textContent = "Saving…";
-  HP().v = CFG.layout_v;
-  try {
-    const r = await fetch(`${GHC}config.json`, {method: "PUT",
-      headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github+json", "Content-Type": "application/json", "X-HB-Save": "1"},
-      body: JSON.stringify({message: `Homepage edited (${hub === "members" ? "Members" : "Leaders"} Hub)`, sha, branch: CFG.branch,
-                            content: b64e(JSON.stringify(C, null, 2) + "\n")})});
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(r.status === 409 ? "the settings changed since you opened this page - reload and redo your change" : (j.message || r.status));
-    sha = j.content && j.content.sha; dirty = false;
-    $("status").textContent = "Saved ✓ - live in a few minutes";
-  } catch (e) { $("status").textContent = "Save failed: " + e.message; }
-};
-window.addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
-load();
 </script>
 </body></html>

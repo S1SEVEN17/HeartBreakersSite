@@ -10,109 +10,67 @@
                     and everyone else's. Nothing is sent to the site; other members never see it.
     MODE "default"  leaders' folder profile-default.html - the faction's DEFAULT layout, used for every member who
                     hasn't made their own. Saved to config.json "profile_layout" through the leaders' save route.
+  Since Nov 14 2026 it runs on the UNIVERSAL PANEL EDITOR (tools/panelkit.js, inlined at /*__PANELKIT__*/ - read its
+  notes); this page only describes the layout (the adapter below): every profile section is a sidebar row - drag ⠿
+  to reorder, 👁 to show / hide; tap a section in the preview to select it.
   Layout = {order: [section keys], hidden: [section keys]} - the keys are the <section data-sec> blocks of
-  member_profile.html (CFG.sections). The preview is the real profile page with ?layout= (nothing saved until Save).
+  member_profile.html (CFG.sections). The preview is the real profile page with ?layout= (nothing saved until saving).
   Placeholders: __CONFIG__ ({mode, sections, gate, ghproxy, member_base, layouts}), __MENU__.
 -->
-<style>
-:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c}
-*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:14px system-ui,sans-serif;margin:0 auto;padding:10px;max-width:1500px}
-h1{color:var(--red);text-align:center;font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:6px 0 2px}
-.lead{color:var(--sub);text-align:center;margin:0 0 10px}
-.wrap{display:flex;gap:12px;align-items:flex-start}.ed{flex:0 0 400px;max-width:100%}.rc{flex:1;min-width:0;position:sticky;top:8px}
-@media(max-width:900px){.wrap{flex-direction:column}.ed{flex:auto;width:100%}.rc{position:static;width:100%}}
-.card{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px;margin-bottom:10px}
-.card h2{margin:0 0 8px;color:var(--gold);font-size:13px;text-transform:uppercase;letter-spacing:1.5px}
-.row{display:flex;align-items:center;gap:8px;border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0;background:#140b0c}
-.row.off{opacity:.5}.row b{flex:1;font-weight:600}.row small{display:block;color:var(--sub);font-weight:400;font-size:12px}
-.row input{width:18px;height:18px}
-button{background:#1a1012;color:#ddd;border:1px solid var(--edge);border-radius:6px;padding:6px 10px;font:13px system-ui;cursor:pointer}
-button:hover{border-color:var(--gold)}button.g{background:var(--red);border-color:var(--red);color:#fff;font-weight:600}
-.sm{padding:3px 8px;font-size:12px}#status{color:var(--gold);margin-left:8px}.small{color:var(--sub);font-size:12px}
-iframe{width:100%;height:calc(100vh - 110px);min-height:520px;border:1px solid var(--edge);border-radius:10px;background:var(--bg)}
-</style></head><body>
+<style>body{background:#100a0b;margin:0 auto;padding:10px;max-width:1700px}</style></head><body>
 __MENU__
-<h1 id="ttl">Profile Layout</h1>
-<p class="lead" id="lead"></p>
-<div class="wrap">
-<div class="ed">
-  <div class="card"><h2>Save</h2><button class="g" id="save">Save layout</button> <button id="reset"></button><span id="status"></span>
-    <div class="small" style="margin-top:6px" id="hint"></div></div>
-  <div class="card"><h2>Sections <span class="small">(top to bottom · untick to hide)</span></h2><div id="list">Loading…</div></div>
-</div>
-<div class="rc"><iframe id="pv" title="Preview"></iframe></div>
-</div>
+<div id="pk"></div>
+<script>/*__PANELKIT__*/</script>
 <script>
 const CFG = __CONFIG__;
-const $ = id => document.getElementById(id);
-const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const {esc, clone} = PK;
 const SEC = CFG.sections;                       // [[key, label, description]]
 const KEYS = SEC.map(x => x[0]);
-let L = null, me = null, sha = null, dirty = false;
 const member = CFG.mode === "member";
-$("ttl").textContent = member ? "My Profile Layout" : "Default Profile Layout";
-$("lead").textContent = member
-  ? "Choose which sections profiles show, and in what order. Saved in this browser only, and used for every profile you open - nobody else sees your layout."
-  : "The layout every member's profile uses until they make their own (members can change theirs from the Me menu).";
-$("reset").textContent = member ? "Use the faction default" : "Back to the built-in order";
-$("ttl").textContent = member ? "My Profile Layout" : "Default Profile Layout";
-$("hint").textContent = member ? "Saved on this device straight away (each phone or computer keeps its own)." : "Saved to the site settings - live a few minutes after saving.";
+const GH = member ? null : PK.gh(Object.assign({branch: "main"}, CFG));
 const norm = x => ({order: ((x && x.order) || []).filter(k => KEYS.includes(k)).concat(KEYS.filter(k => !((x && x.order) || []).includes(k))),
                     hidden: ((x && x.hidden) || []).filter(k => KEYS.includes(k))});
-
-function render() {
-  $("list").innerHTML = L.order.map((k, i) => { const s = SEC.find(x => x[0] === k), off = L.hidden.includes(k);
-    return `<div class="row${off ? " off" : ""}"><input type="checkbox" data-k="${k}"${off ? "" : " checked"} title="Show this section">`
-      + `<b>${esc(s[1])}<small>${esc(s[2])}</small></b><button class="sm" data-u="${i}">▲</button><button class="sm" data-d="${i}">▼</button></div>`; }).join("");
-  preview();
-}
-let pt;
-function preview() { clearTimeout(pt); pt = setTimeout(() => {
-  const id = me ? me.id : "";
-  $("pv").src = `${CFG.member_base}/member.html?id=${id}&layout=${encodeURIComponent(JSON.stringify(L))}`; }, 250); }
-function mark() { dirty = true; $("status").textContent = "Unsaved changes"; }
-$("list").addEventListener("click", e => { const b = e.target.closest("button"); if (!b) return;
-  const i = +(b.dataset.u ?? b.dataset.d), j = b.dataset.u != null ? i - 1 : i + 1;
-  if (j < 0 || j >= L.order.length) return; [L.order[i], L.order[j]] = [L.order[j], L.order[i]]; mark(); render(); });
-$("list").addEventListener("change", e => { const k = e.target.dataset.k; if (!k) return;
-  L.hidden = e.target.checked ? L.hidden.filter(x => x !== k) : L.hidden.concat(k); mark(); render(); });
-
-// saving
-const b64d = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\n/g, "")), c => c.charCodeAt(0)));
-const b64e = t => { const u = new TextEncoder().encode(t); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
-// member: this browser only (null = remove -> back to the faction default)
-async function saveMember(layout) {
-  try { layout ? localStorage.setItem("hb_profile_layout", JSON.stringify(layout)) : localStorage.removeItem("hb_profile_layout"); }
-  catch (e) { throw new Error("this browser won't store it"); }
-}
-async function saveDefault(layout) {
-  const g = await fetch(`${CFG.ghproxy}config.json?ref=main`, {cache: "no-store"});
-  if (!g.ok) throw new Error("couldn't read the settings (" + g.status + ")");
-  const j = await g.json(), c = JSON.parse(b64d(j.content));
-  if (layout) c.profile_layout = layout; else delete c.profile_layout;
-  const r = await fetch(`${CFG.ghproxy}config.json`, {method: "PUT", headers: {"Content-Type": "application/json", "X-HB-Save": "1"},
-    body: JSON.stringify({message: "Default profile layout edited", sha: j.sha, branch: "main", content: b64e(JSON.stringify(c, null, 2) + "\n")})});
-  if (!r.ok) throw new Error(r.status === 409 ? "the settings changed meanwhile - try again" : "save failed (" + r.status + ")");
-}
-$("save").onclick = async () => { $("status").textContent = "Saving…";
-  try { member ? await saveMember(L) : await saveDefault(L); dirty = false; $("status").textContent = member ? "Saved ✓ - open any profile to see it" : "Saved ✓ - live in a few minutes"; }
-  catch (e) { $("status").textContent = "Save failed: " + e.message; } };
-$("reset").onclick = async () => {
-  if (!confirm(member ? "Go back to the faction's default layout on this device?" : "Remove the default layout? (Profiles go back to the built-in order.)")) return;
-  $("status").textContent = "Saving…";
-  try { member ? await saveMember(null) : await saveDefault(null); L = norm(member ? CFG.layouts.default : null); dirty = false; render();
-    $("status").textContent = member ? "Back to the faction default" : "Saved ✓ - live in a few minutes"; }
-  catch (e) { $("status").textContent = "Failed: " + e.message; } };
-addEventListener("beforeunload", e => { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
-
-fetch(`${CFG.gate}/m/whoami.json`, {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null).then(w => {
-  me = w;
-  if (member && !w) { $("list").textContent = "Sign in to edit your profile layout."; return; }
-  const LY = CFG.layouts || {};
-  let own = null;
-  try { own = JSON.parse(localStorage.getItem("hb_profile_layout") || "null"); } catch (e) {}
-  L = norm(member ? (own || LY.default) : LY.default);
-  render();
+let me = null, frame = null;
+PK.mount({
+  id: member ? "profile_mine" : "profile_default",
+  title: member ? "My Profile Layout" : "Default Profile Layout",
+  lead: member ? "Choose which sections profiles show, and in what order. Saved in this browser only, and used for every profile you open - nobody else sees your layout."
+               : "The layout every member's profile uses until they make their own (members can change theirs from the Me menu).",
+  async load() {
+    me = await fetch(`${CFG.gate}/m/whoami.json`, {cache: "no-store"}).then(r => r.ok ? r.json() : null).catch(() => null);
+    if (member && !me) throw new Error("sign in to edit your profile layout");
+    let own = null; try { own = JSON.parse(localStorage.getItem("hb_profile_layout") || "null"); } catch (e) {}
+    return {data: norm(member ? (own || (CFG.layouts || {}).default) : (CFG.layouts || {}).default)};
+  },
+  async save(L) {
+    if (member) { try { localStorage.setItem("hb_profile_layout", JSON.stringify(L)); } catch (e) { throw new Error("this browser won't store it"); }
+      return "Saved ✓ - open any profile to see it"; }
+    await GH.save(null, "Default profile layout edited", c => { c.profile_layout = L; });
+    return "Saved ✓ - live in a few minutes";
+  },
+  saveNote: member ? "Saved on this device straight away (each phone or computer keeps its own)." : "Saved to the site settings - live a few minutes after saving.",
+  sections: L => L.order.map(k => { const s = SEC.find(x => x[0] === k) || [k, k, ""]; return {key: k, label: s[1], sub: s[2], shown: !L.hidden.includes(k)}; }),
+  move: (L, v, from, to) => { const [x] = L.order.splice(from, 1); L.order.splice(to, 0, x); },
+  toggle: (L, v, k, on) => { L.hidden = on ? L.hidden.filter(x => x !== k) : L.hidden.concat(k); },
+  remove: () => {},
+  form: (L, v, k) => { const s = SEC.find(x => x[0] === k) || [k, k, ""];
+    return {obj: {}, title: s[1], help: esc(s[2]) + "<br><br>Drag ⠿ in the list to move it, 👁 to show or hide it.", fields: []}; },
+  actions: [{label: member ? "Use the faction default" : "Back to the built-in order", run: async L => {
+    if (!confirm(member ? "Go back to the faction's default layout on this device?" : "Remove the default layout? (Profiles go back to the built-in order.)")) return;
+    if (member) { try { localStorage.removeItem("hb_profile_layout"); } catch (e) {} return norm((CFG.layouts || {}).default); }
+    await GH.save(null, "Default profile layout removed", c => { delete c.profile_layout; }); alert("Saved ✓ - live in a few minutes"); return norm(null); }}],
+  preview: {sizes: true, delay: 300, note: member ? "Your own profile, drawn with this layout." : "Your own profile, drawn with this layout.", render: async (L, v, ctx) => {
+    if (!frame || !ctx.box.contains(frame)) { ctx.box.innerHTML = ""; frame = document.createElement("iframe"); frame.title = "Preview";
+      frame.style.height = "calc(100vh - 190px)"; frame.style.minHeight = "520px"; ctx.box.appendChild(frame); }
+    await new Promise(ok => { frame.onload = ok; frame.src = `${CFG.member_base}/member.html?id=${me ? me.id : ""}&layout=${encodeURIComponent(JSON.stringify(L))}`; });
+    // same site -> the profile's own <section data-sec> blocks become tappable (#1); quietly skipped if not reachable
+    try { const d = frame.contentDocument;
+      const st = d.createElement("style"); st.textContent = "[data-pk-sec]{cursor:pointer;outline-offset:3px}[data-pk-sec]:hover{outline:2px dashed rgba(232,190,90,.6)}[data-pk-sec].pk-hl{outline:2px solid #e8be5a}"; d.head.appendChild(st);
+      d.querySelectorAll("section[data-sec]").forEach(el => { el.setAttribute("data-pk-sec", el.dataset.sec);
+        el.addEventListener("click", e => { if (e.target.closest("a")) return; ctx.select(el.dataset.sec); }); });
+    } catch (e) {}
+    ctx.status("");
+  }}
 });
 </script>
 </body></html>

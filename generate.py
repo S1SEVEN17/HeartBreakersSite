@@ -3028,8 +3028,10 @@ def render_image(summary: dict, cfg: dict):
     drawers = {"faction_info": draw_faction_info, "what_we_offer": draw_offer,
                "perks": draw_perks, "ranked_wars": draw_ranked_wars,
                "achievements": draw_achievements}
+    sec_start = {}                   # section key -> index of its first block (the editors' click-to-edit map)
     for i, key in enumerate(sections):
         sec = cfg.get(key, {})
+        sec_start[key] = 0 if i == 0 else len(blocks)   # the first section's title is in the header art
         title = str(sec.get("title", key)).upper()
         if i == 0:
             # The first section's title bar is part of header.png (the heart
@@ -3069,7 +3071,9 @@ def render_image(summary: dict, cfg: dict):
     out = Image.new("RGBA", (W, H), (0, 0, 0, 255))
     y = 0
     panels = []                      # panel rects in final-image coords
+    ys = []                          # top of each block
     for b in blocks:
+        ys.append(y)
         out.alpha_composite(b, (0, y))
         if "panel" in b.info:
             x0, y0, x1, y1 = b.info["panel"]
@@ -3077,6 +3081,11 @@ def render_image(summary: dict, cfg: dict):
         y += b.height
     out = cut_outside_frame(out)
     out = pad_transparent(out, OUTER_PAD)
+    # PANEL EDITOR MAP (Nov 14 2026): where each section sits in the image (y from-to, final-image pixels) - the
+    # universal panel editor's preview uses it for click-to-edit. Return value unchanged (info only).
+    starts = sorted((ys[ix], k) for k, ix in sec_start.items() if ix < len(ys))
+    out.info["sections"] = [(k, y0 + OUTER_PAD, (starts[n + 1][0] if n + 1 < len(starts) else H) + OUTER_PAD)
+                            for n, (y0, k) in enumerate(starts)]
     return out, panels
 
 
@@ -4513,7 +4522,7 @@ def write_message_builder(out: Path):
              "announce_url": f"{member_base()}/announce-header.webp"}
     # one page per panel (header: Site Panels -> Description / Announcements), each its own editor + live
     # preview + the HTML for Torn under the panel. "html" = what's live now (the preview replaces it as you edit)
-    tpl_ = (ROOT / "tools" / "panels_editor.html").read_text(encoding="utf-8")
+    tpl_ = inline_panelkit((ROOT / "tools" / "panels_editor.html").read_text(encoding="utf-8"))
     for only, fname in (("D", "description.html"), ("A", "announcements.html")):
         c_ = dict(pconf, only=only, html=description_snippet() if only == "D" else _PANEL_HTML.get("A", ""),
                   leadership=LEADERSHIP_NOW)      # who holds each leadership slot now (Description editor)
@@ -4525,6 +4534,15 @@ def write_message_builder(out: Path):
         (mout / "panels").mkdir(exist_ok=True)
         for f in PANELS_DIR.glob("*.png"):
             shutil.copyfile(f, mout / "panels" / f.name)
+
+
+def inline_panelkit(html: str) -> str:
+    """UNIVERSAL PANEL EDITOR (Nov 14 2026): tools/panelkit.js - the shared editor engine (sections sidebar, click-to-edit
+    preview, placeholders, undo/redo + draft, review & save, preview sizes, templates) - inlined where an editor page
+    has /*__PANELKIT__*/ (Description, Announcements, Header, Homepage, Profile layout). One copy of the code, so a
+    fix there reaches every editor."""
+    kit = (ROOT / "tools" / "panelkit.js").read_text(encoding="utf-8")
+    return html.replace("/*__PANELKIT__*/", kit.replace("</script", "<\\/script"))
 
 
 HUB_CSS = """
@@ -5025,13 +5043,13 @@ def write_homepages(out: Path, cfg: dict = None):
             "member_base": member_base(), "layout_v": HOME_LAYOUT_V,
             "css": HUB_CSS, "js": REL_GRADE_JS + "\n" + HOME_JS, "jscfg": {"members": home_js_cfg("members"), "leaders": home_js_cfg("leaders")},
             "latest": {"members": _hub_latest(""), "leaders": _hub_latest(member_base() + "/")}}
-    (lout / "homepage.html").write_text((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8")
+    (lout / "homepage.html").write_text(inline_panelkit((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8"))
                                         .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
                                         .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "homepage.html")), encoding="utf-8")
     # the Header editor (leaders, Nov 2026) - config.json "site_header": the members' header + the leaders' extra items
     hconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": SITE_PAGES, "default": header_default(),
              "css": MENU_CSS}
-    (lout / "header-editor.html").write_text((ROOT / "tools" / "header_editor.html").read_text(encoding="utf-8")
+    (lout / "header-editor.html").write_text(inline_panelkit((ROOT / "tools" / "header_editor.html").read_text(encoding="utf-8"))
                                              .replace("__CONFIG__", json.dumps(hconf).replace("</", "<\\/"))
                                              .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "header-editor.html")), encoding="utf-8")
 
@@ -6635,7 +6653,7 @@ def write_profile_layouts(out: Path, cfg: dict):
     g_ = gate_cfg()
     if not g_:
         return
-    tpl = (ROOT / "tools" / "profile_layout_editor.html").read_text(encoding="utf-8")
+    tpl = inline_panelkit((ROOT / "tools" / "profile_layout_editor.html").read_text(encoding="utf-8"))
     base = {"sections": PROFILE_SECTIONS, "gate": g_["url"].rstrip("/"), "ghproxy": gh_proxy_url(),
             "member_base": member_base(), "layouts": ly}
     put = lambda path, mode, menu: path.write_text(
