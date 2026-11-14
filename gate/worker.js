@@ -2025,7 +2025,9 @@ async function ocAssignPings(env, crimes) {
     posts++;
     const rate = x.rate != null ? `your pass rate **${Math.round(x.rate)}%**` : "";
     const succ = x.succ != null ? `${x.calc ? "🎲 " : ""}team success **${Math.round(x.succ)}%**` : "";
-    const body = {content: `🕵️ <@${d.id}> you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
+    // name + ID always written next to the mention (Nov 13 2026, user): a webhook can't tell whether the Discord account
+    // is in the server - one that isn't shows as "@unknown-user", so the name + ID says who it is
+    const body = {content: `🕵️ <@${d.id}> (**${x.name || "?"}** [${x.pid}]) you're assigned to **[${x.crime} #${x.crime_id}](<${OC_CRIME_URL(x.crime_id)}>)** as **${x.position}**`
                   + (rate || succ ? `\n-# ${[rate, succ].filter(Boolean).join(" · ")} · join it now - this message goes away once you're in` : ""),
                   allowed_mentions: {users: [d.id]}};
     try {
