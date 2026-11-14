@@ -187,6 +187,9 @@ export function ocPlan(X) {
   // open slots ignore the role cap (as if the cap were 100%): a member above the cap may take one. curPaused is set
   // while such a crime is being filled (step 2b takeover, step 3 fill) and checked by capped(); overQ (spawn
   // eligibility) treats a paused crime's slots as open to everyone over the cap.
+  // JOIN NOW STILL DECIDES (Nov 13 2026, user: "Paused crime qualifiers should still prioritize "Join Now" pay per
+  // day."): lifting the cap only makes them ELIGIBLE - crimes are still filled best join-now pay first (step 3), so a
+  // member goes to the paused crime only when it pays them the most if they join now.
   const paused = c => !!c && c.status === "Recruiting" && (c.slots || []).some(sl => sl.user) && (c.slots || []).some(sl => !sl.user)
     && (c.slots || []).every(sl => !sl.user || (Number(sl.user.progress) || 0) >= 100);
   let curPaused = false;
