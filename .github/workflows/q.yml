@@ -1,0 +1,25 @@
+# Temporary: Discord ID check (counts / types only) - removed after one run
+name: q
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  q:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "22"}
+      - env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TORN_API_KEY: ${{ secrets.TORN_API_KEY }}
+        run: |
+          cd gate && npm install --no-save --silent wrangler@4 >/dev/null 2>&1
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT data FROM oc_snap WHERE env='hub' AND ds='discord:ids'" 2>/dev/null | node -e '
+            let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s)[0].results[0];const d=JSON.parse(r.data);
+            const v=Object.values(d).map(x=>x.id).filter(Boolean);
+            console.log("cached ids:",v.length,"lengths:",[...new Set(v.map(x=>x.length))].join(","),"ending 00:",v.filter(x=>/00$/.test(x)).length,"unsafe(>2^53):",v.filter(x=>Number(x)>2**53).length)})'
+          # one raw Torn reply: is discord_id a string or a number? (type only)
+          curl -s -H "Authorization: ApiKey $TORN_API_KEY" "https://api.torn.com/v2/user/974757/discord" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const m=s.match(/"discord_id"\s*:\s*("?)/);console.log("discord_id in raw JSON is a", m? (m[1]?"string":"NUMBER"):"(missing)")})'
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT COUNT(*) n, SUM(msg_id IS NOT NULL) posted FROM oc_ping" 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log("oc_ping:",JSON.stringify(JSON.parse(s)[0].results)))'
