@@ -4073,7 +4073,8 @@ def header_default() -> dict:
                 # Nov 13 2026 (user): script configuration / settings pages together in a Settings folder
                 {"label": "⚙️ Settings", "items": [L("⛓️ Chain Watch", "L:chainwatch.html"),
                                                   L("🕵️ OC Management", "L:oc.html"),
-                                                  L("🏠 Site settings", "L:homepage.html")]}]}]}
+                                                  L("🏠 Site settings", "L:homepage.html"),
+                                                  L("💬 Discord messages", "L:discord.html")]}]}]}
 
 
 _HEADER = {}
@@ -4207,7 +4208,8 @@ def nav_menu(mroot: str, lroot: str) -> str:
 HISTORY_TABS = [("⚔️ Wars", "wars.html"), ("⛓️ Chains", "chains.html"), ("🕵️ Crimes", "crimes.html")]
 MEMBER_DATA_TABS = [("💪 Stats", "stats.html"), ("⚔️ War readiness", "readiness.html")]
 PANEL_TABS = [("📢 Announcements", "announcements.html"), ("🖼️ Faction description", "description.html")]   # Torn panels
-SETTINGS_TABS = [("🏠 Homepage", "homepage.html"), ("🧭 Header", "header-editor.html"), ("🧩 Profile layout", "profile-default.html")]
+SETTINGS_TABS = [("🏠 Homepage", "homepage.html"), ("🧭 Header", "header-editor.html"), ("🧩 Profile layout", "profile-default.html"),
+                 ("💬 Discord messages", "discord.html")]   # Nov 14 2026: the Discord message editor
 TAB_CSS = ("<style>.hbtabs{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin:-4px 0 12px;font:14px system-ui,sans-serif}"
            ".hbtabs a{color:#ddd;text-decoration:none;background:#1a1012;border:1px solid #5c1c1a;border-radius:8px;padding:6px 14px}"
            ".hbtabs a.on{background:#e4382e;border-color:#e4382e;color:#fff;font-weight:600}</style>")
@@ -5046,6 +5048,14 @@ def write_homepages(out: Path, cfg: dict = None):
     (lout / "homepage.html").write_text(inline_panelkit((ROOT / "tools" / "homepage_editor.html").read_text(encoding="utf-8"))
                                         .replace("__CONFIG__", json.dumps(conf).replace("</", "<\\/"))
                                         .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "homepage.html")), encoding="utf-8")
+    # the Discord message editor (leaders, Nov 14 2026) - config.json "discord_layout" (see DISCORD MESSAGE LAYOUTS);
+    # db/discord_layout.json = the same settings for the Worker's own posts (no webhook addresses in it)
+    _jdump(lout / "db" / "discord_layout.json", dc_layout())
+    dconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(),
+             "channels": [{"key": k, "label": l, "what": w} for k, _, l, w in DC_CHANNELS], "faction": "Heart Breakers"}
+    (lout / "discord.html").write_text(inline_panelkit((ROOT / "tools" / "discord_editor.html").read_text(encoding="utf-8"))
+                                       .replace("__CONFIG__", json.dumps(dconf).replace("</", "<\\/"))
+                                       .replace("__MENU__", leader_menu("") + tab_bar(SETTINGS_TABS, "discord.html")), encoding="utf-8")
     # the Header editor (leaders, Nov 2026) - config.json "site_header": the members' header + the leaders' extra items
     hconf = {"repo": REPO, "branch": "main", "ghproxy": gh_proxy_url(), "pages": SITE_PAGES, "default": header_default(),
              "css": MENU_CSS}
@@ -5067,6 +5077,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
              ("OC Management", "L:oc.html"), ("Chain Watch settings", "L:chainwatch.html"), ("Recruitment", "L:recruitment.html"),
+             ("Discord message editor", "L:discord.html"),
              ("Newsletter Filler (userscript)", "L:hb-newsletter-filler.user.js")]]
 
 
@@ -6918,11 +6929,80 @@ def discord_refresh_done(kind: str):
     discord_msg_save(f"_refresh:{kind}", want)
 
 
+# DISCORD MESSAGE LAYOUTS (Nov 14 2026, user: "Create the discord message editor to the hub webpage" - the editor that
+# lets leaders change how the messages each channel gets look). Leaders edit config.json "discord_layout" on the
+# leaders' page discord.html (tools/discord_editor.html); every post / edit is styled HERE, at the one place all
+# GitHub-side Discord traffic goes through, so no message builder had to change. Per channel:
+#   name / avatar      the webhook's display name + picture (new posts only - Discord can't change them on an edit)
+#   color + one_color  one accent colour for every card (off = each card keeps its own meaning colour: win/loss...)
+#   header             a line above every message (markdown; e.g. a role mention <@&id>) - only where the message
+#                      sends text (a new post, or an edit that rewrites the text), so an edit never wipes a mention
+#   footer + footer_mode  text on every card's footer: "append" after the card's own footer, or "replace" it
+#   timestamp          the time on every card
+# The channel is worked out from the webhook address (the GitHub secrets below) - the addresses are never written
+# anywhere. The Worker's own posts (OC assignment pings -> crimes, chain watch shift pings -> chains) read the same
+# settings from the leaders' db/discord_layout.json (written by write_homepages) - see dcStyle in gate/worker.js.
+DC_CHANNELS = [  # (key, secret, label, what's posted there)
+    ("chains", "DISCORD_WEBHOOK_CHAINS", "⛓️ Chains", "Chain reports + the chain hub post, chain watch shift pings"),
+    ("war", "DISCORD_WEBHOOK_SLACKERS", "⚔️ War reports", "War reports and war payouts (one hub post per war)"),
+    ("crimes", "DISCORD_WEBHOOK_CRIMES", "🕵️ Crimes", "OC delay alerts, OC assignment pings"),
+    ("recap", "DISCORD_WEBHOOK_RECAP", "📰 Monthly recap", "The monthly recap + its previews"),
+    ("leaders", "DISCORD_WEBHOOK_LEADERS", "🛡️ Leaders", "Leader-only alerts and the leaders' links post"),
+]
+_DC_BAD_NAME = ("discord", "clyde")          # Discord refuses webhook names containing these
+
+
+def dc_layout() -> dict:
+    try:
+        L = load_config().get("discord_layout") or {}
+    except (OSError, ValueError):
+        L = {}
+    return {k: v for k, v in L.items() if isinstance(v, dict) and k in {c[0] for c in DC_CHANNELS}}
+
+
+def _dc_style(url: str, method: str, payload: dict):
+    """The channel's layout applied to a webhook payload (a copy) - see DISCORD MESSAGE LAYOUTS."""
+    if not isinstance(payload, dict) or method not in ("POST", "PATCH"):
+        return payload
+    ch = next((k for k, env_, _, _ in DC_CHANNELS if os.environ.get(env_, "").strip() and url.startswith(os.environ[env_].strip())), None)
+    L = dc_layout().get(ch) if ch else None
+    if not L:
+        return payload
+    p = json.loads(json.dumps(payload))
+    name, av = str(L.get("name") or "").strip()[:80], str(L.get("avatar") or "").strip()
+    if method == "POST":
+        if name and not any(b in name.lower() for b in _DC_BAD_NAME):
+            p["username"] = name
+        if av.startswith("https://"):
+            p["avatar_url"] = av
+    head = str(L.get("header") or "").strip()
+    if head and (method == "POST" or "content" in p):
+        p["content"] = (head + ("\n" + p["content"] if p.get("content") else ""))[:2000]
+    col = None
+    try:
+        col = int(str(L.get("color") or "").lstrip("#"), 16) if L.get("one_color") and L.get("color") else None
+    except ValueError:
+        col = None
+    foot, mode = str(L.get("footer") or "").strip(), L.get("footer_mode") or "append"
+    for e in p.get("embeds") or []:
+        if not isinstance(e, dict):
+            continue
+        if col is not None:
+            e["color"] = col
+        if foot:
+            old = ((e.get("footer") or {}).get("text") or "").strip()
+            e["footer"] = dict(e.get("footer") or {}, text=(foot if mode == "replace" or not old else f"{old} · {foot}")[:2048])
+        if L.get("timestamp") and not e.get("timestamp"):
+            e["timestamp"] = datetime.now(timezone.utc).isoformat()
+    return p
+
+
 def _discord_request(url: str, method: str, payload: dict = None, png=None):
     """POST/PATCH (multipart with the image) or DELETE a webhook message.
     Returns the parsed JSON reply (POST uses ?wait=true so Discord returns
     the new message, whose id is saved for the next replace)."""
     import uuid
+    payload = _dc_style(url, method, payload)          # the channel's layout (Discord message editor)
     headers = {"User-Agent": "FactionBanner/1.0 (GitHub Actions)"}
     body = None
     if payload is not None:

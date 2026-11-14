@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Heart Breakers - Discord Messages</title>
+<!--
+  DISCORD MESSAGE EDITOR (leaders' folder: discord.html, published by generate.py write_homepages). Nov 14 2026.
+  User: "Create the discord message editor to the hub webpage" (first asked as "an editor that allows editing the
+  discord message layouts for each channel that are sent out").
+  Runs on the UNIVERSAL PANEL EDITOR (tools/panelkit.js, inlined at /*__PANELKIT__*/ - read its notes); this page only
+  describes the Discord channels (the adapter below).
+  Saves config.json "discord_layout" {<channel>: {name, avatar, color, one_color, header, footer, footer_mode,
+  timestamp}} through the gatekeeper (CFG.ghproxy - no GitHub token on the device). The save re-reads config.json and
+  only replaces discord_layout. HOW IT'S USED: generate.py _dc_style styles every GitHub-side post / edit by the
+  channel its webhook belongs to; the Worker (OC assignment pings, chain watch shift pings) reads the same settings
+  from the leaders' db/discord_layout.json (dcStyle in gate/worker.js). The webhook addresses themselves are secrets
+  and never appear here. Channels (CFG.channels, from DC_CHANNELS in generate.py): chains, war, crimes, recap, leaders.
+  The preview is a Discord look-alike with a typical message for each channel, so leaders see the name, picture,
+  colour, header and footer the way members will. Tap a channel's message in the preview to edit it.
+  __CONFIG__ / __MENU__ filled in by generate.py.
+-->
+<style>body{background:#100a0b;margin:0 auto;padding:10px;max-width:1700px}
+.dc{background:#313338;border-radius:10px;padding:10px 12px;font:15px/1.4 "gg sans","Noto Sans",system-ui,sans-serif;color:#dbdee1;margin-bottom:10px;cursor:pointer}
+.dc-ch{color:#949ba4;font-size:12px;font-weight:600;letter-spacing:.3px;margin-bottom:6px}
+.dc-m{display:flex;gap:12px}.dc-av{width:40px;height:40px;border-radius:50%;flex:0 0 40px;background:#5865f2 center/cover;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700}
+.dc-b{min-width:0;flex:1}.dc-h{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}.dc-n{color:#f2f3f5;font-weight:600}
+.dc-app{background:#5865f2;color:#fff;font-size:10px;font-weight:700;border-radius:3px;padding:0 4px;line-height:15px}
+.dc-t{color:#949ba4;font-size:12px}.dc-c{white-space:pre-wrap;word-break:break-word;margin-top:2px}
+.dc-c .mn{background:rgba(88,101,242,.3);color:#c9cdfb;border-radius:3px;padding:0 2px}.dc-c a{color:#00a8fc;text-decoration:none}
+.dc-c small{color:#949ba4;font-size:12.5px}
+.dc-e{margin-top:6px;max-width:520px;background:#2b2d31;border-radius:4px;border-left:4px solid #1e1f22;padding:8px 12px 10px}
+.dc-et{color:#f2f3f5;font-weight:600;margin-bottom:4px}.dc-ed{font-size:14px;white-space:pre-wrap}
+.dc-f{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:8px;font-size:13.5px}.dc-f b{display:block;color:#f2f3f5;font-size:12.5px}
+.dc-img{margin-top:8px;height:90px;border-radius:4px;background:repeating-linear-gradient(45deg,#3a3c42 0 10px,#35373c 10px 20px);display:flex;align-items:center;justify-content:center;color:#949ba4;font-size:12px}
+.dc-ft{margin-top:8px;color:#b5bac1;font-size:12px}
+</style></head><body>
+__MENU__
+<div id="pk"></div>
+<script>/*__PANELKIT__*/</script>
+<script>
+const CFG = __CONFIG__;
+const {esc, clone} = PK;
+const GH = PK.gh(CFG);
+// a channel's layout, with every field present (panelkit "check" fields read undefined as ON, so booleans are explicit)
+const DEF = () => ({name: "", avatar: "", color: "#E4382E", one_color: false, header: "", footer: "", footer_mode: "append", timestamp: false});
+const LAY = C => {
+  C.discord_layout = C.discord_layout && typeof C.discord_layout === "object" ? C.discord_layout : {};
+  CFG.channels.forEach(ch => { C.discord_layout[ch.key] = Object.assign(DEF(), C.discord_layout[ch.key] || {}); });
+  return C.discord_layout;
+};
+const CH = k => CFG.channels.find(c => c.key === k) || {};
+const isDefault = L => JSON.stringify(Object.assign(DEF(), L)) === JSON.stringify(DEF());
+// a typical message for each channel (what the preview shows) - content, card (title, text, colour, fields, image)
+const SAMPLE = {
+  chains: {content: "", card: {title: "⛓️ Chain #1,284 · 1,000 hits", text: "Ended Nov 14 · 3h 12m · 41 members hit", color: 0xE8BE5A,
+           fields: [["Top hitter", "Chris5295 · 112"], ["Respect", "4,812"], ["Bonus hits", "10 · 25 · 50 · 100"]], foot: "Heart Breakers · Chain report"},
+           extra: "⛓️ **Chain watch shift starting in 2 minutes** (19:00)\n**Primary:** @Chris5295 · until 21:00"},
+  war: {content: "", card: {title: "🏆 VICTORY vs The Foes", text: "Ranked war ended Nov 13, 2026", color: 0xE4382E,
+        fields: [["Score", "**15,204** - 9,880"], ["Participation", "38/41 (93%)"], ["Payout", "$412m paid"]], img: "war report image", foot: "Heart Breakers · Ranked war report"}},
+  crimes: {content: "🕵️ @Chris5295 (**Chris5295** [974757]) you're assigned to **[Gone Fission #77]()** as **Hijacker**\n<small>your pass rate **68%** · team success **81%** · join it now - this message goes away once you're in</small>",
+           card: {title: "⏳ OC delay: Sneaky Git Grab #55", text: "Ready in 2h - waiting on 1 member to finish planning", color: 0xE8A05A, fields: [["Waiting on", "Bob · 40%"]], foot: "Heart Breakers · Organized crimes"}},
+  recap: {content: "", card: {title: "📰 November recap", text: "The month in numbers - wars, chains, crimes and the gym.", color: 0xC9A0FF,
+          fields: [["Wars", "4 won · 1 lost"], ["Chains", "6 · best 2,500"], ["OC", "38 passed"]], img: "recap image", foot: "Heart Breakers · Monthly recap"}},
+  leaders: {content: "", card: {title: "🔔 Leader alerts", text: "💰 No payout yet: vs The Foes (Nov 13)\n🧪 Spawn **Blast from the Past** - pass rates too high for every open crime", color: 0xFF7676,
+            fields: [], foot: "Heart Breakers · Leaders"}},
+};
+// the tiny bit of Discord markdown the samples / header use
+const md = t => esc(t).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\[([^\]]+)\]\(([^)]*)\)/g, '<a href="#" onclick="return false">$1</a>')
+  .replace(/&lt;@&amp;(\d+)&gt;/g, '<span class="mn">@role</span>').replace(/&lt;@(\d+)&gt;/g, '<span class="mn">@member</span>')
+  .replace(/(^|\s)(@[A-Za-z0-9_]+)/g, '$1<span class="mn">$2</span>').replace(/&lt;small&gt;(.*?)&lt;\/small&gt;/g, "<small>$1</small>");
+const hex = v => /^#?[0-9a-f]{6}$/i.test(String(v || "").trim()) ? "#" + String(v).trim().replace(/^#/, "") : null;
+function msgHtml(ch, L, card, content) {
+  const name = (L.name || "").trim() || "Heart Breakers", av = /^https:\/\//.test(L.avatar || "") ? L.avatar : "";
+  const head = (L.header || "").trim(), text = [head, content].filter(Boolean).join("\n");
+  let c = "";
+  if (card) {
+    const col = L.one_color && hex(L.color) ? hex(L.color) : "#" + card.color.toString(16).padStart(6, "0");
+    const foot = (L.footer || "").trim(), ft = !foot ? card.foot : (L.footer_mode === "replace" ? foot : `${card.foot} · ${foot}`);
+    c = `<div class="dc-e" style="border-left-color:${col}"><div class="dc-et">${md(card.title)}</div><div class="dc-ed">${md(card.text)}</div>`
+      + (card.fields.length ? `<div class="dc-f">${card.fields.map(([n, v]) => `<div><b>${esc(n)}</b>${md(v)}</div>`).join("")}</div>` : "")
+      + (card.img ? `<div class="dc-img">🖼 ${esc(card.img)}</div>` : "")
+      + `<div class="dc-ft">${esc(ft)}${L.timestamp ? " • Today at 19:02" : ""}</div></div>`;
+  }
+  return `<div class="dc-m"><div class="dc-av" style="${av ? `background-image:url('${esc(av)}')` : ""}">${av ? "" : "HB"}</div><div class="dc-b">
+    <div class="dc-h"><span class="dc-n">${esc(name)}</span><span class="dc-app">APP</span><span class="dc-t">Today at 19:02</span></div>
+    ${text ? `<div class="dc-c">${md(text)}</div>` : ""}${c}</div></div>`;
+}
+const FIELDS = [
+  {k: "name", label: "Bot name (blank = the webhook's own name)", ph: "Heart Breakers"},
+  {k: "avatar", label: "Bot picture - an https:// image link (blank = the webhook's own picture)"},
+  {k: "color", label: "Accent colour (hex, e.g. #E4382E)"},
+  {k: "one_color", label: "Use the accent colour on every card (off = each card keeps its own colour, like green / red for a win / loss)", t: "check"},
+  {k: "header", label: "Header line above every message (Discord markdown; a role ping is <@&ROLE_ID>)", t: "area", ph: "e.g. **Heart Breakers** · <@&123456789012345678>"},
+  {k: "footer", label: "Footer text on every card"},
+  {k: "footer_mode", label: "Footer", t: "select", opts: [["append", "Add after the card's own footer"], ["replace", "Replace the card's footer"]]},
+  {k: "timestamp", label: "Show the time on every card", t: "check"},
+  {t: "note", html: "New posts use the bot name and picture; Discord doesn't let an edit change them. The header line is added where a message sends text, so an edit never removes a mention. Webhook links stay secret on the Hub."},
+];
+PK.mount({
+  id: "discord", title: "Discord Messages",
+  lead: "How the Hub's Discord messages look in each channel - bot name, picture, colour, header and footer. Tap a channel (or its message in the preview) to edit it.",
+  async load() { const C = await GH.load(); LAY(C); return {data: C}; },
+  async save(C) {
+    const out = {};
+    Object.entries(LAY(C)).forEach(([k, L]) => {
+      const c = hex(L.color);
+      if (L.name && /discord|clyde/i.test(L.name)) throw new Error(`${CH(k).label}: Discord doesn't allow "discord" or "clyde" in a bot name.`);
+      if (L.avatar && !/^https:\/\//.test(L.avatar)) throw new Error(`${CH(k).label}: the bot picture must be an https:// link.`);
+      if (L.color && !c) throw new Error(`${CH(k).label}: the colour must be a hex value like #E4382E.`);
+      const x = {name: String(L.name || "").trim().slice(0, 80), avatar: String(L.avatar || "").trim(), color: c || "#E4382E", one_color: !!L.one_color,
+                 header: String(L.header || "").trim().slice(0, 500), footer: String(L.footer || "").trim().slice(0, 200),
+                 footer_mode: L.footer_mode === "replace" ? "replace" : "append", timestamp: !!L.timestamp};
+      if (!isDefault(x)) out[k] = x;
+    });
+    await GH.save(C, "Discord message layouts edited", c => { c.discord_layout = out; });
+    return "Saved ✓ - new Discord posts use it after the next site update (a few minutes)";
+  },
+  sections: C => CFG.channels.map(ch => ({key: ch.key, icon: "💬", label: ch.label, sub: isDefault(LAY(C)[ch.key]) ? "Default look" : "Customised", fixed: true})),
+  move: () => {}, toggle: () => {}, remove: () => {},
+  form: (C, view, k) => ({obj: LAY(C)[k], title: CH(k).label, help: "Posted here: " + esc(CH(k).what), fields: FIELDS}),
+  actions: [{label: "Reset every channel", run: async C => { if (!confirm("Put every channel back to the default look? (Not saved until you save.)")) return; C.discord_layout = {}; LAY(C); return C; }}],
+  saveNote: "Applies to new posts and edits from the next site update; the Hub's own pings (OC assignments, chain watch shifts) pick it up too.",
+  preview: {sizes: false, delay: 0, render: async (C, view, ctx) => {
+    const L = LAY(C);
+    ctx.box.innerHTML = CFG.channels.map(ch => { const S = SAMPLE[ch.key] || {card: null, content: ""};
+      return `<div class="dc" data-k="${ch.key}"><div class="dc-ch"># ${esc(ch.label.replace(/^\S+\s/, "").toLowerCase().replace(/\s+/g, "-"))}</div>`
+        + msgHtml(ch, L[ch.key], S.card, S.content) + (S.extra ? `<div style="height:10px"></div>` + msgHtml(ch, L[ch.key], null, S.extra) : "") + `</div>`; }).join("");
+    ctx.box.querySelectorAll(".dc[data-k]").forEach(el => ctx.mark(el, el.dataset.k));   // tap a message -> edit its channel
+    ctx.status("");
+  }}
+});
+</script>
+</body></html>

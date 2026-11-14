@@ -438,6 +438,26 @@ async function sxRoute(env, ctx, req) {
       headers: {"X-HB-Save": "1", "Content-Type": "application/json"}, body: JSON.stringify(b.body || {})}), who, "update"));
     return sxJson({ok: false, error: "unknown"}, 400);
   }
+  // ⚙ SETTINGS SYNC (HB Suite 0.2.1, Nov 14 2026, user: "Settings Backup, include an option to upload settings to the
+  // Hub to share between devices"): one small JSON per member (their OWN pid only) - the Suite's layout / module /
+  // display choices. The Suite never puts an API key (Torn or FFScouter) in it. {data} -> saved; get -> {data, updated}
+  if (op === "prefs_get" || op === "prefs_put" || op === "prefs_delete") {
+    if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
+    await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS sx_prefs (pid INTEGER PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL)").run();
+    if (op === "prefs_get") {
+      const r = await env.OC_DB.prepare("SELECT data, updated FROM sx_prefs WHERE pid = ?").bind(who.id).first();
+      let d = null; try { d = r ? JSON.parse(r.data) : null; } catch (e) { d = null; }
+      return sxJson({ok: true, data: d, updated: r ? Number(r.updated) : null});
+    }
+    if (op === "prefs_delete") { await env.OC_DB.prepare("DELETE FROM sx_prefs WHERE pid = ?").bind(who.id).run(); return sxJson({ok: true}); }
+    const txt = JSON.stringify(b.data && typeof b.data === "object" ? b.data : {});
+    if (txt.length > 20000) return sxJson({ok: false, error: "Those settings are too big to save."}, 400);
+    if (/"(key|apikey|api_key|ffkey)"\s*:/i.test(txt)) return sxJson({ok: false, error: "Settings can't include an API key."}, 400);
+    const now = Date.now();
+    await env.OC_DB.prepare("INSERT INTO sx_prefs (pid, data, updated) VALUES (?, ?, ?) ON CONFLICT (pid) DO UPDATE SET data = excluded.data, updated = excluded.updated")
+      .bind(who.id, txt, now).run();
+    return sxJson({ok: true, updated: now});
+  }
   // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
   if (op === "oc_contacted") {
     if (!who.leader) return leadersOnly();
@@ -2040,6 +2060,39 @@ async function ocDiscordIds(env, pids) {
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(cur)).run().catch(() => {});
   return cur;
 }
+// DISCORD MESSAGE LAYOUTS (Nov 14 2026, user: "Create the discord message editor to the hub webpage"): leaders edit
+// how each channel's messages look on the leaders' page discord.html (config.json "discord_layout"); the site build
+// writes the same settings to the leaders' db/discord_layout.json, read here (cached 5 min per isolate) so the Hub's
+// OWN posts match the rest of the channel: OC assignment pings ("crimes") and chain watch shift pings ("chains").
+// Same rules as generate.py _dc_style: name / picture on new posts only; the header line only where the message sends
+// text; one colour / footer / time on cards. No webhook address is ever in the file.
+let DC_LAYOUT = null, DC_LAYOUT_AT = 0;
+async function dcLayout(env) {
+  if (DC_LAYOUT && Date.now() - DC_LAYOUT_AT < 300000) return DC_LAYOUT;
+  try {
+    const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(env.LEADER_DIR)}/db/discord_layout.json`));
+    DC_LAYOUT = r.ok ? await r.json().catch(() => ({})) : {};
+  } catch (e) { DC_LAYOUT = DC_LAYOUT || {}; }
+  DC_LAYOUT_AT = Date.now();
+  return DC_LAYOUT;
+}
+async function dcStyle(env, ch, method, body) {
+  const L = ((await dcLayout(env)) || {})[ch];
+  if (!L || !body) return body;
+  const p = JSON.parse(JSON.stringify(body)), name = String(L.name || "").trim().slice(0, 80), av = String(L.avatar || "").trim();
+  if (method === "POST") { if (name && !/discord|clyde/i.test(name)) p.username = name; if (/^https:\/\//.test(av)) p.avatar_url = av; }
+  const head = String(L.header || "").trim();
+  if (head && (method === "POST" || "content" in p)) p.content = (head + (p.content ? "\n" + p.content : "")).slice(0, 2000);
+  const col = L.one_color && /^#?[0-9a-f]{6}$/i.test(String(L.color || "")) ? parseInt(String(L.color).replace("#", ""), 16) : null;
+  const foot = String(L.footer || "").trim();
+  for (const e of p.embeds || []) {
+    if (!e || typeof e !== "object") continue;
+    if (col != null) e.color = col;
+    if (foot) { const old = String((e.footer || {}).text || "").trim(); e.footer = Object.assign({}, e.footer || {}, {text: (L.footer_mode === "replace" || !old ? foot : `${old} · ${foot}`).slice(0, 2048)}); }
+    if (L.timestamp && !e.timestamp) e.timestamp = new Date().toISOString();
+  }
+  return p;
+}
 function ocHookUrl(env, suffix) {
   const u = new URL(String(env.OC_DISCORD_WEBHOOK).trim()), extra = suffix || "";
   if (extra.startsWith("?")) { new URLSearchParams(extra.slice(1)).forEach((v, k) => u.searchParams.set(k, v)); return u.toString(); }
@@ -2106,7 +2159,7 @@ async function ocAssignPings(env, crimes) {
       if (!d || !d.id) continue;                             // not looked up - next run
       let st = 0;
       try { const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(mid)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}})}); st = res.status; } catch (e) { continue; }
+          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}}))}); st = res.status; } catch (e) { continue; }
       if (st === 404) { await env.OC_DB.prepare("DELETE FROM oc_ping WHERE k = ?").bind(k).run().catch(() => {}); have.delete(k); continue; }
       if (st < 200 || st >= 300) continue;                   // try again next run
     }
@@ -2133,7 +2186,7 @@ async function ocAssignPings(env, crimes) {
       if (!d || !d.id) continue;
       try {
         const res = await fetch(ocHookUrl(env, `/messages/${encodeURIComponent(o.msg_id)}`), {method: "PATCH", headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}})});
+          body: JSON.stringify(await dcStyle(env, "crimes", "PATCH", {content: ocPingText(d.id, x), allowed_mentions: {users: [d.id]}}))});
         if (res.ok || res.status === 404) await env.OC_DB.prepare("UPDATE oc_ping SET created = ? WHERE k = ?").bind(Math.max(Date.now(), OC_PING_NAMES_AT), o.k).run().catch(() => {});
       } catch (e) { /* next run */ }
     }
@@ -2152,7 +2205,7 @@ async function ocAssignPings(env, crimes) {
     const body = {content: ocPingText(d.id, x),
                   allowed_mentions: {users: [d.id]}};
     try {
-      const res = await fetch(ocHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const res = await fetch(ocHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(await dcStyle(env, "crimes", "POST", body))});
       if (!res.ok) continue;                                 // try again next run
       let mid = null; try { const m = await res.json(); mid = m && /^\d+$/.test(String(m.id)) ? String(m.id) : null; } catch (e) { mid = null; }
       await env.OC_DB.prepare("INSERT OR REPLACE INTO oc_ping (k, msg_id, pid, crime_id, created) VALUES (?, ?, ?, ?, ?)").bind(k, mid, x.pid, x.crime_id, Math.max(Date.now(), OC_PING_NAMES_AT)).run();
@@ -3233,7 +3286,7 @@ async function cwShiftAlerts(env) {
                   allowed_mentions: {users}};
     try {
       // ?wait=true -> Discord returns the message (its id), so it can be deleted when the slot ends
-      const res = await fetch(cwHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      const res = await fetch(cwHookUrl(env, "?wait=true"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(await dcStyle(env, "chains", "POST", body))});
       if (!res.ok) continue;                               // try again on the next run
       let msgId = null;
       try { const m = await res.json(); msgId = m && /^\d+$/.test(String(m.id)) ? String(m.id) : null; } catch (e) { msgId = null; }
