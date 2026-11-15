@@ -444,6 +444,21 @@ async function sxRoute(env, ctx, req) {
   // per device.) {do:"get"} -> {data, updated, by, by_pid}; {do:"put", data, base} -> saved unless someone saved after
   // `base` (-> {ok:true, saved:false, conflict:true, by, updated}); force:true overwrites. Never a key - fields that look like one
   // are refused, and the whole thing is capped at 20 KB.
+  // ⛓ CHAIN WATCH SETTINGS FROM THE SUITE (HB Suite 0.2.20, Nov 14 2026, user: "Dropdown for 'Chain Settings' to allow
+  // leaders to change the settings in the script."). LEADERS ONLY. The same settings + the same checks as the Leaders
+  // Hub page (cwLeaderRoute: D1 oc_config 'chainwatch', pushed to every connected script at once) - this just lets the
+  // Suite read / save them. {do:"get"} -> {config, defaults}; {do:"put", data:{topAlertSeconds, restAlertSeconds,
+  // thirdAlertSeconds, firstAlertPrimaryOnly, minChain, bonusWarnHits}} -> {ok, config, pushed} or {ok:false, error}.
+  if (op === "cwcfg") {
+    if (!who.leader) return leadersOnly();
+    const sub = b.do === "put" ? "config" : "config.json";
+    const r = new Request("https://hub/l/cw/" + sub, b.do === "put"
+      ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(b.data || {})} : {method: "GET"});
+    const res = await cwLeaderRoute(env, r, who, sub);
+    let j = {}; try { j = await res.json(); } catch (e) {}
+    if (b.do !== "put" && j.ok) j = {ok: true, config: j.config, defaults: j.defaults};   // (no room status for the Suite)
+    return sxJson(j, res.status === 200 ? 200 : res.status);
+  }
   if (op === "rcset") {
     if (!who.leader) return leadersOnly();
     if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
