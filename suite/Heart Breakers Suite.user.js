@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.45
+// @version      0.2.48
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,14 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.48 (Nov 15 2026) - 💩 Dumping hits: queued members can burn their energy fast before going offline. The Hub hands
+ *          out an allowance that stops short of the protected hits before each bonus (leader-set); STOP banner + sound;
+ *          dumpers get a tap-to-uncover cover over the attack button inside the protected hits. Leaders: Chain settings.
+ *  v0.2.47 (Nov 15 2026) - ⛓ Alerts arrive sooner: the script now checks in with the Hub just after each alert mark
+ *          instead of waiting for its next 5 / 15 s round. New alert tiles above the Queue (Alert 1 / 2 / 3 + Min
+ *          chain) that light up as each alert goes out.
+ *  v0.2.46 (Nov 15 2026) - ⛶ Compact View: the tiny Smaller-closed tab is gone. Three views (Original, Smaller, Timer
+ *          only), and a tap on any of them (except the I'm hitting / Join button) opens Chain Watch in the full panel.
  *  v0.2.45 (Nov 15 2026) - ⚔ War Readiness removed (user: "Remove War Readiness tab and sharing settings. Not
  *          needed."): the leaders' ⚡ Ready tab, the War readiness sharing option and the readiness readings the script
  *          sent are gone. A script that had it on switches it off on the Hub by itself (the Hub deletes what it sent).
@@ -371,7 +379,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.45';
+    const VERSION = '0.2.48';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -421,6 +429,7 @@
         rsSetAt: 'hbs_rs_set_at', rsSetAt0: 'hbs_rs_set_at0',   // shared recruit settings: version applied / first download done (0.2.17)
         rsSetNote: 'hbs_rs_set_note',          // the last change another leader made {by, at, diff} (0.2.17)
         rtOpen: 'hbs_rt_open',
+        cwDump: 'hbs_cw_dump',                 // 💩 dumping mirror {st, done, last, bonus, buffer, stopText} (0.2.48)
         cwCompact: 'hbs_cw_compact',           // ⛶ Compact view {on, size 'l'|'s', side 'left'|'right', y, open} (0.2.42)
 
         relSeen: 'hbs_rel_seen',               // 🛡 low reliability: {member id: grade rank last seen} (0.2.35)
@@ -987,6 +996,28 @@
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
             /* 0.2.42 - ⛶ compact view (edge tab) */
             #hbs-launcher.hbs-cvhide{display:none !important;}
+            /* (0.2.48) 💩 dumping hits */
+            #hbs-panel .hbs-dmbtn{flex:0 0 auto;min-width:0;width:38px;padding-left:0;padding-right:0;font-size:16px;} #hbs-panel .hbs-dmbtn.on{background:#3a2f55;border-color:#9b86e0;}
+            #hbs-panel .hbs-dmline{display:flex;align-items:center;gap:8px;text-align:left;background:var(--card);border:1px solid var(--edge);border-radius:8px;padding:6px 8px;margin-top:7px;font-size:12px;}
+            #hbs-panel .hbs-dmline span{flex:1 1 auto;min-width:0;} #hbs-panel .hbs-dmline b{color:#FFB454;} #hbs-panel .hbs-dmline small{opacity:.7;white-space:nowrap;}
+            #hbs-panel .hbs-dmline i{flex:1 1 40px;height:4px;border-radius:2px;background:#2c313a;overflow:hidden;} #hbs-panel .hbs-dmline em{display:block;height:100%;background:#9b86e0;}
+            #hbs-panel .hbs-dmline .hbs-btn{flex:0 0 auto;width:auto;min-width:0;padding:4px 10px;margin:0;}
+            #hbs-panel .hbs-dmstop{background:#5a2626;border:1px solid #ff5b5b;border-radius:8px;padding:9px;margin-top:7px;text-align:center;color:#ffd6d6;font-size:12px;}
+            #hbs-panel .hbs-dmstop b{display:block;font-size:16px;color:#fff;} #hbs-panel .hbs-dmstop span, #hbs-panel .hbs-dmstop small{display:block;} #hbs-panel .hbs-dmstop small{opacity:.75;margin-top:3px;}
+            #hbs-panel .hbs-qt.dmp{background:#3a2f55;color:#d9ccff;}
+            #hbs-dmcover{position:fixed;z-index:2147481500;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:3px;background:#3a1d1d;border:2px dashed #ff5b5b;border-radius:10px;padding:8px 10px;color:#ffd6d6;font:12px/1.3 Arial,sans-serif;text-align:center;cursor:pointer;touch-action:manipulation;}
+            #hbs-dmcover b{color:#fff;font-size:13px;} #hbs-dmcover u{text-decoration:none;display:block;background:#8a2a2a;color:#ffe0e0;border-radius:7px;padding:5px;font-weight:bold;margin-top:2px;}
+            #hbs-dmwarn{position:fixed;z-index:2147481500;left:8px;right:8px;top:8px;max-width:520px;margin:0 auto;background:#5a4417;border:1px solid #FFB454;border-radius:8px;padding:8px 10px;color:#FFE3B0;font:12px/1.35 Arial,sans-serif;text-align:center;pointer-events:none;}
+            /* (0.2.47) alert timer tiles above the Queue: next = amber outline, sent = amber fill (last alert red), off = dimmed (chain under the minimum) */
+            #hbs-panel .hbs-altiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:5px;margin-top:7px;}
+            #hbs-panel .hbs-altiles div{background:var(--card);border:1px solid var(--edge);border-radius:8px;padding:6px 2px;text-align:center;min-width:0;}
+            #hbs-panel .hbs-altiles span{display:block;font-size:9.5px;opacity:.75;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-altiles b{display:block;color:#ccc;font-size:15px;white-space:nowrap;} #hbs-panel .hbs-altiles i{display:block;font-style:normal;font-size:10px;opacity:.8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-altiles .next{border-color:#FFB454;} #hbs-panel .hbs-altiles .next b{color:#FFB454;}
+            #hbs-panel .hbs-altiles .sent{background:#5a4417;border-color:#FFB454;} #hbs-panel .hbs-altiles .sent b, #hbs-panel .hbs-altiles .sent span, #hbs-panel .hbs-altiles .sent i{color:#FFD48A;opacity:1;}
+            #hbs-panel .hbs-altiles .sent.last{background:#5a2626;border-color:#ff5b5b;} #hbs-panel .hbs-altiles .sent.last b, #hbs-panel .hbs-altiles .sent.last span, #hbs-panel .hbs-altiles .sent.last i{color:#ffc4c4;}
+            #hbs-panel .hbs-altiles .off{opacity:.45;} #hbs-panel .hbs-altiles .met b{color:#7CFC9A;}
+            #hbs-panel .hbs-altiles .below{border-style:dashed;} #hbs-panel .hbs-altiles .below b{color:#ff8f8f;}
             #hbs-compact{position:fixed;z-index:2147481000;box-sizing:border-box;background:#14161b;border:1px solid #FFB454;color:#e8e8e8;font:13px/1.3 Arial,sans-serif;text-align:center;
                 cursor:pointer;user-select:none;-webkit-user-select:none;box-shadow:0 2px 10px rgba(0,0,0,.5);padding:5px 6px;}
             #hbs-compact.cv-right{right:0;border-right:0;border-radius:10px 0 0 10px;} #hbs-compact.cv-left{left:0;border-left:0;border-radius:0 10px 10px 0;}
@@ -2581,7 +2612,7 @@
     function cwShow() { if (!collapsed && tab === 'chain' && !cwBusy()) { clearTimeout(cw.drawT); cw.drawT = setTimeout(() => { if (tab === 'chain' && !cwBusy()) render(true); }, 120); } }
     function cwRetry() { clearTimeout(cw.retryT); cw.retryT = null; if (cwWanted()) cw.retryT = setTimeout(() => { cw.retryT = null; cwConnect(); }, Math.min(30000, 2000 * (cw.fails + 1))); }
     function cwDisconnect() {
-        clearTimeout(cw.retryT); clearInterval(cw.pingT); clearTimeout(cw.readT); clearTimeout(cw.syncT); cw.syncT = null; clearTimeout(cw.wsRetryT);
+        clearTimeout(cw.retryT); clearInterval(cw.pingT); clearTimeout(cw.readT); clearTimeout(cw.syncT); cw.syncT = null; clearTimeout(cw.alT); cw.alT = null; clearTimeout(cw.wsRetryT);
         if (cw.ws) { try { cw.ws.onclose = null; cw.ws.close(); } catch (e) { /* gone */ } cw.ws = null; }
     }
     // no WebSocket (or it keeps failing): the same messages through POST /cw/sync every 15 s (5 s near the first alert)
@@ -2611,7 +2642,58 @@
         if (cw.syncAgain) { cw.syncAgain = false; cw.syncT = setTimeout(cwSyncRun, 50); return; }
         const c = cwChain(), left = c && c.current > 0 ? (num(c.expires_at) - cwNow()) / 1000 : 9e9;
         cw.syncT = setTimeout(cwSyncRun, left < num((cw.state && cw.state.config || {}).topAlertSeconds || 90) ? 5000 : 15000);
+        cwAlSched();
     }
+    // (0.2.47, user: "How can we make the alerts arrive sooner? ... a delay between the timer hitting its mark and the
+    // alert arriving" -> "Yes build the scheduled check ins") The Hub makes each alert on its exact second but a polling
+    // script only collects it on its next /cw/sync (15 s rounds, 5 s under alert 1) - so alert 1 could be ~15 s late.
+    // Now one extra sync is timed for just after each alert / panic mark (the Hub fires 400 ms early, we ask 300 ms
+    // after the mark, and once more 1.5 s after in case the Hub's alarm ran late). Re-planned after every sync, so it
+    // follows the timer when a hit resets it. The Hub still decides who is alerted. No Torn API calls; a handful of
+    // extra Hub syncs per run-down. (Hidden tabs: the browser / PDA may still hold timers back - can't be helped here.)
+    const cwAlMarks = () => { const g = (cw.state && cw.state.config) || {};
+        return [num(g.topAlertSeconds), num(g.restAlertSeconds), num(g.thirdAlertSeconds), 30, 15].filter(x => x > 0); };
+    function cwAlSched() {
+        clearTimeout(cw.alT); cw.alT = null;
+        if (!cw.syncT || (cw.ws && cw.ws.readyState === 1)) return;                 // polling only
+        const c = cwChain(), g = (cw.state && cw.state.config) || {};
+        if (!c || !(c.current > 0) || !num(c.expires_at) || c.current < num(g.minChain)) return;
+        const now = cwNow(), due = [];
+        cwAlMarks().forEach(sec => [300, 1500].forEach(d => { const at = num(c.expires_at) - sec * 1000 + d; if (at > now + 50) due.push(at); }));
+        if (!due.length) return;
+        cw.alT = setTimeout(() => { cw.alT = null;
+            if (cw.syncT && cw.syncT !== -1 && !(cw.ws && cw.ws.readyState === 1)) { clearTimeout(cw.syncT); cwSyncRun(); }   // cwSyncRun re-plans the next mark when it ends
+            else if (cw.syncBusy) cw.syncAgain = true;
+            else cwAlSched(); }, Math.min(...due) - now);
+    }
+    // (0.2.47, user: "Show the alert timers at the top above the Queue, under the chain panel. Alert 1 = #1, Alert 2 =
+    // #1+#2, Alert 3 = All Queued. Minimum chain." - layout A (four tiles), live highlighting, only the alerts that are
+    // set) "sent" = the timer has passed that mark on a chain at / over the minimum - worked out here from the timer,
+    // not a delivery receipt from the Hub. Who gets each follows the Hub's rule by position in the list of set alerts
+    // (1st -> #1 when "first alert to #1 only" is on, else all active; 2nd -> #1 + #2; 3rd -> all queued).
+    function cwAlTilesHtml(cfg) {
+        const st = [num(cfg.topAlertSeconds), num(cfg.restAlertSeconds), num(cfg.thirdAlertSeconds)].filter(x => x > 0).sort((a, b) => b - a);
+        const who = i => i === 0 ? (cfg.firstAlertPrimaryOnly ? '#1' : 'All active') : i === 1 ? '#1 + #2' : 'All queued';
+        return `<div class="hbs-altiles" data-altiles data-min="${num(cfg.minChain)}">`
+            + st.map((x, i) => `<div data-alsec="${x}"${i === st.length - 1 && st.length > 1 ? ' data-allast="1"' : ''}><span data-allab="Alert ${i + 1}">Alert ${i + 1}</span><b>${mSec(x)}</b><i>${who(i)}</i></div>`).join('')
+            + `<div data-almin><span>Min chain</span><b>${int(cfg.minChain)}</b><i>hits</i></div></div>`;
+    }
+    function cwAlTilesTick() {
+        const box = bodyEl && bodyEl.querySelector('[data-altiles]'); if (!box) return;
+        const c = cwChain(), live = !!(c && c.current > 0 && num(c.expires_at) > cwNow()), min = num(box.dataset.min);
+        const left = live ? (num(c.expires_at) - cwNow()) / 1000 : null, ok = live && c.current >= min;
+        let next = null;
+        box.querySelectorAll('[data-alsec]').forEach(d => { const sec = num(d.dataset.alsec), sent = ok && left <= sec;
+            if (ok && !sent && next == null) next = d;                                // tiles run longest -> shortest: the first unsent is next
+            d.className = sent ? (d.dataset.allast ? 'sent last' : 'sent') : live && !ok ? 'off' : '';
+            const l = d.querySelector('[data-allab]'); if (l) l.textContent = l.dataset.allab + (sent ? ' · sent' : ''); });
+        if (next) next.classList.add('next');
+        const m = box.querySelector('[data-almin]');
+        if (m) { m.className = !live || !min ? '' : ok ? 'met' : 'below';
+            m.querySelector('b').textContent = live && min && !ok ? `${int(c.current)} / ${int(min)}` : int(min);
+            m.querySelector('i').textContent = !live || !min ? 'hits' : ok ? 'met' : 'alerts off'; }
+    }
+    setInterval(() => { if (!collapsed && tab === 'chain') cwAlTilesTick(); }, 1000);
     // anything you do while polling goes out at once (not on the next 15 s round)
     function cwSyncSoon() { if (cw.syncT && !(cw.ws && cw.ws.readyState === 1)) { clearTimeout(cw.syncT); cw.syncT = setTimeout(cwSyncRun, 120); } }
     function cwWatch() { if (cwWanted()) cwConnect(); else if (cw.ws || cw.syncT) cwDisconnect(); }
@@ -2662,6 +2744,7 @@
         if (m.now) cw.offset = num(m.now) - Date.now();
         if (m.t === 'alert') { cwHubAlert(m); return; }            // the Hub times every alert; this device delivers it (🔔 alerts, 0.2.3)
         if (m.t === 'panic') { cwHubPanic(m); return; }
+        if (m.t === 'dump') { dmIn(m); return; }                    // 💩 dumping hits (0.2.48)
         if (m.t === 'diag') { cw.diag = m; if (tab === 'chain') render(true); return; }   // 🔍 Alert check (0.2.21, leaders)
         if (m.t === 'notice') {
             if (m.kind === 'join_refused') { cw.optimistic = null; cw.queued = false; store.set(K.cwq, false); cwShow(); }   // undo the optimistic join
@@ -2924,7 +3007,7 @@
         out += `<div class="hbs-actions">${cw.queued ? `<button type="button" class="hbs-btn hbs-ghost" data-cw="leave">Leave queue</button>
                 ${hitBtn('chain')}
                 <button type="button" class="hbs-btn hbs-ghost" data-cw="target" title="Open a weak target's attack page (level 1-3, inactive 60+ days - same pick as Panic Mode)">🎯 Find target</button>
-                <button type="button" class="hbs-btn hbs-ghost" data-cw="away">${(q.find(x => num(x.pid) === me.id) || {}).away ? '↩ Back' : '⏸ Away'}</button>`
+                <button type="button" class="hbs-btn hbs-ghost" data-cw="away">${(q.find(x => num(x.pid) === me.id) || {}).away ? '↩ Back' : '⏸ Away'}</button>${dmBtnHtml()}`
             : `<button type="button" class="hbs-btn" data-cw="join">Join the queue</button>`}
             ${(S.me || {}).is_leader && (S.me || {}).members ? `<select class="hbs-input" data-cwbonus><option value="">🎯 Assign bonus…</option><option value="clear">Clear</option>
                 ${S.me.members.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }))   // (0.2.19, user: "Sort bonus chain hit selections alphabetically")
@@ -2948,6 +3031,8 @@
         // run on from the member's last reading (stats.at). Still in the Hub's order - never re-sorted.
         const qOk = q.filter(x => !x.away && !x.inactive && (!x.presence || x.presence === 'active'));
         const capHits = qOk.reduce((a, x) => { const e = cwEnergy(x); return a + (e ? Math.floor(e.cur / 25) : 0); }, 0);
+        out += dmLineHtml();         // (0.2.48) 💩 dumping: confirm line / progress / STOP banner
+        out += cwAlTilesHtml(cfg);   // (0.2.47) alert timers + minimum chain, under the chain panel
         out += sec(`Queue · ${q.length}`) + (q.length ? `<div class="hbs-cap${capHits === 0 ? ' low' : capHits < 5 ? ' warn' : ''}">${qOk.length ? `⚡ ~${int(capHits)} hits available · ${qOk.length} online` : '⚠ no watchers online'}</div>`
             + `<div class="hbs-q">` + q.map((x, i) => { const s = st[x.pid] || {}, en = cwEnergy(x), hits = en ? Math.floor(en.cur / 25) : null;
             const up = num(turn.up) === num(x.pid), bk = num(turn.backup) === num(x.pid), bon = bonus.pid && num(bonus.pid) === num(x.pid);
@@ -2955,6 +3040,7 @@
             const tags = [up ? `<span class="hbs-qt up">${turn.reason === 'bonus' ? '★ UP · BONUS' : 'UP'}</span>` : bk ? '<span class="hbs-qt">BACKUP</span>' : '',
                 bon && !(up && turn.reason === 'bonus') ? '<span class="hbs-qt bon">★ BONUS</span>' : '',
                 x.can_hit === false ? `<span class="hbs-qt cant">${esc(s.state || "Can't hit")}${s.until ? ' <span data-until="' + s.until + '">-</span>' : ''}</span>` : '',
+                x.dump ? `<span class="hbs-qt dmp">💩 ${x.dump.st === 'on' ? int(x.dump.left) + ' left' : 'stopped'}</span>` : '',
                 hitting ? '<span class="hbs-qt hit">HITTING</span>' : '', x.away ? '<span class="hbs-qt">💤 Away</span>' : idle ? `<span class="hbs-qt">${x.presence === 'idle' ? '💤 Idle' : '⚪ Offline'}</span>` : ''].filter(Boolean).join('');
             return `<div class="hbs-qr${up ? ' up' : ''}${bk ? ' bk' : ''}${bon ? ' bon' : ''}${num(x.pid) === me.id ? ' me' : ''}${x.away || idle ? ' dim' : ''}${hits === 0 ? ' dry' : ''}">
                 <div class="m"><span class="p">${i + 1}</span><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>${tags}<span class="h">${hits == null ? '–' : hits}<small>hits</small></span></div>
@@ -2989,11 +3075,17 @@
         ['bonusWarnHits', 'Bonus heads-up', 'show the bonus banner this many hits before (0 = off)', 0, 50]];
     function cwCfgHtml(cfg, url) {
         if (!cwCfg.open || !((cw.state || {}).me || {}).is_leader) return '';
-        const d = cwCfg.draft || (cwCfg.draft = Object.assign({}, ...CWCFG_F.map(([k]) => ({ [k]: num(cfg[k]) })), { firstAlertPrimaryOnly: !!cfg.firstAlertPrimaryOnly }));
+        const d = cwCfg.draft || (cwCfg.draft = Object.assign({}, ...CWCFG_F.map(([k]) => ({ [k]: num(cfg[k]) })), { firstAlertPrimaryOnly: !!cfg.firstAlertPrimaryOnly,
+            dumpOn: !!cfg.dumpOn, dumpCover: cfg.dumpCover !== false, dumpBuffer: num(cfg.dumpBuffer) || 10 }));   // (0.2.48) 💩 Dumping hits
         return `<div class="hbs-card hbs-cwcfg"><div class="hbs-sub"><b>Faction chain settings</b> - for everyone's Chain Watch. Saved on the Hub and sent to every connected script at once.</div>
             ${CWCFG_F.map(([k, l, h, lo, hi]) => `<label class="hbs-cfgrow"><span><b>${l}</b><small>${h}</small></span>
                 <span class="hbs-cfgin"><input class="hbs-input" type="number" inputmode="numeric" min="${lo}" max="${hi}" step="1" data-cwcfg="${k}" value="${esc(String(d[k]))}">${/Seconds$/.test(k) ? `<small data-cwcfgm="${k}">${mSec(d[k])}</small>` : ''}</span></label>`).join('')}
             <label class="hbs-ck"><input type="checkbox" data-cwcfg="firstAlertPrimaryOnly"${d.firstAlertPrimaryOnly ? ' checked' : ''}> 1st alert to who's up only <small>(off = everyone active in the queue)</small></label>
+            <div class="hbs-sub" style="margin-top:8px"><b>💩 Dumping hits</b> - members burning their energy before going offline; the hits before each bonus stay protected.</div>
+            <label class="hbs-ck"><input type="checkbox" data-cwcfg="dumpOn"${d.dumpOn ? ' checked' : ''}> Dumping on <small>(shows the 💩 button to queued members)</small></label>
+            <label class="hbs-cfgrow"><span><b>Protected hits before a bonus</b><small>nobody can dump into these</small></span>
+                <span class="hbs-cfgin"><input class="hbs-input" type="number" inputmode="numeric" min="1" max="100" step="1" data-cwcfg="dumpBuffer" value="${esc(String(d.dumpBuffer))}"></span></label>
+            <label class="hbs-ck"><input type="checkbox" data-cwcfg="dumpCover"${d.dumpCover ? ' checked' : ''}> Cover the attack button <small>(dumpers only, inside the protected hits - one tap uncovers it)</small></label>
             ${cwCfg.err ? `<div class="hbs-hint hbs-bad">⚠ ${esc(cwCfg.err)}</div>` : ''}
             <div class="hbs-actions"><button type="button" class="hbs-btn" data-cwcfgsave${cwCfg.saving ? ' disabled' : ''}>${cwCfg.saving ? 'Saving…' : '💾 Save for everyone'}</button>
                 <button type="button" class="hbs-btn hbs-ghost" data-cwcfgundo>Undo changes</button></div>
@@ -3014,6 +3106,7 @@
             const bad = CWCFG_F.find(([k, , , lo, hi]) => d[k] === '' || !Number.isFinite(Number(d[k])) || Number(d[k]) < lo || Number(d[k]) > hi);
             if (bad) { cwCfg.err = `${bad[1]} must be ${bad[3]}-${bad[4]}.`; render(true); return; }
             if (!(d.topAlertSeconds > d.restAlertSeconds && d.restAlertSeconds > d.thirdAlertSeconds)) { cwCfg.err = 'Alerts must go down: 1st > 2nd > 3rd.'; render(true); return; }
+            if (!(Number(d.dumpBuffer) >= 1 && Number(d.dumpBuffer) <= 100)) { cwCfg.err = 'Protected hits before a bonus must be 1-100.'; render(true); return; }
             cwCfg.saving = true; cwCfg.err = ''; render(true);
             try {
                 const r = await hub('cwcfg', { do: 'put', data: d });   // [HB Suite] Hub API - op "cwcfg" put (leaders: Chain Watch settings)
@@ -3083,6 +3176,7 @@
         drawChips(); drawPin(); if (!collapsed && tab === 'chain') render(true);
     }
     function chainBind() {
+        cwAlTilesTick(); dmBind();
         bodyEl.querySelectorAll('[data-cw]').forEach(b => b.addEventListener('click', () => cwAction(b.dataset.cw, b)));
         const sel = bodyEl.querySelector('[data-cwbonus]');
         // (0.2.18) the assignment shows at once (optimistic, until the Hub's next update) + a confirmation toast
@@ -4109,7 +4203,7 @@
         alFlashLvl = level; alFlashUntil = Date.now() + (A.repeat > 0 && level ? 120000 : 10000);   // (0.2.34) flash the minimized icon
         if (launcher) { launcher.classList.add('hbs-l-flash'); launcher.classList.toggle('hbs-l-panic', level >= 4); }
         // (0.2.43, user: "Open immediately when alerts fire.") the ⛶ compact tab opens itself so I'm hitting is right there
-        try { if (level && cvGet().on && !cvGet().open) cvSet({ open: true }); else if (cvGet().on) { cvSig = ''; cvDraw(); } } catch (e) { /* compact view */ }
+        try { if (cvGet().on) { cvSig = ''; cvDraw(); } } catch (e) { /* compact view */ }
         if (A.repeat > 0 && level) { alLoop = setInterval(ring, A.repeat * 1000); alStop = setTimeout(alStopAll, 120000); }   // hard cap 2 min
         else alLevel = 0;
         if (A.flash) { flashPanel(); flashTitle(level >= 4 ? '🚨 PANIC!' : kind === 'up' ? "⚔ YOU'RE UP!" : level ? '🚨 CHAIN LOW!' : '🔔 ' + alText(kind, info).slice(0, 30), 10000); }
@@ -4295,6 +4389,12 @@
     //     while an alert sounds (the same alFlashUntil as the launcher). Redrawn once a second from what the Suite
     //     already has - no extra Torn / Hub reads.
     // =====================================================================
+    // (0.2.46, user: "No Smaller, Closed chain watch compact view. That's way too small. Clicking any of the chain watch
+    // compact views should reopen the chain watch panel.") Three views now, picked on the Chain tab - Original ('l'),
+    // Smaller ('s') and Timer only ('t' = the old Original closed tab); the tiny Smaller-closed tab is gone and there is
+    // no tap-to-open/close any more: a tap anywhere but the button opens the full Suite on the Chain tab. `open` in the
+    // saved settings is no longer used. Timer only still shows the Original card while an alert is flashing (0.2.43's
+    // "Open immediately when alerts fire"), so I'm hitting is one tap away.
     const CV_DEF = { on: false, size: 'l', side: 'right', y: 140, open: true };
     const cvGet = () => Object.assign({}, CV_DEF, store.get(K.cwCompact, {}) || {});
     function cvSet(p) { store.set(K.cwCompact, Object.assign(cvGet(), p)); cvSig = ''; cvDraw(); }
@@ -4315,9 +4415,9 @@
             try { cvEl.releasePointerCapture(e.pointerId); } catch (x) { /* */ }
             if (was.moved) { store.set(K.cwCompact, Object.assign(cvGet(), { y: Math.round(cvEl.getBoundingClientRect().top) })); return; }
             const b = was.t && was.t.closest ? was.t.closest('[data-cv]') : null, a = b ? b.dataset.cv : '';
-            if (a === 'full') { setCollapsed(false); tab = 'chain'; store.set(K.tab, tab); render(); cvDraw(); return; }
+            if (a !== 'hit' && a !== 'join') { setCollapsed(false); tab = 'chain'; store.set(K.tab, tab); render(); cvDraw(); return; }
             if (a === 'hit' || a === 'join') { cwAction(a === 'hit' ? 'hitting' : 'join').then(() => { cvSig = ''; cvDraw(); }, () => {}); cvSig = ''; setTimeout(cvDraw, 60); return; }
-            cvSet({ open: !cvGet().open }); };
+            };
         cvEl.addEventListener('pointerup', up); cvEl.addEventListener('pointercancel', () => { d = null; });
         window.addEventListener('resize', () => { if (cvEl && cvShown()) cvEl.style.top = cvClampY(cvGet().y) + 'px'; });
     }
@@ -4337,17 +4437,19 @@
         const posL = !cw.queued ? 'Not queued' : upMe ? "You're up" : `You're #${cw.queuePos || '?'}${bkMe ? ' · backup' : ''}`;
         const btn = !cw.queued ? `<button type="button" class="b" data-cv="join">Join queue</button>`
             : `<button type="button" class="b${hitU ? ' on' : ''}" data-cv="hit">${hitU ? '✋ Hitting' : "⚔ I'm hitting"}</button>`;
-        const sig = [C.size, C.side, C.open, txt, tcls, posL, !!hitU, live ? c.current : 0, flash, upMe, bkMe].join('|');
+        const size = C.size === 't' && flash ? 'l' : C.size, open = size !== 't';
+        const sig = [size, C.side, txt, tcls, posL, !!hitU, live ? c.current : 0, flash, upMe, bkMe].join('|');
         cvEl.style.display = '';
-        cvEl.className = `cv-${C.size} cv-${C.side}${C.open ? ' open' : ''}${upMe ? ' up' : bkMe ? ' bk' : ''}${flash ? ' flash' : ''}${flash && alFlashLvl >= 4 ? ' panic' : ''}`;
+        cvEl.className = `cv-${open ? size : 'l'} cv-${C.side}${open ? ' open' : ''}${upMe ? ' up' : bkMe ? ' bk' : ''}${flash ? ' flash' : ''}${flash && alFlashLvl >= 4 ? ' panic' : ''}`;
         if (sig === cvSig) return;
         cvSig = sig;
-        cvEl.innerHTML = !C.open
-            ? `<div class="t ${tcls}">${txt}</div>${C.size === 'l' ? `<div class="p">${posS}</div>` : ''}`
-            : C.size === 'l'
-                ? `<span class="x" data-cv="full" title="Open the full Suite">⤢</span><div class="s">${live ? 'Chain ' + int(c.current) : 'No live chain'}</div>
+        cvEl.title = 'Open Chain Watch';
+        cvEl.innerHTML = !open
+            ? `<div class="t ${tcls}">${txt}</div><div class="p">${posS}</div>`
+            : size === 'l'
+                ? `<div class="s">${live ? 'Chain ' + int(c.current) : 'No live chain'}</div>
                    <div class="t ${tcls}">${txt}</div><div class="pl"><span>${posL}</span></div>${btn}`
-                : `<span class="x" data-cv="full" title="Open the full Suite">⤢</span><div class="r"><span class="t ${tcls}">${txt}</span><span class="pl"><span>${posS}</span></span></div>${btn}`;
+                : `<div class="r"><span class="t ${tcls}">${txt}</span><span class="pl"><span>${posS}</span></span></div>${btn}`;
         cvEl.style.top = cvClampY(C.y) + 'px';
     }
     setInterval(() => { if (cvGet().on || cvEl) cvDraw(); }, 1000);
@@ -4357,8 +4459,8 @@
         const C = cvGet();
         const pick = (k, opts) => `<span class="hbs-chips" data-cvset="${k}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${String(C[k]) === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>`;
         return `<div class="hbs-actions"><button type="button" class="hbs-btn${cvOptOpen ? '' : ' hbs-ghost'}" data-cvopt>⛶ Compact View ${cvOptOpen ? '▾' : '▸'}</button></div>`
-            + (cvOptOpen ? `<div class="hbs-card hbs-cvopt"><div class="hbs-sub">A small tab on the edge of the screen with the chain timer, your position and the I'm hitting button - shown while the Suite is minimized. Tap it to open or close, drag it up or down, ⤢ brings the full Suite back.</div>
-                <div class="hbs-cfgrow"><span><b>Size</b></span>${pick('size', [['l', 'Original'], ['s', 'Smaller']])}</div>
+            + (cvOptOpen ? `<div class="hbs-card hbs-cvopt"><div class="hbs-sub">A small tab on the edge of the screen with the chain timer, your position and the I'm hitting button - shown while the Suite is minimized. Tap it to open Chain Watch, drag it up or down.</div>
+                <div class="hbs-cfgrow"><span><b>View</b></span>${pick('size', [['l', 'Original'], ['s', 'Smaller'], ['t', 'Timer only']])}</div>
                 <div class="hbs-cfgrow"><span><b>Side</b></span>${pick('side', [['left', 'Left'], ['right', 'Right']])}</div>
                 <div class="hbs-actions"><button type="button" class="hbs-btn" data-cvgo>${C.on ? 'Switch to compact view now' : 'Turn on compact view'}</button>
                     ${C.on ? '<button type="button" class="hbs-btn hbs-ghost" data-cvoff>Turn off</button>' : ''}</div>
@@ -4370,6 +4472,146 @@
             cvSet({ [g.dataset.cvset]: b.dataset.v }); render(true); }));
         const go = bodyEl.querySelector('[data-cvgo]'); if (go) go.addEventListener('click', () => { cvSet({ on: true, open: true }); setCollapsed(true); cvDraw(); });
         const off = bodyEl.querySelector('[data-cvoff]'); if (off) off.addEventListener('click', () => { cvSet({ on: false }); render(true); });
+    }
+
+    // =====================================================================
+    // 💩 DUMPING HITS (0.2.48, user: "a 'Dumping hits' function. This is for users who join the queue, but need to dump
+    // their energy quickly before going offline ... protects the chain bonuses towards expected targets")
+    //   User's choices: buffer = leader-set, in the same Chain settings section as Dumping on/off; "Warnings only, cover
+    //   the button but uncover it on clicking with a warning"; anyone in the queue may dump; told automatically when
+    //   dumping reopens after a bonus; the cover applies "Only [to] those marked as dumping"; the cover keeps its own
+    //   leader switch; "Faster count is fine. Send updates frequently as a dumper so the chain remains accurate";
+    //   "The button to dump should be much smaller footprint. Maybe even a poop icon".
+    //   - 💩 icon button at the end of the queue button row (only when leaders have dumping on and you're queued).
+    //     Tap -> the Hub answers with an allowance ({t:'dump', kind:'offer'}) -> one confirm line -> Start.
+    //   - While dumping: a slim progress line; the icon is lit, tap it to stop. Others see "💩 N left" on your row and
+    //     you are outside the #1 / #2 order (Hub).
+    //   - Count: +1 each time the chain count goes up while you're on an attack page (reported to the Hub at once);
+    //     the Hub's stop_at chain count is the hard limit either way. While dumping the script syncs every 3 s.
+    //   - STOP (kind 'stop'): red banner + sound; the queue row stays "stopped" until that bonus is taken, then the Hub
+    //     sends kind 'reopen'. Finishing with no energy left (kind 'done', finished) leaves the queue for you.
+    //   - Attack-page cover (config.dumpCover, dumpers only - dumping or stopped): while the chain is inside the
+    //     protected hits and you aren't the assigned bonus hitter, Torn's Start fight / Join fight button is covered by
+    //     #hbs-dmcover. One tap uncovers it for this page and leaves a warning. Nothing is ever pressed for the user;
+    //     the page is only looked at while the tab is focused and visible. Mirror of the state in K.cwDump so the cover
+    //     works on a fresh attack page before the Hub's first answer.
+    //   No Torn API calls. Hub messages: {t:'dump', do:'ask'|'start'|'hit'|'stop'}.
+    // =====================================================================
+    const dm = { offer: null, asking: false, msg: '', stop: null, uncovered: false, warnUntil: 0 };
+    const dmGet = () => store.get(K.cwDump, null) || {};
+    const dmSet = p => store.set(K.cwDump, Object.assign(dmGet(), p));
+    const dmCfg = () => (cw.state && cw.state.config) || {};
+    const dmMine = () => { const r = me && ((cw.state || {}).queue || []).find(x => num(x.pid) === me.id); return (r && r.dump) || null; };
+    const dmOnAttack = () => /[?&]sid=attack\b/.test(location.search) || /loader\.php/.test(location.pathname) && /sid=attack/.test(location.href);
+    function dmBtnHtml() {
+        if (!cw.queued || !dmCfg().dumpOn) return '';
+        const d = dmMine(), lit = (d && d.st === 'on') || dm.offer || dm.asking;
+        return `<button type="button" class="hbs-btn hbs-ghost hbs-dmbtn${lit ? ' on' : ''}" data-dm="toggle" title="${d && d.st === 'on' ? 'Stop dumping' : 'Dump energy - burn your hits fast before going offline (bonus hits stay protected)'}">💩</button>`;
+    }
+    function dmLineHtml() {
+        if (!cw.queued || !dmCfg().dumpOn) return '';
+        const d = dmMine(), S = dmGet();
+        if (d && d.st === 'on') { const done = Math.max(num(d.done), num(S.done));
+            return `<div class="hbs-dmline"><span>💩 <b>${int(done)} / ${int(d.allow)}</b></span><i><em style="width:${Math.min(100, Math.round(done / Math.max(1, num(d.allow)) * 100))}%"></em></i><small>stop at ${int(d.stop_at)}</small></div>`; }
+        if ((d && d.st === 'stopped') || dm.stop) return `<div class="hbs-dmstop"><b>STOP · bonus protected</b><span>${esc((dm.stop && dm.stop.text) || S.stopText || `Hits before the bonus at ${int((d || {}).bonus)} are reserved.`)}</span><small>You'll be told when dumping opens again.</small></div>`;
+        if (dm.offer) return `<div class="hbs-dmline"><span>Dump <b>${int(dm.offer.allow)} hit${num(dm.offer.allow) === 1 ? '' : 's'}</b> · stop at ${int(dm.offer.stop_at)}</span><button type="button" class="hbs-btn" data-dm="start">Start</button><button type="button" class="hbs-btn hbs-ghost" data-dm="cancel" title="Cancel">✕</button></div>`;
+        if (dm.asking) return `<div class="hbs-dmline"><span>Asking the Hub…</span></div>`;
+        if (dm.msg) return `<div class="hbs-dmline"><span>💩 ${esc(dm.msg)}</span><button type="button" class="hbs-btn hbs-ghost" data-dm="cancel" title="Dismiss">✕</button></div>`;
+        return '';
+    }
+    function dmBind() {
+        bodyEl.querySelectorAll('[data-dm]').forEach(b => b.addEventListener('click', () => {
+            const a = b.dataset.dm, d = dmMine();
+            if (a === 'toggle') {
+                if (d && d.st === 'on') { cwSend({ t: 'dump', do: 'stop' }); store.set(K.cwDump, null); dm.msg = 'Stopped dumping.'; }   // [HB Suite] Hub - Chain Watch message "dump" stop
+                else if (dm.offer || dm.asking) { dm.offer = null; dm.asking = false; }
+                else { dm.msg = ''; dm.asking = true; cwSend({ t: 'dump', do: 'ask' });                                                // [HB Suite] Hub - Chain Watch message "dump" ask
+                    setTimeout(() => { if (dm.asking) { dm.asking = false; dm.msg = 'No answer from the Hub - try again.'; cwShow(); } }, 12000); }
+            } else if (a === 'start') { if (!dm.offer) return;
+                dmSet({ done: 0, last: num(cwChain().current), st: 'on', stopText: '' }); dm.offer = null; dm.asking = true;
+                setTimeout(() => { if (dm.asking) { dm.asking = false; cwShow(); } }, 12000);
+                cwSend({ t: 'dump', do: 'start' });                                                                                    // [HB Suite] Hub - Chain Watch message "dump" start
+            } else if (a === 'cancel') { dm.offer = null; dm.asking = false; dm.msg = ''; }
+            render(true);
+        }));
+    }
+    // messages {t:'dump', kind} from the Hub (cwIn)
+    function dmIn(m) {
+        dm.asking = false;
+        if (m.kind === 'offer') { dm.offer = m; dm.msg = ''; }
+        else if (m.kind === 'refused') { dm.offer = null; dm.msg = m.text || 'Not right now.'; toast('💩 ' + dm.msg, false); }
+        else if (m.kind === 'started') { dm.offer = null; dm.stop = null; dm.msg = '';
+            dmSet({ st: 'on', done: 0, last: num(m.chain) || num(cwChain().current), bonus: num(m.bonus), buffer: num(m.buffer), stopText: '' });
+            toast(`💩 Dumping - ${int(m.allow)} hit${num(m.allow) === 1 ? '' : 's'}, stop at chain ${int(m.stop_at)}.`, true); }
+        else if (m.kind === 'stop') { dm.stop = { text: m.text || 'STOP - bonus protected.' }; dmSet({ st: 'stopped', bonus: num(m.bonus), buffer: num(m.buffer), stopText: dm.stop.text });
+            alertMe('🛑 ' + dm.stop.text, true); try { alSound('urgent', true); } catch (e) { /* audio blocked */ } }
+        else if (m.kind === 'done') { dm.stop = null; dm.msg = m.text || 'Dump finished.'; store.set(K.cwDump, null); toast('💩 ' + dm.msg, true);
+            // out of energy and finished: off the queue, as designed ("it leaves the queue for you, since you're going offline")
+            if (m.finished && cw.queued) { try { cwAction('leave'); } catch (e) { /* */ } } }
+        else if (m.kind === 'reopen') { dm.stop = null; dm.msg = m.text || 'Dumping is open again.'; store.set(K.cwDump, null); alertMe('💩 ' + dm.msg, true); }
+        cwShow();
+    }
+    // count + keep the Hub fresh while dumping (every 500 ms; a sync every 3 s)
+    let dmSyncAt = 0;
+    setInterval(() => {
+        try {
+            if (!me || !modOn('chain')) return;
+            const d = dmMine(), S = dmGet();
+            if (d && (d.st !== S.st || S.cover !== (dmCfg().dumpCover !== false))) dmSet({ st: d.st, bonus: num(d.bonus), buffer: num(dmCfg().dumpBuffer), cover: dmCfg().dumpCover !== false });                       // mirror for the next page load
+            if (!d && cw.state && S.st && !dm.asking) store.set(K.cwDump, null);                    // the Hub no longer lists us as dumping
+            if (d && d.st === 'on') {
+                const cur = num(cwChain().current), last = num(S.last);
+                if (cur > last) {
+                    const p = { last: cur };
+                    if (last > 0 && dmOnAttack() && !document.hidden) { p.done = Math.max(num(S.done), num(d.done)) + 1;
+                        cwSend({ t: 'dump', do: 'hit', done: p.done }); }                           // [HB Suite] Hub - Chain Watch message "dump" hit (your count)
+                    dmSet(p); cwShow();
+                } else if (!last && cur) dmSet({ last: cur });
+                if (Date.now() - dmSyncAt > 3000) { dmSyncAt = Date.now(); cwSyncSoon(); }          // "Send updates frequently as a dumper"
+            }
+            dmCover();
+        } catch (e) { /* never break the page */ }
+    }, 500);
+    // the attack-page cover
+    let dmCovEl = null, dmWarnEl = null;
+    function dmCoverWanted() {
+        if (dm.uncovered || !dmOnAttack() || !pageScrapeAllowed()) return null;
+        const S = dmGet(), d = dmMine(), g = dmCfg(), have = !!cw.state;
+        if (!(have ? d : S.st)) return null;                                                        // dumpers only (dumping or stopped)
+        if (have ? g.dumpCover === false || !g.dumpOn : S.cover === false) return null;
+        let cur = num(cwChain().current);
+        if (!cur) { const sn = store.get(K.cwSnap, null); if (sn && sn.chain && Date.now() - num(sn.at) < 120000) cur = num(sn.chain.current); }
+        if (!(cur > 0)) return null;
+        const b = (cw.state || {}).bonus || {}, next = num(b.next) || num(S.bonus), buf = num(g.dumpBuffer) || num(S.buffer) || 10;
+        if (!next || next <= cur || next - cur > buf) return null;
+        if (b.pid && me && num(b.pid) === me.id) return null;                                       // you ARE the bonus hitter
+        return { cur, next, name: b.name || '' };
+    }
+    function dmFindBtn() {
+        const els = document.querySelectorAll('button, [role="button"], input[type="submit"]');
+        for (const x of els) { if (x.closest('#hbs-panel, #hbs-compact, #hbs-dmcover')) continue;
+            const t = (x.textContent || x.value || '').trim(); if (!/^(start|join) fight$/i.test(t)) continue;
+            const r = x.getBoundingClientRect(); if (r.width > 4 && r.height > 4) return r; }
+        return null;
+    }
+    function dmCover() {
+        const w = dmCoverWanted(), r = w ? dmFindBtn() : null;
+        if (dmWarnEl && Date.now() > dm.warnUntil) { dmWarnEl.remove(); dmWarnEl = null; }
+        if (!w || !r) { if (dmCovEl) { dmCovEl.remove(); dmCovEl = null; } return; }
+        if (!dmCovEl) {
+            dmCovEl = el('div'); dmCovEl.id = 'hbs-dmcover'; document.body.appendChild(dmCovEl);
+            dmCovEl.addEventListener('click', e => { e.preventDefault(); e.stopPropagation();
+                dm.uncovered = true; if (dmCovEl) { dmCovEl.remove(); dmCovEl = null; }
+                const x = dmCoverWanted.last || {};
+                dmWarnEl = el('div'); dmWarnEl.id = 'hbs-dmwarn'; dmWarnEl.innerHTML = `<b>Uncovered.</b> Chain ${int(x.cur)} of ${int(x.next)}. Only hit if leaders asked you to. The cover returns on the next attack page.`;
+                document.body.appendChild(dmWarnEl); dm.warnUntil = Date.now() + 20000; });
+        }
+        dmCoverWanted.last = w;
+        const W = Math.max(r.width + 16, 230), H = Math.max(r.height + 16, 74), vw = window.innerWidth;
+        dmCovEl.style.cssText = `left:${Math.max(4, Math.min(vw - W - 4, r.left + r.width / 2 - W / 2))}px;top:${Math.max(4, r.top + r.height / 2 - H / 2)}px;width:${W}px;min-height:${H}px;`;
+        const html = `<b>🛡 Bonus protected · chain ${int(w.cur)} of ${int(w.next)}</b><span>This hit could take the bonus${w.name ? ` - the assigned hitter is ${esc(w.name)}` : ''}.</span><u>Tap to uncover the attack button</u>`;
+        if (dmCovEl._h !== html) { dmCovEl.innerHTML = html; dmCovEl._h = html; }
+        const hh = dmCovEl.offsetHeight; if (hh > H) dmCovEl.style.top = Math.max(4, r.top + r.height / 2 - hh / 2) + 'px';   // the text wrapped: keep it centred on the button
     }
     // =====================================================================
     // 0.2.4 MODULES (Nov 14 2026, user's list):

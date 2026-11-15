@@ -140,6 +140,11 @@ export const CW_DEFAULT_CONFIG = {
   //  suffice." - alert 2 already reaches #1 and #2. An old saved value is ignored and no longer sent to scripts.)
   // Nov 2026 (user): bonus heads-up this many hits before a bonus milestone
   bonusWarnHits: 5,
+  // DUMPING HITS (Nov 15 2026, HB Suite 0.2.48, user: "a 'Dumping hits' function ... for users who join the queue, but
+  // need to dump their energy quickly before going offline ... protects the chain bonuses"): off until a leader turns
+  // it on; dumpBuffer = hits before each bonus nobody may dump into; dumpCover = scripts cover the attack button for
+  // dumpers inside the buffer (tap to uncover - a warning, never a block).
+  dumpOn: false, dumpBuffer: 10, dumpCover: true,
   set_by: "Chris5295 [974757]",
   set_at: 0,
 };
@@ -494,6 +499,7 @@ export class ChainRoom {
       // queue asking at once is still ONE Torn call). A dead chain comes back as 0 and ends every alert.
       case "verify": { const c = this.mem.chain; if (c && c.current > 0) this.requestConfirmRead(); break; }
       case "retal": changed = this.doRetalAction(pid, msg); break;
+      case "dump": changed = this.doDump(pid, msg); break;             // DUMPING HITS (Nov 15 2026)
       default: break; // hello / ping: nothing to store
     }
     if (changed) {
@@ -527,6 +533,97 @@ export class ChainRoom {
     };
     if (msg.stats) this.mem.lastStats[pid] = this.mem.queue[pid].stats;
     return true;
+  }
+
+  /* ---- DUMPING HITS (Nov 15 2026, HB Suite 0.2.48, user) ---------------------------------------------------
+   * A queued member who has to go offline burns their energy fast. To keep bonus hits for the expected hitter:
+   *   - leaders set config.dumpBuffer: the last N hits before every bonus are protected (no dumping into them);
+   *   - the Hub hands out an ALLOWANCE: min(their energy / 25, hits to the next bonus - buffer - what other dumpers
+   *     still hold). Everyone's allowance comes out of the same room, so two dumpers can't be promised the same hits;
+   *   - {t:"dump", do:"ask"} -> {t:"dump", kind:"offer"|"refused"} (nothing reserved); do:"start" reserves it
+   *     (queue row .dump = {st:"on", allow, done, stop_at, bonus}); do:"hit" {done} reports progress; do:"stop" ends;
+   *   - a dumper is never #1 / #2 (extras) while st "on";
+   *   - dumpCheck: allowance used / chain at stop_at -> kind "done" (room left: may ask again) or kind "stop"
+   *     (inside the buffer: st "stopped", kept so the script can cover the attack button); when that bonus is taken
+   *     -> kind "reopen" to everyone stopped or refused (user: told automatically when room opens up again).
+   * Anyone in the queue may dump (user: "Anyone"). The Hub only counts and tells - it can't stop a hit.
+   * --------------------------------------------------------------------------------------------------------- */
+  dumpRoom(pid) {
+    const cfg = this.mem.config || CW_DEFAULT_CONFIG, cur = (this.mem.chain && Number(this.mem.chain.current)) || 0;
+    const next = nextBonus(cur), buffer = Math.max(1, Number(cfg.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer);
+    let held = 0;
+    for (const q of Object.values(this.mem.queue)) {
+      if (Number(q.pid) === Number(pid) || !q.dump || q.dump.st !== "on") continue;
+      held += Math.max(0, Math.min(q.dump.allow - q.dump.done, q.dump.stop_at - cur));
+    }
+    return { cur, next, buffer, held, room: next ? next - cur - buffer - held : 999 };
+  }
+  doDump(pid, msg) {
+    const q = this.mem.queue[pid], cfg = this.mem.config || CW_DEFAULT_CONFIG, now = Date.now();
+    const say = (kind, o) => this.notify(pid, Object.assign({ t: "dump", kind, now }, o));
+    if (!q) { say("refused", { text: "Join the queue first." }); return false; }
+    if (msg.do === "stop") { if (!q.dump && !q.dumpWait) return false; delete q.dump; delete q.dumpWait; return true; }
+    if (msg.do === "hit") {
+      if (!q.dump || q.dump.st !== "on") return false;
+      const d = Math.max(q.dump.done, Math.min(q.dump.allow, Math.floor(Number(msg.done)) || 0));
+      if (d === q.dump.done) return false;
+      q.dump.done = d; this.dumpCheck(now); return true;
+    }
+    if (msg.do !== "ask" && msg.do !== "start") return false;
+    if (!cfg.dumpOn) { say("refused", { text: "Dumping is switched off by leaders." }); return false; }
+    const R = this.dumpRoom(pid), e = energyNow(q, now),
+      eh = e == null || !(q.stats && Number(q.stats.energyMax) > 0) ? null : Math.floor(e / HIT_ENERGY_COST);   // null = energy not known (no stats reading): capped at 50
+    if (eh === 0) { say("refused", { text: "You don't have the energy for a hit." }); return false; }
+    if (R.room <= 0) {
+      q.dumpWait = R.next;                                   // told when this bonus has been taken
+      say("refused", { wait: true, bonus: R.next, buffer: R.buffer,
+        text: `No dumping until the bonus at ${R.next} is taken - the last ${R.buffer} hits before it are protected` + (R.next - R.cur > R.buffer ? " (other dumpers hold the rest)." : ".") });
+      return true;
+    }
+    const allow = Math.min(eh == null ? 50 : eh, R.room);
+    // stop_at counts the hits other dumpers still hold (they land in between); capped = the room, not their energy,
+    // set the allowance - so they still have energy when it's used up
+    const stopAt = R.cur + R.held + allow, capped = eh == null || allow < eh;
+    if (msg.do === "ask") { say("offer", { allow, stop_at: stopAt, energy_hits: eh, bonus: R.next, buffer: R.buffer, chain: R.cur }); return false; }
+    q.dump = { st: "on", allow, done: 0, stop_at: stopAt, bonus: R.next, at: now, capped };
+    delete q.dumpWait;
+    say("started", { allow, stop_at: q.dump.stop_at, bonus: R.next, buffer: R.buffer, chain: R.cur });
+    return true;
+  }
+  // run whenever the chain or a dumper's count moves; true = something changed (caller saves / broadcasts)
+  dumpCheck(now) {
+    const cfg = this.mem.config || CW_DEFAULT_CONFIG, cur = (this.mem.chain && Number(this.mem.chain.current)) || 0;
+    const next = nextBonus(cur), buffer = Math.max(1, Number(cfg.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer);
+    let changed = false;
+    for (const q of Object.values(this.mem.queue)) {
+      const pid = Number(q.pid), d = q.dump;
+      if (q.dumpWait && (!cur || next !== q.dumpWait)) {
+        if (cur && cfg.dumpOn) this.notify(pid, { t: "dump", kind: "reopen", now, text: `Dumping is open again - the bonus at ${q.dumpWait} has been taken.` });
+        delete q.dumpWait; changed = true;
+      }
+      if (!d) continue;
+      if (d.st === "on") {
+        const gone = !this.conns.has(pid) && !(this.mem.syncSeen[pid] && now - this.mem.syncSeen[pid] <= SYNC_PRESENT_MS);
+        if (gone || !cfg.dumpOn || !cur) { delete q.dump; changed = true; continue; }       // left / switched off / chain over
+        const inside = next && next - cur <= buffer;
+        if (d.done >= d.allow && !d.capped) {                // out of energy: finished, nothing to protect against
+          delete q.dump; changed = true;
+          this.notify(pid, { t: "dump", kind: "done", now, chain: cur, done: d.done, allow: d.allow, finished: true, text: `Dump finished - ${d.done} hit${d.done === 1 ? "" : "s"}.` });
+        } else if (inside) {
+          d.st = "stopped"; changed = true;
+          this.notify(pid, { t: "dump", kind: "stop", now, bonus: next, buffer, chain: cur, done: d.done, allow: d.allow,
+            text: `STOP - the next ${next - cur} hit${next - cur === 1 ? " is" : "s are"} reserved for the bonus at ${next}.` });
+        } else if (d.done >= d.allow || cur >= d.stop_at) {
+          delete q.dump; changed = true;
+          this.notify(pid, { t: "dump", kind: "done", now, chain: cur, done: d.done, allow: d.allow,
+            text: d.done >= d.allow ? `Dump finished - ${d.done} hit${d.done === 1 ? "" : "s"}.` : `Chain reached ${d.stop_at} - your dump allowance is over. Ask again if you still have energy.` });
+        }
+      } else if (d.st === "stopped" && (!cur || next !== d.bonus)) {
+        if (cur && cfg.dumpOn) this.notify(pid, { t: "dump", kind: "reopen", now, text: `Dumping is open again - the bonus at ${d.bonus} has been taken.` });
+        delete q.dump; changed = true;
+      }
+    }
+    return changed;
   }
 
   /* ---- ASSIGN BONUS (Nov 2026, user): a leader names who takes the next bonus hit (script button) ---------- */
@@ -912,6 +1009,7 @@ export class ChainRoom {
     this.expireRetals(now);
     this.enforceQueueRules(now);
     this.maybeIdleWipe(now);
+    try { this.dumpCheck(now); } catch (e) { /* dumping must never break the loop */ }
     this.checkAlerts(now);
     this.updateLevel();
     await this.save();
@@ -1171,6 +1269,7 @@ export class ChainRoom {
   }
   broadcastDeltas() {
     const now = Date.now();
+    try { this.dumpCheck(now); } catch (e) { /* dumping must never break a sync */ }
     try { this.checkAlerts(now); } catch (e) { /* alerts must never break a sync */ }
     const base = Object.assign({
       t: "sync", now, chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
@@ -1351,8 +1450,10 @@ export class ChainRoom {
     // ... unless nobody active is left: then the inactive ones who can attack (user, Nov 11 2026: "unless they are
     // the last people remaining in the queue")
     // (active first, then inactive - so an inactive member is #1 / #2 only when there aren't enough active ones)
-    const able = q.filter((x) => x.can_hit && !x.away && x.presence === "active")
-      .concat(q.filter((x) => x.can_hit && !x.away && x.presence !== "active"));
+    // (Nov 15 2026) a member who is DUMPING (dump.st "on") is outside the turn order - never #1 / #2
+    const dumping = (x) => !!(x.dump && x.dump.st === "on");
+    const able = q.filter((x) => x.can_hit && !x.away && !dumping(x) && x.presence === "active")
+      .concat(q.filter((x) => x.can_hit && !x.away && !dumping(x) && x.presence !== "active"));
     const cfg = this.mem.config || CW_DEFAULT_CONFIG;
     const next = nextBonus(cur);
     const b = this.mem.bonus && this.mem.bonus.at === next ? this.mem.bonus : null;
@@ -1440,6 +1541,8 @@ export class ChainRoom {
       hitting_until: q.hitting_until || 0, stats: q.stats || null, hits: q.hits || 0,
       presence,                                    // "active" | "idle" | "offline" (idle/offline addendum §5)
       inactive: presence !== "active",             // flag for the queue row (Nov 11 2026)
+      // DUMPING HITS (Nov 15 2026): {st "on"|"stopped", allow, done, left, stop_at, bonus} or null
+      dump: q.dump ? { st: q.dump.st, allow: q.dump.allow, done: q.dump.done, left: Math.max(0, q.dump.allow - q.dump.done), stop_at: q.dump.stop_at, bonus: q.dump.bonus } : null,
     }));
   }
   openRetals() {
@@ -1460,6 +1563,7 @@ export class ChainRoom {
       topAlertSeconds: c.topAlertSeconds, restAlertSeconds: c.restAlertSeconds, thirdAlertSeconds: c.thirdAlertSeconds,
       firstAlertPrimaryOnly: !!c.firstAlertPrimaryOnly, minChain: c.minChain,
       bonusWarnHits: c.bonusWarnHits != null ? Number(c.bonusWarnHits) : CW_DEFAULT_CONFIG.bonusWarnHits,
+      dumpOn: !!c.dumpOn, dumpBuffer: Math.max(1, Number(c.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer), dumpCover: c.dumpCover !== false,
       edit_url: origin + EDIT_PATH, set_by: c.set_by || "", set_at: c.set_at || 0,
     };
   }
@@ -1490,6 +1594,7 @@ export class ChainRoom {
         if (d && d.chain) { this.applyHubChain(d.chain); this.checkAlerts(Date.now()); }
       }
     }
+    try { this.dumpCheck(Date.now()); } catch (e) { /* dumping must never break a sync */ }
     await this.save();
     await this.ensureAlarm();   // keep Hub reads going for these devices too
     if (!this.sched) await this.reloadSchedule(false);

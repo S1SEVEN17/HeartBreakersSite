@@ -3146,6 +3146,15 @@ async function cwLeaderRoute(env, req, who, sub) {
                firstAlertPrimaryOnly: !!b.firstAlertPrimaryOnly,
                // Nov 2026: backup alert (#2 if #1 hasn't hit within N s of being up) + bonus heads-up (N hits before)
                bonusWarnHits: sec(b.bonusWarnHits, 0, 50)};   // (backup alert / handoffSeconds removed Nov 10 2026)
+    // DUMPING HITS (Nov 15 2026, HB Suite 0.2.48): dumpOn / dumpBuffer (protected hits before a bonus, 1-100) /
+    // dumpCover (cover the attack button for dumpers inside the buffer). A save that doesn't carry them (the Hub
+    // settings page, an older Suite) keeps what is saved.
+    {
+      let old = {}; try { const r0 = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'prod' AND k = 'chainwatch'").first(); old = r0 ? JSON.parse(r0.v) : {}; } catch (e) {}
+      const pick = k => b[k] !== undefined ? b[k] : (old[k] !== undefined ? old[k] : CW_DEFAULT_CONFIG[k]);
+      v.dumpOn = !!pick("dumpOn"); v.dumpCover = !!pick("dumpCover"); v.dumpBuffer = sec(pick("dumpBuffer"), 1, 100);
+      if (v.dumpBuffer == null) return Response.json({ok: false, error: "protected hits before a bonus must be 1-100"}, {status: 400});
+    }
     if (v.bonusWarnHits == null) return Response.json({ok: false, error: "bonus heads-up must be 0-50 hits before"}, {status: 400});
     if (v.topAlertSeconds == null || v.restAlertSeconds == null || v.thirdAlertSeconds == null)
       return Response.json({ok: false, error: "alert times must be 5-300 seconds (1st alert at least 10)"}, {status: 400});
