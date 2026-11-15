@@ -4206,7 +4206,7 @@ def nav_menu(mroot: str, lroot: str) -> str:
 #   Site settings homepage.html · header-editor.html · profile-default.html (leaders)
 #   Torn panels  announcements.html · description.html                  (leaders)
 HISTORY_TABS = [("⚔️ Wars", "wars.html"), ("⛓️ Chains", "chains.html"), ("🕵️ Crimes", "crimes.html")]
-MEMBER_DATA_TABS = [("💪 Stats", "stats.html"), ("⚔️ War readiness", "readiness.html")]
+MEMBER_DATA_TABS = [("💪 Stats", "stats.html")]   # (Nov 15 2026, user: "Remove War Readiness tab and sharing settings. Not needed." / "Yes remove them." - the readiness.html page is gone)
 PANEL_TABS = [("📢 Announcements", "announcements.html"), ("🖼️ Faction description", "description.html")]   # Torn panels
 SETTINGS_TABS = [("🏠 Homepage", "homepage.html"), ("🧭 Header", "header-editor.html"), ("🧩 Profile layout", "profile-default.html"),
                  ("💬 Discord messages", "discord.html")]   # Nov 14 2026: the Discord message editor
@@ -4923,7 +4923,7 @@ def homepage_default() -> dict:
     leaders = {"title": "Leaders", "links": link([
         ("🧮", "Payout calculator", "L:payout.html"),
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
-        ("⚔️", "War readiness", "L:readiness.html"), ("⛓️", "Chain Watch", "L:chainwatch.html"),
+        ("⛓️", "Chain Watch", "L:chainwatch.html"),
         ("🤝", "Recruitment", "L:recruitment.html"),
         ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
@@ -5072,7 +5072,7 @@ SITE_PAGES = [(t, u) for t, u in [("My Profile", "M:me"), ("Members Hub", "M:ind
              ("Monthly Recap", "M:newsletter.html"), ("Recap Archive", "M:recaps.html"), ("Dashboard (role home)", "G:/"),
              ("Armory Monitor", "L:armory.html"),
              ("Profile layout (default)", "L:profile-default.html"),
-             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("War targets", "M:war-targets.html"), ("Scripts directory", "M:scripts.html"), ("Member data (stats)", "L:stats.html"), ("Member data (war readiness)", "L:readiness.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
+             ("Chain Watching Schedule", "M:chainwatch-schedule.html"), ("War targets", "M:war-targets.html"), ("Scripts directory", "M:scripts.html"), ("Member data (stats)", "L:stats.html"), ("My data & sharing", "M:my-data.html"), ("My profile layout (this browser)", "M:profile-editor.html"),
              ("Payout Calculator", "L:payout.html"), ("Announcements editor", "L:announcements.html"),
              ("Faction Description editor", "L:description.html"), ("Newsletter Builder", "L:builder.html"),
              ("Homepage Editor", "L:homepage.html"), ("Header Editor", "L:header-editor.html"),
@@ -6122,7 +6122,6 @@ def write_optin_pages(out: Path):
         lout = out / leader_dir()
         conf = {"member_base": member_base(), "gate": gate}
         (lout / "stats.html").write_text(page("member_stats.html", conf, leader_menu("") + tab_bar(MEMBER_DATA_TABS, "stats.html")), encoding="utf-8")
-        (lout / "readiness.html").write_text(page("war_readiness.html", conf, leader_menu("") + tab_bar(MEMBER_DATA_TABS, "readiness.html")), encoding="utf-8")
         # Chain Watch settings (Nov 2026): the Faction Chain Watch script's faction settings, saved through the gate
         (lout / "chainwatch.html").write_text(page("chainwatch_settings.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
         # Recruitment (Nov 11 2026): recruits shared by the Torn Recruit Scout script - claim / status / notes / remove

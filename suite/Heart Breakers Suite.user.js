@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.43
+// @version      0.2.45
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,11 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.45 (Nov 15 2026) - ⚔ War Readiness removed (user: "Remove War Readiness tab and sharing settings. Not
+ *          needed."): the leaders' ⚡ Ready tab, the War readiness sharing option and the readiness readings the script
+ *          sent are gone. A script that had it on switches it off on the Hub by itself (the Hub deletes what it sent).
+ *  v0.2.44 (Nov 15 2026) - 🕵 OC "pays out in ~1.0 days" now counts down to the crime's ready time (the same clock as
+ *          "Ready in") instead of the Hub's estimate in days.
  *  v0.2.43 (Nov 15 2026) - ⛶ Compact view opens by itself the moment an alert fires. 🧩 Scripts: the sort buttons
  *          added in 0.2.42 are gone - the tab shows the order leaders set on the Hub's Scripts page (▲ / ▼ there).
  *  v0.2.42 (Nov 15 2026) - ⛶ Compact View (Chain tab button): a small tab on the left or right edge with the chain
@@ -366,7 +371,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.43';
+    const VERSION = '0.2.45';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -1387,7 +1392,7 @@
         { id: 'alerts', icon: '🔔', label: 'Alerts', lead: true }, { id: 'ocm', icon: '🗂', label: 'OC Management ↗', lead: true, href: '/l/oc.html' },
         { id: 'panels', icon: '🖼', label: 'Panel Editor ↗', lead: true, href: '/l/panels.html' },
         { id: 'recruit', icon: '🤝', label: 'Recruit', lead: true, mod: 'recruit' },
-        { id: 'ready', icon: '⚡', label: 'Ready', lead: true }, { id: 'stats', icon: '💪', label: 'Stats', lead: true },
+        { id: 'stats', icon: '💪', label: 'Stats', lead: true },
         { id: 'armory', icon: '🗄', label: 'Armory', lead: true }, { id: 'calc', icon: '🧮', label: 'Payout calculator ↗', lead: true, href: '/l/payout.html' },
     ];
     // a link tab: open the Hub page instead of switching tab (true = handled)
@@ -1520,6 +1525,7 @@
             if (!me) setMe((await hub('whoami')).me);      // also signs in when needed
             if (!tabOk(tab)) { tab = 'home'; store.set(K.tab, tab); }
             markTab(); cwWatch(); refreshNow(false);
+            if (tab === 'ready') { tab = 'home'; store.set(K.tab, tab); }   // (0.2.45) the War Readiness tab is gone
             const T = VIEWS[tab];
             const html = await T.html();
             if (seq !== renderSeq) return;            // a newer render started (tab switch)
@@ -1960,7 +1966,7 @@
         // how they share (v2.5.0) - leaders (any profile) and yourself (Me), when the Hub has it
         const via = pv && pv.optin && pv.optin.via;
         if (via && Object.values(via).some(v => v && v.length)) {
-            const K2 = [['bs', '💪 Battle stats'], ['ws', '🧰 Work stats'], ['ready', '⚔️ War readiness'], ['oc', '🕵️ OC pass rates'], ['cw', '⛓️ Chain timer']];
+            const K2 = [['bs', '💪 Battle stats'], ['ws', '🧰 Work stats'], ['oc', '🕵️ OC pass rates'], ['cw', '⛓️ Chain timer']];
             out += sec('🔗 How ' + (own ? 'you share' : 'they share')) + K2.filter(([k]) => (via[k] || []).length)
                 .map(([k, l]) => `<div class="hbs-li"><span>${l}</span><b style="font-weight:normal">${srcNames(via[k])}</b></div>`).join('');
         }
@@ -2298,8 +2304,7 @@
         Object.values(P.members || {}).forEach(x => { const v = x.optin && x.optin.via; if (!v) return;
             new Set([].concat(...Object.values(v))).forEach(k => { if (k in ways) ways[k]++; }); });
         let out = tiles([[opted, 'Sharing'], [bs.length, 'Battle stats'], [ws.length, 'Work stats'],
-            [ways.site, '🌐 Hub site'], [ways.script, '🧩 Hub script'], [ways.ocopt, '🕵️ OC script'],
-            [Object.values(P.members || {}).filter(x => x.optin && x.optin.ready).length, 'Readiness on']]);
+            [ways.site, '🌐 Hub site'], [ways.script, '🧩 Hub script'], [ways.ocopt, '🕵️ OC script']]);
         out += chips('sk', [['bs', '⚔ Battle'], ['ws', '🛠 Work']], statsKind);
         const L = statsKind === 'bs' ? [['total', 'Total'], ['a', 'Strength'], ['b', 'Defense'], ['c', 'Speed'], ['d', 'Dexterity']]
                                      : [['total', 'Total'], ['a', 'Manual labor'], ['b', 'Intelligence'], ['c', 'Endurance']];
@@ -3108,9 +3113,14 @@
     // Now' amount. Include (est) after Pay Per Day"): the best recorded figure x the crime's join-now multiplier (pay from
     // now until payout - recruiting AND planning crimes), labelled (est)
     const payDay = p => !p || !p.pay_day ? '' : shortMoney(p.pay_day);
-    function payHero(p) {
+    function payHero(p, readyAt) {
         if (!p || !p.pay_day) return '';
-        const sub = [p.est && p.normal && p.normal !== p.pay_day ? `normal ${shortMoney(p.normal)} / day` : '', p.days != null ? `pays out in ~${(+p.days).toFixed(1)} days` : ''].filter(Boolean);
+        // (0.2.44 FIX, user: "'Pays out in ~1.0 days' needs to match the planning time remaining.") when the crime's ready
+        // time is known (your current crime), the line counts down to it - the same clock as "Ready in" below; the Hub's
+        // estimate in days is only used when there's no ready time yet (an assignment that isn't planning).
+        const ra = num(readyAt);
+        const when = ra ? (ra > nowS() ? `pays out in ~<span data-until="${ra}">${dur(ra - nowS())}</span>` : 'ready to pay out') : p.days != null ? `pays out in ~${(+p.days).toFixed(1)} days` : '';
+        const sub = [p.est && p.normal && p.normal !== p.pay_day ? `normal ${shortMoney(p.normal)} / day` : '', when].filter(Boolean);
         return `<div class="hbs-pay${p.join_now ? ' jn' : ''}"><div class="l">${p.join_now ? '⚡ JOIN NOW · ' : '💰 '}Pay per day (est)</div>
             <div class="v">${payDay(p)}<small> / member / day</small></div>
             ${sub.length ? `<div class="s">${sub.join(' · ')}</div>` : ''}</div>`;
@@ -3128,7 +3138,7 @@
         const cur = MY && MY.current, as = MY && MY.assignment;
         let out = '';
         if (cur) out += `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">${esc(cur.crime)}</span><span class="hbs-chip">${esc(cur.status)}</span></div>
-            ${payHero(cur.pay)}
+            ${payHero(cur.pay, cur.ready_at)}
             ${rsTiles([[esc(cur.position), 'Your role'], [cur.rate != null ? cur.rate + '%' : '-', 'Your CPR'], [cur.difficulty != null ? esc(String(cur.difficulty)) : '-', 'Difficulty'],
                   [`${cur.filled}/${cur.seats}`, 'Filled'], [Math.round(cur.progress) + '%', 'Your planning'], [cur.success != null ? Math.round(cur.success) + '%' : '-', cur.success_kind === 'weighted' ? 'Team success · weighted' : 'Team success']])}
             ${cur.ready_at ? `<div class="hbs-ocready">⏱ Ready in <b><span data-until="${cur.ready_at}">-</span></b><small>${ocWhen(cur.ready_at)}</small></div>` : ''}
@@ -3137,7 +3147,7 @@
             <div class="hbs-actions"><a class="hbs-btn hbs-ghost" href="${OC_LINK(cur.crime_id)}">Open the crime</a></div></div>`;
         if (as && !as.joined && !(cur && String(cur.crime_id) === String(as.crime_id)))
             out += `<div class="hbs-card hbs-alert"><div class="hbs-r1"><span class="hbs-name">📌 Assigned: ${esc(as.crime)}</span>${as.rate != null ? `<span class="hbs-chip">${Math.round(as.rate)}% CPR</span>` : ''}</div>
-                ${payHero(as.pay)}
+                ${payHero(as.pay, as.ready_at)}
                 <div class="hbs-sub">Role <b>${esc(as.position)}</b>${as.weight != null ? ` <small class="hbs-wt">${as.weight}% weight</small>` : ''}${as.difficulty != null ? ` · difficulty ${esc(String(as.difficulty))}` : ''}${as.succ != null ? ` · team success ${Math.round(as.succ)}%` : ''}</div>
                 ${as.leave ? `<div class="hbs-banner">↪ Leave <b>${esc(as.leave.crime)}</b> (${esc(as.leave.position)}) first - your planning there hasn't started and this seat pays more.</div>` : ''}
                 ${as.kind !== 'live' ? '<div class="hbs-hint">Waiting for this crime to be spawned.</div>' : ''}
@@ -3184,7 +3194,7 @@
             try {
                 // [HB Suite] Hub API — op "share_get" then "share_set": flip OC pass rates, keep every other sharing choice
                 const g = await hub('share_get'), st = Object.assign({ bs: 'off', ws: 'off', ready: false, oc: false, cw: false }, g.settings || {});
-                const v = { bs: st.bs, ws: st.ws, ready: !!st.ready, oc: !st.oc, cw: false };
+                const v = { bs: st.bs, ws: st.ws, ready: false, oc: !st.oc, cw: false };
                 const r = await hub('share_set', v);
                 store.set(K.share, r.settings || v);
                 if (v.oc) { store.set(K.ocTag, ''); shareTick(true); }   // send your pass rates now
@@ -5616,7 +5626,7 @@
         members: { html: membersHtml, bind: membersBind }, wars: { html: warsHtml },
         news: { html: newsHtml, bind: () => bindChips('ns', v => { newsSec = v; }) },
         payouts: { html: payoutsHtml }, scripts: { html: scriptsHtml },
-        ready: { html: readyHtml, bind: () => bindChips('rs', v => { readySort = v; }) },
+
         stats: { html: statsHtml, bind: () => { bindChips('sk', v => { statsKind = v; }); bindChips('ss', v => { statsSort = v; }); } },
         armory: { html: armoryHtml, bind: () => { bindChips('as', v => { armSec = v; }); bindChips('ap', v => { armPeriod = v; }); bindChips('ao', v => { armSort = v; }); } },
     };
@@ -5692,16 +5702,15 @@
                 but your key is <b>never uploaded</b>: this script reads Torn on this device and sends only the results. It only updates while the script is running.</div>
             ${opt('💪', 'Battle stats', 'Strength, defense, speed, dexterity - read once a day (the first time the script runs after 00:00 TCT) so your gains are tracked.', sel('bs', st.bs))}
             ${opt('🧰', 'Work stats', 'Manual labor, intelligence, endurance - read once a day.', sel('ws', st.ws))}
-            ${opt('⚔️', 'War readiness', 'Leaders see your energy, happy, drug / booster / medical cooldowns, refill and status - read every minute, only while a leader has War Readiness open.', onoff('ready', st.ready, 'Leaders'))}
             ${opt('🕵️', 'OC pass rates', 'Your checkpoint pass rate per organized crime role - read when the Hub finds a new crime, so leaders\' Team Builder and the OC Optimizer script can put you in the roles you pass best.', onoff('oc', st.oc, 'On'))}
             <div class="hbs-hint">Sharing on the Hub too? The two are combined.</div>
             <div class="hbs-actions"><button type="button" class="hbs-btn" data-shsave>Save sharing</button></div>
             <div class="hbs-msg" data-shmsg>${g.last && (g.last.bs || g.last.ws || g.last.rd_at) ? 'Last sent: ' + [g.last.bs || g.last.ws ? 'stats ' + (g.last.bs || g.last.ws) : '',
-                g.last.rd_at ? 'readiness ' + ago(Math.floor(g.last.rd_at / 1000)) : ''].filter(Boolean).join(' · ') : ''}</div>`;
+                ''].filter(Boolean).join(' · ') : ''}</div>`;
         box.querySelector('[data-shsave]').onclick = async () => {
             const m = box.querySelector('[data-shmsg]');
             const val = k => box.querySelector(`[data-sh="${k}"]`).value;
-            const v = { bs: val('bs'), ws: val('ws'), ready: val('ready') === '1', oc: val('oc') === '1', cw: false };     // chain timer: Chain Watch's job (2.3.0)
+            const v = { bs: val('bs'), ws: val('ws'), ready: false, oc: val('oc') === '1', cw: false };     // chain timer: Chain Watch's job (2.3.0)
             m.textContent = 'Saving…';
             try {
                 // [HB Suite] Hub API — op "share_set": save what to share from the script (all off = the Hub deletes it)
@@ -5710,9 +5719,9 @@
                 const was = store.get(K.shareDay, '');
                 if (v.bs !== 'off' || v.ws !== 'off') store.set(K.shareDay, '');         // send today's stats now
                 if (v.oc) store.set(K.ocTag, '');                                        // send your OC pass rates now
-                m.textContent = (v.bs === 'off' && v.ws === 'off' && !v.ready && !v.oc) ? 'Saved ✓ - nothing is shared from this script; what it sent was deleted.'
+                m.textContent = (v.bs === 'off' && v.ws === 'off' && !v.oc) ? 'Saved ✓ - nothing is shared from this script; what it sent was deleted.'
                     : 'Saved ✓ - sharing runs while the script is active.';
-                if (!was || v.bs !== 'off' || v.ws !== 'off' || v.oc || v.ready) shareTick(true);
+                if (!was || v.bs !== 'off' || v.ws !== 'off' || v.oc) shareTick(true);
             } catch (e) { m.textContent = e.message; }
         };
     }
@@ -5726,7 +5735,12 @@
     async function shareTick(now) {
         clearTimeout(shareTimer); shareTimer = null;
         const st = store.get(K.share, null);
-        if (!st || !getKey() || (st.bs === 'off' && st.ws === 'off' && !st.ready && !st.oc)) return;          // not sharing: stop
+        if (st && st.ready && getKey()) {                           // (0.2.45) War Readiness removed: switch it off on the Hub, once
+            try { const r = await hub('share_set', { bs: st.bs || 'off', ws: st.ws || 'off', ready: false, oc: !!st.oc, cw: false });   // [HB Suite] Hub API — op "share_set" (turns off the removed War readiness share)
+                store.set(K.share, r.settings || Object.assign({}, st, { ready: false })); } catch (e) { /* next run */ }
+            st.ready = false;                                       // (in memory too - never loops if the Hub call failed)
+        }
+        if (!st || !getKey() || (st.bs === 'off' && st.ws === 'off' && !st.oc)) return;          // not sharing: stop
         let next = SHARE_PING_MS;
         if (document.visibilityState === 'visible' && !shareBusy) {
             shareBusy = true;
@@ -5742,23 +5756,12 @@
                     await hub('share_push', body);
                     store.set(K.shareDay, day);
                 }
-                if (st.ready || st.oc) {
+                if (st.oc) {
                     // [HB Suite] Hub API — op "share_ping": is a leader watching War Readiness? a new crime? (also refreshes the
                     // settings)
                     const p = await hub('share_ping');
                     const ps = p.settings || st;
                     if (p.settings) store.set(K.share, p.settings);
-                    if (p.want_ready && ps.ready) {
-                        // [HB Suite] Torn API — sharing: own bars / cooldowns / refills / status (only while a leader watches)
-                        const d = await tornGet('https://api.torn.com/user/?selections=bars,cooldowns,refills,profile');
-                        const bar = b => b ? { cur: b.current, max: b.maximum, full: b.fulltime || 0 } : null;
-                        const stt = d.status || {};
-                        // [HB Suite] Hub API — op "share_push": the readiness reading (numbers + Torn's status text only)
-                        await hub('share_push', { rd: { energy: bar(d.energy), nerve: bar(d.nerve), happy: bar(d.happy), life: bar(d.life),
-                            cd: d.cooldowns || {}, refill: d.refills ? !!d.refills.energy_refill_used : null,
-                            status: { state: stt.state, desc: stt.description, until: stt.until }, last: (d.last_action || {}).timestamp } });
-                        next = Math.min(next, SHARE_READY_MS);
-                    }
                     if (ps.oc && p.oc_tag && p.oc_tag !== store.get(K.ocTag, '')) {
                         // [HB Suite] Torn API — sharing: own OC pass rates (v2 user/organizedcrimes - only when the Hub found a new crime)
                         const d = await tornGet('https://api.torn.com/v2/user/organizedcrimes');
