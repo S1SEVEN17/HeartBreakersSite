@@ -424,6 +424,17 @@ async function sxRoute(env, ctx, req) {
     if (what === "scripts") return sxPass(await scriptsRoute(env, get, u, who));
     if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
     if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
+    // 🚀 DEPLOYED CRIMES (HB Suite 0.2.23, Nov 15 2026, user: "Show Deployed Crimes in the OC Tab within a dropdown. Put
+    // this under the Loans tab. This should only be seen by leadership."): the live OC plan's teams - crime, status
+    // (needs spawn / recruiting / spawned), success, each member's slot, joined / queued, pass rate - the same teams as
+    // OC Management's 🚀 Deployed tab. Leaders only; memoised like the other live reads. Also `sharing` (user: "Create a
+    // 'Sharing' dropdown also for members who are sharing their CPR rates. Only visible by leadership.") - every current
+    // member, whether they share their checkpoint pass rates with the Hub and when they last did (no rates themselves).
+    if (what === "deployed") {
+      if (!who.leader) return leadersOnly();
+      const o = await liveMemo("deployed", () => ocPlanObj(env, "prod", {player_id: who.id}));
+      return sxJson({ok: true, plan_ts: o.plan_ts || null, teams: o.teams || [], sharing: o.sharing || null});   // + 📡 who shares CPR rates (0.2.23, leaders)
+    }
     if (what === "myoc") return sxJson(await ocMine(env, who.id));   // the Hub script's Home "My OC" tile (Nov 14 2026)
     // HB SUITE (Nov 14 2026): the header's live status chips - ranked war + chain now (same as the site's now.json)
     if (what === "now") return sxJson(await liveMemo("now", () => hubNowData(env)));
@@ -434,6 +445,28 @@ async function sxRoute(env, ctx, req) {
   if (op === "rc") {
     if (!who.leader) return leadersOnly();
     if (b.do === "list") return sxPass(await rcLeaderRoute(env, new Request("https://sx.local/list.json"), who, "list.json"));
+    // PAGED (HB Suite 0.2.23, Nov 15 2026, user: "'Recruiting' tab should only show 30 listings at a time, as you scroll
+    // down that list increases ... Once the Hub list becomes large, it would probably cause the script to crash"):
+    // {do:"page", filter: open|mine|unclaimed|all, offset, limit (<= 50)} -> {recruits (best score first), total for
+    // that filter, counts {open, mine, unclaimed, all}, me}. One page of rows per call instead of the whole list
+    // ("list" stays for Torn Recruit Scout).
+    if (b.do === "page") {
+      if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
+      const me = Number(who.id), lim = Math.max(1, Math.min(50, Number(b.limit) || 30)), off = Math.max(0, Math.min(RC_MAX_ROWS, Number(b.offset) || 0));
+      const W = {open: "status IN ('new','contacted')", mine: "claim_pid = ?1", unclaimed: "claim_pid IS NULL AND status NOT IN ('joined','declined')", all: "1 = 1"};
+      const f = W[b.filter] ? b.filter : "open";
+      try {
+        const cnt = await env.OC_DB.prepare("SELECT SUM(CASE WHEN status IN ('new','contacted') THEN 1 ELSE 0 END) AS open, " +
+          "SUM(CASE WHEN claim_pid = ?1 THEN 1 ELSE 0 END) AS mine, SUM(CASE WHEN claim_pid IS NULL AND status NOT IN ('joined','declined') THEN 1 ELSE 0 END) AS unclaimed, " +
+          "COUNT(*) AS all_n FROM rc_recruit WHERE removed_at IS NULL").bind(me).first() || {};
+        const rows = (await env.OC_DB.prepare("SELECT pid, name, data, sent_by, first_sent, updated, status, status_by, status_at, claim_pid, claim_name, claim_at, " +
+          "note, note_by, note_at FROM rc_recruit WHERE removed_at IS NULL AND " + W[f] + " " +
+          "ORDER BY COALESCE(CAST(json_extract(data, '$.fit.pct') AS REAL), -1) DESC, updated DESC LIMIT ?2 OFFSET ?3").bind(me, lim, off).all()).results || [];
+        const counts = {open: Number(cnt.open) || 0, mine: Number(cnt.mine) || 0, unclaimed: Number(cnt.unclaimed) || 0, all: Number(cnt.all_n) || 0};
+        const recruits = rows.map(r => { let d = {}; try { d = JSON.parse(r.data); } catch (e) {} return Object.assign({}, r, {data: d}); });
+        return sxJson({ok: true, recruits, total: counts[f], counts, offset: off, me: {id: who.id, name: who.name}});
+      } catch (e) { return sxJson({ok: true, recruits: [], total: 0, counts: {open: 0, mine: 0, unclaimed: 0, all: 0}, offset: off, me: {id: who.id, name: who.name}}); }   // table not there yet
+    }
     if (b.do === "update") return sxPass(await rcLeaderRoute(env, new Request("https://sx.local/update", {method: "POST",
       headers: {"X-HB-Save": "1", "Content-Type": "application/json"}, body: JSON.stringify(b.body || {})}), who, "update"));
     return sxJson({ok: false, error: "unknown"}, 400);
