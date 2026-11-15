@@ -2740,6 +2740,17 @@ async function ocSpawnAlerts(env) {
     const cat = await ocSnapGet(env, "prod", "catalog").catch(() => null), itemName = {};
     for (const c of ((cat && cat.data && cat.data.organizedcrimes) || [])) for (const sl of c.slots || [])
       if (sl.required_item && sl.required_item.id) itemName[String(sl.required_item.id)] = sl.required_item.name || null;
+    // (Suite 0.2.15, user: "Verify unused loans section. Some entries were showing up that were actively used by crimes")
+    // needs also covers PLANNED seats: a member the planner placed in a crime (not joined yet) needs that role's item,
+    // so a tool already loaned to them isn't listed as unused. Role -> item from the catalog (base role names).
+    const itemOf = {};
+    for (const c of ((cat && cat.data && cat.data.organizedcrimes) || [])) (c.slots || []).forEach((sl, i) => {
+      if (!sl.required_item || !sl.required_item.id) return;
+      (itemOf[c.name] = itemOf[c.name] || {})[ocBaseRole((sl.position_info && sl.position_info.label) || sl.position || ("Role " + (i + 1)))] = Number(sl.required_item.id); });
+    for (const t of plan.teams || []) for (const r of t.roles || []) {
+      const iid = r.pid != null && (itemOf[t.crime] || {})[ocBaseRole(r.position || "")];
+      if (iid) needs.push(Number(r.pid) + ":" + iid);
+    }
     const members = await currentMembers(env).catch(() => null);
     const nm = id => ((members && members.get(Number(id))) || {}).name || ("#" + id);
     for (const c of crimes) {
