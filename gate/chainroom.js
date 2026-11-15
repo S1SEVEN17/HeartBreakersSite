@@ -1179,10 +1179,12 @@ export class ChainRoom {
     // a claimed hit isn't a landed hit.
     const paused = !!this.alertPausedBy(now);
     const lap = this.alertLap(), left = c.expires_at - now;
-    // who a timer alert goes to: queued members who can act (not away, not in hospital / jail / flying) - INCLUDING
-    // idle / offline (they get alert 3 and Panic as a last resort - idle/offline addendum §4)
-    const able = this.orderedQueue().filter((x) => x.can_hit && !x.away).map((x) => x.pid);
-    let ableActive = this.orderedQueue().filter((x) => x.can_hit && !x.away && x.presence === "active").map((x) => x.pid);
+    // who a timer alert goes to: queued members who can act (not in hospital / jail / flying) - INCLUDING idle /
+    // offline (they get alert 3 and Panic as a last resort - idle/offline addendum §4) and AWAY (Nov 14 2026, user:
+    // "Away status should still get alerts like normal if they are queued" - replaces "away gets no alerts"; away
+    // members are still never #1 / #2 for the turn)
+    const able = this.orderedQueue().filter((x) => x.can_hit).map((x) => x.pid);
+    let ableActive = this.orderedQueue().filter((x) => x.can_hit && x.presence === "active").map((x) => x.pid);
     if (!ableActive.length) ableActive = able;           // only inactive members left: they get alerts 1-2 too
     // HUB-DRIVEN PANIC (idle/offline addendum §6): {t:"panic"} at 30 s, then 15 s left, once each per lap, to the
     // alert-3 set; NOT held by "I'm hitting"; nothing below minChain; if both came due at once only the 15 s one goes.

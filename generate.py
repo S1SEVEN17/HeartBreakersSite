@@ -5235,7 +5235,9 @@ def build_databases(raw: dict, cfg: dict) -> dict:
     chains = [{"id": k, "start": c.get("start"), "end": c["end"], "length": c["length"],
                "respect": round(sum(a.get("respect", 0) for a in c.get("attackers", [])), 2),
                "m": [[a["id"], a.get("hits", 0), round(a.get("respect", 0), 2), a.get("rets", 0)]
-                     for a in c.get("attackers", [])]}
+                     for a in c.get("attackers", [])],
+               # bonus hits [[chain number, member id, respect]] (HB Suite 0.2.6: your best chain bonus)
+               "b": [[int(b.get("chain") or 0), b.get("id"), b.get("respect", 0)] for b in c.get("bonuses", []) if b.get("id")]}
               for k, c in sorted(ch.items(), key=lambda kv: kv[1]["end"])]
     # --- crimes ---
     try:
