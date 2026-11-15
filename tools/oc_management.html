@@ -783,7 +783,7 @@ function drawBuilder() {
           `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${payRange(x.crime)}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
         <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${payRange(n)}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
-      <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"}>🚀 Deploy to Live</button>
+      <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"} title="Adds the board's teams to the deployed list - teams already deployed stay">🚀 Add to Live</button>
     </div>
     <div class="stat"><div><b>${BOARD.teams.length}</b><span>Teams</span></div><div><b>${placed}</b><span>Members placed</span></div>
       <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average weighted success</span></div>
@@ -890,12 +890,24 @@ function wireTeams() {
 }
 async function deploy() {
   const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
-  if (!confirm(`Deploy ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role. This replaces the plan that's deployed now.`)) return;
-  const plan = {teams: BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
+  // ADD, DON'T REPLACE (Nov 15 2026, user: "Team Builder should add teams to the deployed list, not replace the entire
+  // list. This will let us build and lock certain teams to crimes that we want to ensure are kept running"): the
+  // board's teams are added to what's deployed. A deployed team is replaced only when the board carries the same team
+  // (same id - loaded from Deployed and edited) or a team for the same Torn crime (#id). A member placed on a board
+  // team is taken off any other deployed team's open (not yet joined) slot, so nobody is planned twice.
+  const cur = ((D.config.plan && D.config.plan.teams) || []).filter(t => !t.unplanned);
+  const bIds = new Set(BOARD.teams.map(t => t.id)), bCids = new Set(BOARD.teams.filter(t => t.crime_id).map(t => String(t.crime_id)));
+  const bPids = new Set([].concat(...BOARD.teams.map(t => t.roles.filter(r => r.pid != null && !r.existing).map(r => Number(r.pid)))));
+  const kept = cur.filter(t => !bIds.has(t.id) && !(t.crime_id && bCids.has(String(t.crime_id))))
+    .map(t => Object.assign({}, t, {roles: t.roles.map(r => r.pid != null && !r.existing && bPids.has(Number(r.pid)) ? {position: r.position, pid: null, name: "", rate: null} : r)}));
+  const repl = cur.length - kept.length;
+  if (kept.length + BOARD.teams.length > 100) { st("Too many teams deployed (100 at most) - delete some on the Deployed tab first.", true); return; }
+  if (!confirm(`Add ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the OC Optimizer will be shown their assigned role.\n${kept.length ? `${kept.length} team${kept.length === 1 ? "" : "s"} already deployed stay${kept.length === 1 ? "s" : ""}.` : "Nothing else is deployed."}${repl ? ` ${repl} ${repl === 1 ? "is" : "are"} replaced by the board's version.` : ""}`)) return;
+  const plan = {teams: kept.concat(BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
     hold: t.hold || null, noshow: t.noshow || null,   // spawn hold / no-shows (Nov 12 2026) kept through a deploy
     roles: t.roles.map(r => ({position: r.position, pid: r.pid, name: r.pid != null ? nameOf(r.pid) : "", rate: r.rate, src: r.src || null, existing: !!r.existing,
-      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null, since: r.since || null, leave: r.leave || null}))}))};
-  try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Deployed ✓ - ${n} members on ${plan.teams.length} teams (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
+      queued: !!r.queued, free_at: r.queued ? r.free_at || null : null, replaces: r.replaces || null, since: r.since || null, leave: r.leave || null}))})))};
+  try { st("Deploying…"); await saveConfig("plan", plan); D.config.plan = plan; D.config.plan_ts = Date.now(); st(`Added ✓ - ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members); ${plan.teams.length} deployed in all (Live).`); TAB = "deployed"; LS.set("hb_oc_tab", TAB); draw(); }
   catch (e) { st("Deploy failed: " + e.message, true); }
 }
 
@@ -1257,7 +1269,7 @@ function drawDeployed() {
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}
+      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${t.lock && !t.unplanned ? ` <button class="s" data-pdel="${esc(t.id)}" title="Delete this locked team from the deployed list">🗑</button>` : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       <div class="tag">${payLine(t, false)}</div>
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
@@ -1267,7 +1279,7 @@ function drawDeployed() {
   $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, existing crimes are always filled first; a crime to spawn (🧪) is only suggested for members whose pass rates are too high (above the ${OPT.cap}% cap) for every open crime. Slots are only reserved for members who haven't joined a crime - members already in a crime stay where they are, and a member who has started planning is never moved. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (members not in a crime) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
     <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = finishing a crime and already lined up for the next one (shown in both) · ⏳ <b>Not joined yet</b> = free, hasn't joined. Counted once per member.</div>
-    <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy">Withdraw plan</button></div>
+    <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy" title="Removes every unlocked team. Locked teams (🔒) stay until a leader deletes them with 🗑 on their card.">Clear deployed list</button></div>
     ${alertsHtml()}
     ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
@@ -1275,8 +1287,17 @@ function drawDeployed() {
   $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
     BOARD = {teams: plan.teams.filter(t => !t.unplanned).map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
       roles: t.roles.map(r => r.existing ? Object.assign({}, r) : Object.assign({}, r, rateOf(r.pid, t.crime, r.position) || {}))}))}; saveBoard(); TAB = "builder"; LS.set("hb_oc_tab", TAB); draw(); };
-  $("undeploy").onclick = async () => { if (!confirm("Withdraw the deployed plan? Members stop seeing their assigned roles.")) return;
-    try { await saveConfig("plan", {teams: []}); D.config.plan = {teams: []}; st("Plan withdrawn."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
+  // LOCKED TEAMS SURVIVE A CLEAR (Nov 15 2026, user: "Clearing the deployed list shouldn't clear these crimes, they
+  // should require manual deletion by leaders on the deployed page") - only the 🗑 on a locked team's card removes it
+  $("undeploy").onclick = async () => {
+    const keep = ((D.config.plan && D.config.plan.teams) || []).filter(t => t.lock && !t.unplanned);
+    if (!confirm(`Clear the deployed list? Members on the removed teams stop seeing their assigned roles.${keep.length ? `\n${keep.length} locked team${keep.length === 1 ? "" : "s"} (🔒) stay${keep.length === 1 ? "s" : ""} - delete ${keep.length === 1 ? "it" : "them"} with 🗑 on the card.` : ""}`)) return;
+    try { await saveConfig("plan", {teams: keep}); D.config.plan = {teams: keep}; st(keep.length ? `Cleared - ${keep.length} locked team${keep.length === 1 ? "" : "s"} kept.` : "Deployed list cleared."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
+  document.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => {
+    const all = ((D.config.plan && D.config.plan.teams) || []), t = all.find(x => x.id === b.dataset.pdel); if (!t) return;
+    if (!confirm(`Delete the locked team for ${t.crime}${t.crime_id ? " #" + t.crime_id : ""} from the deployed list? Its members stop seeing this assignment.`)) return;
+    const left = all.filter(x => x.id !== t.id && !x.unplanned);
+    try { await saveConfig("plan", {teams: left}); D.config.plan = Object.assign({}, D.config.plan, {teams: left}); st("Locked team deleted."); draw(); } catch (e) { st("Failed: " + e.message, true); } });
 }
 
 // ---------- Refresh (once a minute - the gatekeeper enforces it for all leaders together) ----------
