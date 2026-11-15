@@ -73,6 +73,14 @@ const OFFLINE_REMOVE_MS = 60 * 60 * 1000;
 const REJOIN_KEEP_MS = 7 * 24 * 3600 * 1000;
 // HUB-DRIVEN PANIC (same addendum §6): sent at 30 s, then 15 s left, once each per chain lap
 const PANIC_STAGES = [{ stage: 1, sec: 30 }, { stage: 2, sec: 15 }];
+// ROOM STAYS AWAKE FOR SLOW POLLERS (Nov 15 2026, user: "Chain is showing inactive when not in focus ... When out of
+// focus, it should rely on HUB updates" / "the hub either wasn't detecting this properly or wasnt sending out the
+// information properly"): browsers slow a background tab's timers to about one a minute, so a polling script there
+// syncs every ~60 s. With the 45 s window below the room counted NOBODY present between those polls, stopped its Torn
+// read loop, and each poll was answered with the reading from before the previous poll (or none). Now: the ROOM stays
+// awake for SYNC_PRESENT_MS after any poll (members still show idle/offline after 45 s as before), and a poll that
+// finds the chain reading older than its normal cadence gets a fresh Torn read BEFORE it is answered (handleSync).
+const SYNC_PRESENT_MS = 150000;
 const SYNC_STALE_MS = 45000;              // a /cw/sync device counts as present this long after its last sync
 const SESSION_TTL_MS = 24 * 3600 * 1000;  // HMAC session token lifetime
 const PING = '{"t":"ping"}', PONG = '{"t":"pong"}'; // answered by the runtime without waking the object
@@ -849,7 +857,7 @@ export class ChainRoom {
 
   present(now) {
     // anyone here? live sockets, or a /cw/sync device seen recently
-    Object.keys(this.mem.syncSeen).forEach((p) => { if (now - this.mem.syncSeen[p] > SYNC_STALE_MS) delete this.mem.syncSeen[p]; });
+    Object.keys(this.mem.syncSeen).forEach((p) => { if (now - this.mem.syncSeen[p] > SYNC_PRESENT_MS) delete this.mem.syncSeen[p]; });
     return this.conns.size > 0 || Object.keys(this.mem.syncSeen).length > 0;
   }
 
@@ -1465,6 +1473,19 @@ export class ChainRoom {
     this.mem.syncSeen[pid] = Date.now();
     if (this.mem.queue[pid]) this.mem.queue[pid].last_seen = Date.now();   // a sync poll is a presence signal (addendum §1)
     for (const m of body.out || []) await this.onMessage(pid, m);
+    // FRESH BEFORE ANSWERING (Nov 15 2026): the chain reading is older than its cadence (the loop was asleep, or this
+    // device polls slowly from a background tab) -> one Torn read now, shared with the loop's own timer (_chainAt), so
+    // never more often than the loop itself would read (30 s live / 60 s otherwise; doubled when degraded).
+    {
+      const t = Date.now(), liveNow = !!(this.mem.chain && this.mem.chain.current > 0);
+      const cadence = (liveNow ? READ_MS.chain.live : READ_MS.chain.queued) * (this.mem.level >= 1 ? 2 : 1);
+      if (this.mem.level < 2 && t - (this.mem._chainAt || 0) > cadence + 5000) {
+        this.mem._chainAt = t;
+        const d = await this.tornGet("faction/chain");
+        this.mem.chainErr = d && d.chain ? "" : (!this.env.HUB_TORN_KEY ? "no Hub key" : (this.mem.lastErr || "no reply"));
+        if (d && d.chain) { this.applyHubChain(d.chain); this.checkAlerts(Date.now()); }
+      }
+    }
     await this.save();
     await this.ensureAlarm();   // keep Hub reads going for these devices too
     if (!this.sched) await this.reloadSchedule(false);
