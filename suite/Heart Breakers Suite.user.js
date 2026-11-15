@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.48
+// @version      0.2.50
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,10 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.50 (Nov 15 2026) - 🧰 Loans: Retrieve pressed away from Armoury -> Utilities now takes you there and highlights
+ *          the loaned copy; it also switches "Hide loaned items" off so the row can be seen and retrieved.
+ *  v0.2.49 (Nov 15 2026) - 🕵 OC: the pay per day on YOUR crime is now your join-now figure from when you joined (worked
+ *          out by the Hub), labelled "Your pay per day · from when you joined".
  *  v0.2.48 (Nov 15 2026) - 💩 Dumping hits: queued members can burn their energy fast before going offline. The Hub hands
  *          out an allowance that stops short of the protected hits before each bonus (leader-set); STOP banner + sound;
  *          dumpers get a tap-to-uncover cover over the attack button inside the protected hits. Leaders: Chain settings.
@@ -379,7 +383,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.48';
+    const VERSION = '0.2.50';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -3214,8 +3218,10 @@
         // estimate in days is only used when there's no ready time yet (an assignment that isn't planning).
         const ra = num(readyAt);
         const when = ra ? (ra > nowS() ? `pays out in ~<span data-until="${ra}">${dur(ra - nowS())}</span>` : 'ready to pay out') : p.days != null ? `pays out in ~${(+p.days).toFixed(1)} days` : '';
-        const sub = [p.est && p.normal && p.normal !== p.pay_day ? `normal ${shortMoney(p.normal)} / day` : '', when].filter(Boolean);
-        return `<div class="hbs-pay${p.join_now ? ' jn' : ''}"><div class="l">${p.join_now ? '⚡ JOIN NOW · ' : '💰 '}Pay per day (est)</div>
+        // (0.2.49, user: "The Suite should show YOUR 'Join Now' pay per day when you joined the crime.") p.yours = the
+        // Hub worked the figure out from when you took your seat (fixed - it no longer climbs toward the payout)
+        const sub = [p.yours ? 'from when you joined' : '', p.est && p.normal && p.normal !== p.pay_day ? `normal ${shortMoney(p.normal)} / day` : '', when].filter(Boolean);
+        return `<div class="hbs-pay${p.join_now ? ' jn' : ''}"><div class="l">${p.join_now ? '⚡ JOIN NOW · ' : '💰 '}${p.yours ? 'Your pay' : 'Pay'} per day (est)</div>
             <div class="v">${payDay(p)}<small> / member / day</small></div>
             ${sub.length ? `<div class="s">${sub.join(' · ')}</div>` : ''}</div>`;
     }
@@ -4886,7 +4892,39 @@
         ['input', 'keydown', 'keyup', 'change'].forEach(t => { try { input.dispatchEvent(new Event(t, { bubbles: true })); } catch (e) { /* */ } });
     }
     // Loan / Retrieve: scroll to the row and open Torn's own form (one tap = one action) - you press LOAN / Yes
+    // (0.2.50, user: "Clicking 'Retrieve' while not on the armory/utilities tab should take you there. It should also
+    // disable the 'Hide Loaned Items' so you can see and retrieve the items.") Retrieve away from Armoury -> Utilities
+    // (or with the item not on the open Armoury tab) OPENS Armoury -> Utilities and, once the rows are there, scrolls
+    // to the loaned copy and pulses it - that tap's one action is the navigation, so Torn's Retrieve is NOT pressed;
+    // tap Retrieve again for that. Every Retrieve tap also switches "Hide loaned items" off (K.armHide), since a hidden
+    // row can't be seen or retrieved.
+    const ARM_UTIL = '#/tab=armoury&sub=utilities';
+    function armGoRetrieve(iid, pid) {
+        toast('Opening Armoury → Utilities - tap Retrieve again once the item is highlighted.', true);
+        if (/factions\.php/.test(location.pathname) && /step=your/.test(location.search)) location.hash = ARM_UTIL;   // Torn's own tab switch
+        else { try { sessionStorage.setItem('hbs_arm_go', JSON.stringify({ iid, pid, at: Date.now() })); } catch (e) { /* */ }
+            location.href = 'https://www.torn.com/factions.php?step=your' + ARM_UTIL; return; }
+        armFindLoaned(iid, pid, 0);
+    }
+    function armFindLoaned(iid, pid, n) {
+        if (n > 40) { toast('Couldn\'t find that loaned copy on Armoury → Utilities - it may be in another category.', true); return; }
+        setTimeout(() => {
+            const row = onArmoury() && pageScrapeAllowed() ? armRows().filter(r => r.iid === iid).find(r => rowPid(r) === pid) : null;
+            if (!row) return armFindLoaned(iid, pid, n + 1);
+            try { armFilterApply(); } catch (e) { /* */ }
+            row.el.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.el.classList.add('hbs-arm-pulse'); setTimeout(() => row.el.classList.remove('hbs-arm-pulse'), 2400);
+            loanHighlight(); toast('Item highlighted - tap Retrieve again to open Torn\'s confirm.');
+        }, 300);
+    }
+    try { const g = JSON.parse(sessionStorage.getItem('hbs_arm_go') || 'null'); sessionStorage.removeItem('hbs_arm_go');   // arrived from another page
+        if (g && Date.now() - g.at < 30000) setTimeout(() => armFindLoaned(Number(g.iid), Number(g.pid), 0), 1200); } catch (e) { /* */ }
     function armouryAct(mode, iid, pid, name) {
+        if (mode === 'retrieve') {
+            if (store.get(K.armHide, false)) { store.set(K.armHide, false); try { armFilterApply(); } catch (e) { /* */ } }   // show loaned rows
+            if (!onArmoury() || !armRows().some(r => r.iid === iid && rowPid(r) === pid)) {
+                if (!(onArmoury() && /sub=utilities/i.test(location.hash))) { armGoRetrieve(iid, pid); return; }
+            }
+        }
         if (!onArmoury()) { toast('Open your faction Armoury → Utilities first, then tap this again.', true); return; }
         const rows = armRows().filter(r => r.iid === iid);
         if (!rows.length) { toast('That item isn\'t on this Armoury tab - open Utilities (or its category) and try again.', true); return; }
