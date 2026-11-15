@@ -465,6 +465,9 @@ export class ChainRoom {
           left: c.expires_at ? Math.round((c.expires_at - now) / 1000) : null, src: c.src || "",
           stages: this.alertStages().map((x) => x.sec), min_chain: Number((this.mem.config || {}).minChain) || 0,
           sockets: this.conns.size, sync_devices: Object.keys(this.mem.syncSeen).length,
+          // (Nov 15 2026) how the Hub knows the chain: its last Torn API answer, any read error, the last page reading
+          api: this.mem.apiSaid || null, api_low: this.mem.apiLow || 0, api_err: this.mem.chainErr || "",
+          api_read_at: this.mem._chainAt || 0, page_at: c.page_at || 0,
           queue: this.orderedQueue().map((x) => ({ pid: x.pid, name: x.name, can_hit: x.can_hit, away: x.away, presence: x.presence,
             via: this.conns.has(Number(x.pid)) ? "ws" : (this.mem.syncSeen[x.pid] ? "sync" : "none") })),
           log: (this.mem.alertLog || []).slice(-30) });
@@ -792,7 +795,16 @@ export class ChainRoom {
     // a page reading (Torn's live page) is newer than this API reply: a lower count from Torn's cache is ignored
     // while the page timer still has time left; a SAME count with an exact `end` still refines the timer
     const pg = this.mem.chain;
+    this.mem.apiSaid = { cur, left: Number(chain.timeout) || 0, at: now };   // what Torn's API last answered (🔍 Alert check)
     if (pg && pg.page_at && now - pg.page_at < PAGE_TRUST_MS && pg.expires_at > now && cur < pg.current) return;
+    // A CHAIN CAN'T END BEFORE ITS TIMER (Nov 15 2026, user: "Chain is showing inactive when not in focus, meanwhile
+    // there's an active chain going on. When out of focus, it should rely on HUB updates."): the count only ever goes
+    // up while the timer runs, so an API reply with a LOWER count (or 0) than the one the Hub holds - while that
+    // reading's timer still has time left - is a stale / cached / not-yet-counted reply, whatever the reading came
+    // from. It's ignored (and counted, mem.apiLow) instead of wiping the live chain once the 45 s page trust ran out
+    // and nobody had Torn in focus. When the timer does run out, the next API read decides as before.
+    if (pg && pg.current > 0 && pg.expires_at > now && cur < pg.current) { this.mem.apiLow = (this.mem.apiLow || 0) + 1; return; }
+    this.mem.apiLow = 0;
     const exact = Number(chain.end) > 1e9;                // Torn's absolute expiry - right even from a cached reply
     let expires = cur > 0 ? this.chainExpiry(chain, now) : 0;
     const prev = this.mem.chain;
@@ -853,6 +865,7 @@ export class ChainRoom {
     if (ranOut || due(this.mem._chainAt, READ_MS.chain[stateKey] * mult, now)) {
       this.mem._chainAt = now; hubChainRead = true;
       const d = await this.tornGet("faction/chain");
+      this.mem.chainErr = d && d.chain ? "" : (!this.env.HUB_TORN_KEY ? "no Hub key" : (this.mem.lastErr || "no reply"));   // (Nov 15 2026) for 🔍 Alert check
       if (d && d.chain) this.applyHubChain(d.chain);
     }
     if (READ_MS.attacks[stateKey] && due(this.mem._attacksAt, READ_MS.attacks[stateKey] * mult, now)) {
