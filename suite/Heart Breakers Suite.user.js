@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.34
-// @description  ONE faction script for Heart Breakers: the Hub (home, boards, profile, members, wars, news, payouts, leader tools) + Chain Watch (live queue, turn, bonus, retals, Hub-timed alerts) + your OC seat (crimes-page highlight) + leaders' Recruitment list. One sign-in, one panel, one Torn rate budget. Your API key stays on your device. Desktop + TornPDA.
+// @version      0.2.38
+// @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
@@ -24,6 +24,21 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.38 (Nov 15 2026) - ⛓ "No live chain" while Torn wasn't in focus: the Hub now stays awake for slowly-polling
+ *          background tabs and takes a fresh Torn read before answering a poll whose reading is old (Hub side); the
+ *          Suite asks the Hub at once when you come back to the tab, and says "No update from the Hub for X" instead
+ *          of showing old data as fact.
+ *  v0.2.37 (Nov 15 2026) - ⛓ Queue rows without energy / cooldowns: the read of your own bars / cooldowns failed
+ *          silently (usually a key without that access). Now the Chain tab says so while you're queued - Torn's own
+ *          reason, what's needed, a Try again button - and joining warns you. Rows with nothing say "no energy /
+ *          cooldown info shared". Runway shows energy regen per hour (not hits).
+ *  v0.2.36 (Nov 15 2026) - ⛓ Chain shown as "No live chain" when Torn wasn't in focus (Hub fix: an API answer lower
+ *          than the count the Hub already holds can no longer wipe a chain whose timer is still running). 🔍 Alert
+ *          check (leaders) now shows what Torn's API last told the Hub, any read error and the last page reading.
+ *          🔔 Leaving the queue stops alerts at once (a repeating alert kept sounding; late ones still played).
+ *  v0.2.35 (Nov 15 2026) - 🛡 Low reliability alerts only when a member is new on the list or drops a full grade
+ *          (E -> F) - a score moving inside the same grade no longer re-alerts. When it does alert, a "New since you
+ *          last looked" line names who and why, and their rows are tagged (NEW / ▼ E→F).
  *  v0.2.34 (Nov 15 2026) - ⏱ Minimized icon (user: "This should also flash and alert when the alerts go out. Just like
  *          the old Chain Watch script."): the launcher shows the live chain timer, turns red while you're up, and
  *          flashes for as long as an alert is sounding (faster for Panic).
@@ -335,7 +350,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.34';
+    const VERSION = '0.2.38';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -385,6 +400,7 @@
         rsSetAt: 'hbs_rs_set_at', rsSetAt0: 'hbs_rs_set_at0',   // shared recruit settings: version applied / first download done (0.2.17)
         rsSetNote: 'hbs_rs_set_note',          // the last change another leader made {by, at, diff} (0.2.17)
         rtOpen: 'hbs_rt_open',
+        relSeen: 'hbs_rel_seen',               // 🛡 low reliability: {member id: grade rank last seen} (0.2.35)
         onb: 'hbs_onboard',                    // ✅ Getting started {oc, ocAt, test, join, crime, done} (0.2.32)
         ocDepOpen: 'hbs_oc_dep_open', ocShareOpen: 'hbs_oc_share_open',   // 🚀 Deployed / 📡 Sharing folds (0.2.23)
         chatFill: 'hbs_chat_fill',             // 💬 Notify: the chat message waiting for the member's profile (0.2.23)                 // ↩ Retals fold open/closed (0.2.19)
@@ -942,6 +958,14 @@
             #hbs-panel .hbs-banner{margin-top:7px;padding:6px 8px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:11.5px;}
             #hbs-panel .hbs-sec{border-bottom:0;margin:14px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);}
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
+            /* 0.2.37 - "your energy isn't reaching the queue" note */
+            #hbs-panel .hbs-banner.hbs-warnb{background:#3a1f1f;border-color:#7a3a3a;color:#ffd0d0;text-align:left;line-height:1.45;}
+            #hbs-panel .hbs-banner.hbs-warnb .hbs-actions{margin-top:6px;justify-content:flex-start;}
+            /* 0.2.35 - low reliability: who's new / dropped a grade */
+            #hbs-panel .hbs-relnew{margin:4px 0 6px;padding:6px 10px;border-radius:8px;background:#3a1f1f;border:1px solid #7a3a3a;color:#ffd0d0;font-size:12px;text-align:left;line-height:1.5;}
+            #hbs-panel .hbs-relrow.new{border-color:#ff6b6b;box-shadow:inset 3px 0 0 #ff6b6b;}
+            #hbs-panel .hbs-relrow .n{position:relative;}
+            #hbs-panel .hbs-relrow .n em{align-self:flex-start;font-style:normal;font-size:10px;font-weight:bold;padding:0 6px;border-radius:8px;background:#c0392b;color:#fff;margin:2px 0;}
             /* 0.2.34 - minimized icon: chain timer, you're-up, alert flash */
             #hbs-launcher .hbs-ltime{position:absolute;left:50%;bottom:-9px;transform:translateX(-50%);padding:1px 6px;border-radius:9px;background:#111318;border:1px solid var(--acc,#FFB454);
                 color:#e8e8e8;font:bold 11px/1.3 Arial,sans-serif;white-space:nowrap;pointer-events:none;}
@@ -1651,21 +1675,25 @@
             const bad = P && P.members ? Object.entries(P.members).filter(([id, v]) => v && v.reliability && v.reliability.score != null && v.reliability.score < 55
                 && (N.byId[id] || {}).current).sort((a, b) => a[1].reliability.score - b[1].reliability.score) : [];
             const REL_MAX = 12;
+            relTrack(bad);   // (0.2.35) who is new on the list / dropped a grade since you last looked
+            const relNewList = bad.filter(([id]) => relWhy[id]);
             const relHtml = !bad.length ? '' : sec(`🛡 Low reliability · ${bad.length}`)
                 + `<div class="hbs-hint">Score under 55 (grade E or F), worst first. War = wars with ${MIN_HITS}+ hits · Chains = large chains hit · Idle = days since last action.</div>`
-                + `<div class="hbs-rel">` + bad.slice(0, REL_MAX).map(([id, v]) => { const R = v.reliability, g = relG(R.score), D = R.detail || {};
+                + (relNewList.length ? `<div class="hbs-relnew">🔻 <b>New since you last looked:</b> ${relNewList.map(([id, v]) => `<a href="#" data-prof="${id}">${esc(nameOf(N, id))}</a> ${relWhyText(id)} (${int(v.reliability.score)})`).join(' · ')}</div>` : '')
+                + `<div class="hbs-rel">` + relNewList.concat(bad.filter(([id]) => !relWhy[id])).slice(0, REL_MAX).map(([id, v]) => { const R = v.reliability, g = relG(R.score), D = R.detail || {};
                     const why = [D.wars_in ? `War ${int(D.wars_hit)}/${int(D.wars_in)}` : '', D.chains_elig ? `Chains ${int(D.chains_hit)}/${int(D.chains_elig)}` : '',
                         D.idle_days != null && D.idle_days >= 1 ? `Idle ${int(D.idle_days)} d` : ''].filter(Boolean).join(' · ');
-                    return `<div class="hbs-relrow"><b class="g" style="background:${g[1]}">${g[0]}</b>
-                        <span class="n"><a href="#" data-prof="${id}">${esc(nameOf(N, id))}</a><small>${why || 'not enough detail yet'}</small></span>
+                    const W = relWhy[id];
+                    return `<div class="hbs-relrow${W ? ' new' : ''}"><b class="g" style="background:${g[1]}">${g[0]}</b>
+                        <span class="n"><a href="#" data-prof="${id}">${esc(nameOf(N, id))}</a>${W ? `<em>${W.from == null ? 'NEW' : '▼ ' + GRADES[W.from][1] + '→' + GRADES[W.to][1]}</em>` : ''}<small>${why || 'not enough detail yet'}</small></span>
                         <span class="sc"><b style="color:${g[1]}">${int(R.score)}</b><i><u style="width:${Math.max(0, Math.min(100, num(R.score)))}%;background:${g[1]}"></u></i></span></div>`; }).join('') + '</div>'
                 + (bad.length > REL_MAX ? `<div class="hbs-hint">+${bad.length - REL_MAX} more - 👥 Members → sort by Lowest reliability.</div>` : '');
             const NT = (S && S.oc_notify) || [];
             notifyList = NT; notifyTplS = (S && S.notify_tpl) || null;
             const todo = NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position)).length;
-            const n = lines.length + bad.length + todo; alertN = n;   // 🔴 badge count (0.2.1) (0.2.33: + each low-reliability member)
+            const n = lines.length + bad.length + todo; alertN = n;   // total on the page (0.2.1) (0.2.33: + each low-reliability member)
             // what each alert is (0.2.2: the badge counts only the ones not seen yet)
-            alertKeys = lines.map(t => String(t).replace(/<[^>]+>/g, '')).concat(bad.map(([id]) => 'rel:' + id)).concat(NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position))
+            alertKeys = lines.map(t => String(t).replace(/<[^>]+>/g, '')).concat(NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position))
                 .map(x => 'ntf:' + x.pid + ':' + x.crime_id + ':' + x.position));
             out += `<div class="hbs-card ${n ? 'hbs-red' : 'hbs-green'}"><div class="hbs-r1"><span class="hbs-name">🔔 Leader alerts</span><span class="hbs-chip">${n}</span></div>`
                 + (n ? '' : '<div class="hbs-hint">✅ Nothing needs you right now.</div>')
@@ -2623,8 +2651,16 @@
                          energyTick: num(e.ticktime), drug: num(cd.drug), booster: num(cd.booster), refill: rf.energy_refill_used ? 0 : 1 };
             store.set(K.cwStats, { s: st, at: Date.now() });
             cwSend(Object.assign({ t: 'stats' }, st));
+            cw.statsErr = '';
             return st;
-        } catch (x) { return null; }
+        } catch (x) {
+            // (0.2.37, user: "Some users arent showing their energy/cooldowns in the chain watch feature. What could cause
+            // this?") this read used to fail SILENTLY - most often a key without access to bars / cooldowns (a Public key).
+            // The reason is kept and shown on the Chain tab while you're queued (cwStatsWarn).
+            const was = cw.statsErr; cw.statsErr = String((x && x.message) || 'Torn did not answer').replace(/^Torn: /, '').replace(/ - this needs a key with Faction API access\.?$/, '');
+            if (!was && cw.queued && tab === 'chain' && !cwBusy()) render(true);
+            return null;
+        }
     }
     setInterval(() => { if ((cw.ws || cw.syncT) && cw.queued) cwStats(false); }, 10000);   // queued: as fresh as the 30 s cache allows (4.20.6)
     // chain readings: while queued, or while the timer is under the 1st alert - once per 30 s at this device's phase offset
@@ -2749,6 +2785,10 @@
     const pageFocus = () => { if (pageScrapeAllowed()) { pageSentCount = -1; scanPageChain(); } else pageStop(); };
     window.addEventListener('focus', pageFocus); window.addEventListener('blur', pageFocus);
     document.addEventListener('visibilitychange', pageFocus);
+    // (0.2.38) back on the tab / window: ask the Hub at once instead of waiting for the next (slowed) poll
+    const cwWake = () => { if (document.hidden || !cwWanted()) return;
+        if (cw.syncT && !(cw.ws && cw.ws.readyState === 1)) { clearTimeout(cw.syncT); cw.syncT = setTimeout(cwSyncRun, 50); } };
+    document.addEventListener('visibilitychange', cwWake); window.addEventListener('focus', cwWake);
 
     // ---- ⛓ Chain tab ----
     async function chainHtml() {
@@ -2768,7 +2808,13 @@
         }
         const nm = pid => `<a href="#" data-prof="${num(pid)}">${esc(((q.find(x => num(x.pid) === num(pid)) || {}).name) || nameOf(N, pid))}</a>`;   // name -> profile (0.2.4)
         const live = c.current > 0;
-        let out = `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">⛓ ${live ? int(c.current) + ' / ' + int(c.max) : 'No live chain'}</span>
+        // STALE HUB DATA (0.2.38, user: "Chain is showing inactive when not in focus, meanwhile there's an active chain"):
+        // if the Hub hasn't been heard from for over 75 s (a background tab's timers are slowed by the browser, or the
+        // connection dropped) the tab says so instead of showing an old "No live chain" as fact - and asks again now.
+        const hubAge = cw.lastMsg ? Date.now() - cw.lastMsg : 0;
+        if (hubAge > 75000) cwSyncSoon();
+        let out = (hubAge > 75000 ? `<div class="hbs-banner hbs-warnb">⚠ No update from the Hub for <b>${dur(hubAge / 1000)}</b> - what's below may be out of date. Asking again…</div>` : '')
+            + `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">⛓ ${live ? int(c.current) + ' / ' + int(c.max) : 'No live chain'}</span>
             <span class="hbs-chip">${cw.ws && cw.ws.readyState === 1 ? '● Live' : cw.syncT ? '● Polling' : '○ Offline'}</span></div>${cw.err ? `<div class="hbs-hint">${esc(cw.err)}</div>` : ''}`;
         if (live) out += `<div class="hbs-big"><span data-cwexp data-exp="${cwLocal(c.expires_at)}" data-zero="00:00">-</span><small>${cwVerifyAt && cwLeft() <= 0 ? 'timer ran out - checking with the Hub…' : 'left on the timer' + (c.src === 'page' ? ' · live from your Torn page' : '')}</small></div>`;
         else out += `<div class="hbs-big hbs-dead">00:00<small>no active chain</small></div>`   // (0.2.22, user: "Show 00:00 when no active chain")
@@ -2793,7 +2839,7 @@
         // keeps up), and whether the next bonus is within reach of the banked hits
         if (rw) out += `<div class="hbs-runway">
             <div><b>${int(rw.banked_hits)}</b><small>hits banked</small></div>
-            <div><b>+${(+rw.regen_per_hour || 0).toFixed(1)}</b><small>regen / hour</small></div>
+            <div><b>+${int(Math.round((+rw.regen_per_hour || 0) * 25))} E</b><small>energy regen / hour</small></div>
             <div><b>${rw.hours != null ? '~' + (+rw.hours).toFixed(1) + ' h' : '∞'}</b><small>runway at safe pace</small></div>
             <div class="${rw.bonus_reachable ? 'ok' : 'no'}"><b>${rw.bonus_reachable ? '✓' : '✗'}</b><small>${bonus.next ? 'bonus ' + int(bonus.next) : 'next bonus'} ${rw.bonus_reachable ? 'in reach' : 'out of reach'}</small></div></div>`;
         out += `<div class="hbs-actions">${cw.queued ? `<button type="button" class="hbs-btn hbs-ghost" data-cw="leave">Leave queue</button>
@@ -2805,6 +2851,16 @@
                 ${S.me.members.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }))   // (0.2.19, user: "Sort bonus chain hit selections alphabetically")
                     .map(m => `<option value="${m.pid}">${esc(m.name)}</option>`).join('')}</select>` : ''}</div></div>`;
         // queue (in the Hub's order - never re-sorted)
+        // ⚠ NO ENERGY INFO (0.2.37, user: "an alert should appear on the Chain page when joining the queue"): while you're
+        // queued and the Hub has no energy / cooldown reading from you - why (Torn's own error text when the read failed)
+        // and what to do. The Hub already lists members without a reading after everyone whose energy is known, and
+        // before idle / offline members.
+        { const mineQ = q.find(x => num(x.pid) === me.id);
+          if (mineQ && !mineQ.stats && (cw.statsErr || !cwStatsCached(600000)))
+            out += `<div class="hbs-banner hbs-warnb">⚠ <b>Your energy and cooldowns aren't reaching the queue.</b>
+                ${cw.statsErr ? `Torn said: <i>${esc(cw.statsErr)}</i>. ` : ''}Chain Watch reads them with your own key on this device (bars, cooldowns, refills) -
+                that needs a <b>Limited Access</b> key or higher, and Torn open in a visible tab. Until then you're listed after members whose energy is known.
+                <div class="hbs-actions"><button type="button" class="hbs-btn hbs-mini" data-cw="statsretry">↻ Try again</button></div></div>`; }
         // QUEUE (0.2.18, user: "Bring back some of the UI elements of the chain watching script. Include the Energy Count,
         // Energy Symbol for Refill availability, Energy Can for Booster Cooldown, Drug Cooldown reading ... Improve the
         // queue list UI."): Chain Watch 4.20.6 rows - position, name + tags (UP / backup / ★ BONUS / hitting / away /
@@ -2902,7 +2958,7 @@
     const CW_WEED = '<svg class="hbs-ic" viewBox="0 0 24 24" aria-label="drug"><g fill="#5fbf6a"><path d="M12 22C11 14 11 6 12 2C13 6 13 14 12 22Z"/><path d="M12 22C9 15 6 10 3 8C7 10 10 15 12 22Z"/><path d="M12 22C15 15 18 10 21 8C17 10 14 15 12 22Z"/><path d="M12 22C8 17 4 15 1 15C5 16 9 18 12 22Z"/><path d="M12 22C16 17 20 15 23 15C19 16 15 18 12 22Z"/></g><path d="M12 21.5V24" stroke="#7a5230" stroke-width="1.2" fill="none"/></svg>';
     const CW_CAN = '<img class="hbs-ic" src="https://www.torn.com/images/items/555/large.png" alt="booster" loading="lazy" onerror="this.replaceWith(\'🥫\')">';   // Torn's energy can (item 555)
     function cwStatsHtml(x) {
-        const s = x.stats; if (!s) return '<span class="n">stats…</span>';
+        const s = x.stats; if (!s) return '<span class="n">no energy / cooldown info shared</span>';
         const en = cwEnergy(x), drug = cwCd(s.drug, s.at), boost = cwCd(s.booster, s.at), ref = num(s.refill) === 1;
         return (en ? `<span class="en"><span class="bolt${ref ? '' : ' off'}" title="${ref ? 'Energy refill available' : 'Energy refill used'}">⚡</span>${int(en.cur)}${en.max ? '/' + int(en.max) : ''}</span>` : '')
             + `<span class="${drug > 0 ? 'cd' : 'ok'}" title="Drug cooldown">${CW_WEED}${drug > 0 ? cwFmtCd(drug) : '✓'}</span>`
@@ -2916,6 +2972,7 @@
             if (G && !G.last) toast(`⚠ Bonus ${G.next} (${G.name}'s) is ${G.left} hits away.`, false);
             if (b) { b.disabled = true; setTimeout(() => { b.disabled = false; }, 4000); }
             toast('🎯 Finding a weak target…'); openPanicTarget(); return; }
+        if (a === 'statsretry') { store.set(K.cwStats, null); const st = await cwStats(true); toast(st ? '✓ Energy and cooldowns sent to the queue.' : '⚠ Still not readable: ' + (cw.statsErr || 'no answer'), !!st); render(true); return; }
         if (a === 'retry') { cwDisconnect(); cw.fails = 0; cw.err = ''; cw.token = null; store.set(K.cwTok, null); cw.connecting = false; cwConnect(); return; }
         if (a === 'open') { tab = 'chain'; store.set(K.tab, tab); if (collapsed) setCollapsed(false); else render(); return; }
         const S = cw.state || (cw.state = {}), Q = S.queue || (S.queue = []), mine = Q.find(x => num(x.pid) === me.id);
@@ -2925,12 +2982,14 @@
             // join carries your stats (contract §2) - the last reading if it's recent, else read once first (as 4.20.6)
             let st = cwStatsCached(600000); if (!st) st = await cwStats(true);
             cwSend(st ? { t: 'join', stats: st } : { t: 'join' }); if (st) cwStats(false);
+            if (!st) toast("⚠ Joined - but your energy and cooldowns couldn't be read" + (cw.statsErr ? ': ' + cw.statsErr : '') + '. See the note on the Chain tab.', false);   // (0.2.37)
             if (!mine) { const en = st ? num(st.energyCur) : null, row = { pid: me.id, name: me.name, energy: en, can_hit: true, stats: st, hits: 0, presence: 'active' };
                 let at = Q.findIndex(q => q.energy == null || (en != null && num(q.energy) < en)); if (at < 0) at = Q.length; Q.splice(at, 0, row); }
             cw.queued = true; cw.optimistic = { queued: true, at: Date.now() }; store.set(K.cwq, true); cwPresence();
         } else if (a === 'leave') {
             cwSend({ t: 'leave' }); S.queue = Q.filter(x => num(x.pid) !== me.id);
             cw.queued = false; cw.optimistic = { queued: false, at: Date.now() }; store.set(K.cwq, false);
+            alLeftQueue();   // (0.2.36 FIX, user: "Leaving the queue does not stop alerts") silence anything sounding / held
         } else if (a === 'hitting') {                                // toggle (both the Chain tab and the pinned tile)
             const on = !(mine && num(mine.hitting_until) > cwNow());
             cwSend({ t: 'hitting', on }); if (mine) mine.hitting_until = on ? cwNow() + 20000 : 0;
@@ -3639,8 +3698,30 @@
     // SEEN (user, Nov 14 2026: "Notifications should disappear once you've seen them"): the badge counts only alerts
     // you haven't seen - opening 🔔 Alerts marks everything on it seen (K.alertSeen); a new or changed alert counts again.
     let alertN = 0, alertKeys = [], badgeAt = 0;
-    const alertsUnseen = () => { const seen = new Set(store.get(K.alertSeen, []) || []); return alertKeys.filter(k => !seen.has(k)).length; };
-    function alertsSeen() { store.set(K.alertSeen, alertKeys.slice(0, 300)); drawBadges(); }
+    const alertsUnseen = () => { const seen = new Set(store.get(K.alertSeen, []) || []); return alertKeys.filter(k => !seen.has(k)).length + relNewIds().length; };
+    function alertsSeen() { store.set(K.alertSeen, alertKeys.slice(0, 300)); relMarkSeen(); drawBadges(); }
+    // 🛡 LOW RELIABILITY - WHEN IT ALERTS (0.2.35, user: "When these members drop in score, they keep alerting leaders. They
+    // should only alert when they drop in a full ranking. When they re-alert, it should be clear which users are creating
+    // the alert and why."): the 🔴 badge counts a low-reliability member only when they're NEW on the list or their GRADE
+    // got worse (E -> F) since you last opened 🔔 Alerts - a score moving inside the same grade is silent. K.relSeen keeps
+    // {member id: grade rank you last saw}; leaving the list forgets them (coming back alerts again). The first time
+    // (nothing stored) the current list is taken as seen, so nobody alerts just because of this update.
+    // relWhy keeps this page-load's reasons so the "why" stays on screen after the alerts are marked seen.
+    const REL_RANK = sc => { const i = GRADES.findIndex(g => (sc || 0) >= g[0]); return i < 0 ? GRADES.length - 1 : i; };   // S=0 ... F=6
+    let relNow = {}, relWhy = {};                             // {id: {rank, score}} on the list now · {id: {from, to, score}}
+    function relTrack(bad) {
+        relNow = {}; bad.forEach(([id, v]) => { relNow[id] = { rank: REL_RANK(v.reliability.score), score: v.reliability.score }; });
+        let seen = store.get(K.relSeen, null);
+        if (!seen || typeof seen !== 'object') { seen = {}; Object.keys(relNow).forEach(id => { seen[id] = relNow[id].rank; }); store.set(K.relSeen, seen); }
+        Object.keys(relNow).forEach(id => { const r = relNow[id].rank;
+            if (seen[id] == null) relWhy[id] = { from: null, to: r, score: relNow[id].score };
+            else if (r > seen[id]) relWhy[id] = { from: seen[id], to: r, score: relNow[id].score }; });
+        Object.keys(relWhy).forEach(id => { if (!relNow[id] || relNow[id].rank < relWhy[id].to) delete relWhy[id]; });   // off the list / improved
+    }
+    const relNewIds = () => { const seen = store.get(K.relSeen, null) || {}; return Object.keys(relNow).filter(id => seen[id] == null || relNow[id].rank > seen[id]); };
+    function relMarkSeen() { const seen = {}; Object.keys(relNow).forEach(id => { seen[id] = relNow[id].rank; }); store.set(K.relSeen, seen); }
+    const relWhyText = id => { const w = relWhy[id]; if (!w) return ''; const L = r => GRADES[r][1];
+        return w.from == null ? `new on the list at ${L(w.to)}` : `dropped ${L(w.from)} → ${L(w.to)}`; };
     async function refreshBadges(force) {
         if (!me || !me.leader || document.hidden) return;
         if (!force && Date.now() - badgeAt < 180000) return;
@@ -3851,6 +3932,13 @@
     // alert is sounding (10 s for a one-shot alert; faster for Panic). Sound / vibration are the alert's own - they
     // already play whether the panel is open or minimized. Updated once a second; nothing is read from Torn or the Hub.
     let alFlashUntil = 0, alFlashLvl = 0;
+    // LEFT THE QUEUE (0.2.36, user: "Leaving the queue does not stop alerts"): leaving stops a sounding / repeating alert
+    // and the held "You're up" at once, and chain alerts that still arrive (already on their way, or waiting on the
+    // Hub for a polling device) are not sounded. "Not queued" = this device's own flag (set the moment you join / leave)
+    // AND the Hub's list both say so - so a join that hasn't reached the Hub yet, or a queue joined on another device,
+    // still alerts.
+    const alNotQueued = () => !cw.queued && !store.get(K.cwq, false);
+    function alLeftQueue() { alStopAll(); alUpHeld = null; if (launcher) launcher.classList.remove('hbs-l-flash', 'hbs-l-panic'); }
     setInterval(() => {
         if (!launcher) return;
         let t = launcher.querySelector('.hbs-ltime');
@@ -3889,6 +3977,7 @@
         alStopAll(); alLevel = level; alKind = kind;
         const ring = () => {
             if (level && !chainAlive()) { alStopAll(); return; }
+            if (level && alNotQueued()) { alStopAll(); return; }   // (0.2.36) left the queue mid-alert
             // (0.2.21) no "timer back above the 1st alert" stop here any more - it could silence an alert before its
             // first sound when this device's timer read differed from the Hub's; a landed hit (count change) still
             // stops it (alWatch), as do I'm hitting and the 2-minute cap
@@ -3909,6 +3998,7 @@
         const kind = m.kind, stage = num(m.stage);
         if (kind === 'test') { const A = alCfg().k.a1; alSound(A.tone, false); if (A.vibrate) buzz([180, 90, 180]); flashPanel(); toast(alText('test', m), true); notifyOut('test', m, false); return; }
         if (kind !== 'test' && !isAlertTab()) { alNote(m, 'not sounded - another Torn tab is the alert tab'); return; }
+        if ((kind === 'timer' || kind === 'up') && alNotQueued()) { alNote(m, "not sounded - you're not in the queue"); return; }   // (0.2.36)
         if (kind === 'shift_start') { alEngage('shift', 0, false, { text: m.text }); alNote(m, 'sounded'); return; }
         // (0.2.19 FIX, user: "Confirm alerts are firing correctly. I don't believe they are."): the Hub sends "You're up"
         // ONCE, the moment you become #1 - usually right after a hit, with ~5 min on the timer. It was dropped here when
@@ -3946,6 +4036,7 @@
     function cwHubPanic(m) {
         // (0.2.21) the Hub only sends Panic to queued members - no local "am I queued" check (it could lag the Hub)
         if (!isAlertTab()) { alNote(m, 'not sounded - another Torn tab is the alert tab'); return; }
+        if (alNotQueued()) { alNote(m, "not sounded - you're not in the queue"); return; }   // (0.2.36)
         const count = num(m.chain) || cwChain().current;
         if (cwChain().current > count) { alNote(m, `not sounded - chain already at ${cwChain().current}`); return; }
         if (!chainAlive()) { alNote(m, 'not sounded - the chain timer has run out'); return; }
@@ -4028,6 +4119,8 @@
             out += `<div class="hbs-actions"><button type="button" class="hbs-btn hbs-ghost" data-aldiag>${D ? '↻ Ask the Hub again' : 'Ask the Hub what it sent'}</button></div>`;
             if (D) out += `<div class="hbs-sub"><b>The Hub</b> (${tAgo(cwLocal(D.now))}): ${esc(D.why)}</div>
                 <div class="hbs-hint">Chain ${int(D.chain)}${D.left != null ? ` · ${mSec(D.left)} left` : ''}${D.src ? ` (from ${esc(D.src)})` : ''} · alerts at ${esc((D.stages || []).map(mSec).join(' / '))} · min chain ${int(D.min_chain)} · ${int(D.sockets)} live + ${int(D.sync_devices)} polling</div>
+                <div class="hbs-hint${D.api_err ? ' hbs-bad' : ''}">Torn API (Hub's own read${D.api_read_at ? ', ' + tAgo(cwLocal(D.api_read_at)) : ''}): ${D.api_err ? '⚠ failed - ' + esc(D.api_err)
+                    : D.api ? `chain ${int(D.api.cur)}${D.api.cur > 0 ? ' · ' + mSec(D.api.left) + ' left' : ''}` : 'no answer yet'}${D.api_low ? ` · ⚠ ${int(D.api_low)} lower-than-known answer${D.api_low === 1 ? '' : 's'} ignored` : ''}${D.page_at ? ' · last page reading ' + tAgo(cwLocal(D.page_at)) : ''}</div>
                 ${(D.queue || []).length ? `<div class="hbs-allog">${D.queue.map(q => `<div><b>${esc(q.name)}</b><em>${q.via === 'ws' ? 'live' : q.via === 'sync' ? 'polling' : '⚠ not connected'}${q.can_hit ? '' : ' · can\'t attack'}${q.away ? ' · away' : ''}${q.presence !== 'active' ? ' · ' + esc(q.presence) : ''}</em></div>`).join('')}</div>` : ''}
                 <div class="hbs-sub"><b>Sent by the Hub</b> (last ${(D.log || []).length})</div>
                 ${(D.log || []).length ? `<div class="hbs-allog">${D.log.slice().reverse().map(x => `<div><span>${tAgo(cwLocal(x.at))}</span><b>${esc(alLabel(x))}</b> #${int(x.chain)}${x.left != null ? ` · ${x.left}s` : ''}<em>→ ${x.to.map(t => esc(t.name || '#' + t.pid) + (t.via === 'ws' ? '' : t.via === 'held' ? ' (poll)' : ' ⚠')).join(', ') || 'nobody'}</em></div>`).join('')}</div>`
