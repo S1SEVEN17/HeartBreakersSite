@@ -2749,11 +2749,28 @@ async function ocMine(env, pid) {
             join_now: jn && open, est: jn, days: id && days[id] != null ? Number(days[id]) : null};
   };
   const teamOf = c => (plan.teams || []).find(t => t.crime_id != null && String(t.crime_id) === String(c.id));
-  const detail = c => ({difficulty: c.difficulty ?? null, created_at: c.created_at || null, planning_at: c.planning_at || null, ready_at: c.ready_at || null,
-    expired_at: c.expired_at || null, pay: payOf(c), success: (teamOf(c) || {}).succ ?? null,
+  // TEAM SUCCESS (HB Suite 0.2.24, Nov 15 2026, user: "Team success is empty. This should be the weighted success rate
+  // based on the tornprobability info."): tornprobability.com's exact chance when the Hub has it for this crime + these
+  // rates (full team, tp:success), else the ROLE-WEIGHTED average of the seated members' pass rates (tp:weights - the
+  // same tpWeighted the planner and OC Management use), else the plan's own figure. success_kind says which.
+  const tpW = ((await ocSnapGet(env, "hub", "tp:weights").catch(() => null)) || {}).data || null;
+  const tpS = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
+  const succOf = (crimeName, roles, planSucc) => {
+    const ex = tpS && tpW && tpW.names ? tpSuccessOf(tpS, tpW.names, crimeName, roles) : null;
+    if (ex && ex.chance != null) return {success: ex.chance, success_kind: "exact"};
+    const filled = roles.filter(r => r.pid != null && r.rate != null);
+    const w = filled.length ? tpWeighted(tpW, crimeName, filled) : null;
+    if (w != null) return {success: w, success_kind: "weighted"};
+    return {success: planSucc ?? null, success_kind: planSucc != null ? "plan" : null};
+  };
+  const slotRoles = c => (c.slots || []).map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position || "",
+    pid: sl.user ? Number(sl.user.id) : null, rate: typeof sl.checkpoint_pass_rate === "number" ? sl.checkpoint_pass_rate : null}));
+  const detail = c => Object.assign({difficulty: c.difficulty ?? null, created_at: c.created_at || null, planning_at: c.planning_at || null, ready_at: c.ready_at || null,
+    expired_at: c.expired_at || null, pay: payOf(c),
     slots: (c.slots || []).map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position || "", pid: sl.user ? Number(sl.user.id) : null,
       name: sl.user ? nameOf(sl.user.id) : null, progress: sl.user ? Number(sl.user.progress) || 0 : null,
-      rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null, you: !!(sl.user && Number(sl.user.id) === pid)}))});
+      rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null, you: !!(sl.user && Number(sl.user.id) === pid)}))},
+    succOf(c.name, slotRoles(c), (teamOf(c) || {}).succ));
   let current = null;
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && Number(sl.user.id) === pid)
     current = Object.assign({crime: c.name, crime_id: c.id, status: c.status, position: (sl.position_info && sl.position_info.label) || sl.position || "",
@@ -2763,7 +2780,9 @@ async function ocMine(env, pid) {
   for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment) {
     const c = t.crime_id != null ? crimes.find(x => String(x.id) === String(t.crime_id)) : null;
     assignment = {crime: t.crime, crime_id: t.crime_id || null, kind: t.kind || "spawn", position: r.position, rate: r.rate ?? null,
-                  joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null, succ: t.succ ?? null,
+                  joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null,
+                  // (0.2.24) the planned team's success: exact (tornprobability) or role-weighted from the team's rates
+                  succ: (() => { const o = succOf(t.crime, (t.roles || []).map(x => ({position: x.position, pid: x.pid, rate: x.rate})), t.succ); return o.success; })(),
                   difficulty: t.difficulty ?? null, pay: payOf(c, t.crime), detail: c ? detail(c) : null};
   }
   return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment};
