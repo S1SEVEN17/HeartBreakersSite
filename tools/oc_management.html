@@ -375,12 +375,12 @@ const uid = () => "t" + Date.now().toString(36) + Math.random().toString(36).sli
 
 // Best team for one crime from the free members: every role filled with a member at or above minRole, highest
 // WEIGHTED success (role weights - Nov 2026; branch and bound over the roles, fewest-candidates role first; top 10 per role).
-function bestTeam(crime, blocked) {
+function bestTeam(crime, blocked, anyBusy) {   // anyBusy (Refill, Nov 15 2026): members already in a crime count too
   const roles = rolesOf(crime);
   if (!roles.length) return null;
   const busy = busyMap();
   const cands = roles.map(pos => candidates(crime, pos)
-    .filter(c => c.rate >= floorOf(crime, pos) && !blocked.has(c.pid) && (OPT.includeBusy || !busy[c.pid])).slice(0, 10));
+    .filter(c => c.rate >= floorOf(crime, pos) && !blocked.has(c.pid) && (anyBusy || OPT.includeBusy || !busy[c.pid])).slice(0, 10));
   if (cands.some(c => !c.length)) return null;
   const order = roles.map((_, i) => i).sort((a, b) => cands[a].length - cands[b].length);
   const W = roles.map(pos => roleW(crime, pos));                // role weights (mean 1): a member counts rate x weight
@@ -844,7 +844,7 @@ function teamCard(t) {
       ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}
       <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
       <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
-      ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best available">↻</button>`}
+      ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best members for each role - including members already in a crime; only members on another locked team are left out">↻</button>`}
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
     <div class="tag">${teamAvg(t) == null ? "" : payLine(t, true)}</div>
@@ -883,10 +883,26 @@ function wireTeams() {
   });
   document.querySelectorAll("[data-lock]").forEach(b => b.onclick = () => { const t = BOARD.teams.find(x => x.id === b.dataset.lock); t.lock = !t.lock; saveBoard(); draw(); });
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { BOARD.teams = BOARD.teams.filter(x => x.id !== b.dataset.del); saveBoard(); draw(); });
+  // REFILL = THE BEST MEMBERS, WHOEVER THEY ARE (Nov 15 2026, user: "Refill should fill with the best roles, regardless
+  // of availability. The only thing that should make them unavailable is being in another locked crime."): members who
+  // are in a crime, or on another UNLOCKED team, count too. Only members on another LOCKED team (on this board or
+  // deployed) are left out. Anyone taken from an unlocked board team is removed from that team, so nobody is on two.
   document.querySelectorAll("[data-fill]").forEach(b => b.onclick = () => {
     const i = BOARD.teams.findIndex(x => x.id === b.dataset.fill), t = BOARD.teams[i];
-    BOARD.teams.splice(i, 1); addTeam(t.crime);
-    const nt = BOARD.teams.pop(); nt.lock = t.lock; nt.id = t.id; BOARD.teams.splice(i, 0, nt); saveBoard(); draw(); });
+    const blocked = new Set();
+    BOARD.teams.forEach(x => { if (x !== t && x.lock) x.roles.forEach(r => { if (r.pid != null) blocked.add(+r.pid); }); });
+    ((D.config.plan && D.config.plan.teams) || []).forEach(x => { if (x.lock && x.id !== t.id) (x.roles || []).forEach(r => { if (r.pid != null) blocked.add(+r.pid); }); });
+    const nt = bestTeam(t.crime, blocked, true) || {crime: t.crime, difficulty: diffOf(t.crime),
+      roles: rolesOf(t.crime).map(pos => ({position: pos, pid: null, name: "", rate: null}))};
+    nt.roles.forEach(r => { if (r.pid != null) return;       // no full team at the role floors: the best member per role, one each
+      const taken = new Set(nt.roles.filter(x => x.pid != null).map(x => +x.pid));
+      const c = candidates(t.crime, r.position).find(c => !blocked.has(c.pid) && !taken.has(c.pid));
+      if (c) Object.assign(r, {pid: c.pid, name: c.name, rate: c.rate, src: c.src}); });
+    nt.lock = t.lock; nt.id = t.id;
+    const picked = new Set(nt.roles.filter(r => r.pid != null).map(r => +r.pid)); let moved = 0;
+    BOARD.teams.forEach(x => { if (x === t || x.lock) return; x.roles.forEach(r => { if (r.pid != null && !r.existing && picked.has(+r.pid)) { Object.assign(r, {pid: null, name: "", rate: null, src: null}); moved++; } }); });
+    BOARD.teams.splice(i, 1, nt); saveBoard(); draw();
+    if (moved) st(`Refilled ${t.crime} - ${moved} member${moved === 1 ? " was" : "s were"} taken from other unlocked teams on the board.`); });
 }
 async function deploy() {
   const n = BOARD.teams.reduce((a, t) => a + t.roles.filter(r => r.pid != null).length, 0);
