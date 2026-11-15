@@ -1709,6 +1709,14 @@ async function ocPlanObj(env, envName, id) {
             success_weighted: tpWeighted(tpWts, t.crime, (t.roles || []).filter(r => r.pid != null && r.rate != null)),
             success: tpSucc ? tpSuccessOf(tpSucc, tpNames, t.crime, t.roles || []) : null,
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
+            // UNFILLED ROLES (HB Suite 0.2.30, Nov 15 2026, user: "Show unfilled roles in the Deployed Crimes list."):
+            // the plan's roles with nobody assigned - {position, weight, item, taken_by?}. taken_by = a member who sits
+            // in that seat of the live crime without being on the plan's team (so it isn't really open).
+            open: (t.roles || []).filter(r => r.pid == null).map(r => {
+              const sl = ci ? (ci.slots || []).find(x => labOf(x) === r.position && x.user) : null;
+              return {position: r.position, weight: (tpRoleShares(tpWts, t.crime, (t.roles || []).map(x => x.position)) || {})[r.position] ?? null,
+                item: (items[t.crime] || {})[r.position] || null,
+                taken_by: sl ? {pid: Number(sl.user.id), name: (members && members.get(Number(sl.user.id)) || {}).name || ("#" + sl.user.id)} : null}; }),
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position),
               weight: (tpRoleShares(tpWts, t.crime, (t.roles || []).map(x => x.position)) || {})[r.position] ?? null,   // (0.2.25) role weight %
               // bound team: the exact slot in ITS instance (the seat they're in, or the open seat for their role)
