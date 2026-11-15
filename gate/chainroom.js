@@ -440,6 +440,12 @@ export class ChainRoom {
       case "leave":
         if (this.mem.rejoin) delete this.mem.rejoin[pid];  // chose to leave: no automatic rejoin
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
+        // (Nov 15 2026, user: "Leaving the queue does not stop alerts") chain alerts still waiting for this member's
+        // next /cw/sync are dropped
+        if (this.mem.notices[pid]) {
+          const keep = this.mem.notices[pid].filter((n) => n.t !== "panic" && !(n.t === "alert" && (n.kind === "timer" || n.kind === "up")));
+          if (keep.length) this.mem.notices[pid] = keep; else delete this.mem.notices[pid];
+        }
         break;
       case "hitting": {
         // "I'm hitting" also PAUSES alerts 1 & 2 for everyone until a hit lands or the flag runs out (20 s) - alert 3
