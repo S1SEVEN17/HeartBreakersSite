@@ -325,7 +325,10 @@ export function ocPlan(X) {
         // a MOVING member (o.leave): kept while they still sit idle (progress 0) in the crime they're leaving, or once
         // they've left it and are free; started planning there -> dropped (locked in)
         const moving = o.leave && o.pid != null && String(idleIn(o.pid) || "") === String(o.leave.crime_id);
-        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && (usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
+        // LOCKED TEAMS KEEP BUSY MEMBERS (Nov 15 2026, user: "Team Builder should allow placement of all members,
+        // regardless of their crime status."): a leader's placement on a locked team stands even while the member is
+        // still in another crime (shown as queued when that crime has a ready time) - only leaving the faction drops it
+        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && (t.lock || usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
           const k = Object.assign({}, o, {joined: false}); delete k.replaces; if (!moving) delete k.leave; return k;   // the old member has left: a normal open slot now
         }
         return {position: label, pid: null, name: "", rate: null};
@@ -348,7 +351,8 @@ export function ocPlan(X) {
       if (t.hold && !(NOW < Number(t.hold.until))) { holdLog[t.crime] = NOW + HOLD; delete t.hold; }
       if (X.reshuffle && !t.lock && !t.hold) continue;     // RECONFIGURE: unlocked spawn teams are planned again (holds stay)
       t.kind = "spawn"; t.crime_id = null;
-      t.roles = (t.roles || []).map(r => (r.pid != null && (roster[String(r.pid)] == null || (!usable(r.pid) && !O.includeBusy) || assigned.has(Number(r.pid))))
+      // (Nov 15 2026) locked spawn teams keep members who are busy in another crime too - see LOCKED TEAMS KEEP BUSY MEMBERS
+      t.roles = (t.roles || []).map(r => (r.pid != null && (roster[String(r.pid)] == null || (!t.lock && !usable(r.pid) && !O.includeBusy) || assigned.has(Number(r.pid))))
         ? Object.assign({}, r, {pid: null, name: "", rate: null, src: null}) : r);
       t.roles.forEach(r => { if (r.pid != null) take(r.pid); });
       teams.push(t);
