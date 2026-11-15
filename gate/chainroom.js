@@ -1310,7 +1310,9 @@ export class ChainRoom {
     const lastHit = cur > 0 && c.expires_at ? c.expires_at - CHAIN_TIMEOUT_S * 1000 : 0;
     // runway
     let banked = 0, regen = 0;
-    q.forEach((x) => {
+    // (Nov 15 2026, user: "Do not include 'Offline' members in the Runway at a safe pace calculation") - offline
+    // members' energy and regen don't count toward banked hits / regen / hours / bonus reachable
+    q.filter((x) => x.presence !== "offline").forEach((x) => {
       if (x.energy != null) banked += Math.floor(x.energy / HIT_ENERGY_COST);
       const s = x.stats;
       if (s && Number(s.energyInt) > 0 && (x.energy == null || x.energy < Number(s.energyMax))) regen += (Number(s.energyInc) || 0) * 3600 / Number(s.energyInt) / HIT_ENERGY_COST;
