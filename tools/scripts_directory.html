@@ -50,6 +50,7 @@ __MENU__
 <div class="sub">The faction's userscripts for Torn. Tap a script for details, then Install.</div>
 
 <div class="top"><input id="q" type="search" placeholder="Search scripts…" autocomplete="off">
+  <button id="azBtn" type="button" style="display:none" title="Clear the custom order - back to A-Z">Sort A-Z</button>
   <button id="addBtn" type="button" style="display:none">+ Add</button></div>
 <div class="card" id="formCard" style="display:none"><h2 id="formTitle">Add a script</h2><div id="formBody"></div></div>
 <div class="count" id="count"></div>
@@ -79,11 +80,33 @@ function render() {
     + `</div>`
     + (x.description ? `<details><summary>Details</summary><div class="desc">${rich(x.description)}</div></details>` : "")
     + `<div class="meta"><span>${x.install_url ? esc(host(x.install_url)) + " · " : ""}updated ${when(x.updated)}${leader && x.updated_by ? " by " + esc(x.updated_by) : ""}</span>`
-    + (leader ? `<span class="tools"><button class="e" data-edit="${x.id}">Edit</button><button class="x" data-del="${x.id}">Remove</button></span>` : "")
+    + (leader ? `<span class="tools">${q ? "" : `<button class="e" data-mv="-1" data-id="${x.id}" title="Move up" aria-label="Move up">▲</button><button class="e" data-mv="1" data-id="${x.id}" title="Move down" aria-label="Move down">▼</button>`}<button class="e" data-edit="${x.id}">Edit</button><button class="x" data-del="${x.id}">Remove</button></span>` : "")
     + `</div></div>`).join("")
     : `<div class="empty">${D.scripts.length ? "No scripts match that search." : "No scripts listed yet." + (leader ? " Tap + Add to list the first one." : "")}</div>`;
   document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => openForm(D.scripts.find(x => x.id === Number(b.dataset.edit))));
   document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => del(Number(b.dataset.del)));
+  document.querySelectorAll("[data-mv]").forEach(b => b.onclick = () => move(Number(b.dataset.id), Number(b.dataset.mv)));
+  $("azBtn").style.display = leader && D.custom_order ? "" : "none";
+}
+// ---- leaders: ORDER (Nov 15 2026, user: "Scripts should be sortable on the hub webpage ... The order on the script
+// should be that of the webpage.") ▲ / ▼ move a listing; the whole order is saved (POST {order: [ids]}) and is what
+// every member sees here and in the Suite's Scripts tab. "Sort A-Z" clears it. Hidden while searching.
+let orderBusy = false;
+async function saveOrder(ids) {
+  if (orderBusy) return; orderBusy = true;
+  try {
+    const r = await fetch("scripts", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify({order: ids})});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || r.status);
+  } catch (e) { alert("Order not saved: " + e.message); }
+  orderBusy = false; await load();
+}
+function move(id, by) {
+  const i = D.scripts.findIndex(x => x.id === id), j = i + by;
+  if (i < 0 || j < 0 || j >= D.scripts.length) return;
+  const a = D.scripts.slice(); [a[i], a[j]] = [a[j], a[i]];
+  D.scripts = a; D.custom_order = true; render();          // shows at once
+  saveOrder(a.map(x => x.id));
 }
 
 // ---- leaders: add / edit form ----
@@ -139,10 +162,11 @@ async function load() {
 }
 $("q").oninput = () => { if (D) render(); };
 $("addBtn").onclick = () => openForm(null);
+$("azBtn").onclick = () => { if (confirm("Clear the custom order and list the scripts A-Z?")) saveOrder([]); };
 load();
 // LIVE UPDATES (Nov 14 2026, user: the site updates in real time): scripts other leaders add, edit or remove show up
 // within 30 s while this page is visible - not while the add/edit form is open.
-setInterval(() => { if (!document.hidden && $("formCard").style.display === "none") load(); }, 30000);
+setInterval(() => { if (!document.hidden && !orderBusy && $("formCard").style.display === "none") load(); }, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden && $("formCard").style.display === "none") load(); });
 </script>
 </body></html>

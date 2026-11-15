@@ -3212,6 +3212,16 @@ async function scriptsRoute(env, req, url, who) {
       rows = (await env.OC_DB.prepare("SELECT id, name, summary, description, install_url, version, updated, updated_by FROM hub_script " +
         "ORDER BY name COLLATE NOCASE").all()).results || [];
     } catch (e) { rows = []; }                                // table not there yet (first deploy)
+    // LEADERS' ORDER (Nov 15 2026, user: "Scripts should be sortable on the hub webpage, not the script. The order on
+    // the script should be that of the webpage."): D1 oc_config env 'all' k 'scripts_order' = [id, ...] as leaders
+    // arranged them on scripts.html (POST {order}). Listed ids first in that order; anything not in it (a new listing)
+    // follows A-Z. The Hub page and the Suite both show this order.
+    let order = [];
+    try { const o = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'all' AND k = 'scripts_order'").first(); order = o && o.v ? JSON.parse(o.v) : []; } catch (e) { order = []; }
+    if (Array.isArray(order) && order.length) {
+      const pos = new Map(order.map((id, i) => [Number(id), i]));
+      rows.sort((a, b) => (pos.has(a.id) ? pos.get(a.id) : 1e9) - (pos.has(b.id) ? pos.get(b.id) : 1e9));   // stable: the rest stay A-Z
+    }
     // GREASY FORK (Nov 11 2026, user: "Scripts should pull the greasyfork information for their name, version numbers,
     // etc. These should stay updated even when an update is made."): a listing whose install link is on Greasy Fork
     // shows Greasy Fork's current name / version / description / last update / install link (read through
@@ -3224,7 +3234,7 @@ async function scriptsRoute(env, req, url, who) {
         install_url: g.code_url || r.install_url, updated: g.updated || r.updated, updated_by: g.updated ? "Greasy Fork" : r.updated_by,
         gf: {id: g.id, url: g.url, installs: g.installs, daily: g.daily}});
     }));
-    return Response.json({ok: true, scripts: rows, me: {leader: !!who.leader}}, H);
+    return Response.json({ok: true, scripts: rows, custom_order: Array.isArray(order) && order.length > 0, me: {leader: !!who.leader}}, H);
   }
   if (!who.leader) return bad("Only leaders can change the scripts list.", 403);
   if (req.method === "DELETE") {
@@ -3236,6 +3246,13 @@ async function scriptsRoute(env, req, url, who) {
   }
   if (req.method === "POST") {
     let b; try { b = await req.json(); } catch (e) { return bad("bad request"); }
+    if (Array.isArray(b.order)) {                             // leaders: save the order ([] = back to A-Z)
+      const ids = [...new Set(b.order.map(Number).filter(x => x > 0))].slice(0, SCRIPT_LIMITS.count);
+      await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'scripts_order', ?, ?, ?) " +
+        "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
+        .bind(JSON.stringify(ids), Date.now(), String(who.name || "")).run();
+      return Response.json({ok: true, order: ids}, H);
+    }
     const txt = (k) => String(b[k] == null ? "" : b[k]).replace(/\r\n?/g, "\n").trim();
     const v = {name: txt("name"), summary: txt("summary").replace(/\s*\n\s*/g, " "), description: txt("description"),
                install_url: txt("install_url"), version: txt("version")};
