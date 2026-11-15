@@ -450,6 +450,19 @@ export class ChainRoom {
           chain: (this.mem.chain && this.mem.chain.current) || 0, text: "Test alert from the Hub - if you can see / hear this, your alerts work." });
         break;
       }
+      case "diag": {   // 🔍 Alert check (HB Suite 0.2.21, leaders): the Hub's alert log + why it is / isn't alerting now
+        const me = this.mem.members[pid];
+        if (!me || !me.is_leader) break;
+        const now = Date.now(), c = this.mem.chain || {};
+        this.notify(pid, { t: "diag", now, why: this.alertWhyNot(now), chain: c.current || 0,
+          left: c.expires_at ? Math.round((c.expires_at - now) / 1000) : null, src: c.src || "",
+          stages: this.alertStages().map((x) => x.sec), min_chain: Number((this.mem.config || {}).minChain) || 0,
+          sockets: this.conns.size, sync_devices: Object.keys(this.mem.syncSeen).length,
+          queue: this.orderedQueue().map((x) => ({ pid: x.pid, name: x.name, can_hit: x.can_hit, away: x.away, presence: x.presence,
+            via: this.conns.has(Number(x.pid)) ? "ws" : (this.mem.syncSeen[x.pid] ? "sync" : "none") })),
+          log: (this.mem.alertLog || []).slice(-30) });
+        break;
+      }
       case "retal": changed = this.doRetalAction(pid, msg); break;
       default: break; // hello / ping: nothing to store
     }
@@ -1160,7 +1173,31 @@ export class ChainRoom {
     if (cur == null || at < cur) await this.storage.setAlarm(Math.max(Date.now() + 100, at));
   }
   sendAlert(pids, msg) {
+    this.logAlert(msg.kind, msg.stage, msg.chain, msg.remaining_ms, pids);
     for (const pid of new Set(pids)) if (pid) this.notify(Number(pid), Object.assign({ t: "alert" }, msg));
+  }
+  /* ---- ALERT LOG (Nov 15 2026, user: "None of the alerts are firing for the Suite Chain Watch. Test Alert seems to be
+   * working fine") - the last 30 alerts the Hub sent: when, which, chain count, seconds left, and who it went to
+   * (ws = live socket, held = waiting for that member's next /cw/sync poll). Kept with the room (saved);
+   * leaders read it with {t:"diag"} from the Suite (🔍 Alert check). No keys, no Torn data beyond the chain count. */
+  logAlert(kind, stage, chain, leftMs, pids) {
+    const to = [...new Set(pids)].filter(Boolean).map((p) => ({ pid: Number(p), name: (this.mem.members[p] || {}).name || "",
+      via: this.conns.has(Number(p)) ? "ws" : (this.mem.syncSeen[p] ? "held" : "none") }));
+    (this.mem.alertLog = this.mem.alertLog || []).push({ at: Date.now(), kind, stage: stage || 0, chain: chain || 0,
+      left: leftMs != null ? Math.round(leftMs / 1000) : null, to });
+    if (this.mem.alertLog.length > 30) this.mem.alertLog.splice(0, this.mem.alertLog.length - 30);
+  }
+  // why the Hub isn't sending timer alerts right now (one line, for 🔍 Alert check)
+  alertWhyNot(now) {
+    const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
+    if (!c || !(c.current > 0)) return "the Hub sees no live chain";
+    if (!c.expires_at || c.expires_at <= now) return "the Hub's chain timer has run out (waiting for a new reading)";
+    if (c.current < (Number(cfg.minChain) || 0)) return `chain ${c.current} is below the minimum chain (${cfg.minChain}) - no alerts yet`;
+    if (!this.alertStages().length) return "no alert times are set";
+    const q = this.orderedQueue();
+    if (!q.length) return "nobody is in the queue";
+    if (!q.some((x) => x.can_hit)) return "nobody in the queue can attack (hospital / jail / flying)";
+    return "armed - alerts go out at " + this.alertStages().map((x) => x.sec + "s").join(" / ") + " left";
   }
   checkAlerts(now) {
     const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
@@ -1195,6 +1232,7 @@ export class ChainRoom {
       if (lap.panic.includes(p.stage) || left > p.sec * 1000 + ALERT_EARLY_MS) continue;
       lap.panic.push(p.stage);
       if (PANIC_STAGES.some((x) => !lap.panic.includes(x.stage) && left <= x.sec * 1000 + ALERT_EARLY_MS)) continue;
+      this.logAlert("panic", p.stage, c.current, left, able);
       for (const pid of new Set(able)) this.notify(Number(pid), { t: "panic", seconds: p.sec, stage: p.stage, chain: c.current, now });
     }
     const stages = this.alertStages();
