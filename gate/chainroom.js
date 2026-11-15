@@ -65,6 +65,12 @@ const CONN_STALE_MS = 70000;              // a socket with no msg/ping for this 
 // heartbeats (every 45 s while the Torn tab is visible) is IDLE after 3 min without one; OFFLINE = no live socket
 // and no recent /cw/sync. Both are skipped for up / backup (like Away) but still get alert 3 and Panic.
 const IDLE_AFTER_MS = 180000;
+// OFFLINE REMOVAL (Nov 15 2026, user: "Offline for more than 60 minutes removes you from the Chain Watch hub. When you
+// come back, your script should rejoin the chain watch."): a queued member whose script has been gone (no live socket,
+// no /cw/sync) for this long is taken out of the queue and marked `rejoin`; their next state says me.rejoin = true and
+// the script joins again by itself. The mark is dropped when they join / leave, or after REJOIN_KEEP_MS.
+const OFFLINE_REMOVE_MS = 60 * 60 * 1000;
+const REJOIN_KEEP_MS = 7 * 24 * 3600 * 1000;
 // HUB-DRIVEN PANIC (same addendum §6): sent at 30 s, then 15 s left, once each per chain lap
 const PANIC_STAGES = [{ stage: 1, sec: 30 }, { stage: 2, sec: 15 }];
 const SYNC_STALE_MS = 45000;              // a /cw/sync device counts as present this long after its last sync
@@ -432,6 +438,7 @@ export class ChainRoom {
         break;
       }
       case "leave":
+        if (this.mem.rejoin) delete this.mem.rejoin[pid];  // chose to leave: no automatic rejoin
         if (this.mem.queue[pid]) { delete this.mem.queue[pid]; delete this.mem.status[pid]; changed = true; }
         break;
       case "hitting": {
@@ -480,6 +487,7 @@ export class ChainRoom {
 
   /* ---- JOIN (queue rules live here now, §5) ------------------------------- */
   doJoin(pid, msg) {
+    if (this.mem.rejoin) delete this.mem.rejoin[pid];      // (Nov 15 2026) back in - the offline mark is done
     if (this.mem.queue[pid]) return false;
     const m = this.mem.members[pid] || {};
     // RECRUITS (Nov 2026, user): Torn doesn't count chain hits from members in their first 72 h, so they can't join
@@ -1030,6 +1038,19 @@ export class ChainRoom {
       }
       // (The old "#1 / #2 Offline in Torn for 5 min -> removed" rule is gone - Nov 11 2026, user: inactive members
       //  are never removed, only flagged and sorted below active members.)
+      // OFFLINE 60 MIN -> REMOVED, REJOINS ON RETURN (Nov 15 2026, user) - see OFFLINE_REMOVE_MS
+      // "offline" here = the member's SCRIPT is gone (no socket, no recent /cw/sync) - not Torn's Offline status, so
+      // someone AFK with the page open isn't dropped (and then rejoined) every hour
+      const gone = !this.conns.has(Number(q.pid)) && !(this.mem.syncSeen[q.pid] && now - this.mem.syncSeen[q.pid] <= SYNC_STALE_MS);
+      if (gone) {
+        if (!q.offline_since) q.offline_since = now;
+        else if (now - q.offline_since >= OFFLINE_REMOVE_MS) {
+          delete this.mem.queue[q.pid]; delete this.mem.status[q.pid];
+          const R = (this.mem.rejoin = this.mem.rejoin || {}); R[q.pid] = now;
+          Object.keys(R).forEach((p) => { if (now - R[p] > REJOIN_KEEP_MS) delete R[p]; });
+          return;
+        }
+      } else if (q.offline_since) delete q.offline_since;
       void idx; void cooling;
     });
   }
@@ -1109,6 +1130,8 @@ export class ChainRoom {
       chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
       me: { pid, is_leader: !!me.is_leader, phase_ms: this.phaseFor(pid),
+            // (Nov 15 2026) removed for being offline 60+ min -> the script rejoins by itself
+            rejoin: !!(this.mem.rejoin && this.mem.rejoin[pid] && Date.now() - this.mem.rejoin[pid] < REJOIN_KEEP_MS && !this.mem.queue[pid]),
             // leaders get the member list for the script's "Assign bonus" picker
             members: me.is_leader ? Object.keys(this.mem.members).map((k) => ({ pid: Number(k), name: this.mem.members[k].name })) : undefined },
       mode: this.modeOf(), reason: this.reasonOf(),
