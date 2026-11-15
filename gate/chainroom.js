@@ -1342,10 +1342,21 @@ export class ChainRoom {
     });
     regen = Math.round(regen * 10) / 10;
     const toBonus = next ? next - cur : 0;
+    // PACE (HB Suite 0.2.31, Nov 15 2026, user: "Chain goal on the hero: hits left to the next bonus and an estimated
+    // time to reach it at the current pace"): a sample [ms, count] each time the count changes, kept for 15 minutes;
+    // pace = hits per minute over that window (needs 2+ minutes and 3+ hits of history, else null).
+    let P = this.mem.pace || (this.mem.pace = []);
+    if (!cur || (P.length && cur < P[P.length - 1][1])) P = this.mem.pace = [];                // chain over / new chain
+    if (cur && (!P.length || P[P.length - 1][1] !== cur)) P.push([now, cur]);
+    while (P.length > 1 && now - P[0][0] > 15 * 60000) P.shift();
+    let pace = null;
+    if (P.length > 1 && now - P[0][0] >= 120000 && cur - P[0][1] >= 3) pace = Math.round((cur - P[0][1]) / ((now - P[0][0]) / 60000) * 100) / 100;
     return {
       turn: cur > 0 ? { up, backup, since: Math.max(this.mem.turnUpAt, lastHit), reason } : null,
       bonus: next ? { next, warn_from: Math.max(1, next - (Number(cfg.bonusWarnHits) || 0)),
-                      pid: b ? b.pid : null, name: b ? b.name : null, by: b ? b.by : null } : null,
+                      pid: b ? b.pid : null, name: b ? b.name : null, by: b ? b.by : null,
+                      to_go: toBonus, pace_per_min: pace,                                    // (0.2.31) chain goal
+                      eta_s: pace > 0 ? Math.round(toBonus / pace * 60) : null } : null,
       runway: { banked_hits: banked, regen_per_hour: regen, hits_to_bonus: toBonus, bonus_reachable: banked >= toBonus,
                 hours: regen >= MIN_PACE_HITS_PER_HOUR ? null : Math.round(banked / (MIN_PACE_HITS_PER_HOUR - regen) * 10) / 10 },
       cooldown: this.coolingDown(now) ? { until: c.cooldown_until } : null,
