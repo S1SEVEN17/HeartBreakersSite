@@ -777,8 +777,10 @@ export class ChainRoom {
       // COOLDOWN (Nov 2026): after a break Torn cools the chain 6 s per hit - when the next chain can start
       cooldown_until: cur === 0 && Number(chain.cooldown) > 0 ? now + Number(chain.cooldown) * 1000 : 0,
     };
-    // the assigned bonus is done once the chain reaches it (or the chain ends)
-    if (this.mem.bonus && (cur >= this.mem.bonus.at || cur === 0)) this.mem.bonus = null;
+    // the assigned bonus is done once the chain reaches it (or a live chain ENDS).
+    // (Nov 14 2026 FIX, user: "Assigning chain bonus doesn't work"): this used to clear it whenever the count read 0,
+    // so a bonus assigned before a chain started (next bonus = 10) was wiped by the very next Hub read.
+    if (this.mem.bonus && (cur >= this.mem.bonus.at || (prev && prev.current > 0 && cur === 0))) this.mem.bonus = null;
     if (prev && prev.current > 0 && cur === 0) this.mem.lastChainEndedAt = now;
     if (cur > 0) this.mem.lastChainEndedAt = 0;
   }
