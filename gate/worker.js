@@ -1704,6 +1704,7 @@ async function ocPlanObj(env, envName, id) {
             success: tpSucc ? tpSuccessOf(tpSucc, tpNames, t.crime, t.roles || []) : null,
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position),
+              weight: (tpRoleShares(tpWts, t.crime, (t.roles || []).map(x => x.position)) || {})[r.position] ?? null,   // (0.2.25) role weight %
               // bound team: the exact slot in ITS instance (the seat they're in, or the open seat for their role)
               slot: (b && b.slot[r.pid]) || r.position, pid: Number(r.pid),
               name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
@@ -2765,11 +2766,13 @@ async function ocMine(env, pid) {
   };
   const slotRoles = c => (c.slots || []).map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position || "",
     pid: sl.user ? Number(sl.user.id) : null, rate: typeof sl.checkpoint_pass_rate === "number" ? sl.checkpoint_pass_rate : null}));
+  const sharesOf = c => tpRoleShares(tpW, c.name, (c.slots || []).map(sl => (sl.position_info && sl.position_info.label) || sl.position || "")) || {};
   const detail = c => Object.assign({difficulty: c.difficulty ?? null, created_at: c.created_at || null, planning_at: c.planning_at || null, ready_at: c.ready_at || null,
     expired_at: c.expired_at || null, pay: payOf(c),
     slots: (c.slots || []).map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position || "", pid: sl.user ? Number(sl.user.id) : null,
       name: sl.user ? nameOf(sl.user.id) : null, progress: sl.user ? Number(sl.user.progress) || 0 : null,
-      rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null, you: !!(sl.user && Number(sl.user.id) === pid)}))},
+      rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null, you: !!(sl.user && Number(sl.user.id) === pid),
+      weight: sharesOf(c)[(sl.position_info && sl.position_info.label) || sl.position || ""] ?? null}))},   // (0.2.25) role weight, % of the crime
     succOf(c.name, slotRoles(c), (teamOf(c) || {}).succ));
   let current = null;
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && Number(sl.user.id) === pid)
@@ -2780,6 +2783,7 @@ async function ocMine(env, pid) {
   for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment) {
     const c = t.crime_id != null ? crimes.find(x => String(x.id) === String(t.crime_id)) : null;
     assignment = {crime: t.crime, crime_id: t.crime_id || null, kind: t.kind || "spawn", position: r.position, rate: r.rate ?? null,
+                  weight: (tpRoleShares(tpW, t.crime, (t.roles || []).map(x => x.position)) || {})[r.position] ?? null,   // (0.2.25)
                   joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null,
                   // (0.2.24) the planned team's success: exact (tornprobability) or role-weighted from the team's rates
                   succ: (() => { const o = succOf(t.crime, (t.roles || []).map(x => ({position: x.position, pid: x.pid, rate: x.rate})), t.succ); return o.success; })(),
@@ -3742,6 +3746,19 @@ function tpWeighted(tp, crime, roles) {
   const look = l => { const k = tpKey(l); return wm[k] ?? (/\d+$/.test(k) ? wm[k.replace(/\d+$/, "")] : undefined); };
   roles.forEach(r => { const w = m ? (look(r.position) ?? 1) : 1; a += w * r.rate; ws += w; });
   return ws > 0 ? Math.round(a / ws * 10) / 10 : null;
+}
+// ROLE WEIGHTS FOR DISPLAY (HB Suite 0.2.25, Nov 15 2026, user: "Show weights with roles."): each role's share of the
+// crime's total weight, in % (tornprobability GetRoleWeights; "Enforcer #2" falls back to "Enforcer"). positions = the
+// crime's slot labels; -> {label: pct (1 decimal)} or null when the Hub has no weights for that crime.
+function tpRoleShares(tp, crime, positions) {
+  const m = tp && tp.weights ? Object.entries(tp.weights).find(([k]) => tpKey(k) === tpKey(crime)) : null;
+  if (!m || !positions.length) return null;
+  const wm = {}; Object.entries(m[1] || {}).forEach(([r, v]) => { wm[tpKey(r)] = Math.max(0, Number(v) || 0); });
+  const look = l => { const k = tpKey(l); return wm[k] ?? (/\d+$/.test(k) ? wm[k.replace(/\d+$/, "")] : undefined); };
+  const ws = positions.map(p => look(p)), tot = ws.reduce((a, w) => a + (w || 0), 0);
+  if (!(tot > 0)) return null;
+  const out = {}; positions.forEach((p, i) => { out[p] = ws[i] != null ? Math.round(ws[i] / tot * 1000) / 10 : null; });
+  return out;
 }
 // the parameter order for CalculateSuccess: the crime's roles P1..Pn (GetRoleNames) matched to our slot labels
 function tpOrder(names, crime, roles) {
