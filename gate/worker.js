@@ -438,6 +438,35 @@ async function sxRoute(env, ctx, req) {
       headers: {"X-HB-Save": "1", "Content-Type": "application/json"}, body: JSON.stringify(b.body || {})}), who, "update"));
     return sxJson({ok: false, error: "unknown"}, 400);
   }
+  // ⚙ SHARED RECRUIT SETTINGS (HB Suite 0.2.17, Nov 14 2026, user: "Share recruitment settings among leaders. Alert when
+  // changes are made."). LEADERS ONLY. One JSON for every leader's Suite: checks + limits + weights + must-haves, score
+  // thresholds, mail subject + message, Hub-list auto-send + its score. (Calls per minute and the collector switch stay
+  // per device.) {do:"get"} -> {data, updated, by, by_pid}; {do:"put", data, base} -> saved unless someone saved after
+  // `base` (-> {ok:true, saved:false, conflict:true, by, updated}); force:true overwrites. Never a key - fields that look like one
+  // are refused, and the whole thing is capped at 20 KB.
+  if (op === "rcset") {
+    if (!who.leader) return leadersOnly();
+    if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
+    await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS rc_settings (id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated INTEGER NOT NULL, " +
+      "by TEXT, by_pid INTEGER)").run();
+    const cur = await env.OC_DB.prepare("SELECT data, updated, by, by_pid FROM rc_settings WHERE id = 1").first();
+    if (b.do === "get") {
+      let data = null; try { data = cur ? JSON.parse(cur.data) : null; } catch (e) {}
+      return sxJson({ok: true, data, updated: cur ? Number(cur.updated) : 0, by: cur ? cur.by : null, by_pid: cur ? Number(cur.by_pid) : null});
+    }
+    if (b.do === "put") {
+      const json = JSON.stringify(b.data || null);
+      if (!b.data || typeof b.data !== "object" || json.length > 20000) return sxJson({ok: false, error: "Settings missing or too large."}, 400);
+      if (/"[^"]*(key|token|secret|password)[^"]*"\s*:/i.test(json)) return sxJson({ok: false, error: "That looks like it contains a key - not saved."}, 400);
+      if (cur && !b.force && Number(cur.updated) > Number(b.base || 0))
+        return sxJson({ok: true, saved: false, conflict: true, by: cur.by, updated: Number(cur.updated)});   // ok:true so the Suite sees who
+      const now = Date.now();
+      await env.OC_DB.prepare("INSERT INTO rc_settings (id, data, updated, by, by_pid) VALUES (1, ?, ?, ?, ?) ON CONFLICT (id) DO UPDATE SET " +
+        "data = excluded.data, updated = excluded.updated, by = excluded.by, by_pid = excluded.by_pid").bind(json, now, String(who.name || ""), Number(who.id)).run();
+      return sxJson({ok: true, updated: now});
+    }
+    return sxJson({ok: false, error: "unknown"}, 400);
+  }
   // 🗃 RECRUIT POOL (HB Suite 0.2.8, Nov 14 2026, user: "I noticed there was only a 1k limit of users. Can that be
   // increased, even if we dump most data except their userID and level? How feasible would it be to offload this data
   // to the HUB ... for later searching?" - chose a shared Hub pool). LEADERS ONLY. Every player a leader's Suite scans
