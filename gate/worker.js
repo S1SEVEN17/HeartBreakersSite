@@ -438,6 +438,83 @@ async function sxRoute(env, ctx, req) {
       headers: {"X-HB-Save": "1", "Content-Type": "application/json"}, body: JSON.stringify(b.body || {})}), who, "update"));
     return sxJson({ok: false, error: "unknown"}, 400);
   }
+  // 🗃 RECRUIT POOL (HB Suite 0.2.8, Nov 14 2026, user: "I noticed there was only a 1k limit of users. Can that be
+  // increased, even if we dump most data except their userID and level? How feasible would it be to offload this data
+  // to the HUB ... for later searching?" - chose a shared Hub pool). LEADERS ONLY. Every player a leader's Suite scans
+  // (Recruit tab → Scan page) lands here as ONE small row - public Torn facts only, no keys, no stats beyond these:
+  //   pid, name, level, fac (faction id, 0 = none, NULL = unknown), la (last action, epoch s), state (Okay / Hospital /
+  //   Federal ...), bs (FFScouter estimate), pct (% of the scanning leader's checks passed), verdict (fit | near | fail |
+  //   excl | ''), checked (ms of the last quick check), by (leader pid), added (ms first scanned)
+  // so one leader's check spares every other leader the same Torn call, and the pool can be searched later.
+  //   {do:"add",    players:[{pid, name, level?}]}            new scans (existing rows only get a name / level filled)
+  //   {do:"update", players:[{pid, name, level, fac, la, state, bs, pct, verdict}]}   after quick checks (checked = now)
+  //   {do:"search", lvl_min, lvl_max, fac:"none"|"any", checked:"never"|"stale"|"fresh"|"any", stale_days, verdict,
+  //                 sort:"added"|"level"|"bs"|"pct", limit<=500, offset}  -> {rows, total}
+  //   {do:"get",    pids:[...]<=500}  -> {rows}  (what the pool knows about these players)
+  //   {do:"stats"}  -> {total, checked, fits, nofac}
+  //   {do:"forget", pids:[...]}  (a leader removes rows, e.g. players who joined)
+  // No Torn call here. D1 rc_pool; at most RC_POOL_MAX rows (the oldest never-checked rows make room first).
+  if (op === "rcpool") {
+    if (!who.leader) return leadersOnly();
+    if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
+    const DB = env.OC_DB, now = Date.now();
+    await DB.prepare("CREATE TABLE IF NOT EXISTS rc_pool (pid INTEGER PRIMARY KEY, name TEXT, level INTEGER, fac INTEGER, la INTEGER, " +
+      "state TEXT, bs INTEGER, pct REAL, verdict TEXT, checked INTEGER, by INTEGER, added INTEGER NOT NULL)").run();
+    await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_lvl ON rc_pool (level)").run();
+    const n = v => (v == null || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
+    const ids = a => (Array.isArray(a) ? a : []).map(Number).filter(x => Number.isInteger(x) && x > 0).slice(0, 500);
+    const VERD = ["fit", "near", "fail", "excl", ""];
+    if (b.do === "add" || b.do === "update") {
+      const list = (Array.isArray(b.players) ? b.players : []).slice(0, 500).filter(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0);
+      if (!list.length) return sxJson({ok: true, n: 0});
+      const cnt = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool").first();
+      const over = Number((cnt && cnt.c) || 0) + list.length - RC_POOL_MAX;
+      if (over > 0) await DB.prepare("DELETE FROM rc_pool WHERE pid IN (SELECT pid FROM rc_pool WHERE checked IS NULL ORDER BY added LIMIT ?)").bind(over).run();
+      const ops = list.map(x => b.do === "add"
+        ? DB.prepare("INSERT INTO rc_pool (pid, name, level, by, added) VALUES (?, ?, ?, ?, ?) ON CONFLICT (pid) DO UPDATE SET " +
+            "name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE rc_pool.name END, level = COALESCE(excluded.level, rc_pool.level)")
+            .bind(Number(x.pid), String(x.name || "").slice(0, 40), n(x.level), who.id, now)
+        : DB.prepare("INSERT INTO rc_pool (pid, name, level, fac, la, state, bs, pct, verdict, checked, by, added) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) " +
+            "ON CONFLICT (pid) DO UPDATE SET name = excluded.name, level = excluded.level, fac = excluded.fac, la = excluded.la, state = excluded.state, " +
+            "bs = COALESCE(excluded.bs, rc_pool.bs), pct = excluded.pct, verdict = excluded.verdict, checked = excluded.checked, by = excluded.by")
+            .bind(Number(x.pid), String(x.name || "").slice(0, 40), n(x.level), n(x.fac), n(x.la), String(x.state || "").slice(0, 20), n(x.bs),
+                  n(x.pct), VERD.includes(x.verdict) ? x.verdict : "", now, who.id, now));
+      for (let i = 0; i < ops.length; i += 100) await DB.batch(ops.slice(i, i + 100));
+      return sxJson({ok: true, n: ops.length});
+    }
+    if (b.do === "get") {
+      const p = ids(b.pids); if (!p.length) return sxJson({ok: true, rows: []});
+      const {results} = await DB.prepare(`SELECT * FROM rc_pool WHERE pid IN (${p.map(() => "?").join(",")})`).bind(...p).all();
+      return sxJson({ok: true, rows: results || []});
+    }
+    if (b.do === "forget") {
+      const p = ids(b.pids); if (p.length) await DB.prepare(`DELETE FROM rc_pool WHERE pid IN (${p.map(() => "?").join(",")})`).bind(...p).run();
+      return sxJson({ok: true, n: p.length});
+    }
+    if (b.do === "stats") {
+      const r = await DB.prepare("SELECT COUNT(*) AS total, SUM(checked IS NOT NULL) AS checked, SUM(verdict = 'fit') AS fits, " +
+        "SUM(fac = 0) AS nofac FROM rc_pool").first();
+      return sxJson({ok: true, total: Number(r && r.total) || 0, checked: Number(r && r.checked) || 0, fits: Number(r && r.fits) || 0, nofac: Number(r && r.nofac) || 0});
+    }
+    if (b.do === "search") {
+      const w = [], v = [];
+      if (n(b.lvl_min) != null) { w.push("level >= ?"); v.push(n(b.lvl_min)); }
+      if (n(b.lvl_max) != null) { w.push("level <= ?"); v.push(n(b.lvl_max)); }
+      if (b.fac === "none") w.push("(fac = 0 OR fac IS NULL)");
+      const stale = now - Math.max(1, n(b.stale_days) || 7) * 864e5;
+      if (b.checked === "never") w.push("checked IS NULL");
+      else if (b.checked === "stale") { w.push("(checked IS NULL OR checked < ?)"); v.push(stale); }
+      else if (b.checked === "fresh") { w.push("checked >= ?"); v.push(stale); }
+      if (VERD.includes(b.verdict) && b.verdict) { w.push("verdict = ?"); v.push(b.verdict); }
+      const where = w.length ? " WHERE " + w.join(" AND ") : "";
+      const order = {level: "level DESC", bs: "bs DESC", pct: "pct DESC", added: "added DESC"}[b.sort] || "added DESC";
+      const lim = Math.min(500, Math.max(1, n(b.limit) || 100)), off = Math.max(0, n(b.offset) || 0);
+      const tot = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool" + where).bind(...v).first();
+      const {results} = await DB.prepare(`SELECT * FROM rc_pool${where} ORDER BY ${order} NULLS LAST, pid LIMIT ? OFFSET ?`).bind(...v, lim, off).all();
+      return sxJson({ok: true, rows: results || [], total: Number(tot && tot.c) || 0});
+    }
+    return sxJson({ok: false, error: "unknown"}, 400);
+  }
   // ⚙ SETTINGS SYNC (HB Suite 0.2.1, Nov 14 2026, user: "Settings Backup, include an option to upload settings to the
   // Hub to share between devices"): one small JSON per member (their OWN pid only) - the Suite's layout / module /
   // display choices. The Suite never puts an API key (Torn or FFScouter) in it. {data} -> saved; get -> {data, updated}
@@ -3023,6 +3100,7 @@ async function scriptsRoute(env, req, url, who) {
 // ======================================================================================================
 const RC_STATUS = ["new", "contacted", "joined", "declined"];
 const RC_MAX_PUSH = 100, RC_MAX_ROWS = 2000, RC_NOTE_MAX = 500;
+const RC_POOL_MAX = 200000;             // 🗃 recruit pool rows (Suite 0.2.8) - ~20 MB of D1 at most
 const RC_PURGE_MS = 180 * 864e5;         // removed recruits are deleted for good after 180 days
 
 // Only the fields the Recruitment page shows, with sane types and lengths - nothing else from the client is stored.
