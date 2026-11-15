@@ -2763,6 +2763,23 @@ async function ocMine(env, pid) {
     return {pay_day: Math.round(hi * (jn ? m : 1)), pay_day_min: lo != null ? Math.round(lo * (jn ? m : 1)) : null, normal: Math.round(hi),
             join_now: jn && open, est: jn, days: id && days[id] != null ? Number(days[id]) : null};
   };
+  // YOUR PAY PER DAY, FIXED AT WHEN YOU JOINED (Nov 15 2026, user: "The Suite should show YOUR 'Join Now' pay per day
+  // when you joined the crime."): for the crime you're IN, the join-now figure is worked out from the moment you took
+  // your seat (slot user.joined_at) instead of from now - so it no longer climbs as the payout gets closer, and it's
+  // comparable with the join-now pay of a crime you're assigned to. Same arithmetic as the planner's instDays:
+  //   crime type's days = mult x days (plan:stats); downtime = type days - seats;
+  //   your days = max(1, time from joining to ready + downtime);  pay = type's pay per day x type days / your days.
+  // Falls back to the from-now figure when the join time or the planner's figures aren't known.
+  const payMine = (c, sl) => {
+    const base = payOf(c); if (!base) return base;
+    const id = String(c.id), m = Number(mult[id]) || 0, d = Number(days[id]) || 0, j = Number(sl && sl.user && sl.user.joined_at) || 0;
+    if (!(m > 0) || !(d > 0) || !j) return Object.assign({}, base, {join_now: false});
+    const typeDays = m * d, down = Math.max(0, typeDays - ((c.slots || []).length || 1)), nowS = Date.now() / 1000;
+    const toReady = Number(c.ready_at) > 0 ? (Number(c.ready_at) - nowS) / 86400 : Math.max(0, d - down);
+    const mine = Math.max(1, toReady + Math.max(0, nowS - j) / 86400 + down), k = typeDays / mine;
+    return {pay_day: Math.round(base.normal * k), pay_day_min: pmin[c.name] != null ? Math.round(pmin[c.name] * k) : null, normal: base.normal,
+            join_now: false, est: true, yours: true, days: base.days, your_days: Math.round(mine * 10) / 10};
+  };
   const teamOf = c => (plan.teams || []).find(t => t.crime_id != null && String(t.crime_id) === String(c.id));
   // TEAM SUCCESS (HB Suite 0.2.24, Nov 15 2026, user: "Team success is empty. This should be the weighted success rate
   // based on the tornprobability info."): tornprobability.com's exact chance when the Hub has it for this crime + these
@@ -2792,7 +2809,8 @@ async function ocMine(env, pid) {
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && Number(sl.user.id) === pid)
     current = Object.assign({crime: c.name, crime_id: c.id, status: c.status, position: (sl.position_info && sl.position_info.label) || sl.position || "",
                progress: Number(sl.user.progress) || 0, ready_at: c.ready_at || null, filled: (c.slots || []).filter(x => x.user).length,
-               seats: (c.slots || []).length, rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}, detail(c));
+               seats: (c.slots || []).length, rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}, detail(c),
+               {pay: payMine(c, sl)});   // (Nov 15 2026) your pay per day from when you joined
   let assignment = null;
   for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment) {
     const c = t.crime_id != null ? crimes.find(x => String(x.id) === String(t.crime_id)) : null;
