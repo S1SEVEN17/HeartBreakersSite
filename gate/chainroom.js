@@ -463,6 +463,10 @@ export class ChainRoom {
           log: (this.mem.alertLog || []).slice(-30) });
         break;
       }
+      // VERIFY (HB Suite 0.2.22, user: "When a chain reaches 0, force an API/Hub check to make sure its actually dead"):
+      // a script's timer ran out with a count still up -> read Torn's faction/chain now (shared 10 s gap, so a whole
+      // queue asking at once is still ONE Torn call). A dead chain comes back as 0 and ends every alert.
+      case "verify": { const c = this.mem.chain; if (c && c.current > 0) this.requestConfirmRead(); break; }
       case "retal": changed = this.doRetalAction(pid, msg); break;
       default: break; // hello / ping: nothing to store
     }
@@ -742,6 +746,15 @@ export class ChainRoom {
     return true;
   }
 
+  // CHAIN OVER (Nov 15 2026, user: "If its dead, ensure alerts are no longer going out"): alerts / Panic still waiting
+  // for a polling device's next /cw/sync are thrown away, and this lap's alert state is reset
+  dropPendingAlerts() {
+    for (const p of Object.keys(this.mem.notices)) {
+      const keep = (this.mem.notices[p] || []).filter((n) => n.t !== "panic" && !(n.t === "alert" && (n.kind === "timer" || n.kind === "up")));
+      if (keep.length) this.mem.notices[p] = keep; else delete this.mem.notices[p];
+    }
+    this.mem.alertLap = null; this.mem.alertUpSent = 0;
+  }
   requestConfirmRead() {
     const now = Date.now();
     if (now - (this.mem._confirmAt || 0) < CONFIRM_READ_GAP_MS) return;
@@ -794,7 +807,7 @@ export class ChainRoom {
     // (Nov 14 2026 FIX, user: "Assigning chain bonus doesn't work"): this used to clear it whenever the count read 0,
     // so a bonus assigned before a chain started (next bonus = 10) was wiped by the very next Hub read.
     if (this.mem.bonus && (cur >= this.mem.bonus.at || (prev && prev.current > 0 && cur === 0))) this.mem.bonus = null;
-    if (prev && prev.current > 0 && cur === 0) this.mem.lastChainEndedAt = now;
+    if (prev && prev.current > 0 && cur === 0) { this.mem.lastChainEndedAt = now; this.dropPendingAlerts(); }
     if (cur > 0) this.mem.lastChainEndedAt = 0;
   }
 
@@ -827,7 +840,9 @@ export class ChainRoom {
 
     // ---- Hub Torn reads, each on its own cadence (API: Heart Breakers Hub - Chain Watch) ----
     let hubChainRead = false;
-    if (due(this.mem._chainAt, READ_MS.chain[stateKey] * mult, now)) {
+    // (Nov 15 2026) the timer ran out while the Hub still shows a count: confirm with Torn now, not at the next 30 s read
+    const ranOut = live && this.mem.chain.expires_at && this.mem.chain.expires_at <= now && now - (this.mem._chainAt || 0) > CONFIRM_READ_GAP_MS;
+    if (ranOut || due(this.mem._chainAt, READ_MS.chain[stateKey] * mult, now)) {
       this.mem._chainAt = now; hubChainRead = true;
       const d = await this.tornGet("faction/chain");
       if (d && d.chain) this.applyHubChain(d.chain);
@@ -872,6 +887,8 @@ export class ChainRoom {
     if (al && al < next) next = Math.max(now + 250, al);
     const ni = this.nextIdleAt(now);                       // a member going idle: wake so `up` moves on time
     if (ni && ni < next) next = Math.max(now + 250, ni + 100);
+    const ex = live ? Number(this.mem.chain.expires_at) || 0 : 0;   // the timer running out: wake to confirm (Nov 15 2026)
+    if (ex > now && ex + 1500 < next) next = ex + 1500;
     const ns = this.nextShiftNudgeAt(now);                 // a present member's shift starting before then: wake for it
     if (ns && ns < next) next = Math.max(now + 250, ns);
     await this.storage.setAlarm(next);
@@ -1202,6 +1219,7 @@ export class ChainRoom {
   checkAlerts(now) {
     const c = this.mem.chain, cfg = this.mem.config || CW_DEFAULT_CONFIG;
     if (!c || !(c.current > 0) || !c.expires_at) return;
+    if (c.expires_at <= now) return;                       // timer ran out: nothing (not even "You're up") until Torn confirms (Nov 15 2026)
     const ex = this.extras(), turn = ex.turn;
     // "you're up" - once per change of who's up. NOT below minChain (Nov 10 2026, user: "NO alerts should go out
     // before the set minimum chain, even the 'You're up' alerts"). Whoever is up when the chain reaches the minimum
