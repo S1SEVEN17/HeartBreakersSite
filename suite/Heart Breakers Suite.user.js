@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.39
+// @version      0.2.43
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,18 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.43 (Nov 15 2026) - ⛶ Compact view opens by itself the moment an alert fires. 🧩 Scripts: the sort buttons
+ *          added in 0.2.42 are gone - the tab shows the order leaders set on the Hub's Scripts page (▲ / ▼ there).
+ *  v0.2.42 (Nov 15 2026) - ⛶ Compact View (Chain tab button): a small tab on the left or right edge with the chain
+ *          timer, your position and I'm hitting - shown instead of the round icon while the Suite is minimized. Tap to
+ *          open / close, drag up or down, Original or Smaller size, ⤢ for the full Suite.
+ *  v0.2.41 (Nov 15 2026) - 🕒 Time setting (user: "Should be TCT / Local, 12h / 24h"): the TCT button read "EST" when a
+ *          page-wide TCT converter script rewrote it - "TCT" is now drawn by CSS there and after every printed time,
+ *          like the schedule's. Two rows: TCT / Local, then 12h / 24h (same order on the schedule).
+ *  v0.2.40 (Nov 15 2026) - ⛓ Queue cover: the four runway tiles are one headline - "Queue covers about 12 min · until
+ *          ~14:32" (red under 15 min, amber under 30, green above) with hits ready, how many can hit now and whether
+ *          the next bonus is in reach. 🕒 ⚙ → Display → "Times shown in" TCT / Local (12h / 24h for Local): every clock
+ *          time and date in the Suite follows it; the schedule's own switch is the same setting.
  *  v0.2.39 (Nov 15 2026) - ⬆ Updates reach you fast (user: "I want them to be pushed ASAP to users"): the Hub now
  *          sends the published Suite version with every Chain Watch update, so the banner shows within seconds of a
  *          release (the old check was every 6 h; the fallback check is now every 30 min). 3+ versions behind: the
@@ -354,7 +366,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.39';
+    const VERSION = '0.2.43';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -404,6 +416,8 @@
         rsSetAt: 'hbs_rs_set_at', rsSetAt0: 'hbs_rs_set_at0',   // shared recruit settings: version applied / first download done (0.2.17)
         rsSetNote: 'hbs_rs_set_note',          // the last change another leader made {by, at, diff} (0.2.17)
         rtOpen: 'hbs_rt_open',
+        cwCompact: 'hbs_cw_compact',           // ⛶ Compact view {on, size 'l'|'s', side 'left'|'right', y, open} (0.2.42)
+
         relSeen: 'hbs_rel_seen',               // 🛡 low reliability: {member id: grade rank last seen} (0.2.35)
         onb: 'hbs_onboard',                    // ✅ Getting started {oc, ocAt, test, join, crime, done} (0.2.32)
         ocDepOpen: 'hbs_oc_dep_open', ocShareOpen: 'hbs_oc_share_open',   // 🚀 Deployed / 📡 Sharing folds (0.2.23)
@@ -446,8 +460,12 @@
     const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
     const pnum = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[$,\s]/g, '')); return Number.isFinite(n) ? n : 0; };   // "1,000,000" -> 1000000
     const int = n => Math.round(num(n)).toLocaleString('en-US');
-    const fmtD = t => t ? new Date(t * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '-';
-    const fmtDT = t => t ? new Date(t * 1000).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) : '-';
+    const tzLocal = () => store.get(K.schTz, 'tct') === 'local';
+    const tzTag = () => tzLocal() ? 'local' : 'TCT';                                           // plain text (confirm() etc.)
+    const tzTagH = () => tzLocal() ? 'local' : '<span class="hbs-tct" aria-label="TCT"></span>';   // html ("TCT" drawn by CSS - see the schedule notes)
+    const tzOpt = o => tzLocal() ? Object.assign(o, o.hour ? { hour12: store.get(K.schHr, '24') === '12' } : {}) : Object.assign(o, { timeZone: 'UTC' }, o.hour ? { hour12: false } : {});
+    const fmtD = t => t ? new Date(t * 1000).toLocaleDateString('en-US', tzOpt({ month: 'short', day: 'numeric', year: 'numeric' })) : '-';
+    const fmtDT = t => t ? new Date(t * 1000).toLocaleString('en-US', tzOpt({ month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })) : '-';
     const money = n => '$' + Math.round(num(n)).toLocaleString('en-US');
     const shortMoney = n => { n = num(n); return n >= 1e9 ? '$' + (n / 1e9).toFixed(2) + 'b' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + n; };
     const big = n => n == null ? '-' : n >= 1e9 ? (n / 1e9).toFixed(2) + 'b' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'm' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
@@ -962,6 +980,42 @@
             #hbs-panel .hbs-banner{margin-top:7px;padding:6px 8px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:11.5px;}
             #hbs-panel .hbs-sec{border-bottom:0;margin:14px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);}
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
+            /* 0.2.42 - ⛶ compact view (edge tab) */
+            #hbs-launcher.hbs-cvhide{display:none !important;}
+            #hbs-compact{position:fixed;z-index:2147481000;box-sizing:border-box;background:#14161b;border:1px solid #FFB454;color:#e8e8e8;font:13px/1.3 Arial,sans-serif;text-align:center;
+                cursor:pointer;user-select:none;-webkit-user-select:none;box-shadow:0 2px 10px rgba(0,0,0,.5);padding:5px 6px;}
+            #hbs-compact.cv-right{right:0;border-right:0;border-radius:10px 0 0 10px;} #hbs-compact.cv-left{left:0;border-left:0;border-radius:0 10px 10px 0;}
+            #hbs-compact .t{font-weight:bold;color:#fff;font-variant-numeric:tabular-nums;} #hbs-compact .t.amber{color:#FFB454;} #hbs-compact .t.red{color:#ff5b5b;} #hbs-compact .t.dim{color:#777;}
+            #hbs-compact .p{font-size:11px;color:#bbb;} #hbs-compact .s{font-size:11px;color:#999;}
+            #hbs-compact .pl span{display:inline-block;padding:2px 8px;border-radius:9px;background:#2c313a;color:#ddd;font-weight:bold;font-size:12px;white-space:nowrap;}
+            #hbs-compact.up .pl span{background:#2f5d33;color:#c8f5cf;} #hbs-compact.bk .pl span{background:#5a4417;color:#FFD48A;}
+            #hbs-compact.cv-right.up{border-left:3px solid #4caf50;} #hbs-compact.cv-right.bk{border-left:3px solid #FFB454;}
+            #hbs-compact.cv-left.up{border-right:3px solid #4caf50;} #hbs-compact.cv-left.bk{border-right:3px solid #FFB454;}
+            #hbs-compact .b{display:block;width:100%;margin-top:6px;padding:8px 6px;border:0;border-radius:8px;background:#FFB454;color:#2a1c00;font:bold 13px Arial,sans-serif;cursor:pointer;touch-action:none;}
+            #hbs-compact .b.on{background:#2f5d33;color:#c8f5cf;}
+            #hbs-compact .x{position:absolute;top:2px;font-size:13px;color:#999;padding:2px 5px;} #hbs-compact.cv-right .x{left:2px;} #hbs-compact.cv-left .x{right:2px;}
+            #hbs-compact.cv-l:not(.open) .t{font-size:16px;} #hbs-compact.cv-s:not(.open){padding:4px 6px;} #hbs-compact.cv-s:not(.open) .t{font-size:13px;}
+            #hbs-compact.cv-l.open{width:138px;padding:8px;} #hbs-compact.cv-l.open .t{font-size:30px;line-height:1.2;} #hbs-compact.cv-l.open .pl{margin:4px 0 2px;}
+            #hbs-compact.cv-s.open{width:100px;padding:6px;} #hbs-compact.cv-s.open .r{display:flex;align-items:baseline;justify-content:center;gap:6px;margin-top:8px;}
+            #hbs-compact.cv-s.open .t{font-size:21px;} #hbs-compact.cv-s.open .pl span{font-size:11px;padding:1px 6px;} #hbs-compact.cv-s.open .b{font-size:12px;padding:7px 4px;margin-top:5px;}
+            #hbs-compact.flash{animation:hbsCvFlash .9s steps(1,end) infinite;} #hbs-compact.flash.panic{animation-duration:.45s;}
+            @keyframes hbsCvFlash{0%{background:#7a1410;border-color:#ff3b30;}50%{background:#14161b;border-color:#FFB454;}}
+            #hbs-panel .hbs-cvopt{text-align:left;margin-top:6px;}
+            /* 0.2.40 - queue cover headline + time setting row */
+            #hbs-panel .hbs-cover{margin:8px 0 2px;padding:9px 12px;border-radius:9px;text-align:left;border:1px solid #2f5d33;background:#16261b;color:#c8f5cf;}
+            #hbs-panel .hbs-cover .h{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;}
+            #hbs-panel .hbs-cover .h i{font-style:normal;font-size:15px;}
+            #hbs-panel .hbs-cover .h b{font-size:14.5px;}
+            #hbs-panel .hbs-cover .h span{margin-left:auto;font-size:11.5px;opacity:.85;white-space:nowrap;}
+            #hbs-panel .hbs-cover .d{margin-top:5px;font-size:11.5px;opacity:.9;line-height:1.5;}
+            #hbs-panel .hbs-cover .d .y{color:#7CFC9A;font-weight:bold;} #hbs-panel .hbs-cover .d .n{color:#ff8f8f;font-weight:bold;}
+            #hbs-panel .hbs-cover.warn{border-color:#6b4a18;background:#2a2414;color:#ffd9a0;}
+            #hbs-panel .hbs-cover.low{border-color:#7a3a3a;background:#3a1f1f;color:#ffd0d0;}
+            #hbs-panel .hbs-tzrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;text-align:left;}
+            #hbs-panel .hbs-tzrow > span:first-child{display:flex;flex-direction:column;min-width:0;}
+            #hbs-panel .hbs-tzrow small{color:#888;font-size:10.5px;}
+            #hbs-panel .hbs-tzrow .hbs-chips{flex:0 0 auto;margin:0;}
+            #hbs-panel .hbs-tzset{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex:0 0 auto;}
             /* 0.2.39 - red update banner (3+ versions behind / required) */
             #hbs-panel .hbs-upd.hbs-updreq{background:#4a1616;border-color:#ff6b6b;color:#ffe0e0;font-size:12.5px;line-height:1.5;padding:8px 10px;}
             #hbs-panel .hbs-upd.hbs-updreq .hbs-btn{margin-left:6px;text-decoration:none;}
@@ -1671,7 +1725,7 @@
             // (0.2.17) another leader changed the shared recruit settings in the last 48 h
             await rsSyncSettings();
             { const SN = store.get(K.rsSetNote, null);
-              if (SN && Date.now() - SN.at < 48 * 3600e3) lines.push(`⚙ Recruit settings changed by <b>${esc(SN.by)}</b> (${fmtDT(Math.floor(SN.at / 1000))} TCT)${(SN.diff || []).length ? ': ' + esc(SN.diff.slice(0, 4).join(', ')) + (SN.diff.length > 4 ? '…' : '') : ''}`); }
+              if (SN && Date.now() - SN.at < 48 * 3600e3) lines.push(`⚙ Recruit settings changed by <b>${esc(SN.by)}</b> (${fmtDT(Math.floor(SN.at / 1000))} ${tzTagH()})${(SN.diff || []).length ? ': ' + esc(SN.diff.slice(0, 4).join(', ')) + (SN.diff.length > 4 ? '…' : '') : ''}`); }
             (At ? At.unpaid || [] : []).forEach(w => lines.push(`💰 No payout yet: vs ${esc(w.opponent || '?')} (${fmtD(w.end)})`));
             (At ? At.recruits || [] : []).forEach(r => lines.push(`🧑 Recruit ${esc(r.name)} idle ${r.idle} days`));
             const OA = (S && S.oc_alerts) || {};
@@ -2281,7 +2335,7 @@
                 return { id, name: nm(id), cur: !!(A.names[id] || [])[1], cats, n };
             }).filter(r => r.n).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
             out += tiles(ARM_LOAN.map(([c, ic]) => [int(tot[c] || 0), ic + ' ' + (c === 'Temporary' ? 'Temps' : c)]).concat([[String(rows.length), 'Members']]));
-            out += `<div class="hbs-hint">${A.loans_at ? 'As of ' + fmtDT(A.loans_at) + ' TCT (read with each full Hub update)' : 'Not read yet - it starts with the next full Hub update'} · tap a member for their items</div>`;
+            out += `<div class="hbs-hint">${A.loans_at ? 'As of ' + fmtDT(A.loans_at) + ' ' + tzTagH() + ' (read with each full Hub update)' : 'Not read yet - it starts with the next full Hub update'} · tap a member for their items</div>`;
             out += rows.map(r => {
                 const key = 'al:' + r.id;
                 const detail = open[key] ? `<div class="hbs-detail">${ARM_LOAN.filter(([c]) => (r.cats[c] || []).length).map(([c, ic]) => {
@@ -2845,11 +2899,23 @@
         // QUEUE RUNWAY (0.2.22, user: "Keep the Queue information, but format it professionally"): four labelled stats -
         // hits banked in the queue's energy, regen per hour, how long that lasts at the slowest safe pace (∞ = regen
         // keeps up), and whether the next bonus is within reach of the banked hits
-        if (rw) out += `<div class="hbs-runway">
-            <div><b>${int(rw.banked_hits)}</b><small>hits banked</small></div>
-            <div><b>+${int(Math.round((+rw.regen_per_hour || 0) * 25))} E</b><small>energy regen / hour</small></div>
-            <div><b>${rw.hours != null ? '~' + (+rw.hours).toFixed(1) + ' h' : '∞'}</b><small>runway at safe pace</small></div>
-            <div class="${rw.bonus_reachable ? 'ok' : 'no'}"><b>${rw.bonus_reachable ? '✓' : '✗'}</b><small>${bonus.next ? 'bonus ' + int(bonus.next) : 'next bonus'} ${rw.bonus_reachable ? 'in reach' : 'out of reach'}</small></div></div>`;
+        // QUEUE COVER (0.2.40, user: "Is there a better way to show/represent this in the chain watcher?" -> one headline:
+        // how long the queue can hold the chain at the slowest safe pace, until when (TCT / Local - the ⚙ time setting),
+        // and why: hits ready, how many watchers can hit now, and whether the next bonus is in reach ("Add the 'Bonus 25
+        // in reach' notification to the new headlines. Remove the 'next hit regenerates' line."). Red under 15 min,
+        // amber under 30, green above; "regen keeps pace" when the queue's regen alone holds the chain. Replaces the
+        // four tiles (hits banked / regen per hour / runway / bonus).
+        if (rw) {
+            const mins = rw.hours != null ? Math.max(0, Math.round(+rw.hours * 60)) : null;
+            const canNow = q.filter(x => x.can_hit !== false && !x.away && !x.inactive && (!x.presence || x.presence === 'active') && (() => { const e = cwEnergy(x); return e && e.cur >= 25; })()).length;
+            const lvl = mins == null ? 'ok' : mins < 15 ? 'low' : mins < 30 ? 'warn' : 'ok';
+            const span = mins == null ? '' : mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ' ' + (mins % 60) + ' min' : ''}`;
+            const until = mins == null || !mins ? '' : `until ~${tzClock(Math.floor(cwNow() / 1000) + mins * 60)} ${tzTagH()}`;
+            const head = mins == null ? 'Queue covers the chain - regen keeps pace' : mins === 0 ? "Queue can't cover the chain right now" : `Queue covers about ${span}`;
+            const bon = bonus.next ? `<span class="${rw.bonus_reachable ? 'y' : 'n'}">bonus ${int(bonus.next)} ${rw.bonus_reachable ? 'in reach ✓' : 'out of reach ✗'}</span>` : '';
+            out += `<div class="hbs-cover ${lvl}"><div class="h"><i>${lvl === 'low' ? '⚠' : lvl === 'warn' ? '⏳' : '✓'}</i><b>${head}</b>${until ? `<span>${until}</span>` : ''}</div>
+                <div class="d">${int(rw.banked_hits)} hit${num(rw.banked_hits) === 1 ? '' : 's'} ready · ${canNow} of ${q.length} can hit now${bon ? ' · ' + bon : ''}</div></div>`;
+        }
         out += `<div class="hbs-actions">${cw.queued ? `<button type="button" class="hbs-btn hbs-ghost" data-cw="leave">Leave queue</button>
                 ${hitBtn('chain')}
                 <button type="button" class="hbs-btn hbs-ghost" data-cw="target" title="Open a weak target's attack page (level 1-3, inactive 60+ days - same pick as Panic Mode)">🎯 Find target</button>
@@ -2902,6 +2968,7 @@
             + alertsCfgHtml();   // (↻ Try live again removed - user, Nov 14 2026)
         // alert times as minutes + seconds (user, Nov 14 2026: "Show alerts as minutes ... 1m 45s, 1m 15s, 45s")
         out += await chainSummaryHtml();   // (0.2.6) your chain summary at the bottom
+        out += cvChainHtml();   // (0.2.42) ⛶ Compact View button + options
         out += `<div class="hbs-hint">Alerts: ${[cfg.topAlertSeconds, cfg.restAlertSeconds, cfg.thirdAlertSeconds].filter(x => num(x) > 0).map(mSec).join(' / ')} left · min chain ${int(cfg.minChain)}</div>`;   // (0.2.19: "change on the Hub" link -> the 🛠 Chain settings button)
         return out;
     }
@@ -2925,7 +2992,7 @@
             ${cwCfg.err ? `<div class="hbs-hint hbs-bad">⚠ ${esc(cwCfg.err)}</div>` : ''}
             <div class="hbs-actions"><button type="button" class="hbs-btn" data-cwcfgsave${cwCfg.saving ? ' disabled' : ''}>${cwCfg.saving ? 'Saving…' : '💾 Save for everyone'}</button>
                 <button type="button" class="hbs-btn hbs-ghost" data-cwcfgundo>Undo changes</button></div>
-            <div class="hbs-hint">${cfg.set_by ? `Last changed by ${esc(String(cfg.set_by).replace(/ \[\d+\]$/, ''))}${num(cfg.set_at) ? ' · ' + new Date(num(cfg.set_at)).toLocaleString() : ''}` : 'Defaults - nobody has changed them yet.'}${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">open on the Hub</a>` : ''}</div></div>`;
+            <div class="hbs-hint">${cfg.set_by ? `Last changed by ${esc(String(cfg.set_by).replace(/ \[\d+\]$/, ''))}${num(cfg.set_at) ? ' · ' + fmtDT(Math.floor(num(cfg.set_at) / 1000)) + ' ' + tzTagH() : ''}` : 'Defaults - nobody has changed them yet.'}${url ? ` · <a href="${esc(url)}" target="_blank" rel="noopener">open on the Hub</a>` : ''}</div></div>`;
     }
     function cwCfgBind() {
         const o = bodyEl.querySelector('[data-cwcfgopen]');
@@ -3020,7 +3087,7 @@
             toast(pid ? `★ Bonus hit assigned to ${m ? m.name : '#' + pid}` : 'Bonus assignment cleared', false); render(true); };
         if (sel) sel.addEventListener('change', () => { if (!sel.value) return; const v = sel.value; sel.value = ''; sel.blur(); setBonus(v === 'clear' ? null : Number(v)); });
         const bc = bodyEl.querySelector('[data-cwbonusclr]'); if (bc) bc.addEventListener('click', () => setBonus(null));
-        retalsBind(); schedBind(); alertsCfgBind(); cwCfgBind();
+        retalsBind(); schedBind(); alertsCfgBind(); cwCfgBind(); cvChainBind();
     }
 
     // =====================================================================
@@ -3572,7 +3639,7 @@
         if (mine.length) out += mine.map(m => { const ok = m.est_hits == null || num(m.est_hits) >= num(m.need_hits);
             return `<div class="hbs-li"><span><b>${roleLabel(m.role)}</b> · ${dayOf(m.start)} ${span(m.start, minutesOf(m))}${m.est_hits == null ? '' : ok ? ' · ✓ energy' : ` · ⚠ ${m.est_hits}/${m.need_hits} hits`}</span>
                 <button type="button" class="hbs-btn hbs-ghost" data-sch="cancel" data-id="${esc(String(m.id))}">Cancel</button></div>`; }).join('');
-        out += `<div class="hbs-rtc">${chips('schtz', [['tct', TCT], ['local', 'Local']], schLocal() ? 'local' : 'tct')}${schLocal() ? chips('schhr', [['24', '24h'], ['12', '12h']], sch24() ? '24' : '12') : '<div class="hbs-chips"><button type="button" class="hbs-on" disabled title="Torn time is always 24 h">24h</button></div>'}</div>`;
+        out += `<div class="hbs-rtc">${chips('schtz', [['tct', TCT], ['local', 'Local']], schLocal() ? 'local' : 'tct')}${schLocal() ? chips('schhr', [['12', '12h'], ['24', '24h']], sch24() ? '24' : '12') : '<div class="hbs-chips"><button type="button" class="hbs-on" disabled title="Torn time is always 24 h">24h</button></div>'}</div>`;
         const dc = dayCount(); if (sch.day >= dc) sch.day = 0;
         out += chips('schday', [...Array(dc).keys()].map(d => [String(d), dayChip(d)]), String(sch.day));
         // the grid: two half-day bars of 24 × 30-min cells (green = Primary covered, amber = backup only)
@@ -3842,7 +3909,7 @@
             const a = b.dataset.bk; m.textContent = '…';
             try {
                 if (a === 'up') { const r = await hub('prefs_put', { data: prefsCollect() });          // [HB Suite] Hub API — op prefs_put (own settings)
-                    m.innerHTML = `Saved to the Hub ✓ ${fmtDT(Math.floor(num(r.updated) / 1000))} ${TCT} - use ⬇ Load on your other device.`; }
+                    m.innerHTML = `Saved to the Hub ✓ ${fmtDT(Math.floor(num(r.updated) / 1000))} ${tzTagH()} - use ⬇ Load on your other device.`; }
                 else if (a === 'down') { const r = await hub('prefs_get');                            // [HB Suite] Hub API — op prefs_get (own settings)
                     if (!r.data) { m.textContent = 'Nothing saved on the Hub yet - use ⬆ Save on the device you want to copy.'; return; }
                     if (!confirm(`Replace this device's layout / module / display settings with the ones saved ${fmtDT(Math.floor(num(r.updated) / 1000))} (Torn time)?`)) { m.textContent = ''; return; }
@@ -3859,7 +3926,14 @@
         box.innerHTML = `<div class="hbs-sec">Display (this device)</div>
             <label class="hbs-ck"><input type="checkbox" data-ui="compact"${U.compact ? ' checked' : ''}> 🗜 Compact mode - smaller cards and text</label>
             <label class="hbs-ck"><input type="checkbox" data-ui="pin"${U.pin ? ' checked' : ''}> 📌 Pinned Chain Watch tile on every tab</label>
+            <div class="hbs-tzrow"><span><b>🕒 Times shown in</b><small>Every clock time and date in the Suite - the same switch as on the chain watching schedule.</small></span>
+                <span class="hbs-tzset" data-tzset><span class="hbs-chips">${[['tct', '<span class="hbs-tct" aria-label="TCT"></span>'], ['local', 'Local']].map(([v, l]) => `<button type="button" data-v="${v}" class="${(tzLocal() ? 'local' : 'tct') === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>
+                ${tzLocal() ? `<span class="hbs-chips">${[['12', '12h'], ['24', '24h']].map(([v, l]) => `<button type="button" data-hr="${v}" class="${(store.get(K.schHr, '24') === '12' ? '12' : '24') === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>` : ''}</span></div>
 `;
+        const tz = box.querySelector('[data-tzset]');
+        if (tz) tz.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return;
+            if (b.dataset.v) store.set(K.schTz, b.dataset.v); else if (b.dataset.hr) store.set(K.schHr, b.dataset.hr);
+            displayBox(box); });
         box.querySelectorAll('[data-ui]').forEach(c => c.addEventListener('change', () => { const u = Object.assign({}, UI_DEF, store.get(K.ui, {}) || {}); u[c.dataset.ui] = c.checked; store.set(K.ui, u); applyUi(); }));
     }
 
@@ -4024,6 +4098,8 @@
         ring();
         alFlashLvl = level; alFlashUntil = Date.now() + (A.repeat > 0 && level ? 120000 : 10000);   // (0.2.34) flash the minimized icon
         if (launcher) { launcher.classList.add('hbs-l-flash'); launcher.classList.toggle('hbs-l-panic', level >= 4); }
+        // (0.2.43, user: "Open immediately when alerts fire.") the ⛶ compact tab opens itself so I'm hitting is right there
+        try { if (level && cvGet().on && !cvGet().open) cvSet({ open: true }); else if (cvGet().on) { cvSig = ''; cvDraw(); } } catch (e) { /* compact view */ }
         if (A.repeat > 0 && level) { alLoop = setInterval(ring, A.repeat * 1000); alStop = setTimeout(alStopAll, 120000); }   // hard cap 2 min
         else alLevel = 0;
         if (A.flash) { flashPanel(); flashTitle(level >= 4 ? '🚨 PANIC!' : kind === 'up' ? "⚔ YOU'RE UP!" : level ? '🚨 CHAIN LOW!' : '🔔 ' + alText(kind, info).slice(0, 30), 10000); }
@@ -4193,6 +4269,98 @@
         const rs = bodyEl.querySelector('[data-alreset]'); if (rs) rs.addEventListener('click', () => { if (confirm('Put every alert back to the defaults?')) { alSave(AL_DEF()); render(true); } });
     }
 
+
+    // =====================================================================
+    // ⛶ COMPACT VIEW (0.2.42, user: "Create a 'Compact' view that is best for TornPDA ... focus mainly on the chain timer,
+    // your position and the I'm Hitting button" -> "Provide an option for the Original and Smaller Open/Close. All should
+    // be side mounted and minimize on click, with the small timer still showing as a clickable Open button. This needs
+    // to be vertically adjustable ... Allow left and right mounting. The option for this should be located on the Chain
+    // page as a 'Compact View' button.")
+    //   - An edge tab (#hbs-compact) mounted on the left or right edge, shown INSTEAD of the round launcher while the
+    //     Suite is minimized and Compact view is on. Closed = the small timer (tap = open). Open = timer, your position
+    //     and I'm hitting / Join queue; a tap anywhere else on the open card closes it again; ⤢ opens the full Suite.
+    //   - Two sizes: Original ('l') and Smaller ('s'). Drag it up / down (pointer events, touch-action none) - the
+    //     height is remembered and kept on screen. Per device: K.cwCompact {on, size, side, y, open}.
+    //   - Timer amber under the 1st alert, red under 30 s; green edge when you're up, amber when you're backup; flashes
+    //     while an alert sounds (the same alFlashUntil as the launcher). Redrawn once a second from what the Suite
+    //     already has - no extra Torn / Hub reads.
+    // =====================================================================
+    const CV_DEF = { on: false, size: 'l', side: 'right', y: 140, open: true };
+    const cvGet = () => Object.assign({}, CV_DEF, store.get(K.cwCompact, {}) || {});
+    function cvSet(p) { store.set(K.cwCompact, Object.assign(cvGet(), p)); cvSig = ''; cvDraw(); }
+    let cvEl = null, cvSig = '';
+    const cvShown = () => { const C = cvGet(); return !!(C.on && collapsed && me && modOn('chain')); };
+    function cvEnsure() {
+        if (cvEl) return;
+        cvEl = el('div'); cvEl.id = 'hbs-compact'; cvEl.style.touchAction = 'none';
+        document.body.appendChild(cvEl);
+        // drag up / down, or tap (under 6 px of movement): the button acts, ⤢ opens the Suite, anything else opens / closes
+        let d = null;
+        cvEl.addEventListener('pointerdown', e => { if (e.button) return; d = { y: e.clientY, top: cvEl.getBoundingClientRect().top, moved: false, id: e.pointerId, t: e.target };
+            try { cvEl.setPointerCapture(e.pointerId); } catch (x) { /* */ } });
+        cvEl.addEventListener('pointermove', e => { if (!d || e.pointerId !== d.id) return; const dy = e.clientY - d.y;
+            if (!d.moved && Math.abs(dy) < DRAG_THRESHOLD) return; d.moved = true; e.preventDefault();
+            cvEl.style.top = cvClampY(d.top + dy) + 'px'; });
+        const up = e => { if (!d || e.pointerId !== d.id) return; const was = d; d = null;
+            try { cvEl.releasePointerCapture(e.pointerId); } catch (x) { /* */ }
+            if (was.moved) { store.set(K.cwCompact, Object.assign(cvGet(), { y: Math.round(cvEl.getBoundingClientRect().top) })); return; }
+            const b = was.t && was.t.closest ? was.t.closest('[data-cv]') : null, a = b ? b.dataset.cv : '';
+            if (a === 'full') { setCollapsed(false); tab = 'chain'; store.set(K.tab, tab); render(); cvDraw(); return; }
+            if (a === 'hit' || a === 'join') { cwAction(a === 'hit' ? 'hitting' : 'join').then(() => { cvSig = ''; cvDraw(); }, () => {}); cvSig = ''; setTimeout(cvDraw, 60); return; }
+            cvSet({ open: !cvGet().open }); };
+        cvEl.addEventListener('pointerup', up); cvEl.addEventListener('pointercancel', () => { d = null; });
+        window.addEventListener('resize', () => { if (cvEl && cvShown()) cvEl.style.top = cvClampY(cvGet().y) + 'px'; });
+    }
+    const cvClampY = y => Math.max(6, Math.min(Math.max(6, window.innerHeight - (cvEl ? cvEl.offsetHeight : 60) - 6), num(y)));
+    function cvDraw() {
+        const show = cvShown();
+        if (launcher) launcher.classList.toggle('hbs-cvhide', show);     // the edge tab stands in for the round launcher
+        if (!show) { if (cvEl) cvEl.style.display = 'none'; cvSig = ''; return; }
+        cvEnsure();
+        const C = cvGet(), S = cw.state || {}, c = cwChain(), live = c.current > 0 && num(c.expires_at) > 0;
+        const left = live ? Math.max(0, Math.floor((num(c.expires_at) - cwNow()) / 1000)) : 0;
+        const txt = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+        const t = S.turn || {}, upMe = cw.queued && num(t.up) === me.id, bkMe = cw.queued && !upMe && num(t.backup) === me.id;
+        const hitU = hittingUntil(), flash = Date.now() < alFlashUntil;
+        const tcls = !live ? 'dim' : left <= 30 ? 'red' : left <= topAlertS() ? 'amber' : '';
+        const posS = cw.queued ? '#' + (cw.queuePos || '?') : '–';
+        const posL = !cw.queued ? 'Not queued' : upMe ? "You're up" : `You're #${cw.queuePos || '?'}${bkMe ? ' · backup' : ''}`;
+        const btn = !cw.queued ? `<button type="button" class="b" data-cv="join">Join queue</button>`
+            : `<button type="button" class="b${hitU ? ' on' : ''}" data-cv="hit">${hitU ? '✋ Hitting' : "⚔ I'm hitting"}</button>`;
+        const sig = [C.size, C.side, C.open, txt, tcls, posL, !!hitU, live ? c.current : 0, flash, upMe, bkMe].join('|');
+        cvEl.style.display = '';
+        cvEl.className = `cv-${C.size} cv-${C.side}${C.open ? ' open' : ''}${upMe ? ' up' : bkMe ? ' bk' : ''}${flash ? ' flash' : ''}${flash && alFlashLvl >= 4 ? ' panic' : ''}`;
+        if (sig === cvSig) return;
+        cvSig = sig;
+        cvEl.innerHTML = !C.open
+            ? `<div class="t ${tcls}">${txt}</div>${C.size === 'l' ? `<div class="p">${posS}</div>` : ''}`
+            : C.size === 'l'
+                ? `<span class="x" data-cv="full" title="Open the full Suite">⤢</span><div class="s">${live ? 'Chain ' + int(c.current) : 'No live chain'}</div>
+                   <div class="t ${tcls}">${txt}</div><div class="pl"><span>${posL}</span></div>${btn}`
+                : `<span class="x" data-cv="full" title="Open the full Suite">⤢</span><div class="r"><span class="t ${tcls}">${txt}</span><span class="pl"><span>${posS}</span></span></div>${btn}`;
+        cvEl.style.top = cvClampY(C.y) + 'px';
+    }
+    setInterval(() => { if (cvGet().on || cvEl) cvDraw(); }, 1000);
+    // the "Compact View" button + its options on the Chain tab
+    let cvOptOpen = false;
+    function cvChainHtml() {
+        const C = cvGet();
+        const pick = (k, opts) => `<span class="hbs-chips" data-cvset="${k}">${opts.map(([v, l]) => `<button type="button" data-v="${v}" class="${String(C[k]) === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>`;
+        return `<div class="hbs-actions"><button type="button" class="hbs-btn${cvOptOpen ? '' : ' hbs-ghost'}" data-cvopt>⛶ Compact View ${cvOptOpen ? '▾' : '▸'}</button></div>`
+            + (cvOptOpen ? `<div class="hbs-card hbs-cvopt"><div class="hbs-sub">A small tab on the edge of the screen with the chain timer, your position and the I'm hitting button - shown while the Suite is minimized. Tap it to open or close, drag it up or down, ⤢ brings the full Suite back.</div>
+                <div class="hbs-cfgrow"><span><b>Size</b></span>${pick('size', [['l', 'Original'], ['s', 'Smaller']])}</div>
+                <div class="hbs-cfgrow"><span><b>Side</b></span>${pick('side', [['left', 'Left'], ['right', 'Right']])}</div>
+                <div class="hbs-actions"><button type="button" class="hbs-btn" data-cvgo>${C.on ? 'Switch to compact view now' : 'Turn on compact view'}</button>
+                    ${C.on ? '<button type="button" class="hbs-btn hbs-ghost" data-cvoff>Turn off</button>' : ''}</div>
+                <div class="hbs-hint">${C.on ? 'On - minimizing the Suite shows the compact tab instead of the round icon.' : 'Off - minimizing the Suite shows the round icon.'}</div></div>` : '');
+    }
+    function cvChainBind() {
+        const o = bodyEl.querySelector('[data-cvopt]'); if (o) o.addEventListener('click', () => { cvOptOpen = !cvOptOpen; render(true); });
+        bodyEl.querySelectorAll('[data-cvset]').forEach(g => g.addEventListener('click', e => { const b = e.target.closest('button[data-v]'); if (!b) return;
+            cvSet({ [g.dataset.cvset]: b.dataset.v }); render(true); }));
+        const go = bodyEl.querySelector('[data-cvgo]'); if (go) go.addEventListener('click', () => { cvSet({ on: true, open: true }); setCollapsed(true); cvDraw(); });
+        const off = bodyEl.querySelector('[data-cvoff]'); if (off) off.addEventListener('click', () => { cvSet({ on: false }); render(true); });
+    }
     // =====================================================================
     // 0.2.4 MODULES (Nov 14 2026, user's list):
     //   🕵 OC tab → Leaders: the 📣 Notify list (with the last contact time), ⏰ delayed crimes, ⏸ paused planning and
@@ -5113,7 +5281,7 @@
     async function rsUploadSettings(force) {
         const r = await hub('rcset', { do: 'put', data: rsSetLocal(), base: num(store.get(K.rsSetAt, 0)), force: !!force });   // [HB Suite] Hub API — op "rcset" put
         if (r && r.conflict) {
-            if (!confirm(`${r.by || 'Another leader'} changed the shared recruit settings after you opened them (${fmtDT(Math.floor(num(r.updated) / 1000))} TCT).\nSave yours over theirs?`)) {
+            if (!confirm(`${r.by || 'Another leader'} changed the shared recruit settings after you opened them (${fmtDT(Math.floor(num(r.updated) / 1000))} ${tzTag()}).\nSave yours over theirs?`)) {
                 store.set(K.rsSetAt, 0); await rsSyncSettings(true); return false; }
             return rsUploadSettings(true);
         }
@@ -5249,7 +5417,7 @@
             <div class="hbs-rsbtns">${[25, 50, 100, 250].map(n => `<button type="button" class="hbs-btn${n === 50 ? '' : ' hbs-ghost'}" data-rsnext="${n}"${rsRunning ? ' disabled' : ''}>Check ${n}</button>`).join('')}
                 <button type="button" class="hbs-btn hbs-ghost" data-rsnext="all"${rsRunning || !rows.length ? ' disabled' : ''}>Check all · ${int(rows.length)}${rows.length ? ` (~${mins(rows.length)} min)` : ''}</button></div>
             ${(() => { const A = store.get(K.rsAtk, null); return `<div class="hbs-rsbtns"><button type="button" class="hbs-btn hbs-ghost" data-rs="atk"${rsRunning ? ' disabled' : ''}>⚔ Pull from attack logs</button></div>
-                <div class="hbs-hint">${A && A.to ? `Read up to ${fmtDT(A.to)} TCT (${int(A.n)} attacks so far) - the next pull continues from there.` : 'Players who attacked us or we attacked (not our members), with their level and faction. Uses your key (faction API access), up to 10 calls a tap; first pull = the last 7 days.'}</div>`; })()}
+                <div class="hbs-hint">${A && A.to ? `Read up to ${fmtDT(A.to)} ${tzTagH()} (${int(A.n)} attacks so far) - the next pull continues from there.` : 'Players who attacked us or we attacked (not our members), with their level and faction. Uses your key (faction API access), up to 10 calls a tap; first pull = the last 7 days.'}</div>`; })()}
             <div class="hbs-rsbtns"><button type="button" class="hbs-btn hbs-ghost" data-rs="hubload">⇩ Load from Hub</button>
                 ${rsHubTot != null && rsHubOff < rsHubTot ? `<button type="button" class="hbs-btn hbs-ghost" data-rs="hubmore">⇩ Next 500 (${int(rsHubOff)}/${int(rsHubTot)})</button>` : ''}
                 <button type="button" class="hbs-btn hbs-ghost" data-rs="exppool">⇪ Export pool to Hub</button>
@@ -5352,7 +5520,7 @@
               ${box('weight', `<input class="hbs-input" type="number" min="0" max="10" inputmode="numeric" data-rsw="${key}" value="${cr.w[key] != null ? cr.w[key] : 1}">`)}</div></div>`;
         const plain = (label, input) => `<div class="hbs-rsset"><span>${label}</span>${input}</div>`;
         const N = store.get(K.rsSetNote, null), at = num(store.get(K.rsSetAt, 0));
-        const shared = `<div class="hbs-hint">🔗 Shared with every leader${at ? ` · last saved ${fmtDT(Math.floor(at / 1000))} TCT` : ' · not saved to the Hub yet'}.${N && Date.now() - N.at < 48 * 3600e3 ? `<br><b>${esc(N.by)}</b> changed: ${esc((N.diff || []).join(', ') || 'settings')}` : ''}</div>`;
+        const shared = `<div class="hbs-hint">🔗 Shared with every leader${at ? ` · last saved ${fmtDT(Math.floor(at / 1000))} ${tzTagH()}` : ' · not saved to the Hub yet'}.${N && Date.now() - N.at < 48 * 3600e3 ? `<br><b>${esc(N.by)}</b> changed: ${esc((N.diff || []).join(', ') || 'settings')}` : ''}</div>`;
         return `<div class="hbs-card">${shared}${sec('Recruit checks')}
             ${RS_CHECKS.map(row).join('')}
             <div class="hbs-hint"><b>Weight</b> = how much a check counts toward the score (pass = full weight, near miss = half, 0 = ignore).
@@ -5803,6 +5971,7 @@
         launcher.classList.toggle('hbs-show', state);
         if (!state) { clampPanel(); render(); } else { clampLauncher(); stopTimers(); }   // nothing polls while minimized
         if (me) cwWatch();                                     // Chain Watch stays connected only while you're queued
+        try { cvDraw(); } catch (e) { /* compact view */ }       // (0.2.42)
     }
 
     // ---------------------------------------------------------------------
