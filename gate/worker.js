@@ -1691,6 +1691,12 @@ async function ocPlanObj(env, envName, id) {
     // TIME IN THE CRIME (Nov 12 2026): a live recruiting crime's pay per day is for whoever joins NOW (planning left
     // + 24 h per open slot) - the planner's stats.inst_mult scales the crime type's figure; spawn teams keep full days
     const mul = t.crime_id != null && instMult[String(t.crime_id)] ? instMult[String(t.crime_id)] : 1;
+    // (Nov 15 2026 FIX, user: "Script is showing incorrect information" - Wessie shown "not joined" while seated in
+    // #2460345): joined / slot were only read from the instance for teams the Hub BOUND this run; a team deployed with
+    // its crime_id already set kept the plan's stale flags. Now any team with a live instance reads its real seats.
+    const ci = b ? b.c : (t.crime_id != null ? (crimes || []).find(c => c && String(c.id) === String(t.crime_id)) : null);
+    const seatOf = pid => ci ? (ci.slots || []).find(x => x.user && Number(x.user.id) === Number(pid)) : null;
+    const labOf = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
     const sc = v => v == null ? null : Math.round(v * mul);
     return {team: t.id, crime: t.crime, difficulty: t.difficulty ?? null, deployed: cfg.plan_ts || null,
             kind: t.kind || "spawn", crime_id: t.crime_id || null,
@@ -1706,10 +1712,10 @@ async function ocPlanObj(env, envName, id) {
             members: (t.roles || []).filter(r => r.pid != null).map(r => ({position: ocBaseRole(r.position),
               weight: (tpRoleShares(tpWts, t.crime, (t.roles || []).map(x => x.position)) || {})[r.position] ?? null,   // (0.2.25) role weight %
               // bound team: the exact slot in ITS instance (the seat they're in, or the open seat for their role)
-              slot: (b && b.slot[r.pid]) || r.position, pid: Number(r.pid),
+              slot: (seatOf(r.pid) && labOf(seatOf(r.pid))) || (b && b.slot[r.pid]) || r.position, pid: Number(r.pid),
               name: (members && members.get(Number(r.pid)) || {}).name || r.name || ("#" + r.pid), rate: r.rate ?? null,
-              existing: !!r.existing || !!(b && (b.c.slots || []).some(x => x.user && Number(x.user.id) === Number(r.pid))),
-              joined: !!r.joined || !!(b && (b.c.slots || []).some(x => x.user && Number(x.user.id) === Number(r.pid))),
+              existing: ci ? !!seatOf(r.pid) : !!r.existing,
+              joined: ci ? !!seatOf(r.pid) : !!r.joined,   // the live crime's seats win over the plan's flags
               queued: !!r.queued, free_at: r.queued ? r.free_at || null : null,
               replaces: r.replaces || null,
               item: (items[t.crime] || {})[r.position] || null}))};   // required item {id, name} for this role, or null   // replaces {pid, name}: a leader is swapping out the member in this slot
