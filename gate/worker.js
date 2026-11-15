@@ -458,18 +458,67 @@ async function sxRoute(env, ctx, req) {
     if (!who.leader) return leadersOnly();
     if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
     const DB = env.OC_DB, now = Date.now();
-    await DB.prepare("CREATE TABLE IF NOT EXISTS rc_pool (pid INTEGER PRIMARY KEY, name TEXT, level INTEGER, fac INTEGER, la INTEGER, " +
-      "state TEXT, bs INTEGER, pct REAL, verdict TEXT, checked INTEGER, by INTEGER, added INTEGER NOT NULL)").run();
-    await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_lvl ON rc_pool (level)").run();
+    if (!rcPoolReady) {                                     // table + 0.2.9 columns, once per Worker instance
+      await DB.prepare("CREATE TABLE IF NOT EXISTS rc_pool (pid INTEGER PRIMARY KEY, name TEXT, level INTEGER, fac INTEGER, la INTEGER, " +
+        "state TEXT, bs INTEGER, pct REAL, verdict TEXT, checked INTEGER, by INTEGER, added INTEGER NOT NULL)").run();
+      await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_lvl ON rc_pool (level)").run();
+      // 0.2.9 columns (user, Nov 14 2026: "Hub list should store more detailed information when its supplied ... keeping
+      // at minimum the user ID and level"; "Save a timestamp [of contact] and share this with all Suite users"):
+      //   data          the full scouting snapshot (rcClean - the same fields as the Recruitment list) when a leader's
+      //                 Suite sends one; dropped again for the oldest non-fitting rows past RC_POOL_DATA_MAX (the row,
+      //                 its id and level stay)
+      //   contacted, contacted_by   when a leader last messaged the player (any leader's Suite, or "contacted" on the list)
+      for (const c of ["data TEXT", "contacted INTEGER", "contacted_by TEXT"])
+        await DB.prepare(`ALTER TABLE rc_pool ADD COLUMN ${c}`).run().catch(() => {});      // already there
+      await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_cont ON rc_pool (contacted)").run().catch(() => {});
+      rcPoolReady = true;
+    }
     const n = v => (v == null || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
     const ids = a => (Array.isArray(a) ? a : []).map(Number).filter(x => Number.isInteger(x) && x > 0).slice(0, 500);
     const VERD = ["fit", "near", "fail", "excl", ""];
+    // {do:"merge", players:[{pid, name, level, fac, la, state, bs, pct, verdict, checked (ms), contacted (ms), data?}]}
+    //   (0.2.9 - exports + every check result): upsert keeping whichever side was checked LAST (checked = when that
+    //   leader's Suite read Torn, never later than now); contacted keeps the latest; data kept when the newer side has none
+    if (b.do === "merge") {
+      const list = (Array.isArray(b.players) ? b.players : []).slice(0, 500).filter(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0);
+      if (!list.length) return sxJson({ok: true, n: 0});
+      await rcPoolRoom(DB, list.length);
+      const NEW = "COALESCE(excluded.checked, 0) > COALESCE(rc_pool.checked, 0)";
+      const pick = c => `${c} = CASE WHEN ${NEW} THEN excluded.${c} ELSE rc_pool.${c} END`;
+      const sql = "INSERT INTO rc_pool (pid, name, level, fac, la, state, bs, pct, verdict, checked, by, added, data, contacted, contacted_by) " +
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (pid) DO UPDATE SET " +
+        "name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE rc_pool.name END, " +
+        `level = CASE WHEN ${NEW} THEN COALESCE(excluded.level, rc_pool.level) ELSE COALESCE(rc_pool.level, excluded.level) END, ` +
+        ["fac", "la", "state", "pct", "verdict", "by"].map(pick).join(", ") + ", " +
+        `bs = CASE WHEN ${NEW} THEN COALESCE(excluded.bs, rc_pool.bs) ELSE COALESCE(rc_pool.bs, excluded.bs) END, ` +
+        `data = CASE WHEN ${NEW} THEN COALESCE(excluded.data, rc_pool.data) ELSE COALESCE(rc_pool.data, excluded.data) END, ` +
+        "checked = NULLIF(MAX(COALESCE(excluded.checked, 0), COALESCE(rc_pool.checked, 0)), 0), " +
+        "contacted_by = CASE WHEN COALESCE(excluded.contacted, 0) > COALESCE(rc_pool.contacted, 0) THEN excluded.contacted_by ELSE rc_pool.contacted_by END, " +
+        "contacted = NULLIF(MAX(COALESCE(excluded.contacted, 0), COALESCE(rc_pool.contacted, 0)), 0)";
+      const ops = list.map(x => {
+        const chk = n(x.checked) ? Math.min(now, n(x.checked)) : null, ct = n(x.contacted) ? Math.min(now, n(x.contacted)) : null;
+        const data = x.data && typeof x.data === "object" ? JSON.stringify(rcClean(x.data)) : null;
+        return DB.prepare(sql).bind(Number(x.pid), String(x.name || "").slice(0, 40), n(x.level), chk ? n(x.fac) : null, chk ? n(x.la) : null,
+          chk ? String(x.state || "").slice(0, 20) : null, n(x.bs), chk ? n(x.pct) : null, chk && VERD.includes(x.verdict) ? x.verdict : "",
+          chk, who.id, now, data, ct, ct ? String(who.name || "").slice(0, 40) : null);
+      });
+      for (let i = 0; i < ops.length; i += 100) await DB.batch(ops.slice(i, i + 100));
+      await rcPoolTrimData(DB);
+      return sxJson({ok: true, n: ops.length});
+    }
+    // {do:"contact", pid, name}: a leader messaged this player (Suite ✉ Message) - shared with every leader
+    if (b.do === "contact") {
+      const pid = Number(b.pid); if (!Number.isInteger(pid) || pid <= 0) return sxJson({ok: false, error: "Which player?"}, 400);
+      await rcPoolRoom(DB, 1);
+      await DB.prepare("INSERT INTO rc_pool (pid, name, by, added, contacted, contacted_by) VALUES (?,?,?,?,?,?) ON CONFLICT (pid) DO UPDATE SET " +
+        "contacted = excluded.contacted, contacted_by = excluded.contacted_by, name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE rc_pool.name END")
+        .bind(pid, String(b.name || "").slice(0, 40), who.id, now, now, String(who.name || "").slice(0, 40)).run();
+      return sxJson({ok: true, contacted: now});
+    }
     if (b.do === "add" || b.do === "update") {
       const list = (Array.isArray(b.players) ? b.players : []).slice(0, 500).filter(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0);
       if (!list.length) return sxJson({ok: true, n: 0});
-      const cnt = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool").first();
-      const over = Number((cnt && cnt.c) || 0) + list.length - RC_POOL_MAX;
-      if (over > 0) await DB.prepare("DELETE FROM rc_pool WHERE pid IN (SELECT pid FROM rc_pool WHERE checked IS NULL ORDER BY added LIMIT ?)").bind(over).run();
+      await rcPoolRoom(DB, list.length);
       const ops = list.map(x => b.do === "add"
         ? DB.prepare("INSERT INTO rc_pool (pid, name, level, by, added) VALUES (?, ?, ?, ?, ?) ON CONFLICT (pid) DO UPDATE SET " +
             "name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE rc_pool.name END, level = COALESCE(excluded.level, rc_pool.level)")
@@ -485,7 +534,7 @@ async function sxRoute(env, ctx, req) {
     if (b.do === "get") {
       const p = ids(b.pids); if (!p.length) return sxJson({ok: true, rows: []});
       const {results} = await DB.prepare(`SELECT * FROM rc_pool WHERE pid IN (${p.map(() => "?").join(",")})`).bind(...p).all();
-      return sxJson({ok: true, rows: results || []});
+      return sxJson({ok: true, rows: (results || []).map(rcPoolRow)});
     }
     if (b.do === "forget") {
       const p = ids(b.pids); if (p.length) await DB.prepare(`DELETE FROM rc_pool WHERE pid IN (${p.map(() => "?").join(",")})`).bind(...p).run();
@@ -493,8 +542,9 @@ async function sxRoute(env, ctx, req) {
     }
     if (b.do === "stats") {
       const r = await DB.prepare("SELECT COUNT(*) AS total, SUM(checked IS NOT NULL) AS checked, SUM(verdict = 'fit') AS fits, " +
-        "SUM(fac = 0) AS nofac FROM rc_pool").first();
-      return sxJson({ok: true, total: Number(r && r.total) || 0, checked: Number(r && r.checked) || 0, fits: Number(r && r.fits) || 0, nofac: Number(r && r.nofac) || 0});
+        "SUM(fac = 0) AS nofac, SUM(contacted IS NOT NULL) AS contacted, SUM(data IS NOT NULL) AS detailed FROM rc_pool").first();
+      const N = k => Number(r && r[k]) || 0;
+      return sxJson({ok: true, total: N("total"), checked: N("checked"), fits: N("fits"), nofac: N("nofac"), contacted: N("contacted"), detailed: N("detailed")});
     }
     if (b.do === "search") {
       const w = [], v = [];
@@ -506,12 +556,13 @@ async function sxRoute(env, ctx, req) {
       else if (b.checked === "stale") { w.push("(checked IS NULL OR checked < ?)"); v.push(stale); }
       else if (b.checked === "fresh") { w.push("checked >= ?"); v.push(stale); }
       if (VERD.includes(b.verdict) && b.verdict) { w.push("verdict = ?"); v.push(b.verdict); }
+      if (b.uncontacted) { w.push("contacted IS NULL"); }                            // (0.2.9) never messaged by a leader
       const where = w.length ? " WHERE " + w.join(" AND ") : "";
       const order = {level: "level DESC", bs: "bs DESC", pct: "pct DESC", added: "added DESC"}[b.sort] || "added DESC";
       const lim = Math.min(500, Math.max(1, n(b.limit) || 100)), off = Math.max(0, n(b.offset) || 0);
       const tot = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool" + where).bind(...v).first();
       const {results} = await DB.prepare(`SELECT * FROM rc_pool${where} ORDER BY ${order} NULLS LAST, pid LIMIT ? OFFSET ?`).bind(...v, lim, off).all();
-      return sxJson({ok: true, rows: results || [], total: Number(tot && tot.c) || 0});
+      return sxJson({ok: true, rows: (results || []).map(rcPoolRow), total: Number(tot && tot.c) || 0});
     }
     return sxJson({ok: false, error: "unknown"}, 400);
   }
@@ -3099,8 +3150,31 @@ async function scriptsRoute(env, req, url, who) {
 // No Torn call anywhere here. Storage: D1 rc_recruit (gate/oc_schema.sql).
 // ======================================================================================================
 const RC_STATUS = ["new", "contacted", "joined", "declined"];
-const RC_MAX_PUSH = 100, RC_MAX_ROWS = 2000, RC_NOTE_MAX = 500;
-const RC_POOL_MAX = 200000;             // 🗃 recruit pool rows (Suite 0.2.8) - ~20 MB of D1 at most
+const RC_MAX_PUSH = 100, RC_MAX_ROWS = 10000, RC_NOTE_MAX = 500;   // (0.2.9: 2,000 -> 10,000 rows)
+const RC_FULL_MAX = 3000;              // rows that keep their full scouting snapshot; older ones keep only level (+ name, status, note)
+const RC_POOL_MAX = 500000;             // 🗃 recruit pool rows (Suite 0.2.8; 0.2.9: 500k) - a bare row (id, level...) is ~60 bytes
+let rcPoolReady = false;               // rc_pool created / altered in this Worker instance
+const RC_POOL_DATA_MAX = 40000;        // rows that also keep the full scouting snapshot (~1 KB each) - oldest non-fits drop it first
+// a pool row for the Suite: data parsed (null when the row was compacted / never had one)
+function rcPoolRow(r) { let d = null; if (r.data) { try { d = JSON.parse(r.data); } catch (e) {} } return Object.assign({}, r, {data: d}); }
+// make room for n new rows: never-checked rows with no level go first, then the oldest never-checked; checked rows,
+// contacted rows and their id + level are only removed when nothing else is left (they never are in practice at 500k)
+async function rcPoolRoom(DB, n) {
+  const cnt = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool").first();
+  let over = Number((cnt && cnt.c) || 0) + n - RC_POOL_MAX;
+  if (over <= 0) return;
+  for (const w of ["checked IS NULL AND contacted IS NULL AND level IS NULL", "checked IS NULL AND contacted IS NULL"]) {
+    const r = await DB.prepare(`DELETE FROM rc_pool WHERE pid IN (SELECT pid FROM rc_pool WHERE ${w} ORDER BY added LIMIT ?)`).bind(over).run();
+    over -= Number((r && r.meta && r.meta.changes) || 0); if (over <= 0) return;
+  }
+}
+// keep at most RC_POOL_DATA_MAX full snapshots: the oldest-checked non-fits lose theirs first (the row stays)
+async function rcPoolTrimData(DB) {
+  const c = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool WHERE data IS NOT NULL").first();
+  const over = Number((c && c.c) || 0) - RC_POOL_DATA_MAX;
+  if (over > 0) await DB.prepare("UPDATE rc_pool SET data = NULL WHERE pid IN (SELECT pid FROM rc_pool WHERE data IS NOT NULL " +
+    "ORDER BY (verdict IN ('fit', 'near')), checked LIMIT ?)").bind(over).run();
+}
 const RC_PURGE_MS = 180 * 864e5;         // removed recruits are deleted for good after 180 days
 
 // Only the fields the Recruitment page shows, with sane types and lengths - nothing else from the client is stored.
@@ -3116,6 +3190,8 @@ function rcClean(d) {
     level: n(d.level), age: n(d.age), factionId: n(d.factionId), factionName: s(d.factionName, 60),
     lastActionTs: n(d.lastActionTs), rwHits: n(d.rwHits), xan: n(d.xan), refills: n(d.refills), attacksWon: n(d.attacksWon),
     streak: n(d.streak), bestStreak: n(d.bestStreak), lifeAvgSec: n(d.lifeAvgSec),
+    // (Suite 0.2.9: the detail shown on the Hub list / pool) respect for factions, friends / enemies, Xanax per day
+    respect: n(d.respect), friends: n(d.friends), enemies: n(d.enemies), xpd: n(d.xpd),
     bs: n(d.bs), bsHuman: s(d.bsHuman, 20), ff: n(d.ff),
     activity: a ? {daily: arr(a.daily, 7), weekly: arr(a.weekly, 4), activeDays: n(a.activeDays), sampled: n(a.sampled),
                    avgSec: n(a.avgSec), longestIdle: n(a.longestIdle), weakWeeks: n(a.weakWeeks), at: n(a.at)} : null,
@@ -3183,6 +3259,16 @@ async function rcScriptRoute(env, req, p) {
     }
   }
   if (ops.length) await env.OC_DB.batch(ops);
+  // SPACE (0.2.9, user: "If it needs to dump information to save more entries and preserve space, do so while keeping at
+  // minimum the user ID and level"): past RC_FULL_MAX full snapshots, the oldest rows (removed / joined / declined first,
+  // then by last update; claimed ones last) are cut down to {level, compact: true}. Name, status, claim and notes stay.
+  try {
+    const c = await env.OC_DB.prepare("SELECT COUNT(*) AS c FROM rc_recruit WHERE json_extract(data, '$.compact') IS NULL").first();
+    const over = Number((c && c.c) || 0) - RC_FULL_MAX;
+    if (over > 0) await env.OC_DB.prepare("UPDATE rc_recruit SET data = json_object('level', json_extract(data, '$.level'), 'compact', 1) " +
+      "WHERE pid IN (SELECT pid FROM rc_recruit WHERE json_extract(data, '$.compact') IS NULL ORDER BY (removed_at IS NULL), " +
+      "(status IN ('new', 'contacted')), (claim_pid IS NOT NULL), updated LIMIT ?)").bind(over).run();
+  } catch (e) { /* compaction is best effort */ }
   return ocJson({ok: true, added, updated, removed, full});
 }
 
@@ -3217,7 +3303,11 @@ async function rcLeaderRoute(env, req, who, sub) {
       case "status":
         if (!RC_STATUS.includes(b.status)) return bad("Status must be new, contacted, joined or declined.");
         st = env.OC_DB.prepare("UPDATE rc_recruit SET status = ?, status_by = ?, status_at = ? WHERE pid = ? AND removed_at IS NULL")
-          .bind(b.status, by, now, pid); break;
+          .bind(b.status, by, now, pid);
+        // (Suite 0.2.9) "contacted" here = contacted in the shared recruit pool too (if the pool exists yet)
+        if (b.status === "contacted") await env.OC_DB.prepare("UPDATE rc_pool SET contacted = ?, contacted_by = ? WHERE pid = ?")
+          .bind(now, String(who.name || "").slice(0, 40), pid).run().catch(() => {});
+        break;
       case "note": {
         const note = String(b.note == null ? "" : b.note).replace(/\r\n?/g, "\n").trim();
         if (note.length > RC_NOTE_MAX) return bad(`Notes can be at most ${RC_NOTE_MAX} characters.`);
