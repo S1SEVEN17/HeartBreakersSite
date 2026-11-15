@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.33
+// @version      0.2.34
 // @description  ONE faction script for Heart Breakers: the Hub (home, boards, profile, members, wars, news, payouts, leader tools) + Chain Watch (live queue, turn, bonus, retals, Hub-timed alerts) + your OC seat (crimes-page highlight) + leaders' Recruitment list. One sign-in, one panel, one Torn rate budget. Your API key stays on your device. Desktop + TornPDA.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,9 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.34 (Nov 15 2026) - ⏱ Minimized icon (user: "This should also flash and alert when the alerts go out. Just like
+ *          the old Chain Watch script."): the launcher shows the live chain timer, turns red while you're up, and
+ *          flashes for as long as an alert is sounding (faster for Panic).
  *  v0.2.33 (Nov 15 2026) - 🔔 Leader alerts (user: "Format leader alerts for low reliability better."): low
  *          reliability is its own 🛡 section - one row per member with the grade badge, score bar and what's dragging
  *          it down (wars hit, large chains hit, idle days), worst first; tap a name for the profile.
@@ -332,7 +335,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.33';
+    const VERSION = '0.2.34';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -939,6 +942,15 @@
             #hbs-panel .hbs-banner{margin-top:7px;padding:6px 8px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:11.5px;}
             #hbs-panel .hbs-sec{border-bottom:0;margin:14px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);}
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
+            /* 0.2.34 - minimized icon: chain timer, you're-up, alert flash */
+            #hbs-launcher .hbs-ltime{position:absolute;left:50%;bottom:-9px;transform:translateX(-50%);padding:1px 6px;border-radius:9px;background:#111318;border:1px solid var(--acc,#FFB454);
+                color:#e8e8e8;font:bold 11px/1.3 Arial,sans-serif;white-space:nowrap;pointer-events:none;}
+            #hbs-launcher .hbs-ltime.amber{color:#FFB454;} #hbs-launcher .hbs-ltime.red{color:#fff;background:#c0392b;border-color:#ff6b6b;}
+            #hbs-launcher.hbs-l-up{box-shadow:0 0 0 3px #ff4d4d,0 2px 10px rgba(0,0,0,.6);}
+            #hbs-launcher.hbs-l-flash,#hbs-launcher.hbs-l-flash.hbs-alerting{animation:hbsLFlash .9s steps(1,end) infinite;}   /* wins over the old 2.6 s hbs-alerting pulse */
+            #hbs-launcher.hbs-l-flash.hbs-l-panic,#hbs-launcher.hbs-l-flash.hbs-l-panic.hbs-alerting{animation-duration:.45s;}
+            @keyframes hbsLFlash{0%{background:#ff3b30;box-shadow:0 0 0 6px rgba(255,59,48,.55),0 0 18px 6px rgba(255,59,48,.6);transform:scale(1.12);}
+                50%{background:#FFB454;box-shadow:0 0 0 2px rgba(255,180,84,.5);transform:scale(1);}}
             /* 0.2.33 - 🛡 low reliability rows */
             #hbs-panel .hbs-rel{display:flex;flex-direction:column;gap:4px;margin:4px 0 6px;}
             #hbs-panel .hbs-relrow{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;background:#1b1e24;border:1px solid #2c313a;text-align:left;}
@@ -3832,7 +3844,30 @@
 
     // ---- the repeating controller: only the most urgent alert sounds ----
     let alLoop = null, alLevel = 0, alStop = null, alKind = null;
-    function alStopAll() { clearInterval(alLoop); alLoop = null; clearTimeout(alStop); alStop = null; alLevel = 0; alKind = null; }
+    function alStopAll() { clearInterval(alLoop); alLoop = null; clearTimeout(alStop); alStop = null; alLevel = 0; alKind = null; alFlashUntil = 0; }
+    // ⏱ MINIMIZED ICON (0.2.34, user: chain timer on the minimized icon - "This should also flash and alert when the alerts
+    // go out. Just like the old Chain Watch script."): while the panel is minimized the launcher shows the live chain
+    // timer (amber under the 1st-alert time, red under 30 s), turns red while you're up, and FLASHES for as long as an
+    // alert is sounding (10 s for a one-shot alert; faster for Panic). Sound / vibration are the alert's own - they
+    // already play whether the panel is open or minimized. Updated once a second; nothing is read from Torn or the Hub.
+    let alFlashUntil = 0, alFlashLvl = 0;
+    setInterval(() => {
+        if (!launcher) return;
+        let t = launcher.querySelector('.hbs-ltime');
+        const c = cwChain(), live = !!(me && modOn('chain') && c.current > 0 && cw.state && num(c.expires_at) > 0);
+        const left = live ? Math.max(0, Math.floor((num(c.expires_at) - cwNow()) / 1000)) : 0;
+        if (!live) { if (t) t.remove(); launcher.classList.remove('hbs-l-up'); }
+        else {
+            if (!t) { t = el('span', 'hbs-ltime'); launcher.appendChild(t); }
+            const txt = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+            if (t.textContent !== txt) t.textContent = txt;
+            t.className = 'hbs-ltime' + (left <= 30 ? ' red' : left <= topAlertS() ? ' amber' : '');
+            const up = cw.queued && num(((cw.state || {}).turn || {}).up) === me.id && c.current >= num(((cw.state || {}).config || {}).minChain);
+            launcher.classList.toggle('hbs-l-up', !!up);
+        }
+        const fl = Date.now() < alFlashUntil;
+        launcher.classList.toggle('hbs-l-flash', fl); launcher.classList.toggle('hbs-l-panic', fl && alFlashLvl >= 4);
+    }, 1000);
     // (0.2.21: a restored page-load snapshot counts too) (0.2.22: not once the timer has run out - 3 s grace for clock drift;
     // the Hub is asked to confirm the chain is dead, and nothing sounds meanwhile)
     const chainAlive = () => { const c = cwChain(); return c.current > 0 && !!cw.state && num(c.expires_at) - cwNow() > (cwVerifyAt ? 0 : -3000); };   // once the Suite has asked the Hub to confirm: no grace
@@ -3861,6 +3896,8 @@
             if (A.vibrate) buzz(urgent ? [200, 100, 200, 100, 200] : [180, 90, 180]);
         };
         ring();
+        alFlashLvl = level; alFlashUntil = Date.now() + (A.repeat > 0 && level ? 120000 : 10000);   // (0.2.34) flash the minimized icon
+        if (launcher) { launcher.classList.add('hbs-l-flash'); launcher.classList.toggle('hbs-l-panic', level >= 4); }
         if (A.repeat > 0 && level) { alLoop = setInterval(ring, A.repeat * 1000); alStop = setTimeout(alStopAll, 120000); }   // hard cap 2 min
         else alLevel = 0;
         if (A.flash) { flashPanel(); flashTitle(level >= 4 ? '🚨 PANIC!' : kind === 'up' ? "⚔ YOU'RE UP!" : level ? '🚨 CHAIN LOW!' : '🔔 ' + alText(kind, info).slice(0, 30), 10000); }
