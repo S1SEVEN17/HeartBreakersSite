@@ -468,7 +468,10 @@ async function sxRoute(env, ctx, req) {
       //                 Suite sends one; dropped again for the oldest non-fitting rows past RC_POOL_DATA_MAX (the row,
       //                 its id and level stay)
       //   contacted, contacted_by   when a leader last messaged the player (any leader's Suite, or "contacted" on the list)
-      for (const c of ["data TEXT", "contacted INTEGER", "contacted_by TEXT"])
+      // 0.2.10: dnc = "don't contact" - the player was declined, joined or removed on the leaders' Recruitment list
+      // (user: "Shared don't-contact list: anyone marked declined or removed on the Hub list is hidden from every
+      // leader's pool"). Set / cleared by rcLeaderRoute + a manual re-send (rcScriptRoute).
+      for (const c of ["data TEXT", "contacted INTEGER", "contacted_by TEXT", "dnc INTEGER"])
         await DB.prepare(`ALTER TABLE rc_pool ADD COLUMN ${c}`).run().catch(() => {});      // already there
       await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_cont ON rc_pool (contacted)").run().catch(() => {});
       rcPoolReady = true;
@@ -536,6 +539,11 @@ async function sxRoute(env, ctx, req) {
       const {results} = await DB.prepare(`SELECT * FROM rc_pool WHERE pid IN (${p.map(() => "?").join(",")})`).bind(...p).all();
       return sxJson({ok: true, rows: (results || []).map(rcPoolRow)});
     }
+    // {do:"dnc"} -> {pids}: every player on the shared don't-contact list (the Suite hides them from its pool)
+    if (b.do === "dnc") {
+      const {results} = await DB.prepare("SELECT pid FROM rc_pool WHERE dnc = 1").all();
+      return sxJson({ok: true, pids: (results || []).map(r => Number(r.pid))});
+    }
     if (b.do === "forget") {
       const p = ids(b.pids); if (p.length) await DB.prepare(`DELETE FROM rc_pool WHERE pid IN (${p.map(() => "?").join(",")})`).bind(...p).run();
       return sxJson({ok: true, n: p.length});
@@ -557,6 +565,7 @@ async function sxRoute(env, ctx, req) {
       else if (b.checked === "fresh") { w.push("checked >= ?"); v.push(stale); }
       if (VERD.includes(b.verdict) && b.verdict) { w.push("verdict = ?"); v.push(b.verdict); }
       if (b.uncontacted) { w.push("contacted IS NULL"); }                            // (0.2.9) never messaged by a leader
+      if (!b.with_dnc) w.push("(dnc IS NULL OR dnc = 0)");                            // (0.2.10) never the don't-contact list
       const where = w.length ? " WHERE " + w.join(" AND ") : "";
       const order = {level: "level DESC", bs: "bs DESC", pct: "pct DESC", added: "added DESC"}[b.sort] || "added DESC";
       const lim = Math.min(500, Math.max(1, n(b.limit) || 100)), off = Math.max(0, n(b.offset) || 0);
@@ -3237,7 +3246,7 @@ async function rcScriptRoute(env, req, p) {
   const have = new Map((results || []).map(r => [Number(r.pid), r]));
   const cnt = await env.OC_DB.prepare("SELECT COUNT(*) AS n FROM rc_recruit").first();
   let room = RC_MAX_ROWS - Number((cnt && cnt.n) || 0);
-  const ops = [], removed = [];
+  const ops = [], removed = [], undnc = [];
   let added = 0, updated = 0, full = 0;
   for (const x of items) {
     const cur = have.get(x.pid);
@@ -3249,6 +3258,7 @@ async function rcScriptRoute(env, req, p) {
         .bind(x.pid, x.name, x.data, by, now, now));
     } else if (cur.removed_at != null) {                    // manual re-send of a removed recruit: back as new
       updated++;
+      undnc.push(x.pid);                                    // (0.2.10) off the don't-contact list (after the batch)
       ops.push(env.OC_DB.prepare("UPDATE rc_recruit SET name = ?, data = json(?), sent_by = ?, updated = ?, removed_at = NULL, removed_by = NULL, " +
         "status = 'new', status_by = ?, status_at = ?, claim_pid = NULL, claim_name = NULL, claim_at = NULL WHERE pid = ?")
         .bind(x.name, x.data, by, now, by, now, x.pid));
@@ -3259,6 +3269,7 @@ async function rcScriptRoute(env, req, p) {
     }
   }
   if (ops.length) await env.OC_DB.batch(ops);
+  for (const p of undnc) await env.OC_DB.prepare("UPDATE rc_pool SET dnc = 0 WHERE pid = ?").bind(p).run().catch(() => {});   // pool may not exist yet
   // SPACE (0.2.9, user: "If it needs to dump information to save more entries and preserve space, do so while keeping at
   // minimum the user ID and level"): past RC_FULL_MAX full snapshots, the oldest rows (removed / joined / declined first,
   // then by last update; claimed ones last) are cut down to {level, compact: true}. Name, status, claim and notes stay.
@@ -3307,6 +3318,8 @@ async function rcLeaderRoute(env, req, who, sub) {
         // (Suite 0.2.9) "contacted" here = contacted in the shared recruit pool too (if the pool exists yet)
         if (b.status === "contacted") await env.OC_DB.prepare("UPDATE rc_pool SET contacted = ?, contacted_by = ? WHERE pid = ?")
           .bind(now, String(who.name || "").slice(0, 40), pid).run().catch(() => {});
+        // (Suite 0.2.10) declined / joined = on the shared don't-contact list; new / contacted = off it again
+        await env.OC_DB.prepare("UPDATE rc_pool SET dnc = ? WHERE pid = ?").bind(["declined", "joined"].includes(b.status) ? 1 : 0, pid).run().catch(() => {});
         break;
       case "note": {
         const note = String(b.note == null ? "" : b.note).replace(/\r\n?/g, "\n").trim();
@@ -3315,7 +3328,9 @@ async function rcLeaderRoute(env, req, who, sub) {
           .bind(note, note ? by : null, note ? now : null, pid); break;
       }
       case "remove":
-        st = env.OC_DB.prepare("UPDATE rc_recruit SET removed_at = ?, removed_by = ? WHERE pid = ? AND removed_at IS NULL").bind(now, by, pid); break;
+        st = env.OC_DB.prepare("UPDATE rc_recruit SET removed_at = ?, removed_by = ? WHERE pid = ? AND removed_at IS NULL").bind(now, by, pid);
+        await env.OC_DB.prepare("UPDATE rc_pool SET dnc = 1 WHERE pid = ?").bind(pid).run().catch(() => {});   // (0.2.10) don't-contact
+        break;
       default:
         return bad("Unknown action.");
     }
