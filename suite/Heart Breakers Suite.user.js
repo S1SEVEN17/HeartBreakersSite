@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.38
+// @version      0.2.39
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,10 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.39 (Nov 15 2026) - ⬆ Updates reach you fast (user: "I want them to be pushed ASAP to users"): the Hub now
+ *          sends the published Suite version with every Chain Watch update, so the banner shows within seconds of a
+ *          release (the old check was every 6 h; the fallback check is now every 30 min). 3+ versions behind: the
+ *          banner turns red and can't be dismissed. ⛔ "Update required" banner when leaders mark a release required.
  *  v0.2.38 (Nov 15 2026) - ⛓ "No live chain" while Torn wasn't in focus: the Hub now stays awake for slowly-polling
  *          background tabs and takes a fresh Torn read before answering a poll whose reading is old (Hub side); the
  *          Suite asks the Hub at once when you come back to the tab, and says "No update from the Hub for X" instead
@@ -350,7 +354,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.38';
+    const VERSION = '0.2.39';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -958,6 +962,9 @@
             #hbs-panel .hbs-banner{margin-top:7px;padding:6px 8px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:11.5px;}
             #hbs-panel .hbs-sec{border-bottom:0;margin:14px 0 4px;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);}
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
+            /* 0.2.39 - red update banner (3+ versions behind / required) */
+            #hbs-panel .hbs-upd.hbs-updreq{background:#4a1616;border-color:#ff6b6b;color:#ffe0e0;font-size:12.5px;line-height:1.5;padding:8px 10px;}
+            #hbs-panel .hbs-upd.hbs-updreq .hbs-btn{margin-left:6px;text-decoration:none;}
             /* 0.2.37 - "your energy isn't reaching the queue" note */
             #hbs-panel .hbs-banner.hbs-warnb{background:#3a1f1f;border-color:#7a3a3a;color:#ffd0d0;text-align:left;line-height:1.45;}
             #hbs-panel .hbs-banner.hbs-warnb .hbs-actions{margin-top:6px;justify-content:flex-start;}
@@ -2601,6 +2608,7 @@
             if (m.kind === 'join_refused') { cw.optimistic = null; cw.queued = false; store.set(K.cwq, false); cwShow(); }   // undo the optimistic join
             alertMe(m.text || m.kind, false); return; }
         if (m.t === 'mode') { cw.mode = m.mode; return; }
+        if (m.suite) updFromHub(m.suite);                           // (0.2.39) the published Suite version -> update banner at once
         if (m.chain) { cw.hubAt = Date.now();                      // when the Hub last sent a chain (page-read sanity reference)
             try { store.set(K.cwSnap, { chain: m.chain, offset: num(m.now) - Date.now(), at: Date.now() }); } catch (e) { /* */ } }
         if (m.t === 'state') cw.state = m;
@@ -3758,18 +3766,47 @@
     let updEl = null;
     async function checkUpdate() {
         const U = store.get(K.upd, {}) || {};
-        if (!U.at || Date.now() - num(U.at) > 6 * 3600e3) {
+        if (!U.at || Date.now() - num(U.at) > 30 * 60e3) {   // (0.2.39) fallback only - the Hub pushes the version (updFromHub)
             try { const d = await live('scripts');                     // [HB Suite] Hub API — op live "scripts" (the Scripts directory)
                 const x = (d.scripts || []).find(s => /heart breakers suite/i.test(s.name || ''));
-                Object.assign(U, { at: Date.now(), ver: x ? x.version : '', url: x ? x.install_url : '' }); store.set(K.upd, U);
+                const U2 = store.get(K.upd, {}) || {}, v = x ? String(x.version || '') : '';
+                Object.assign(U2, { at: Date.now(), ver: U2.ver && (!v || cmpVer(v, U2.ver) < 0) ? U2.ver : v, url: (x && x.install_url) || U2.url || '' }); store.set(K.upd, U2);
             } catch (e) { /* next time */ }
         }
         drawUpdate();
     }
+    // HUB PUSH (0.2.39): the Chain Watch room's state / sync carries {latest, required} (gate/suite_version.js, written
+    // when a version is published). A newer `latest` or a changed `required` updates the banner at once.
+    const SUITE_INSTALL = 'https://update.greasyfork.org/scripts/605562/Heart%20Breakers%20Suite.user.js';
+    function updFromHub(sv) {
+        const U = store.get(K.upd, {}) || {}, lat = String(sv.latest || ''), req = String(sv.required || '');
+        if (!/^\d+(\.\d+)*$/.test(lat) || (req && !/^\d+(\.\d+)*$/.test(req))) return;
+        if (U.ver === lat && (U.req || '') === req && U.url) return;
+        if (U.ver && cmpVer(lat, U.ver) < 0 && (U.req || '') === req) return;      // never step back to an older "latest"
+        Object.assign(U, { at: Date.now(), ver: U.ver && cmpVer(lat, U.ver) < 0 ? U.ver : lat, req, url: U.url || SUITE_INSTALL }); store.set(K.upd, U);
+        drawUpdate();
+    }
+    // how far behind: same major.minor -> the difference in the last number; an older minor / major = far behind
+    const verBehind = (mine, latest) => { const a = String(mine).split('.').map(Number), b = String(latest).split('.').map(Number);
+        return (a[0] || 0) !== (b[0] || 0) || (a[1] || 0) !== (b[1] || 0) ? 99 : Math.max(0, (b[2] || 0) - (a[2] || 0)); };
     function drawUpdate() {
         if (!updEl) return;
         const U = store.get(K.upd, {}) || {};
-        const show = U.ver && cmpVer(U.ver, VERSION) > 0 && U.dismissed !== U.ver;
+        const newer = U.ver && cmpVer(U.ver, VERSION) > 0;
+        // (0.2.39, user: "Add the Stronger banner for further out of date scripts. A 'required version' banner when any
+        // major updates are pushed.") required = this Suite is older than the version leaders marked required;
+        // strong = 3+ versions behind. Both are red and can't be dismissed; required also says so.
+        const required = !!(U.req && cmpVer(VERSION, U.req) < 0), strong = newer && verBehind(VERSION, U.ver) >= 3;
+        if (required || strong) {
+            updEl.style.display = ''; updEl.className = 'hbs-upd hbs-updreq';
+            const to = newer ? U.ver : U.req;
+            updEl.innerHTML = required
+                ? `⛔ <b>Update required</b> - Suite v${esc(to)} has an important fix (you're on v${VERSION}). <a class="hbs-btn hbs-mini" href="${esc(U.url || SUITE_INSTALL)}" target="_blank" rel="noopener">Update now</a>`
+                : `⚠ <b>Your Suite is ${verBehind(VERSION, U.ver) >= 99 ? 'far' : verBehind(VERSION, U.ver) + ' versions'} behind</b> (v${VERSION} → v${esc(U.ver)}) - fixes you're missing. <a class="hbs-btn hbs-mini" href="${esc(U.url || SUITE_INSTALL)}" target="_blank" rel="noopener">Update now</a>`;
+            return;
+        }
+        updEl.className = 'hbs-upd';
+        const show = newer && U.dismissed !== U.ver;
         updEl.style.display = show ? '' : 'none';
         if (show) updEl.innerHTML = `⬆ Suite <b>v${esc(U.ver)}</b> is out ${U.url ? `- <a href="${esc(U.url)}" target="_blank" rel="noopener">install</a>` : '- see 🧩 Scripts'} <button type="button" data-upd="x" title="Hide until the next version">✕</button>`;
     }

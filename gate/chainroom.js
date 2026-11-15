@@ -37,6 +37,8 @@
  *     and refuses pids not on the member list; /cw/sync devices keep the loop running; settings reload on save;
  *     the governor reports both levels (70% degraded / 90% fall back).
  * ========================================================================== */
+import { SUITE_LATEST, SUITE_REQUIRED } from "./suite_version.js";   // the published Suite version -> scripts' update banner (Nov 15 2026)
+
 
 /* ----------------------------------------------------------------------------
  * CONSTANTS (contract §4/§5/§8). Timers are generous on purpose — Torn caches each key's response ~30 s, so
@@ -1154,6 +1156,7 @@ export class ChainRoom {
     const me = this.mem.members[pid] || {};
     return {
       t: "state", now: Date.now(),
+      suite: { latest: SUITE_LATEST, required: SUITE_REQUIRED },   // (Nov 15 2026) update banner
       chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
       me: { pid, is_leader: !!me.is_leader, phase_ms: this.phaseFor(pid),
@@ -1171,6 +1174,7 @@ export class ChainRoom {
     try { this.checkAlerts(now); } catch (e) { /* alerts must never break a sync */ }
     const base = Object.assign({
       t: "sync", now, chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
+      suite: { latest: SUITE_LATEST, required: SUITE_REQUIRED },
       retals: this.openRetals(), config: this.publicConfig(),
     }, this.extras());
     if (this.schedDirty && this.sched) {
