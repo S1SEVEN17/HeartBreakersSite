@@ -3063,7 +3063,10 @@ async function ocTriggers(env, cfg, crimes) {
 }
 const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or left", settings: "settings changed", rates: "pass rates updated", success: "success chances checked"};
 // 🔬 SHADOW: the V2 rule settings (user's answers, Nov 15 2026) and the side-by-side report
-const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12};
+// + SAFEGUARDS (Nov 16 2026, user: "Enable safeguards so users don't get switched around too much."): a move must pay
+// the member at least 10 % more per day; a member is asked to move at most once in 24 h and never back, within 72 h,
+// to the crime they left; never out of a paused / about-to-pause / fuller crime (gate/oc_planner.js V2 SAFEGUARDS).
+const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHours: 24, backHours: 72};
 function ocShadowReport(A, B, crimes, members, now) {
   const byId = new Map((crimes || []).map(c => [String(c.id), c]));
   const nm = pid => members[String(pid)] || ("#" + pid);
@@ -3102,7 +3105,7 @@ function ocShadowReport(A, B, crimes, members, now) {
   }).filter(r => r.open_now > 0 || r.cur || r.v2)
     .sort((p, q) => (p.same - q.same) || ({paused: 0, pausing: 1, "": 2}[p.state] - {paused: 0, pausing: 1, "": 2}[q.state]) || q.seats - q.open_now - (p.seats - p.open_now));
   const changed = [...new Set(Object.keys(a.who).concat(Object.keys(b.who)))].filter(pid => a.who[pid] !== b.who[pid]).length;
-  return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows};
+  return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows, blocked: (B.stats && B.stats.v2_blocked) || null};
 }
 async function ocAutoPlan(env, crimes, now, run = {}) {
   const cfg = await ocConfig(env, "prod");
@@ -3227,7 +3230,17 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     const base = {succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                   rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now, fresh: true,
                   holdLog: {}, scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null};
-    const A = ocPlan(Object.assign({}, base)), B = ocPlan(Object.assign({}, base, {v2: OC_V2}));
+    // the shadow's own MOVE LOG (oc_snap hub 'plan:shadow-moves' {pid: {at, to, from}}): the last move the new rules
+    // proposed for each member - what the once-a-day safeguard checks. A move still proposed keeps its first time.
+    const ml0 = ((await ocSnapGet(env, "hub", "plan:shadow-moves").catch(() => null)) || {}).data || {};
+    const A = ocPlan(Object.assign({}, base)), B = ocPlan(Object.assign({}, base, {v2: OC_V2, moveLog: ml0}));
+    const ml = {};
+    Object.keys(ml0).forEach(k => { if (now - Number((ml0[k] || {}).at) < 7 * 864e5) ml[k] = ml0[k]; });
+    (B.teams || []).forEach(t => (t.roles || []).forEach(r => { if (r.pid != null && r.leave && t.crime_id != null) {
+      const old = ml[String(r.pid)];
+      if (!(old && String(old.to) === String(t.crime_id))) ml[String(r.pid)] = {at: now, to: t.crime_id, from: r.leave.crime_id}; } }));
+    await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:shadow-moves', ?, ?, 'hub') " +
+      "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify(ml)).run();
     await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:shadow', ?, ?, 'hub') " +
       "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
       .bind(now, JSON.stringify(ocShadowReport(A, B, crimes, members, now))).run();

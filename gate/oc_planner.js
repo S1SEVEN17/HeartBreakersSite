@@ -153,7 +153,18 @@ export function ocPlan(X) {
   //      the other crime pays them more per day if they join now ("under 12 hours ... as long as the swap benefits
   //      them in profit per day"; "as long as the crime is not filled"). Full crimes are never pulled from.
   // =====================================================================================================
-  const V2 = X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0} : null;
+  //   4. SAFEGUARDS (Nov 16 2026, user: "Enable safeguards so users don't get switched around too much."), for the
+  //      moves in 3 (a member asked to LEAVE the crime they sit in):
+  //        - WORTH IT: the other crime must pay them at least minGain % more per day (today's rule: 1 %);
+  //        - NOT FROM A CRIME THAT NEEDS THEM: never out of a paused / about-to-pause crime, and never out of a crime
+  //          that is fuller than the one being filled (that would only move the hole);
+  //        - ONCE A DAY: X.moveLog {pid: {at, to, from}} = the last move each member was asked to make. Within
+  //          cooldownHours of it they aren't asked to go anywhere else, and they're never sent back to the crime
+  //          they left within backHours. (The same pending move may keep being proposed - it's one ask.)
+  //      stats.v2_blocked counts the moves each safeguard held back.
+  const V2 = X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
+    minGain: Number(X.v2.minGain) || 0, cooldownHours: Number(X.v2.cooldownHours) || 0, backHours: Number(X.v2.backHours) || 0} : null;
+  const moveLog = (V2 && X.moveLog) || {}, v2Blocked = {gain: new Set(), source: new Set(), cooldown: new Set()};   // members a safeguard held back (at least once)
   let curSlack = 0;                                        // V2: points under the target / role minimums for the crime being filled
   const TGT = () => O.target - curSlack;
   const floorOf = (crime, label) => {
@@ -585,6 +596,13 @@ export function ocPlan(X) {
       if (!cid || cid === String(c.id) || assigned.has(pid) || nsBan.has(pid) || roster[String(pid)] == null || moveFrom.has(pid)) continue;
       const xc = inst.get(cid); if (!xc || !(each(xc) * 1.01 < each(c))) continue;
       if (teams.some(x => x.lock && String(x.crime_id) === cid)) continue;
+      if (V2) {                                              // V2 SAFEGUARDS (see the header)
+        if (V2.minGain > 0 && !(each(xc) * (1 + V2.minGain / 100) < each(c))) { v2Blocked.gain.add(pid); continue; }
+        if (urgency(xc) > 0 || filled(xc) > filled(c)) { v2Blocked.source.add(pid); continue; }
+        const L = moveLog[String(pid)];
+        if (L && ((V2.cooldownHours > 0 && NOW - Number(L.at) < V2.cooldownHours * 3600e3 && String(L.to) !== String(c.id))
+               || (V2.backHours > 0 && NOW - Number(L.at) < V2.backHours * 3600e3 && String(L.from) === String(c.id)))) { v2Blocked.cooldown.add(pid); continue; }
+      }
       idleFrom.set(pid, {crime_id: xc.id, crime: xc.name, position: busy.get(pid).label}); movePool.push({pid, soft: false});
     }
     const pool = freePool().concat(softPool()).concat(movePool).filter(p => !nsBan.has(p.pid));
@@ -820,7 +838,8 @@ export function ocPlan(X) {
   // (succ_calc) when the team is full and it's known, else the weighted average of the members placed so far
   teams.forEach(t => { const c = calcOf(t.roles, t.crime), a = c != null ? c : avgOf(t.roles.filter(r => r.pid != null), t.crime);
     t.succ = a == null ? null : Math.round(a * 10) / 10; t.succ_calc = c != null; });
-  return {teams, changed, stats: {live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
+  return {teams, changed, stats: {v2_blocked: V2 ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
+    live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
     holds: teams.filter(t => t.hold).length, hold_log: holdLog,
     // CALCULATED SUCCESS: how many team checks used a known calculated chance / full teams rejected for being below the target
