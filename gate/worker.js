@@ -452,7 +452,9 @@ async function sxRoute(env, ctx, req) {
       // + cpr_notified {pid: {ts, by}} - when a leader last pressed Notify for a member without the script (HB Suite 0.2.56)
       const nt = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'all' AND k = 'cpr_notified'").first().catch(() => null);
       let cprN = {}; try { cprN = nt ? JSON.parse(nt.v) || {} : {}; } catch (e) { cprN = {}; }
-      return sxJson({ok: true, plan_ts: o.plan_ts || null, teams: o.teams || [], sharing: o.sharing || null, cpr_notified: cprN});   // + 📡 who shares CPR rates (0.2.23, leaders)
+      const iv = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'prod' AND k = 'invite'").first().catch(() => null);
+      let invite = null; try { invite = iv ? JSON.parse(iv.v) || null : null; } catch (e) { invite = null; }
+      return sxJson({ok: true, plan_ts: o.plan_ts || null, teams: o.teams || [], sharing: o.sharing || null, cpr_notified: cprN, invite_tpl: invite});   // + 📡 who shares CPR rates (0.2.23, leaders)
     }
     if (what === "myoc") return sxJson(await ocMine(env, who.id));   // the Hub script's Home "My OC" tile (Nov 14 2026)
     // HB SUITE (Nov 14 2026): the header's live status chips - ranked war + chain now (same as the site's now.json)
@@ -1951,7 +1953,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     let b;
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
-    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify", "contacted"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify", "invite", "contacted"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
     if (b.k === "contacted") {
       // 📣 CONTACT LOG (Nov 14 2026) - see ocContactLog; the page sends ONE entry {pid, crime, crime_id, role, how}
@@ -1972,6 +1974,14 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       v = v && typeof v === "object" ? v : {};
       const t = (x, max) => typeof x === "string" ? x.replace(/\r/g, "").slice(0, max) : "";
       v = {chat: t(v.chat, 600), subject: t(v.subject, 120), mail: t(v.mail, 3000)};
+    } else if (b.k === "invite") {
+      // ✉ SCRIPT INVITE (Nov 15 2026, user: "Add an editor for the text to the hub. This should be linked under the
+      // management page."): the mail leaders send to members with no script from the Suite's Sharing CPR rates list
+      // (✉ Notify) - {subject, mail}, fill-ins {name} {scripts} {hub}; blank = the built-in wording. Edited on OC
+      // Management's Notify tab; the Suite gets it with live "deployed" (invite_tpl).
+      v = v && typeof v === "object" ? v : {};
+      const t = (x, max) => typeof x === "string" ? x.replace(/\r/g, "").slice(0, max) : "";
+      v = {subject: t(v.subject, 120), mail: t(v.mail, 3000)};
     } else if (b.k === "opts") {
       // Team Builder settings - the gatekeeper's automatic planner uses the same ones (ocAutoPlan)
       const n = (x, lo, hi, d) => { x = Number(x); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };

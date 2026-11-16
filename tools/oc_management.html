@@ -1135,7 +1135,26 @@ function notifyEditor() {
     <label class="hn">💬 Chat<br><textarea id="ntChat" rows="3" style="width:100%">${esc(T.chat || NOTIFY_DEFAULT.chat)}</textarea></label>
     <label class="hn">✉️ Mail subject<br><input id="ntSubj" style="width:100%" value="${esc(T.subject || NOTIFY_DEFAULT.subject)}"></label>
     <label class="hn">✉️ Mail<br><textarea id="ntMail" rows="9" style="width:100%">${esc(T.mail || NOTIFY_DEFAULT.mail)}</textarea></label>
-    <div><button id="ntSave">💾 Save</button> <button id="ntReset">↩️ Back to the built-in wording</button> <span class="hn" id="ntMsg"></span></div></details>`;
+    <div><button id="ntSave">💾 Save</button> <button id="ntReset">↩️ Back to the built-in wording</button> <span class="hn" id="ntMsg"></span></div></details>` + inviteEditor();
+}
+// ✉ SCRIPT INVITE (Nov 15 2026, user: "Add an editor for the text to the hub. This should be linked under the
+// management page."): the mail the Suite's ✉ Notify fills in for members with no script (leaders' Sharing CPR rates
+// list). Saved in the OC config ("invite": {subject, mail}, blank = the built-in wording below); the Suite reads it
+// with live "deployed" (invite_tpl) - keep its INVITE_DEFAULT in step. Fill-ins: {name} {scripts} (the Suite on
+// Greasy Fork) {hub}. Same mail formatting as the messages above.
+const INVITE_DEFAULT = {
+  subject: "Please install the Heart Breakers Suite",
+  mail: "Hi {name},\n\nHeart Breakers now runs on one script: the **Heart Breakers Suite**. It shows your Organized Crime assignment, Chain Watch and more, and shares your OC pass rates with the Hub so leaders can seat you in the roles you pass best.\n\n"
+    + "Please install it here: [Heart Breakers Suite]({scripts})\n\nThanks! 💗"};
+function inviteEditor() {
+  const T = (D.config && D.config.invite) || {};
+  return `<details class="panel" style="margin-top:10px"><summary><b>✏️ Edit the script invite</b> <span class="tag">${T.subject || T.mail ? "custom wording" : "built-in wording"}</span></summary>
+    <div class="hn">The mail the Heart Breakers Suite fills in when a leader presses <b>✉ Notify</b> next to a member with no script (OC tab → 📡 Sharing CPR rates).
+      Fill-ins: <code>{name}</code> <code>{scripts}</code> (the Heart Breakers Suite on Greasy Fork) <code>{hub}</code> (the Hub).
+      A blank line starts a new paragraph, <code>**bold**</code>, <code>[link text](address)</code>. Leave a box empty for the built-in wording.</div>
+    <label class="hn">✉️ Mail subject<br><input id="ivSubj" style="width:100%" value="${esc(T.subject || INVITE_DEFAULT.subject)}"></label>
+    <label class="hn">✉️ Mail<br><textarea id="ivMail" rows="9" style="width:100%">${esc(T.mail || INVITE_DEFAULT.mail)}</textarea></label>
+    <div><button id="ivSave">💾 Save</button> <button id="ivReset">↩️ Back to the built-in wording</button> <span class="hn" id="ivMsg"></span></div></details>`;
 }
 function notifyEditorWire() {
   const go = async v => { try { $("ntMsg").textContent = "Saving…"; await saveConfig("notify", v); D.config.notify = v; drawNotify(); }
@@ -1144,6 +1163,10 @@ function notifyEditorWire() {
   const keep = (val, def) => (val.trim() === def.trim() ? "" : val);
   $("ntSave").onclick = () => go({chat: keep($("ntChat").value, NOTIFY_DEFAULT.chat), subject: keep($("ntSubj").value, NOTIFY_DEFAULT.subject), mail: keep($("ntMail").value, NOTIFY_DEFAULT.mail)});
   $("ntReset").onclick = () => go({chat: "", subject: "", mail: ""});
+  const goI = async v => { try { $("ivMsg").textContent = "Saving…"; await saveConfig("invite", v); D.config.invite = v; drawNotify(); }
+    catch (e) { $("ivMsg").textContent = "Not saved: " + e.message; } };
+  $("ivSave").onclick = () => goI({subject: keep($("ivSubj").value, INVITE_DEFAULT.subject), mail: keep($("ivMail").value, INVITE_DEFAULT.mail)});
+  $("ivReset").onclick = () => goI({subject: "", mail: ""});
 }
 // copy as rich text (HTML + plain text); browsers without ClipboardItem get the HTML copied from a hidden editable box
 function copyRich(html, text) {
