@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.54
+// @version      0.2.55
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.54';
+    const VERSION = '0.2.55';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -33,6 +33,7 @@
     const CACHE_MS = 5 * 60 * 1000;
     const MIN_HITS = 5;
     const READY_POLL_MS = 60000;
+    const OC_SHARE_MS = 300000;
     const SHARE_PING_MS = 120000;
     const SHARE_READY_MS = 60000;
 
@@ -49,6 +50,9 @@
         paid: 'hbs_paid_',
         rcpt: 'hbs_rcpt_',
         share: 'hbs_share',
+        shareMig: 'hbs_share_mig255',
+        ocShareAt: 'hbs_share_ocat',
+        sharePingAt: 'hbs_share_pingat',
         shareDay: 'hbs_share_day',
         ocTag: 'hbs_share_octag',
         mods: 'hbs_mods',
@@ -2352,7 +2356,7 @@
         const live = c.current > 0;
         const hubAge = cw.lastMsg ? Date.now() - cw.lastMsg : 0;
         if (hubAge > 75000) cwSyncSoon();
-        let out = (hubAge > 75000 ? `<div class="hbs-banner hbs-warnb">⚠ No update from the Hub for <b>${dur(hubAge / 1000)}</b> - what's below may be out of date. Asking again…</div>` : '')
+        let out = cvChainHtml() + (hubAge > 75000 ? `<div class="hbs-banner hbs-warnb">⚠ No update from the Hub for <b>${dur(hubAge / 1000)}</b> - what's below may be out of date. Asking again…</div>` : '')
             + `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">⛓ ${live ? int(c.current) + ' / ' + int(c.max) : 'No live chain'}</span>
             <span class="hbs-chip">${cw.ws && cw.ws.readyState === 1 ? '● Live' : cw.syncT ? '● Polling' : '○ Offline'}</span></div>${cw.err ? `<div class="hbs-hint">${esc(cw.err)}</div>` : ''}`;
         if (live) out += `<div class="hbs-big"><span data-cwexp data-exp="${cwLocal(c.expires_at)}" data-zero="00:00">-</span><small>${cwVerifyAt && cwLeft() <= 0 ? 'timer ran out - checking with the Hub…' : 'left on the timer' + (c.src === 'page' ? ' · live from your Torn page' : '')}</small></div>`;
@@ -2418,7 +2422,6 @@
             + cwCfgHtml(cfg, cfgUrl)
             + alertsCfgHtml();
         out += await chainSummaryHtml();
-        out += cvChainHtml();
         out += `<div class="hbs-hint">Alerts: ${[cfg.topAlertSeconds, cfg.restAlertSeconds, cfg.thirdAlertSeconds].filter(x => num(x) > 0).map(mSec).join(' / ')} left · min chain ${int(cfg.minChain)}</div>`;
         return out;
     }
@@ -3846,8 +3849,9 @@
         if (!open) return out;
         if (!L) return out + `<div class="hbs-foldb"><div class="hbs-hint">${ocDep.busy ? 'Loading…' : ocDep.err ? esc(ocDep.err) : 'Not available right now.'}</div></div>`;
         const row = (x, ok) => `<div class="hbs-depm"><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>
-            <span class="s ${ok ? 'ok' : 'no'}">${ok ? (x.last ? '✓ ' + ago(Math.floor(num(x.last) / (num(x.last) > 1e12 ? 1000 : 1))) : '✓ sharing') : '✕ not sharing'}</span></div>`;
-        return out + `<div class="hbs-foldb"><div class="hbs-hint">Members whose script (or opt-in key) sends their checkpoint pass rates to the Hub, so the planner can seat them in roles they pass. Rates themselves aren't shown.</div>
+            <span class="s ${ok ? 'ok' : 'no'}">${ok ? (x.last ? '✓ ' + ago(Math.floor(num(x.last) / (num(x.last) > 1e12 ? 1000 : 1))) : '✓ sharing')
+                : x.off ? '✕ script running · sharing off' : x.script ? '… script running · no rates yet' : '✕ no script'}</span></div>`;
+        return out + `<div class="hbs-foldb"><div class="hbs-hint">Members whose script (or opt-in key) sends their checkpoint pass rates to the Hub, so the planner can seat them in roles they pass. Rates themselves aren't shown. The time is when their script last checked (every few minutes while it runs).</div>
             <div class="hbs-sec">Sharing · ${yes.length}</div>${yes.length ? yes.map(x => row(x, true)).join('') : '<div class="hbs-hint">Nobody yet.</div>'}
             <div class="hbs-sec">Not sharing · ${no.length}</div>${no.length ? no.map(x => row(x, false)).join('') : '<div class="hbs-hint">✅ Everyone shares.</div>'}</div>`;
     }
@@ -4864,9 +4868,9 @@
         box.innerHTML = `<div class="hbs-sec">Share from this script</div>
             <div class="hbs-hint" style="opacity:.85">The same options as the Hub's <a href="${HUB_BASE}/m/my-data.html" target="_blank" rel="noopener">My data & sharing</a>,
                 but your key is <b>never uploaded</b>: this script reads Torn on this device and sends only the results. It only updates while the script is running.</div>
+            ${opt('🕵️', 'OC pass rates', 'Your checkpoint pass rate per organized crime role - checked every few minutes while this script runs (on unless you switch it off), so leaders\' Team Builder and the Suite can put you in the roles you pass best.', onoff('oc', st.oc, 'On'))}
             ${opt('💪', 'Battle stats', 'Strength, defense, speed, dexterity - read once a day (the first time the script runs after 00:00 TCT) so your gains are tracked.', sel('bs', st.bs))}
             ${opt('🧰', 'Work stats', 'Manual labor, intelligence, endurance - read once a day.', sel('ws', st.ws))}
-            ${opt('🕵️', 'OC pass rates', 'Your checkpoint pass rate per organized crime role - read when the Hub finds a new crime, so leaders\' Team Builder and the Suite can put you in the roles you pass best.', onoff('oc', st.oc, 'On'))}
             <div class="hbs-hint">Sharing on the Hub too? The two are combined.</div>
             <div class="hbs-actions"><button type="button" class="hbs-btn" data-shsave>Save sharing</button></div>
             <div class="hbs-msg" data-shmsg>${g.last && (g.last.bs || g.last.ws || g.last.rd_at) ? 'Last sent: ' + [g.last.bs || g.last.ws ? 'stats ' + (g.last.bs || g.last.ws) : '',
@@ -4894,7 +4898,8 @@
     const tctDay = () => new Date().toISOString().slice(0, 10);
     async function shareTick(now) {
         clearTimeout(shareTimer); shareTimer = null;
-        const st = store.get(K.share, null);
+        if (!store.get(K.shareMig, 0)) { store.set(K.shareMig, 1); store.set(K.share, null); }
+        const st = store.get(K.share, null) || { bs: 'off', ws: 'off', ready: false, oc: true, cw: false };
         if (st && st.ready && getKey()) {
             try { const r = await hub('share_set', { bs: st.bs || 'off', ws: st.ws || 'off', ready: false, oc: !!st.oc, cw: false });   // [HB Suite] Hub API — op "share_set" (turns off the removed War readiness share)
                 store.set(K.share, r.settings || Object.assign({}, st, { ready: false })); } catch (e) {   }
@@ -4902,7 +4907,7 @@
         }
         if (!st || !getKey() || (st.bs === 'off' && st.ws === 'off' && !st.oc)) return;
         let next = SHARE_PING_MS;
-        if (document.visibilityState === 'visible' && !shareBusy) {
+        if (!shareBusy) {
             shareBusy = true;
             try {
                 if ((st.bs !== 'off' || st.ws !== 'off') && store.get(K.shareDay, '') !== tctDay()) {
@@ -4915,13 +4920,15 @@
                     await hub('share_push', body);
                     store.set(K.shareDay, day);
                 }
-                if (st.oc) {
+                if (st.oc && Date.now() - num(store.get(K.sharePingAt, 0)) > SHARE_PING_MS - 20000) {
+                    store.set(K.sharePingAt, Date.now());
                     // [HB Suite] Hub API — op "share_ping": is a leader watching War Readiness? a new crime? (also refreshes the
                     const p = await hub('share_ping');
                     const ps = p.settings || st;
                     if (p.settings) store.set(K.share, p.settings);
-                    if (ps.oc && p.oc_tag && p.oc_tag !== store.get(K.ocTag, '')) {
-                        // [HB Suite] Torn API — sharing: own OC pass rates (v2 user/organizedcrimes - only when the Hub found a new crime)
+                    if (ps.oc && ((p.oc_tag && p.oc_tag !== store.get(K.ocTag, '')) || Date.now() - num(store.get(K.ocShareAt, 0)) > OC_SHARE_MS - 20000)) {
+                        store.set(K.ocShareAt, Date.now());
+                        // [HB Suite] Torn API — sharing: own OC pass rates (v2 user/organizedcrimes - every 5 min while the script runs, 1 call)
                         const d = await tornGet('https://api.torn.com/v2/user/organizedcrimes');
                         const rows = [];
                         (d.organizedcrimes || []).forEach(c => (c.slots || []).forEach(sl => {
@@ -4929,8 +4936,8 @@
                             rows.push([c.name, (sl.position_info && sl.position_info.label) || sl.position, Math.round(sl.checkpoint_pass_rate)]);
                         }));
                         // [HB Suite] Hub API — op "share_push": the pass rates [[crime, role, rate], ...]
-                        if (rows.length) await hub('share_push', { oc: rows });
-                        store.set(K.ocTag, p.oc_tag);
+                        await hub('share_push', { oc: rows });
+                        if (p.oc_tag) store.set(K.ocTag, p.oc_tag);
                     }
                 }
             } catch (e) { console.warn(LOG, 'sharing:', e.message); }
