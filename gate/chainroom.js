@@ -550,7 +550,7 @@ export class ChainRoom {
    * --------------------------------------------------------------------------------------------------------- */
   dumpRoom(pid) {
     const cfg = this.mem.config || CW_DEFAULT_CONFIG, cur = (this.mem.chain && Number(this.mem.chain.current)) || 0;
-    const next = nextBonus(cur), buffer = Math.max(1, Number(cfg.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer);
+    const next = dumpBonus(cur), buffer = Math.max(1, Number(cfg.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer);
     let held = 0;
     for (const q of Object.values(this.mem.queue)) {
       if (Number(q.pid) === Number(pid) || !q.dump || q.dump.st !== "on") continue;
@@ -593,7 +593,7 @@ export class ChainRoom {
   // run whenever the chain or a dumper's count moves; true = something changed (caller saves / broadcasts)
   dumpCheck(now) {
     const cfg = this.mem.config || CW_DEFAULT_CONFIG, cur = (this.mem.chain && Number(this.mem.chain.current)) || 0;
-    const next = nextBonus(cur), buffer = Math.max(1, Number(cfg.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer);
+    const next = dumpBonus(cur), buffer = Math.max(1, Number(cfg.dumpBuffer) || CW_DEFAULT_CONFIG.dumpBuffer);
     let changed = false;
     for (const q of Object.values(this.mem.queue)) {
       const pid = Number(q.pid), d = q.dump;
@@ -1707,6 +1707,9 @@ function isRecruit(m) {
   return /^recruit$/i.test(String(m.position || "")) || (m.days != null && Number(m.days) < RECRUIT_DAYS);
 }
 function nextBonus(cur) { return BONUS_HITS.find((b) => b > (Number(cur) || 0)) || 0; }
+// DUMPING (Nov 15 2026, user: "Exempt 10 bonus from dump protection."): the bonus dumping protects - the next one,
+// skipping the bonus at 10 (with 10 protected hits a new chain could never be dumped into until it passed 10)
+function dumpBonus(cur) { return BONUS_HITS.find((b) => b !== 10 && b > (Number(cur) || 0)) || 0; }
 function due(last, every, now) { return !!every && now - (last || 0) >= every - 1000; }
 function todayUTC() { return new Date().toISOString().slice(0, 10); }
 function sanitizeStats(s) {
