@@ -3102,6 +3102,7 @@ const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHou
 // minFloor (user: "Cap how low someone can drop to 50%"): never under 50% of their best crime's pay, however long they wait.
 // (later Nov 16: "Measure against whats open" - the 75% floor is gone; alert = the underperforming warning's %)
 const OC_V3 = {floor: 0, alert: 75, minFloor: 50, waitHours: 24, pauseHours: 12};
+const OC_SHADOW_RUN = false;   // the shadow comparison (see ocAutoPlan) - off since the Shadow tab became Team Builder v2
 function ocShadowReport(A, B, crimes, members, now) {
   const byId = new Map((crimes || []).map(c => [String(c.id), c]));
   const nm = pid => members[String(pid)] || ("#" + pid);
@@ -3282,7 +3283,9 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   // about-to-pause / fullest first; -5 under the floor for those; moves under 12 h of planning - gate/oc_planner.js
   // V2). Nothing here is deployed or shown to members: the result goes to oc_snap hub 'plan:shadow' for OC
   // Management's 🔬 Shadow tab. Any failure is swallowed - the live plan above never depends on it.
-  try {
+  // SHADOW RUN OFF (Nov 16 2026, user: "Replace the Shadow tab with this new Team Builder v2."): nothing shows the
+  // comparison any more, so the two extra plans + three D1 writes per run are skipped. OC_SHADOW_RUN = true brings it back.
+  if (OC_SHADOW_RUN) try {
     const base = {succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                   rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now, fresh: true,
                   holdLog: {}, scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null};
