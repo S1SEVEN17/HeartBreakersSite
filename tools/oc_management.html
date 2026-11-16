@@ -950,8 +950,10 @@ function v3Html(S) {
   const V = S.v3; if (!V) return "";
   const money = n => n >= 1e6 ? "$" + (n / 1e6).toFixed(2) + "m" : "$" + Math.round(n / 1e3) + "k";
   const hrs = ms => { const h = Math.max(0, (Date.now() - ms) / 36e5); return h < 1 ? "just now" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " d"; };
+  const byPid = new Map(V.waiting.map(w => [Number(w.pid), w]));
   const req = V.requests.map(r => `<div style="border-top:1px solid #2c313a;padding:6px 0"><span class="tag mid">Spawn difficulty ${esc(r.tier)}</span> <b>${r.members.length}</b> waiting <span class="hn">· longest ${hrs(r.longest)}</span>
-      <div class="hn">${r.names.map(esc).join(", ")}</div></div>`).join("");
+      ${r.members.map((pid, i) => { const w = byPid.get(Number(pid));   // (user: "This should show their highest crimes pay per day.")
+        return `<div class="hn">${esc(r.names[i] || (w && w.name) || "#" + pid)}${w ? ` · best: <b>${esc(w.best)}</b> <b style="color:#7CFC9A">${money(w.best_pay)}/day</b>` : ""}</div>`; }).join("")}</div>`).join("");
   const wait = V.waiting.slice().sort((a, b) => a.since - b.since).map(w => `<div style="border-top:1px solid #2c313a;padding:5px 0">${esc(w.name)}
       <span class="hn">· best: ${esc(w.best)} ${money(w.best_pay)}/day${w.dropped ? ` · now accepts ${esc(w.rung)} ${money(w.rung_pay)}/day (dropped ${w.dropped} step${w.dropped === 1 ? "" : "s"})` : ""} · tier ${esc(w.tier)} · waiting ${hrs(w.since)}</span>
       ${w.floor_blocked ? ' <span class="tag">held out of a lower-paying crime</span>' : ""}</div>`).join("");
