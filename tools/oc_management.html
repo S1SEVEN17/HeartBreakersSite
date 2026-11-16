@@ -956,8 +956,8 @@ async function deploy() {
 //   - RECRUITING = a crime recruiting in Torn that already has at least one member in it; AVAILABLE = one nobody has
 //     joined yet (Torn's feed calls both "Recruiting"). Only crimes with an open seat are listed.
 //   - MEMBERS = everyone on the roster who is not in a crime in Torn (busyMap). A member is on one seat at most.
-//   - BAND = the role's minimum (floorOf: lowest-role %, weight-scaled when set) up to the pass-rate ceiling (OPT.cap;
-//     only counts for a member who passes a HARDER switched-on crime - the planner's cap rule, tb2CapUp).
+//   - BAND = see BACK TO BASICS below (flat OPT.minRole - OPT.cap, hard). [first version: weight-scaled minimum and the
+//     planner's "passes a harder crime" cap rule - removed the same day at the user's request]
 //   - MANUAL: each unfilled role has a picker of free members with a recorded rate for it (in-band first; out-of-band
 //     ones are offered with a ⚠ so leaders can overrule). FILL: empty roles of that crime, heaviest role first, each
 //     gets the highest-rated free member inside the band. Nothing checks the team target - the card shows the weighted
@@ -976,8 +976,14 @@ function tb2CapUp() { const up = {};
   Object.keys(CFG.members).forEach(pid => Object.keys(CFG.catalog).forEach(c => { if (!crimeOk(c)) return; const d = diffOf(c) || 0; if (d <= (up[pid] || 0)) return;
     if (rolesOf(c).some(pos => { const r = rateOf(pid, c, pos); return r && r.rate >= floorOf(c, pos); })) up[pid] = d; }));
   return up; }
-// "ok" inside the band · "low" under the role minimum · "high" over the ceiling (and they pass a harder crime)
-const tb2Band = (pid, crime, pos, rate, up) => rate < floorOf(crime, pos) ? "low" : OPT.cap < 100 && rate > OPT.cap && (up[pid] || 0) > (diffOf(crime) || 0) ? "high" : "ok";
+// BACK TO BASICS (Nov 16 2026, user, on the "9.2% · min 59%" role tag: "Remove this. Back to default hard requirements
+// for crimes within the band. I want to go back to the basics with v2."): v2 uses ONE flat band for every role of every
+// crime - OPT.minRole (lowest rate) to OPT.cap (ceiling; 100 = none). No role weights, no weight-scaled minimum, no
+// "only if they pass a harder crime" exception, and the band is HARD: pickers and Fill only offer members inside it.
+// (tb2CapUp / the `up` argument are unused now - kept so the weighted rules can come back.)
+// "ok" inside the band · "low" under the minimum · "high" over the ceiling
+const tb2Min = () => OPT.minRole;
+const tb2Band = (pid, crime, pos, rate, up) => rate < tb2Min() ? "low" : OPT.cap < 100 && rate > OPT.cap ? "high" : "ok";
 function tb2Crimes() {
   const list = (D.feed || []).filter(c => c && c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user)).map(c => {
     const t = {kind: "live", crime: c.name, crime_id: c.id}, v = valueOf(c.name), ld = liveDays(t), started = (c.slots || []).some(sl => sl.user);
@@ -998,7 +1004,7 @@ function tb2Prune(crimes, busy) { const seen = new Set(), ids = new Map(crimes.m
 function tb2Fill(cid) {
   const x = tb2Crimes().find(y => String(y.c.id) === String(cid)); if (!x) return 0;
   const c = x.c, busy = busyMap(), up = tb2CapUp(), placed = tb2Prune(tb2Crimes(), busy), mine = TB2.sel[String(c.id)] = TB2.sel[String(c.id)] || {};
-  const open = (c.slots || []).filter(sl => !sl.user && mine[tb2Label(sl)] == null).map(tb2Label).sort((a, b) => roleW(c.name, b) - roleW(c.name, a));
+  const open = (c.slots || []).filter(sl => !sl.user && mine[tb2Label(sl)] == null).map(tb2Label);   // in the crime's own role order
   let n = 0;
   open.forEach(pos => { let best = null;
     Object.keys(CFG.members).forEach(p => { const pid = Number(p); if (busy[pid] || placed.has(pid)) return; const r = rateOf(pid, c.name, pos);
@@ -1019,23 +1025,25 @@ function drawBuilder2() {
       const pid = mine[pos] != null ? Number(mine[pos]) : null, r = pid != null ? rateOf(pid, c.name, pos) : null;
       return {position: pos, pid, rate: r ? r.rate : null, src: r ? r.src : null}; });
     const a = teamAvg({crime: c.name, roles}), nPl = roles.filter(r => r.pid != null && !r.existing).length, nIn = roles.filter(r => r.existing).length;
-    const rows = roles.map(r => { const lo = Math.round(floorOf(c.name, r.position)), bandTxt = `<span class="tag" title="The band for this role: lowest rate - pass-rate ceiling">${lo}–${OPT.cap < 100 ? OPT.cap : 100}%</span>`;
-      if (r.existing) return `<div class="rr held"><span class="pos">${esc(r.position)}${wTag(c.name, r.position)}</span><span>✅ <b>${esc(nameOf(r.pid))}</b> <span class="tag">in the crime${r.prog ? ` · planning ${r.prog}%` : ""}</span></span>
+    const rows = roles.map(r => {
+      if (r.existing) return `<div class="rr held"><span class="pos">${esc(r.position)}</span><span>✅ <b>${esc(nameOf(r.pid))}</b> <span class="tag">in the crime${r.prog ? ` · planning ${r.prog}%` : ""}</span></span>
         <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</span></div>`;
       const cands = [];
       free.forEach(pid => { if (placed.has(pid) && pid !== r.pid) return; const q = rateOf(pid, c.name, r.position); if (!q) return;
-        cands.push({pid, rate: q.rate, src: q.src, band: tb2Band(pid, c.name, r.position, q.rate, up)}); });
+        const band = tb2Band(pid, c.name, r.position, q.rate, up);
+        if (band !== "ok" && pid !== r.pid) return;            // HARD band: only members inside it are offered (a placement already here stays, flagged)
+        cands.push({pid, rate: q.rate, src: q.src, band}); });
       cands.sort((x, y) => (x.band !== "ok") - (y.band !== "ok") || y.rate - x.rate);
       const opts = `<option value="">— unfilled —</option>` + cands.map(q => `<option value="${q.pid}"${q.pid === r.pid ? " selected" : ""}>${esc(nameOf(q.pid))} · ${q.rate}%${q.src === "history" ? " ~" : ""}${q.band === "low" ? " ⚠ under the minimum" : q.band === "high" ? " ⚠ over the ceiling" : ""}${usesScript(q.pid) ? "" : " 📵"}</option>`).join("");
       const b = r.pid != null ? tb2Band(r.pid, c.name, r.position, r.rate, up) : "ok";
-      return `<div class="rr"><span class="pos">${esc(r.position)}${wTag(c.name, r.position)} ${bandTxt}</span><select data-b2c="${esc(c.id)}" data-b2p="${esc(r.position)}">${opts}</select>
+      return `<div class="rr"><span class="pos">${esc(r.position)}</span><select data-b2c="${esc(c.id)}" data-b2p="${esc(r.position)}">${opts}</select>
         <span class="rt ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}${r.src === "history" ? '<span class="src">hist</span>' : ""}</span>
-        ${b !== "ok" ? `<div class="rnotes"><span class="tag bad">⚠ ${b === "low" ? "under this role's minimum" : "over the pass-rate ceiling - they pass a harder crime"}</span></div>` : cands.length ? "" : `<div class="rnotes"><span class="tag">no free member has a recorded rate for this role</span></div>`}</div>`; }).join("");
+        ${b !== "ok" ? `<div class="rnotes"><span class="tag bad">⚠ ${b === "low" ? "under the minimum" : "over the ceiling"} - outside the band</span></div>` : cands.length ? "" : `<div class="rnotes"><span class="tag">no free member inside the band for this role</span></div>`}</div>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live" title="${started ? "Recruiting in Torn with members in it" : "Spawned in Torn, nobody has joined yet"}">${started ? "🎯 Recruiting" : "🆕 Available"} #${esc(c.id)}</span>
         <span class="sr ${col(a)}" title="Weighted success of the members in it + the ones placed here">${a == null ? "-" : Math.round(a) + "%"}</span>
-        <button class="s gold" data-b2fill="${esc(c.id)}" title="Fill the unfilled roles with the best qualified free members inside each role's band">Fill</button></div>
-      <div class="tag">${nIn}/${roles.length} in it${nPl ? ` · <b>${nPl}</b> placed here` : ""} · ${roles.length - nIn - nPl} unfilled${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}${off.has(c.name) ? ' · <span class="mid">switched off in Crimes</span>' : ""}</div>
+        <button class="s gold" data-b2fill="${esc(c.id)}" title="Fill the unfilled roles with the highest-rated free members inside the band">Fill</button></div>
+      <div class="tag">band ${tb2Min()}–${OPT.cap < 100 ? OPT.cap : 100}% · ${nIn}/${roles.length} in it${nPl ? ` · <b>${nPl}</b> placed here` : ""} · ${roles.length - nIn - nPl} unfilled${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}${off.has(c.name) ? ' · <span class="mid">switched off in Crimes</span>' : ""}</div>
       <div class="tag">${payLine({kind: "live", crime: c.name, crime_id: c.id}, false)}</div>${rows}</div>`; };
   // unassigned = free and not placed on the board; do they fit any still-unfilled role inside its band?
   const openRoles = []; crimes.forEach(({c}) => (c.slots || []).forEach(sl => { if (!sl.user) openRoles.push([c, tb2Label(sl)]); }));
@@ -1048,12 +1056,12 @@ function drawBuilder2() {
     : `<span class="tag bad" style="display:inline-block;margin:2px 4px 2px 0;padding:3px 8px;border:1px solid #6b2f2f;border-radius:999px" title="${u.any ? "Has recorded rates for open roles, but none inside the band" : "No recorded rate for any open role"}">🚩 ${esc(u.name)} · ${u.any ? "outside every band" : "no rates"}</span>`;
   const rec = crimes.filter(x => x.started), av = crimes.filter(x => !x.started), nSel = Object.values(TB2.sel).reduce((a, m) => a + Object.keys(m).length, 0);
   $("view").innerHTML = `<div class="panel"><b>🧩 Team Builder v2</b>
-      <div class="hn">The crimes open in Torn right now and the members who aren't in a crime. Pick a member for any unfilled role, or press <b>Fill</b> to give a crime's unfilled roles the best qualified free members inside each role's band (lowest rate – ceiling). Nothing changes for members until you press <b>Add to Live</b>.</div>
+      <div class="hn">The crimes open in Torn right now and the members who aren't in a crime. Pick a member for any unfilled role, or press <b>Fill</b> to give a crime's unfilled roles the best qualified free members. Only members inside the band (<b>${tb2Min()}–${OPT.cap < 100 ? OPT.cap : 100}%</b> pass rate, the same for every role) can be placed. Nothing changes for members until you press <b>Add to Live</b>.</div>
       <div class="row" style="margin-top:8px;gap:8px;display:flex;flex-wrap:wrap;align-items:center"><button class="gold" id="b2dep"${nSel ? "" : " disabled"}>🚀 Add to Live (${nSel} placed)</button>
         <button id="b2live" title="Throw this board away and start again from the members reserved in the live plan">↺ Start from Live</button><button id="b2clear"${nSel ? "" : " disabled"}>Clear placements</button>
         <span class="hn">${crimes.length} crime${crimes.length === 1 ? "" : "s"} with open seats · ${free.length} member${free.length === 1 ? "" : "s"} not in a crime${D.feedT ? ` · crimes checked ${ago(D.feedT)}` : ""}</span></div></div>
     <div class="panel"><b>Unassigned members · ${un.length}</b>${flagged.length ? ` <span class="tag bad">🚩 ${flagged.length} don't qualify for any open crime</span>` : ""}
-      <div class="hn">Not in a crime and not placed on this board. 🚩 = no open role fits them: either no recorded rate, or every rate is outside its role's band. 📵 = doesn't use the Suite, so they won't see an assignment.</div>
+      <div class="hn">Not in a crime and not placed on this board. 🚩 = no open role fits them: either no recorded rate, or every rate is outside the band. 📵 = doesn't use the Suite, so they won't see an assignment.</div>
       <div style="margin-top:6px">${un.map(chip).join("") || '<span class="hn">Everyone free is placed.</span>'}</div></div>
     <div class="panel"><b>🎯 Recruiting · ${rec.length}</b> <span class="hn">members already in them - best "join now" pay per day first</span>
       <div class="teams" style="margin-top:8px">${rec.map(card).join("") || '<div class="hn">No part-filled crime has an open seat.</div>'}</div></div>
