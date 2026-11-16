@@ -415,7 +415,7 @@ Promise.all(["members", "wars", "chains", "crimes", "payouts"].map(get)
       $("relhn").innerHTML = (na ? `<b>Not enough data</b> yet - needs ${RU.min_wars} wars or ${RU.min_chains} large chains since joining. `
           : `Grade <b style="color:${G[1]}">${G[0]}</b> from <b>${sc}</b> of 100. `)
         + `War up to ${WT.war} · large chains (${RU.chain_min}+ hits) up to ${WT.chains} · activity up to ${WT.activity} pts. `
-        + `Their whole time in the faction; taking part = ${RU.min_hits}+ hits; termed wars and excused leave aren't counted; a part without enough data is left out and the score comes from the rest.`
+        + `Their whole time in the faction; taking part = ${RU.min_hits}+ hits; a termed war only counts when they took part (never against them); excused leave isn't counted; a part without enough data is left out and the score comes from the rest.`
         + `<br>Grades: S 95+ · A 85+ · B 75+ · C 65+ · D 55+ · E 45+ · F under 45 · ${who_}.`;
       $("relb").innerHTML = part("⚔️ War", "war", WT.war, `${RU.min_hits}+ hits in ${D.wars_hit}/${D.wars_in} wars`, RU.min_wars + " wars")
         + part("⛓️ Large chains", "chains", WT.chains, `${RU.min_hits}+ hits in ${D.chains_hit}/${D.chains_elig} chains (half = full marks)`, RU.min_chains + " chains")
@@ -658,7 +658,7 @@ function drawReceipt(m, R, WT, RU, sc, G) {
   row("Hits per chain (when hitting)", C.avg == null ? "-" : String(C.avg), C.avg == null ? "" : vs(C.avg, C.fac_avg).replace("faction avg", "faction avg per hitter"));
   y += 6;
   if (X.leave && X.leave.length) { T("Excused leave (not counted): " + X.leave.map(l => fmtD(l.from) + " – " + fmtD(l.to)).join(", "), pad, y, 11, "#e8be5a"); y += 20; }
-  T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars and excused leave aren't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, "#6f6f72", 400, "center");
+  T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars count only when you took part · excused leave isn't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, "#6f6f72", 400, "center");
   // ---- show + actions ----
   const box = $("rcBox"); box.innerHTML = "";
   cv.style.maxWidth = "640px"; box.appendChild(cv);

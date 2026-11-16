@@ -5421,7 +5421,11 @@ def monitor_data(db: dict) -> dict:
       trend       hits in each of the last TREND_WARS wars (None = not in the faction for it), hit rate,
                   ▲/▼/► comparing the last 2 wars they were in with the 3 before
       reliability 0-100 (or None = not enough data) from the parts that have enough data:
-                    War 55       share of their wars (since joining, not termed, not on leave) with 5+ hits
+                    War 55       share of their wars (since joining, not on leave) with 5+ hits. TERMED wars
+                                 (Nov 16 2026, user: "Termed wars don't count against you, but they should count in
+                                 your favor if you participated."): a termed war is judged ONLY for a member who
+                                 took part in it (5+ hits) - then it counts as a war they were in and took part in;
+                                 with fewer hits it is left out for them, as before
                     Chains 25    share of large (100+) chains since joining (not on leave) with 5+ hits - half or
                                  more = full marks: nobody can make every chain across time zones
                     Activity 20  last action: <=1d 20, <=2d 16, <=3d 12, <=5d 7, else 0
@@ -5430,7 +5434,9 @@ def monitor_data(db: dict) -> dict:
       ledger      every member ever paid: total, wars paid, average, last payout"""
     now = db["generated"]
     members = [m for m in db["members"]["members"] if m["current"]]
-    wars = [w for w in db["wars"]["wars"] if not w.get("termed")]   # termed wars: never judged (TERMED WARS)
+    wars = [w for w in db["wars"]["wars"] if not w.get("termed")]   # the hit TREND: termed wars left out (TERMED WARS)
+    wars_all = db["wars"]["wars"]             # reliability: + termed wars, for the members who took part (see the docstring)
+    war_mavg_all = [sum(x[1] for x in w["m"]) / max(1, len(w["m"])) for w in wars_all]
     leave = leave_periods()
     big_chains = [c for c in db["chains"]["chains"] if c["length"] >= REL_CHAIN_MIN]
     # each war's average hits among members who hit - the trend compares a member against this, so a
@@ -5461,9 +5467,13 @@ def monitor_data(db: dict) -> dict:
         if a and b:
             ra, rb = sum(a) / len(a), sum(b) / len(b)      # share of the war average
             trend = "▲" if ra > rb + 0.15 else "▼" if ra < rb - 0.15 else "►"
-        # ---- wars judged: since joining, not termed, not on leave ----
-        jw = [(k, h) for k, h in enumerate(hist)
-              if h is not None and not on_leave(wars[k].get("start") or wars[k]["end"], wars[k]["end"])]
+        # ---- wars judged: since joining, not on leave; a TERMED war only when they took part (5+ hits) - it then
+        #      counts in their favour, and never against them (k indexes wars_all) ----
+        hist_all = [None if (w.get("start") or w["end"]) < joined else next((x[1] for x in w["m"] if x[0] == i), None)
+                    for w in wars_all]
+        jw = [(k, h) for k, h in enumerate(hist_all)
+              if h is not None and not on_leave(wars_all[k].get("start") or wars_all[k]["end"], wars_all[k]["end"])
+              and not (wars_all[k].get("termed") and h < REL_MIN_HITS)]
         wars_in, wars_part = len(jw), sum(1 for _k, h in jw if h >= REL_MIN_HITS)
         war_hits = sum(h for _k, h in jw)
         war_pts = REL_W_WAR * wars_part / wars_in if wars_in >= REL_MIN_WARS else None
@@ -5482,15 +5492,16 @@ def monitor_data(db: dict) -> dict:
         used = [(p_, mx) for p_, mx in ((war_pts, REL_W_WAR), (chain_pts, REL_W_CHAIN)) if p_ is not None]
         score = round(100 * (sum(p_ for p_, _m in used) + act_pts) / (sum(mx for _p, mx in used) + REL_W_ACT)) if used else None
         # ---- receipt figures ----
-        fac_war = sum(war_mavg[k] for k, _h in jw) / wars_in if wars_in else None
+        fac_war = sum(war_mavg_all[k] for k, _h in jw) / wars_in if wars_in else None
         hit_chains = [(c, h) for c, h in zip(jc, ch) if h > 0]
         receipt = {
             "level": m.get("level"), "days": m.get("days"), "since": joined or None, "last_action": la,
             "wars": {"in": wars_in, "part": wars_part, "hits": war_hits,
                      "avg": round(war_hits / wars_in, 1) if wars_in else None,
                      "fac_avg": round(fac_war, 1) if fac_war is not None else None,
-                     "last": [{"id": wars[k]["id"], "opponent": wars[k].get("opponent"), "end": wars[k]["end"], "hits": h,
-                               "fac_avg": round(war_mavg[k], 1), "ok": h >= REL_MIN_HITS} for k, h in jw[-REL_RECEIPT_LAST:]][::-1]},
+                     "last": [{"id": wars_all[k]["id"], "opponent": wars_all[k].get("opponent"), "end": wars_all[k]["end"], "hits": h,
+                               "fac_avg": round(war_mavg_all[k], 1), "ok": h >= REL_MIN_HITS,
+                               "termed": bool(wars_all[k].get("termed"))} for k, h in jw[-REL_RECEIPT_LAST:]][::-1]},
             "chains": {"in": chains_in, "part": chains_part, "hits": chain_hits,
                        "avg": round(chain_hits / len(hit_chains), 1) if hit_chains else None,
                        "fac_avg": round(sum(chain_havg[id(c)] for c, _h in hit_chains) / len(hit_chains), 1) if hit_chains else None},
