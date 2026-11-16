@@ -162,7 +162,39 @@ export function ocPlan(X) {
   //          cooldownHours of it they aren't asked to go anywhere else, and they're never sent back to the crime
   //          they left within backHours. (The same pending move may keep being proposed - it's one ask.)
   //      stats.v2_blocked counts the moves each safeguard held back.
-  const V2 = X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
+  // =====================================================================================================
+  // V3 "LADDER" RULES - SHADOW MODE ONLY (Nov 16 2026). They REPLACE the V2 rules in the shadow comparison (user: "3.
+  // Replace them."); X.v2 is no longer passed by the Hub and its code is kept for reference. The live plan never sets
+  // X.v3, so live team building is exactly as before.
+  // Why (user, Nov 16 2026): the live planner put members who pass difficulty-5 crimes into a difficulty-1 crime because
+  // it only fills crimes that are open. "I want to completely rework the way OCs are assigned ... prioritize keeping
+  // members for higher tier OCs that pay the most per day ... limit paused planning time, mainly for these higher tier
+  // crimes. Members should not sacrifice their pay per day to move to lower tier crimes than they qualify for. The goal
+  // ... is to always place members at their highest possible pay, while maintaining their respective scores and pass
+  // rates."  User's answers: spawning is by TIER (difficulty 1-2, 3-4, 5-6, 7-8, 9-10) and the crime inside it is
+  // RANDOM; "Higher Tier should always be based on pay per day"; floor "75%"; wait "24 Hours. Alert leaders when members
+  // are waiting for higher tier crimes to be spawned"; no full-team-before-first-join rule ("Remove that rule ... the
+  // Join Now pay per day will begin to increase for new joins"); "Don't place members when there is no recorded rates";
+  // alerts go to "Leader Alerts" (when this goes live - in shadow they're listed on the 🔬 Shadow tab only).
+  // X.v3 = {floor (%), waitHours, pauseHours}; X.waitLog = {pid: ms since they've been waiting} (the shadow's own).
+  //   1. LADDER: for each member, every switched-on crime TYPE they have a RECORDED rate for at a role's minimum,
+  //      ranked by the crime's normal pay per member per day (ladPay). Rung 0 = their best. No recorded rate = no rung.
+  //   2. FLOOR: a member is only placed in a recruiting crime whose JOIN-NOW pay per member per day (each(c)) is at
+  //      least floor x their reference rung's pay (v3Low, checked wherever the role cap is: every fill). Paused crimes
+  //      lift the cap as before but NOT the floor.
+  //   3. WAIT: a member free with no seat above the floor WAITS for a spawn of their reference rung's tier
+  //      (stats.v3.waiting / requests by tier). Every waitHours of waiting drops the reference one rung (v3Drop), so
+  //      the floor relaxes step by step and nobody idles for ever. Placed / joined = the clock is cleared.
+  //   4. ORDER: paused crimes first, then crimes pausing within pauseHours, then join-now pay (not "the fullest").
+  //   5. NO SPAWN TEAMS for crime types (a spawn can't pick the crime): step 4's spawn teams are off; the tier
+  //      requests replace them. Members with no recorded rates at all are listed (stats.v3.norates), never placed.
+  //   Unchanged: role minimums, team target, the role cap, never moving a member whose planning has started, and the
+  //   move safeguards (the Team Builder's 🛡 numbers).
+  // =====================================================================================================
+  const V3 = X.v3 && typeof X.v3 === "object" ? {floor: (Number(X.v3.floor) || 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
+  const V2 = V3 ? {pauseHours: V3.pauseHours, slack: 0, moveHours: 0, minGain: O.safeOn === false ? 0 : Number(O.safeGain ?? 10) || 0,
+                   cooldownHours: O.safeOn === false ? 0 : Number(O.safeCooldown ?? 24) || 0, backHours: O.safeOn === false ? 0 : Number(O.safeBack ?? 72) || 0}
+    : X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
     minGain: Number(X.v2.minGain) || 0, cooldownHours: Number(X.v2.cooldownHours) || 0, backHours: Number(X.v2.backHours) || 0} : null;
   // SAFEGUARDS ON THE LIVE PLAN TOO (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings
   // to the Team Builder page under their own category to adjust where feasible."): the same four checks now also guard
@@ -249,7 +281,7 @@ export function ocPlan(X) {
   const paused = c => !!c && c.status === "Recruiting" && (c.slots || []).some(sl => sl.user) && (c.slots || []).some(sl => !sl.user)
     && (c.slots || []).every(sl => !sl.user || (Number(sl.user.progress) || 0) >= 100);
   let curPaused = false;
-  const capped = (pid, crime, rate) => capOn && !curPaused && O.cap < 100 && rate > O.cap && (capUp[pid] || 0) > (diffOf(crime) || 0);
+  const capped = (pid, crime, rate) => v3Low(pid) || (capOn && !curPaused && O.cap < 100 && rate > O.cap && (capUp[pid] || 0) > (diffOf(crime) || 0));   // v3Low: the V3 pay floor (below)
   // rotation pools + how many RECRUITING instances of each rotated crime get rotation queueing at once:
   // floor(pool / seats), at least 1, most-filled first. (The join-order deadlines decide who can actually make it.)
   const poolOf = {};
@@ -305,6 +337,18 @@ export function ocPlan(X) {
     const down = v && v.days ? Math.max(0, v.days - own) : 0, open = (c.slots || []).filter(sl => !sl.user).length;
     return Math.max(1, (planLeft(c) + PLAN_MS * open) / 864e5 + down); };
   const payDayInst = c => { const v = X.payOf(c.name); return v && v.pot ? v.pot / instDays(c) : 0; };   // team, max, this instance
+  // ---- V3 LADDER (shadow only - see the V3 header) ----
+  const ladPay = n => payDay(n) / (rolesOf(n).length || 1);        // a crime type's normal pay per member per day
+  const ladder = {}, waitLog = X.waitLog || {}, v3Blocked = new Set();
+  if (V3) Object.keys(roster).forEach(pid => {
+    ladder[pid] = Object.keys(cat).filter(n => crimeOk(n) && ladPay(n) > 0 && rolesOf(n).some(pos => { const r = rateOf(pid, n, pos); return r && r.rate >= floorOf(n, pos); }))
+      .map(n => ({crime: n, pay: ladPay(n), diff: diffOf(n)})).sort((a, b) => b.pay - a.pay); });
+  const v3Drop = pid => { const since = Number(waitLog[String(pid)]) || 0; return since ? Math.max(0, Math.floor((NOW - since) / (V3.waitHours * 3600e3))) : 0; };
+  const v3Rung = pid => { const L = ladder[String(pid)] || []; return L.length ? L[Math.min(L.length - 1, v3Drop(pid))] : null; };
+  let curInst = null;                                      // the recruiting crime being filled (set by the fill loops)
+  // true = this crime pays the member less than floor x their reference rung if they join now -> not offered to them
+  const v3Low = pid => { if (!V3 || !curInst) return false; const r = v3Rung(pid); if (!r) return false;
+    if (each(curInst) + 1e-9 < V3.floor * r.pay) { v3Blocked.add(Number(pid)); return true; } return false; };
   // DELAYS (Nov 2026): X.delays {pid: {n, long, hrs, runs}} - a member's crime delays over the last 30 days. The hours
   // of delay they're likely to cause per crime (hrs / crimes they took part in) hold up EVERYONE's payout, so the
   // cost charged against them = the team's pay per day x those hours / (24 x the crime's days) - a member who often
@@ -497,6 +541,7 @@ export function ocPlan(X) {
       if (t.lock) continue;
       const c = t.kind === "live" ? inst.get(String(t.crime_id)) : null;
       curPaused = paused(c);                               // PAUSED CRIMES: no cap in this crime's seats
+      curInst = c || null;                                 // V3 floor
       t.roles.forEach((r, ri) => {
         if (r.pid == null || r.existing || !noScr(r.pid)) return;
         let b = null;
@@ -542,7 +587,7 @@ export function ocPlan(X) {
   const each = c => payDayInst(c) / ((c.slots || []).length || 1);   // TIME IN THE CRIME: this instance's days
   const recruiting = [...inst.values()].filter(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user))
     .sort((a, b) => ROT_ON.has(String(b.id)) - ROT_ON.has(String(a.id))
-      || (V2 ? urgency(b) - urgency(a) || filled(b) - filled(a) : 0)       // V2: paused, about to pause, then the fullest
+      || (V2 ? urgency(b) - urgency(a) || (V3 ? 0 : filled(b) - filled(a)) : 0)       // V2: paused, about to pause, then the fullest
       || each(b) - each(a) || filled(b) - filled(a) || (b.difficulty || 0) - (a.difficulty || 0));   // rotated first
   // WHO fills a slot: MEMBER CHOICE (see tier() above) - script users, then free members, then the highest pass rate.
   // (The old "minus half of their best crime elsewhere" opportunity cost was removed Nov 13 2026, user.)
@@ -576,6 +621,7 @@ export function ocPlan(X) {
   const fillOrder = new Map(recruiting.map((c, i) => [String(c.id), i]));   // V2: this crime's place in the fill order
   const fillRecruiting = () => { for (const c of recruiting) {
     curPaused = paused(c);                                 // PAUSED CRIMES: cap maxed for this crime (reset below)
+    curInst = c;                                           // V3 floor: what joining THIS crime now pays
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
     if (t && t.lock) { skip(c, "locked"); continue; }
     if (!t && X.disabled.has(c.name)) { skip(c, "switched off"); continue; }   // switched off (an existing team is kept)
@@ -672,7 +718,8 @@ export function ocPlan(X) {
     if (!t) { t = {id: uid(), crime: c.name, difficulty: c.difficulty ?? diffOf(c.name), kind: "live", crime_id: c.id, lock: false, roles}; teams.push(t); claimed.add(String(c.id)); }
     else t.roles = roles;
     if (V2) { t.urgency = urgency(c); if (usedSlack) t.slack = usedSlack; }   // V2 report: why this crime came first / filled below the floor
-  } curPaused = false; };
+  } curPaused = false; curInst = null; };
+  curInst = null;
   fillRecruiting();
 
   // ---- 3b. SPAWN HOLDS (see the header) ----
@@ -716,6 +763,7 @@ export function ocPlan(X) {
   // spawn team. Leaders' locked spawn teams are kept as they are.
   const openNow = [...inst.values()].filter(c => c.status === "Recruiting" && !X.disabled.has(c.name) && (c.slots || []).some(sl => !sl.user));
   const overQ = pid => { let high = false;
+    if (V3) return false;                                  // V3: no spawn teams for crime types - tier requests instead (stats.v3)
     for (const c of openNow) for (const sl of c.slots || []) { if (sl.user) continue;
       const pos = slotLabel(sl), r = rateOf(pid, c.name, pos);
       if (!r || r.rate < floorOf(c.name, pos)) continue;
@@ -855,7 +903,24 @@ export function ocPlan(X) {
   // (succ_calc) when the team is full and it's known, else the weighted average of the members placed so far
   teams.forEach(t => { const c = calcOf(t.roles, t.crime), a = c != null ? c : avgOf(t.roles.filter(r => r.pid != null), t.crime);
     t.succ = a == null ? null : Math.round(a * 10) / 10; t.succ_calc = c != null; });
-  return {teams, changed, stats: {v2_blocked: V2 ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
+  // ---- V3: who is waiting for a spawn, the tier requests for leaders, and the wait clock for the next run ----
+  let v3 = undefined;
+  if (V3) {
+    const tierOf = d => { const x = Math.max(1, Math.min(10, Math.round(Number(d) || 1))), lo = x % 2 ? x : x - 1; return lo + "-" + (lo + 1); };
+    const waiting = [], norates = [], wl = {};
+    Object.keys(roster).map(Number).forEach(pid => {
+      if (busy.has(pid) || assigned.has(pid)) return;       // in a crime, or placed by this plan: not waiting
+      const L = ladder[String(pid)] || [];
+      if (!L.length) { norates.push({pid, name: nameOf(pid)}); return; }   // "Don't place members when there is no recorded rates"
+      const since = Number(waitLog[String(pid)]) || NOW, r = v3Rung(pid); wl[pid] = since;
+      waiting.push({pid, name: nameOf(pid), since, best: L[0].crime, best_pay: Math.round(L[0].pay), rung: r.crime, rung_pay: Math.round(r.pay),
+                    dropped: Math.min(L.length - 1, v3Drop(pid)), tier: tierOf(r.diff), floor_blocked: v3Blocked.has(pid)}); });
+    const byTier = {};
+    waiting.forEach(w => { (byTier[w.tier] = byTier[w.tier] || []).push(w); });
+    const requests = Object.keys(byTier).sort((a, b) => parseInt(b) - parseInt(a)).map(t => ({tier: t, members: byTier[t].map(w => w.pid), longest: Math.min(...byTier[t].map(w => w.since))}));
+    v3 = {floor: Math.round(V3.floor * 100), waitHours: V3.waitHours, pauseHours: V3.pauseHours, waiting, requests, norates, wait_log: wl, floor_blocked: v3Blocked.size};
+  }
+  return {teams, changed, stats: {v3, v2_blocked: V2 ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
     safe_blocked: SAFE ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
     live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,

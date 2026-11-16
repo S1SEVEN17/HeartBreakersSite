@@ -3093,6 +3093,9 @@ const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or lef
 // the member at least 10 % more per day; a member is asked to move at most once in 24 h and never back, within 72 h,
 // to the crime they left; never out of a paused / about-to-pause / fuller crime (gate/oc_planner.js V2 SAFEGUARDS).
 const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHours: 24, backHours: 72};
+// V3 LADDER RULES for the shadow plan (user's answers, Nov 16 2026): never placed under 75% of their best crime's pay
+// per day; 24 h of waiting for a spawn drops them one rung; paused / pausing-within-12-h crimes are filled first.
+const OC_V3 = {floor: 75, waitHours: 24, pauseHours: 12};
 function ocShadowReport(A, B, crimes, members, now) {
   const byId = new Map((crimes || []).map(c => [String(c.id), c]));
   const nm = pid => members[String(pid)] || ("#" + pid);
@@ -3131,7 +3134,12 @@ function ocShadowReport(A, B, crimes, members, now) {
   }).filter(r => r.open_now > 0 || r.cur || r.v2)
     .sort((p, q) => (p.same - q.same) || ({paused: 0, pausing: 1, "": 2}[p.state] - {paused: 0, pausing: 1, "": 2}[q.state]) || q.seats - q.open_now - (p.seats - p.open_now));
   const changed = [...new Set(Object.keys(a.who).concat(Object.keys(b.who)))].filter(pid => a.who[pid] !== b.who[pid]).length;
-  return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows, blocked: (B.stats && B.stats.v2_blocked) || null};
+  // V3: who waits for a spawn (by tier), who has no recorded rates, how many the pay floor kept out of a lower crime.
+  // (the "v2" keys keep their names - they are "the new rules" columns on the 🔬 Shadow tab)
+  const v3 = (B.stats && B.stats.v3) || null;
+  return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows, blocked: (B.stats && B.stats.v2_blocked) || null,
+          v3: v3 ? {floor: v3.floor, waitHours: v3.waitHours, waiting: v3.waiting, requests: v3.requests.map(r => Object.assign({}, r, {names: r.members.map(nm)})),
+                    norates: v3.norates, floor_blocked: v3.floor_blocked} : null};
 }
 async function ocAutoPlan(env, crimes, now, run = {}) {
   const cfg = await ocConfig(env, "prod");
@@ -3276,8 +3284,16 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     // proposed for each member - what the once-a-day safeguard checks. A move still proposed keeps its first time.
     const ml0 = ((await ocSnapGet(env, "hub", "plan:shadow-moves").catch(() => null)) || {}).data || {};
     const v2 = Object.assign({}, OC_V2, opts.safeOn === false ? {minGain: 0, cooldownHours: 0, backHours: 0}
-      : {minGain: Number(opts.safeGain ?? 10), cooldownHours: Number(opts.safeCooldown ?? 24), backHours: Number(opts.safeBack ?? 72)});   // the Team Builder's 🛡 Safeguards numbers
-    const A = ocPlan(Object.assign({}, base, {moveLog})), B = ocPlan(Object.assign({}, base, {v2, moveLog: ml0}));
+      : {minGain: Number(opts.safeGain ?? 10), cooldownHours: Number(opts.safeCooldown ?? 24), backHours: Number(opts.safeBack ?? 72)},   // the Team Builder's 🛡 Safeguards numbers
+      {v3: true, floor: OC_V3.floor, waitHours: OC_V3.waitHours, pauseHours: OC_V3.pauseHours, slack: 0, moveHours: 0});
+    // V3 LADDER RULES (Nov 16 2026, user: "I want to completely rework the way OCs are assigned" -> "7. Shadow Mode",
+    // "3. Replace them."): the shadow plan B now runs gate/oc_planner.js V3 instead of V2. Its WAIT CLOCK (oc_snap hub
+    // 'plan:shadow-wait' {pid: ms}) = since when each member has been free with no seat above their pay floor; a member
+    // who is placed or in a crime drops out of it (the planner returns the next clock in stats.v3.wait_log).
+    const wl0 = ((await ocSnapGet(env, "hub", "plan:shadow-wait").catch(() => null)) || {}).data || {};
+    const A = ocPlan(Object.assign({}, base, {moveLog})), B = ocPlan(Object.assign({}, base, {v3: OC_V3, waitLog: wl0, moveLog: ml0}));
+    await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:shadow-wait', ?, ?, 'hub') " +
+      "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify((B.stats.v3 && B.stats.v3.wait_log) || {})).run();
     const ml = {};
     Object.keys(ml0).forEach(k => { if (now - Number((ml0[k] || {}).at) < 7 * 864e5) ml[k] = ml0[k]; });
     (B.teams || []).forEach(t => (t.roles || []).forEach(r => { if (r.pid != null && r.leave && t.crime_id != null) {

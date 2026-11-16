@@ -943,6 +943,23 @@ async function deploy() {
 // be asked to move when it pays them more). Nothing on this tab is deployed or shown to members. Data:
 // /l/oc/shadow.json (gate/worker.js ocShadowReport).
 let SHADOW = null, SHADOW_AT = 0;
+// 🔬 Shadow - the ladder rules' own lists (Nov 16 2026): spawn requests by tier (spawning is by tier 1-2 … 9-10 and the
+// crime inside it is random), who is waiting and for how long, and members with no recorded rates. When these rules go
+// live the "waiting for a spawn" list becomes a Leader Alert (user: "2. Leader Alerts"); in shadow it is shown here only.
+function v3Html(S) {
+  const V = S.v3; if (!V) return "";
+  const money = n => n >= 1e6 ? "$" + (n / 1e6).toFixed(2) + "m" : "$" + Math.round(n / 1e3) + "k";
+  const hrs = ms => { const h = Math.max(0, (Date.now() - ms) / 36e5); return h < 1 ? "just now" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " d"; };
+  const req = V.requests.map(r => `<div style="border-top:1px solid #2c313a;padding:6px 0"><span class="tag mid">Spawn difficulty ${esc(r.tier)}</span> <b>${r.members.length}</b> waiting <span class="hn">· longest ${hrs(r.longest)}</span>
+      <div class="hn">${r.names.map(esc).join(", ")}</div></div>`).join("");
+  const wait = V.waiting.slice().sort((a, b) => a.since - b.since).map(w => `<div style="border-top:1px solid #2c313a;padding:5px 0">${esc(w.name)}
+      <span class="hn">· best: ${esc(w.best)} ${money(w.best_pay)}/day${w.dropped ? ` · now accepts ${esc(w.rung)} ${money(w.rung_pay)}/day (dropped ${w.dropped} step${w.dropped === 1 ? "" : "s"})` : ""} · tier ${esc(w.tier)} · waiting ${hrs(w.since)}</span>
+      ${w.floor_blocked ? ' <span class="tag">held out of a lower-paying crime</span>' : ""}</div>`).join("");
+  return `<div class="panel"><b>📣 Spawn requests · ${V.requests.length}</b><div class="hn">Members the new rules would hold for a better crime instead of placing them lower. Spawning is by tier and the crime is random, so a request is a tier, not a crime. ${V.floor_blocked} member${V.floor_blocked === 1 ? " was" : "s were"} kept out of a crime paying under ${V.floor}% of their best.</div>
+      ${req || '<div class="hn">Nobody is waiting for a spawn.</div>'}</div>
+    <details class="panel"${V.waiting.length ? " open" : ""}><summary><b>Waiting for a spawn · ${V.waiting.length}</b></summary>${wait || '<div class="hn">Nobody.</div>'}</details>
+    <details class="panel"><summary><b>Free with no recorded rates (never placed) · ${V.norates.length}</b></summary><div class="hn">${V.norates.map(x => esc(x.name)).join(", ") || "Nobody."}</div></details>`;
+}
 async function drawShadow() {
   if (!SHADOW || Date.now() - SHADOW_AT > 60000) {
     $("view").innerHTML = `<div class="panel"><div class="hn">Loading the comparison…</div></div>`;
@@ -952,7 +969,7 @@ async function drawShadow() {
   const S = SHADOW;
   const intro = `<div class="panel"><b>🔬 Shadow mode - nothing here is live</b>
     <div class="hn">The Hub plans the same crimes twice from scratch, with the same members and pass rates: once by <b>today's rules</b> and once by the <b>new rules</b>. Members only ever see the live plan (🚀 Deployed), which still uses today's rules.<br>
-    New rules: fill <b>paused</b> crimes first, then crimes that will pause within <b>${S ? S.rules.pauseHours : 12} h</b>, then the <b>fullest</b>; those urgent crimes may be filled up to <b>${S ? S.rules.slack : 5} points under</b> the target and role minimums; a member under <b>${S ? S.rules.moveHours : 12} h</b> into planning in a crime that isn't full may be asked to move when the other crime pays them more per day. The pass-rate ceiling is unchanged.<br>
+    <b>New rules (the "ladder", Nov 16 2026)</b>: every member is ranked against the crimes they have a <b>recorded pass rate</b> for, best pay per day first. They are only placed in a recruiting crime that pays them, if they join now, at least <b>${S && S.v3 ? S.v3.floor : 75}%</b> of their best crime's pay per day. With no such seat they <b>wait for a spawn</b> of that crime's tier (listed below for leaders); every <b>${S && S.v3 ? S.v3.waitHours : 24} h</b> of waiting lets them drop to their next-best crime. Paused crimes are filled first, then crimes pausing within <b>${S ? S.rules.pauseHours : 12} h</b>, then best join-now pay. Members with no recorded rates are never placed. Role minimums, the team target and the pass-rate ceiling are unchanged.<br>
     <b>Safeguards on moves</b> (set in the Team Builder's ⚙️ Settings → 🛡 Safeguards, and applied to today's rules too): the other crime must pay them at least <b>${S && S.rules.minGain ? S.rules.minGain : 10}% more</b> per day; a member is asked to move <b>at most once in ${S && S.rules.cooldownHours ? S.rules.cooldownHours : 24} h</b> and never back to the crime they left (within ${S && S.rules.backHours ? S.rules.backHours : 72} h); nobody is taken out of a paused or about-to-pause crime, or out of a crime that is fuller than the one being filled.</div></div>`;
   if (!S) { $("view").innerHTML = intro + `<div class="panel"><div class="hn">No comparison yet - it's made the next time the Hub rebuilds the plan (a few minutes, or press Update now on 🚀 Deployed).</div></div>`; return; }
   const tile = (label, a, b, better) => { const d = b - a, good = better === "more" ? d > 0 : d < 0;
@@ -969,7 +986,8 @@ async function drawShadow() {
   $("view").innerHTML = intro + `<div class="panel"><div class="hn">Compared ${ago(S.at)} · ${S.changed_members} member${S.changed_members === 1 ? "" : "s"} placed differently</div>
       <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
         ${tile("Crimes fully staffed", S.cur.staffed, S.v2.staffed, "more")}${tile("Paused crimes staffed", S.cur.paused_staffed, S.v2.paused_staffed, "more")}
-        ${tile("Members placed", S.cur.placed, S.v2.placed, "more")}${tile("Asked to move", S.cur.moves, S.v2.moves, "less")}${tile("Filled under the floor", S.cur.slack, S.v2.slack, "less")}</div></div>
+        ${tile("Members placed", S.cur.placed, S.v2.placed, "more")}${tile("Asked to move", S.cur.moves, S.v2.moves, "less")}</div></div>
+    ${v3Html(S)}
     ${S.blocked ? `<div class="panel"><b>🛡 Moves the safeguards held back</b><div class="hn">Members who would have been asked to move without them: <b>${S.blocked.cooldown}</b> already asked in the last day · <b>${S.blocked.source}</b> sitting in a crime that needs them · <b>${S.blocked.gain}</b> where the gain was under ${S.rules.minGain}%.</div></div>` : ""}
     <div class="panel"><b>Planned differently · ${diff.length}</b>${diff.length ? diff.map(row).join("") : `<div class="hn">Right now both sets of rules place everyone the same way.</div>`}</div>
     <details class="panel"><summary><b>Planned the same · ${same.length}</b></summary>${same.map(row).join("")}</details>
