@@ -131,7 +131,7 @@ __MENU__
 <div class="sub">Choose which crimes the Heart Breakers Suite suggests, build teams and deploy them to members using the script</div>
 <div class="bar"><button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
-<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button></div>
+<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button><button data-tab="shadow">🔬 Shadow</button></div>
 <div id="view"></div>
 <script>
 // ---- shared OC team planner (gate/oc_planner.js, inlined by generate.py) ----
@@ -700,7 +700,7 @@ function addTeam(crime) {
 function draw() {
   VIEW_DIRTY = false;                                            // a fresh view - nothing unsaved in it yet
   document.querySelectorAll("[data-tab]").forEach(b => b.classList.toggle("on", b.dataset.tab === TAB));
-  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "notify") drawNotify(); else if (TAB === "sharing") drawSharing(); else drawBuilder();
+  if (TAB === "crimes") drawCrimes(); else if (TAB === "deployed") drawDeployed(); else if (TAB === "planning") drawPlanning(); else if (TAB === "notify") drawNotify(); else if (TAB === "sharing") drawSharing(); else if (TAB === "shadow") drawShadow(); else drawBuilder();
 }
 
 // ROTATION - REMOVED Nov 13 2026 (user); notes kept for reference. (Nov 2026): leaders mark the crimes they want ROTATED. A rotated crime that's recruiting is filled first
@@ -930,6 +930,43 @@ async function deploy() {
 // RATE SHARING (Nov 2026): which current members share their CPR rates with the Hub (the OC Optimizer script's
 // sync or the opt-in key on the site - both land in D1 oc_cpr, read here as D.rates) and when they last did.
 // Members who don't share can only be placed from their history, so new or rarely-run crimes can't use them.
+// 🔬 SHADOW (Nov 15 2026, user: "Enable this in Shadow Mode. I want to see how things would work with the new system
+// compared to our current system."): a read-only side-by-side. Each time the Hub rebuilds the live plan it also plans
+// the same crimes twice from scratch - by today's rules and by the NEW rules (paused / about-to-pause / fullest crimes
+// first; those may be filled 5 points under the floor; members under 12 h into planning in a crime that isn't full may
+// be asked to move when it pays them more). Nothing on this tab is deployed or shown to members. Data:
+// /l/oc/shadow.json (gate/worker.js ocShadowReport).
+let SHADOW = null, SHADOW_AT = 0;
+async function drawShadow() {
+  if (!SHADOW || Date.now() - SHADOW_AT > 60000) {
+    $("view").innerHTML = `<div class="panel"><div class="hn">Loading the comparison…</div></div>`;
+    try { SHADOW = (await getJSON("oc/shadow.json")).shadow; SHADOW_AT = Date.now(); } catch (e) { $("view").innerHTML = `<div class="panel"><div class="hn">Couldn't load the comparison: ${esc(e.message)}</div></div>`; return; }
+    if (TAB !== "shadow") return;
+  }
+  const S = SHADOW;
+  const intro = `<div class="panel"><b>🔬 Shadow mode - nothing here is live</b>
+    <div class="hn">The Hub plans the same crimes twice from scratch, with the same members and pass rates: once by <b>today's rules</b> and once by the <b>new rules</b>. Members only ever see the live plan (🚀 Deployed), which still uses today's rules.<br>
+    New rules: fill <b>paused</b> crimes first, then crimes that will pause within <b>${S ? S.rules.pauseHours : 12} h</b>, then the <b>fullest</b>; those urgent crimes may be filled up to <b>${S ? S.rules.slack : 5} points under</b> the target and role minimums; a member under <b>${S ? S.rules.moveHours : 12} h</b> into planning in a crime that isn't full may be asked to move when the other crime pays them more per day. The pass-rate ceiling is unchanged.</div></div>`;
+  if (!S) { $("view").innerHTML = intro + `<div class="panel"><div class="hn">No comparison yet - it's made the next time the Hub rebuilds the plan (a few minutes, or press Update now on 🚀 Deployed).</div></div>`; return; }
+  const tile = (label, a, b, better) => { const d = b - a, good = better === "more" ? d > 0 : d < 0;
+    return `<div style="flex:1 1 130px;border:1px solid #2c313a;border-radius:8px;padding:8px;text-align:center"><div class="hn">${label}</div>
+      <div style="font-size:18px;font-weight:bold">${a} <span class="hn">→</span> <span style="color:${!d ? "inherit" : good ? "#7CFC9A" : "#ff8f8f"}">${b}</span></div><div class="hn">today → new</div></div>`; };
+  const who = v => !v ? `<span class="hn">nobody placed</span>` : v.add.map(r => `<div>${esc(r.name)} <span class="hn">→ ${esc(r.role)}${r.rate != null ? " · " + r.rate + "%" : ""}</span>${r.leave ? ` <span class="tag mid">leaves ${esc(r.leave.crime)}</span>` : ""}</div>`).join("")
+      + (v.left ? `<div class="hn">${v.left} seat${v.left === 1 ? "" : "s"} still open</div>` : `<div class="hn">✅ fully staffed${v.ready ? " · earliest ready " + new Date(v.ready).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : ""}</div>`)
+      + (v.slack ? `<div><span class="tag bad">filled ${v.slack} under the floor</span></div>` : "");
+  const row = r => `<div style="border-top:1px solid #2c313a;padding:8px 0">
+      <div><b>${esc(r.crime)}</b> <span class="hn">#${esc(r.id)} · ${r.seats - r.open_now}/${r.seats} in it now</span>
+        ${r.state === "paused" ? '<span class="tag bad">⏸ paused</span>' : r.state === "pausing" ? '<span class="tag mid">pauses within 12 h</span>' : ""}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px"><div><div class="hn"><b>Today's rules</b></div>${who(r.cur)}</div><div><div class="hn"><b>New rules</b></div>${who(r.v2)}</div></div></div>`;
+  const diff = S.rows.filter(r => !r.same), same = S.rows.filter(r => r.same && (r.cur || r.v2)), idle = S.rows.filter(r => r.same && !r.cur && !r.v2);
+  $("view").innerHTML = intro + `<div class="panel"><div class="hn">Compared ${ago(S.at)} · ${S.changed_members} member${S.changed_members === 1 ? "" : "s"} placed differently</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px">
+        ${tile("Crimes fully staffed", S.cur.staffed, S.v2.staffed, "more")}${tile("Paused crimes staffed", S.cur.paused_staffed, S.v2.paused_staffed, "more")}
+        ${tile("Members placed", S.cur.placed, S.v2.placed, "more")}${tile("Asked to move", S.cur.moves, S.v2.moves, "less")}${tile("Filled under the floor", S.cur.slack, S.v2.slack, "less")}</div></div>
+    <div class="panel"><b>Planned differently · ${diff.length}</b>${diff.length ? diff.map(row).join("") : `<div class="hn">Right now both sets of rules place everyone the same way.</div>`}</div>
+    <details class="panel"><summary><b>Planned the same · ${same.length}</b></summary>${same.map(row).join("")}</details>
+    <details class="panel"><summary><b>Recruiting, nobody placed by either · ${idle.length}</b></summary>${idle.map(r => `<div class="hn">${esc(r.crime)} #${esc(r.id)} · ${r.seats - r.open_now}/${r.seats}</div>`).join("")}</details>`;
+}
 function drawSharing() {
   const ids = Object.keys(CFG.members);
   const rows = ids.map(pid => { const r = D.rates[pid]; const n = r && r.roles ? Object.keys(r.roles).length : 0;

@@ -1901,6 +1901,11 @@ async function ocLeaderRoute(env, req, url, who, sub) {
   }
   // GET /l/oc/summaries.json?env= -> {summaries, prices} - the same payout data the OC Optimizer script uses, so the
   // OC Management page shows the SAME pay per day (max payout recorded, Nov 2026)
+  // GET /l/oc/shadow.json -> the latest 🔬 Shadow comparison (leaders' folder; see ocShadowReport)
+  if (req.method === "GET" && sub === "shadow.json") {
+    const sh = await ocSnapGet(env, "hub", "plan:shadow").catch(() => null);
+    return Response.json({ok: true, shadow: (sh && sh.data) || null}, H);
+  }
   if (req.method === "GET" && sub === "summaries.json") {
     const envName = url.searchParams.get("env");
     if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
@@ -3057,6 +3062,48 @@ async function ocTriggers(env, cfg, crimes) {
           success: ocHash(String((sc && sc.as_of) || 0))};
 }
 const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or left", settings: "settings changed", rates: "pass rates updated", success: "success chances checked"};
+// 🔬 SHADOW: the V2 rule settings (user's answers, Nov 15 2026) and the side-by-side report
+const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12};
+function ocShadowReport(A, B, crimes, members, now) {
+  const byId = new Map((crimes || []).map(c => [String(c.id), c]));
+  const nm = pid => members[String(pid)] || ("#" + pid);
+  // one plan -> {crimes: {crime_id: {...}}, who: {pid: "crime_id|role"}}
+  const view = R => {
+    const out = {crimes: {}, who: {}, n: {staffed: 0, paused_staffed: 0, open_left: 0, placed: 0, moves: 0, slack: 0, spawn: 0}};
+    (R.teams || []).forEach(t => {
+      if (t.kind !== "live") { out.n.spawn++; return; }
+      const c = byId.get(String(t.crime_id)); if (!c) return;
+      const openNow = (c.slots || []).filter(sl => !sl.user).length;
+      const added = (t.roles || []).filter(r => r.pid != null && !r.existing);
+      const left = (t.roles || []).filter(r => r.pid == null).length;
+      if (!added.length) return;                           // a team the plan adds nobody to = not planned
+      const pausedNow = (c.slots || []).some(sl => sl.user) && openNow > 0 && (c.slots || []).every(sl => !sl.user || (Number(sl.user.progress) || 0) >= 100);
+      const soon = !pausedNow && openNow > 0 && (c.slots || []).some(sl => sl.user) && c.ready_at && c.ready_at * 1000 - now <= OC_V2.pauseHours * 3600e3;
+      // earliest the whole crime can be ready if everyone planned joins now: Torn's ready time for the members in it
+      // (or now) + 24 h per seat that was open; null when seats stay empty
+      const ready = left ? null : Math.max(now, (c.ready_at || 0) * 1000) + openNow * 864e5;
+      out.crimes[String(c.id)] = {crime: c.name, id: c.id, seats: (c.slots || []).length, in_now: (c.slots || []).length - openNow, open_now: openNow, left,
+        state: pausedNow ? "paused" : soon ? "pausing" : "", slack: t.slack || 0, lock: !!t.lock, ready,
+        add: added.map(r => ({pid: Number(r.pid), name: nm(r.pid), role: r.position, rate: r.rate ?? null, leave: r.leave ? {crime: r.leave.crime, id: r.leave.crime_id} : null}))};
+      if (openNow && !left) { out.n.staffed++; if (pausedNow) out.n.paused_staffed++; }
+      out.n.open_left += left; out.n.placed += added.length; out.n.moves += added.filter(r => r.leave).length; if (t.slack) out.n.slack++;
+      added.forEach(r => { out.who[String(r.pid)] = String(c.id) + "|" + r.position; });
+    });
+    return out;
+  };
+  const a = view(A), b = view(B), ids = [...new Set(Object.keys(a.crimes).concat(Object.keys(b.crimes)))];
+  // recruiting crimes with open seats that neither plan touches still belong in the picture
+  (crimes || []).forEach(c => { if (c && c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user) && !ids.includes(String(c.id))) ids.push(String(c.id)); });
+  const rows = ids.map(id => {
+    const c = byId.get(id), x = a.crimes[id] || null, y = b.crimes[id] || null, openNow = c ? (c.slots || []).filter(sl => !sl.user).length : 0;
+    const key = v => v ? v.add.map(r => r.pid + ":" + r.role).sort().join(",") + "|" + v.left : "-";
+    return {id: c ? c.id : id, crime: c ? c.name : (x || y).crime, seats: c ? (c.slots || []).length : (x || y).seats, open_now: openNow,
+            state: (y && y.state) || (x && x.state) || "", cur: x, v2: y, same: key(x) === key(y)};
+  }).filter(r => r.open_now > 0 || r.cur || r.v2)
+    .sort((p, q) => (p.same - q.same) || ({paused: 0, pausing: 1, "": 2}[p.state] - {paused: 0, pausing: 1, "": 2}[q.state]) || q.seats - q.open_now - (p.seats - p.open_now));
+  const changed = [...new Set(Object.keys(a.who).concat(Object.keys(b.who)))].filter(pid => a.who[pid] !== b.who[pid]).length;
+  return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows};
+}
 async function ocAutoPlan(env, crimes, now, run = {}) {
   const cfg = await ocConfig(env, "prod");
   const opts = Object.assign({}, OC_OPTS_DEFAULT, cfg.opts || {});
@@ -3170,6 +3217,21 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
                     reshuffle: moves.length > 0, holdLog: ((lastStats && lastStats.data) || {}).hold_log || {},
                     // SCRIPT USERS: null until anyone has been seen (the table is new) - no preference until then
                     scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null});
+  // 🔬 SHADOW MODE (Nov 15 2026, user: "Enable this in Shadow Mode. I want to see how things would work with the new
+  // system compared to our current system."): the same crimes, members and rates are planned twice more FROM SCRATCH
+  // (locked teams kept, members already in a crime stay) - once by today's rules, once by the V2 rules (paused /
+  // about-to-pause / fullest first; -5 under the floor for those; moves under 12 h of planning - gate/oc_planner.js
+  // V2). Nothing here is deployed or shown to members: the result goes to oc_snap hub 'plan:shadow' for OC
+  // Management's 🔬 Shadow tab. Any failure is swallowed - the live plan above never depends on it.
+  try {
+    const base = {succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
+                  rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now, fresh: true,
+                  holdLog: {}, scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null};
+    const A = ocPlan(Object.assign({}, base)), B = ocPlan(Object.assign({}, base, {v2: OC_V2}));
+    await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:shadow', ?, ?, 'hub') " +
+      "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+      .bind(now, JSON.stringify(ocShadowReport(A, B, crimes, members, now))).run();
+  } catch (e) { console.log("oc shadow: failed (" + String((e && e.message) || e).slice(0, 80) + ")"); }
   if (moves.length) {
     r.stats.reconfigured = {at: now, moves};
     // kept for OC Management's Deployed tab ("Reconfigured ... - X took Y's spot") until the next one

@@ -136,9 +136,29 @@ export function ocPlan(X) {
   // minimum slides down in proportion to its weight: minZero + (minRole - minZero) x wOf. The team target still applies.
   // e.g. Gaslight the Way, minRole 65 / minZero 50: Imitator #3 41% -> 65, Looter #3 12% -> 61, Looter #1 9% -> 58,
   // Looter #2 0% -> 50.
+  // =====================================================================================================
+  // V2 RULES - SHADOW MODE ONLY (Nov 15 2026, user: crimes "too spread out", members "in the wrong crimes"; then
+  // "Enable this in Shadow Mode. I want to see how things would work with the new system compared to our current
+  // system."). Everything below marked V2 runs ONLY when X.v2 is set - the live plan (gate/worker.js ocAutoPlan)
+  // never sets it, so live team building is exactly as before. X.v2 = {pauseHours, slack, moveHours}:
+  //   1. ORDER: recruiting crimes are filled PAUSED first (everyone in it has finished planning, seats still open),
+  //      then ABOUT TO PAUSE (its members finish within pauseHours - Torn's ready_at on a recruiting crime), then the
+  //      FULLEST, then by join-now pay as before. ("Strong preference for the fullest crimes. Primarily any crimes
+  //      that are paused ... or ones that will become paused soon." / "within 12 hours")
+  //   2. BELOW THE FLOOR: a paused / about-to-pause crime that can't be filled by the normal rules is tried again
+  //      with the team target and every role minimum `slack` points lower ("Fill below the floor, -5% max floor").
+  //      The team carries slack: N. The role cap ("max ceiling CPR") is NOT relaxed any further than today.
+  //   3. MOVES: a member sitting in a crime that is NOT full may be asked to move while their own planning is under
+  //      moveHours (24 h per member -> under moveHours/24 of their progress), not only at 0% - and still only when
+  //      the other crime pays them more per day if they join now ("under 12 hours ... as long as the swap benefits
+  //      them in profit per day"; "as long as the crime is not filled"). Full crimes are never pulled from.
+  // =====================================================================================================
+  const V2 = X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0} : null;
+  let curSlack = 0;                                        // V2: points under the target / role minimums for the crime being filled
+  const TGT = () => O.target - curSlack;
   const floorOf = (crime, label) => {
-    if (O.minZero == null || !(O.minZero < O.minRole)) return O.minRole;
-    return O.minZero + (O.minRole - O.minZero) * Math.min(1, wOf(crime, label));
+    if (O.minZero == null || !(O.minZero < O.minRole)) return O.minRole - curSlack;
+    return O.minZero + (O.minRole - O.minZero) * Math.min(1, wOf(crime, label)) - curSlack;
   };
   const clock = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const t0 = clock();
@@ -161,7 +181,7 @@ export function ocPlan(X) {
   // (Recruiting OR Planning: a crime that filled up and is planning again still has members waiting for their turn)
   // FULL CRIMES (Nov 13 2026, user: "If a crime is full, do not pull members from it."): a member in a crime with
   // every slot taken is never moved, planning started or not - only crimes with an open slot can lose a member
-  const idleIn = pid => { const b = busy.get(Number(pid)); return b && !b.full && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > 0) ? b.cid : null; };
+  const idleIn = pid => { const b = busy.get(Number(pid)); return b && !b.full && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > (V2 && V2.moveHours > 0 ? Math.min(99, V2.moveHours / 24 * 100) : 0)) ? b.cid : null; };   // V2: under moveHours of planning
   // ---- queue: members in a Planning crime that's ready within the window ----
   // QUEUE REMOVED (Nov 13 2026, user: "Remove the queue options"): members still in a crime are never queued for their
   // next one - QWIN is always 0 whatever opts.queueHours says (rotated crimes' join-order deadlines are separate)
@@ -282,10 +302,10 @@ export function ocPlan(X) {
     const v = X.succOf(crime, roles); return typeof v === "number" ? v : null; };
   const succ = (roles, crime) => { const c = calcOf(roles, crime); return c != null ? c : avgOf(roles, crime); };
   // does this team reach the target? the calculated chance when known, else the weighted average
-  const meets = (roles, crime) => { const c = calcOf(roles, crime); if (c != null) { calcChecked++; return c >= O.target; }
-    const a = avgOf(roles, crime); return a != null && a >= O.target; };
+  const meets = (roles, crime) => { const c = calcOf(roles, crime); if (c != null) { calcChecked++; return c >= TGT(); }
+    const a = avgOf(roles, crime); return a != null && a >= TGT(); };
   // a full team the search found: rejected only when its calculated chance is KNOWN and below the target
-  const calcBad = (roles, crime) => { const c = calcOf(roles, crime); if (c != null && c < O.target) { calcRejected++; return true; } return false; };
+  const calcBad = (roles, crime) => { const c = calcOf(roles, crime); if (c != null && c < TGT()) { calcRejected++; return true; } return false; };
   // NO EXPECTED PAY (Nov 12 2026, the user: "Remove expected pay per day. This isn't needed."): a team's value is its
   // crime's MAX pay per day - success is NOT multiplied in; it only decides whether a team may be formed (the target,
   // calculated chance when known). The tiny success term only breaks exact ties (stable picks), never outweighs pay.
@@ -408,7 +428,7 @@ export function ocPlan(X) {
   // leafOk(pick) (optional): false = this combination is rejected (CALCULATED SUCCESS below the target) - the search
   // carries on to the next-best one
   function fillSlots(crime, slots, fixedSum, n, pool, scoreOf, nodeCap, leafOk) {
-    const need = O.target * n - fixedSum - 1e-9;
+    const need = TGT() * n - fixedSum - 1e-9;
     const cands = slots.map(s => {
       const all = [], w = wOf(crime, s.label);
       pool.forEach(p => { const r = rateOf(p.pid, crime, s.label); if (r && r.rate >= floorOf(crime, s.label) && !capped(p.pid, crime, r.rate))
@@ -481,9 +501,16 @@ export function ocPlan(X) {
   // instances of one crime) the one already BUILT (members in it), most-filled first, goes first - so a half-built
   // crime is finished before a fresh copy of it, but never ahead of a better-paying crime.
   const filled = c => { const sl = c.slots || []; return sl.length ? sl.filter(x => x.user).length / sl.length : 0; };
+  // V2 urgency: 2 = paused now, 1 = will pause within pauseHours (has members + open seats and Torn's ready_at - when
+  // the members in it finish planning - falls inside the window), 0 = neither
+  const urgency = c => { if (!V2 || !c || !(c.slots || []).some(sl => sl.user)) return 0;
+    if (paused(c) || (c.ready_at && c.ready_at * 1000 <= NOW)) return 2;
+    return c.ready_at && c.ready_at * 1000 - NOW <= V2.pauseHours * 3600e3 ? 1 : 0; };
   const each = c => payDayInst(c) / ((c.slots || []).length || 1);   // TIME IN THE CRIME: this instance's days
   const recruiting = [...inst.values()].filter(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user))
-    .sort((a, b) => ROT_ON.has(String(b.id)) - ROT_ON.has(String(a.id)) || each(b) - each(a) || filled(b) - filled(a) || (b.difficulty || 0) - (a.difficulty || 0));   // rotated first
+    .sort((a, b) => ROT_ON.has(String(b.id)) - ROT_ON.has(String(a.id))
+      || (V2 ? urgency(b) - urgency(a) || filled(b) - filled(a) : 0)       // V2: paused, about to pause, then the fullest
+      || each(b) - each(a) || filled(b) - filled(a) || (b.difficulty || 0) - (a.difficulty || 0));   // rotated first
   // WHO fills a slot: MEMBER CHOICE (see tier() above) - script users, then free members, then the highest pass rate.
   // (The old "minus half of their best crime elsewhere" opportunity cost was removed Nov 13 2026, user.)
   // why recruiting crimes were left open (stats.skipped, counts per reason + the gap) - diagnostics only
@@ -513,6 +540,7 @@ export function ocPlan(X) {
     }
     return null;
   }
+  const fillOrder = new Map(recruiting.map((c, i) => [String(c.id), i]));   // V2: this crime's place in the fill order
   const fillRecruiting = () => { for (const c of recruiting) {
     curPaused = paused(c);                                 // PAUSED CRIMES: cap maxed for this crime (reset below)
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
@@ -543,6 +571,9 @@ export function ocPlan(X) {
     teams.forEach(x => {
       if (x.kind !== "live" || x.lock || String(x.crime_id) === String(c.id) || ROT_ON.has(String(x.crime_id))) return;
       const xc = inst.get(String(x.crime_id)); if (!xc || !(each(xc) * 1.01 < each(c))) return;
+      // V2: crimes aren't filled in pay order any more, so a seat emptied in a crime the loop has ALREADY passed (an
+      // urgent / fuller one) would never be refilled - reservations are only pulled from crimes still to come
+      if (V2 && (fillOrder.get(String(x.crime_id)) ?? 1e9) < (fillOrder.get(String(c.id)) ?? 0)) return;
       x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
         moveFrom.set(Number(r.pid), {t: x, ri}); movePool.push({pid: Number(r.pid), soft: false}); });
     });
@@ -571,6 +602,15 @@ export function ocPlan(X) {
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
                            (p, rate) => tier(p.pid, rate, p.q), 20000, leafOk);     // MEMBER CHOICE (free before queued)
     }
+    // V2: an urgent crime nobody can fill by the normal rules is tried once more, `slack` points under the target
+    // and the role minimums (the pool, cap and member choice are the same)
+    let usedSlack = 0;
+    if (!best && V2 && V2.slack > 0 && urgency(c) > 0 && !ROT_ON.has(String(c.id))) {
+      curSlack = V2.slack;
+      best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool, (p, rate) => tier(p.pid, rate, false), 20000, leafOk);
+      if (best) usedSlack = V2.slack;
+      curSlack = 0;
+    }
     if (!best) {                                           // can't reach the target: SKIPPED (left open)
       // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
       // free or queued, ignoring that one member can only take one slot); roles nobody can fill at all
@@ -596,6 +636,7 @@ export function ocPlan(X) {
     });
     if (!t) { t = {id: uid(), crime: c.name, difficulty: c.difficulty ?? diffOf(c.name), kind: "live", crime_id: c.id, lock: false, roles}; teams.push(t); claimed.add(String(c.id)); }
     else t.roles = roles;
+    if (V2) { t.urgency = urgency(c); if (usedSlack) t.slack = usedSlack; }   // V2 report: why this crime came first / filled below the floor
   } curPaused = false; };
   fillRecruiting();
 
