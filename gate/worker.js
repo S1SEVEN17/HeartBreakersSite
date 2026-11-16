@@ -746,7 +746,11 @@ async function sxShareOp(env, who, op, b) {
   if (!env.OC_DB) return sxJson({ok: false, error: "Hub storage isn't set up yet"}, 503);
   const pid = Number(who.id), now = Date.now();
   let row = await sxShareRow(env, pid);
-  const settings = r => ({bs: r ? r.bs : "off", ws: r ? r.ws : "off", ready: !!(r && r.ready), oc: !!(r && r.oc), cw: !!(r && r.cw)});
+  // CPR SHARING IS ON BY DEFAULT (Nov 15 2026, user: "Run all 3 fixes ... Switch all sharing an API key to 'On' for CPR
+  // rates."): the old OC Optimizer shared pass rates automatically; the Suite asked first, so members who never opened
+  // the sharing settings stopped updating. Now a member with no saved choice counts as OC pass rates ON (stats stay
+  // off), and a member who turns it off keeps a row saying so (the row is no longer deleted when everything is off).
+  const settings = r => ({bs: r ? r.bs : "off", ws: r ? r.ws : "off", ready: !!(r && r.ready), oc: r ? !!r.oc : true, cw: !!(r && r.cw)});
   if (op === "share_get") {
     const bs = sxJ(row && row.bs_s, []), ws = sxJ(row && row.ws_s, []);
     return sxJson({ok: true, settings: settings(row), since: row ? row.since : null,
@@ -760,10 +764,8 @@ async function sxShareOp(env, who, op, b) {
       const {data} = await readOptin(env, false).catch(() => ({data: {members: {}}}));
       if (!((data.members || {})[String(pid)] || {}).oc) await ocCprDrop(env, String(pid)).catch(() => {});
     }
-    if (bs === "off" && ws === "off" && !ready && !oc && !cw) {            // everything off = nothing kept
-      await env.OC_DB.prepare("DELETE FROM sx_share WHERE pid = ?").bind(pid).run();
-      return sxJson({ok: true, settings: {bs, ws, ready: false, oc: false, cw: false}});
-    }
+    // (everything off used to delete the row - it's kept now, so "OC pass rates off" stays the member's saved choice;
+    //  the upsert below clears the readings of every part that's off)
     await env.OC_DB.prepare("INSERT INTO sx_share (pid, name, bs, ws, ready, oc, cw, since, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT (pid) DO UPDATE SET name = excluded.name, bs = excluded.bs, ws = excluded.ws, ready = excluded.ready, oc = excluded.oc, cw = excluded.cw, updated = excluded.updated, " +
       // a part turned off: its readings go too
@@ -778,7 +780,7 @@ async function sxShareOp(env, who, op, b) {
       const w = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'sx_ready_watch'").first().catch(() => null);
       out.want_ready = !!(w && now - Number(w.ts) < SX_WATCH_MS);
     }
-    if (row && row.oc) {                     // the Hub's crime list signature - changes when it finds a NEW crime
+    if (row ? row.oc : true) {               // the Hub's crime list signature - changes when it finds a NEW crime
       const st = ((await ocSnapGet(env, "hub", "oc-optin").catch(() => null)) || {data: {}}).data || {};
       const seen = (Array.isArray(st.seen) ? st.seen : []).map(Number).filter(Boolean);
       out.oc_tag = seen.length ? Math.max(...seen) + ":" + seen.length : "none";
@@ -793,7 +795,12 @@ async function sxShareOp(env, who, op, b) {
     return sxJson(out);
   }
   // share_push: only the parts this member turned on; numbers only
-  if (!row) return sxJson({ok: false, error: "Sharing from the script is off."}, 400);
+  if (!row) {                                // no saved choice yet: OC pass rates on (the default), stats off
+    await env.OC_DB.prepare("INSERT INTO sx_share (pid, name, bs, ws, ready, oc, cw, since, updated) VALUES (?, ?, 'off', 'off', 0, 1, 0, ?, ?) ON CONFLICT (pid) DO NOTHING")
+      .bind(pid, who.name, now, now).run();
+    row = await sxShareRow(env, pid);
+    if (!row) return sxJson({ok: false, error: "Sharing from the script is off."}, 400);
+  }
   const day = new Date(now).toISOString().slice(0, 10);
   const cutoff = new Date(now - SX_SHARE_DAYS * 864e5).toISOString().slice(0, 10);
   const nums = (a, n) => Array.isArray(a) && a.length === n ? a.map(x => Math.max(0, Math.round(Number(x) || 0))) : null;
@@ -817,6 +824,11 @@ async function sxShareOp(env, who, op, b) {
     b.oc.slice(0, 200).forEach(x => { if (Array.isArray(x) && x.length === 3 && Number.isFinite(Number(x[2])))
       roles[ocFb(x[0]) + "|" + ocFb(ocBaseRole(x[1]))] = Math.max(0, Math.min(100, Math.round(Number(x[2])))); });
     if (Object.keys(roles).length) { await ocStoreRates(env, pid, who.name, roles, "script"); extra++; }
+    // CHECKED JUST NOW (Nov 15 2026, user: "Why are their CPR rates not updating?" - the list's time only moved when a
+    // rate CHANGED): every check from the script moves the member's time on, changed or not (also when Torn showed
+    // them no open role this time), so "x ago" = when their script last checked
+    await env.OC_DB.prepare("UPDATE oc_cpr SET ts = ? WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(now, Number(env.FACTION_ID), pid).run().catch(() => {});
+    extra++;
   }
   if (row.cw && b.chain && typeof b.chain === "object" && env.CHAINROOM) {
     // the same checks + room call as the homepage's chain readings (cwReading): shorten-only in the room
@@ -1065,6 +1077,22 @@ async function ocPullMember(env, id, name, key) {
 }
 // store a member's pass rates {"Crime|Role": rate} into oc_cpr (shared by the Hub-key read above and the Hub script's
 // sharing - SCRIPT SHARING "OC pass rates")
+// ONE-TIME SWITCH-ON (Nov 15 2026, user: "Switch all sharing an API key to 'On' for CPR rates."): every member who
+// shares from the script (sx_share) and every member with a key stored on the Hub (the opt-in list) gets OC pass rates
+// turned on, once - oc_config all/'sx_oc_all_on' marks it done, so a member who turns it off afterwards stays off.
+// Counts only in the log; no names, no keys.
+async function ocShareAllOn(env, now) {
+  if (!env.OC_DB) return;
+  const done = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'sx_oc_all_on'").first().catch(() => null);
+  if (done) return;
+  const r = await env.OC_DB.prepare("UPDATE sx_share SET oc = 1, updated = ? WHERE oc = 0").bind(now).run();
+  let keys = 0;
+  const {data} = await readOptin(env, true);
+  if (Object.values(data.members || {}).some(e => e && e.k && !e.oc))
+    await writeOptin(env, null, {whole: d => { Object.values(d.members || {}).forEach(e => { if (e && e.k && !e.oc) { e.oc = true; e.updated = now; keys++; } }); }}, "OC pass rates on for members with a stored key");
+  await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'sx_oc_all_on', '1', ?, 'hub') ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts").bind(now).run();
+  console.log("oc share all-on: script rows " + ((r.meta && r.meta.changes) || 0) + ", stored keys " + keys);
+}
 async function ocStoreRates(env, id, name, roles, src) {
   const n = Object.keys(roles).length;
   if (n && src) await shareSrcMark(env, id, "oc", src);
@@ -1744,8 +1772,14 @@ async function ocPlanObj(env, envName, id) {
     const {results} = await env.OC_DB.prepare("SELECT player_id, ts, LENGTH(roles) > 2 AS has FROM oc_cpr WHERE env = ? AND faction_id = ?")
       .bind(envName, Number(env.FACTION_ID)).all();
     const by = new Map((results || []).filter(r => r.has).map(r => [Number(r.player_id), Number(r.ts) || null]));
+    // + who runs the script and has turned OC pass rates OFF (Nov 15 2026, user's fix 2: 'Show "script running,
+    // sharing off"'): script = seen by the Hub in the last 3 days (oc_seen) or has script sharing settings (sx_share);
+    // off = their saved choice is OC pass rates off
+    const seen = await ocScriptSeen(env, envName).catch(() => ({}));
+    const sx = new Map(((await env.OC_DB.prepare("SELECT pid, oc FROM sx_share").all().catch(() => ({results: []}))).results || []).map(r => [Number(r.pid), Number(r.oc)]));
     sharing = [...members.entries()].map(([pid, m]) => ({pid: Number(pid), name: (m && m.name) || ("#" + pid),
-      sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null}))
+      sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null,
+      script: seen[String(pid)] != null || sx.has(Number(pid)), off: sx.get(Number(pid)) === 0}))
       .sort((a, b) => (a.sharing - b.sharing) || a.name.localeCompare(b.name));
   }
   // JOIN NOW (Nov 12 2026, user: 'a "Join Now" pay per day rate that can be given to members to encourage them to
@@ -2159,6 +2193,7 @@ async function ocFeedPull(env) {
   } catch (e) { fail("now", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
+  try { await ocShareAllOn(env, now); } catch (e) { fail("oc-share-all-on", e); }
   // roster - hourly (1 call)
   let newRoster = false;
   if (due("roster")) try {
