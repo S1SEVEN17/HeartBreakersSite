@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.56
+// @version      0.2.57
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.56';
+    const VERSION = '0.2.57';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -1223,7 +1223,7 @@
         const ocBtn = as && !as.joined && as.kind === 'live' && as.crime_id
             ? `<a class="hbs-btn hbs-mini" href="${OC_LINK(as.crime_id)}">Join ${esc(as.crime)}</a>` : '<button type="button" class="hbs-btn hbs-mini" data-onb="oc">Open 🕵 OC</button>';
         const steps = [
-            ['key', !!getKey(), 'Add your API key', 'Stays on this device.', ''],
+            ['key', !!getKey(), 'Add your API key', 'A Limited Access key. Stays on this device.', ''],
             ['oc', !!o.oc, 'Share your OC pass rates', 'So the planner seats you in roles you pass.', '<button type="button" class="hbs-btn hbs-mini" data-onb="oc">Open 🕵 OC</button>'],
             ['test', !!o.test, 'Test your alerts', "Hear and feel what a chain alert is like.", '<button type="button" class="hbs-btn hbs-mini" data-onb="test">🔔 Test</button>'],
             ['join', !!o.join, 'Join the Chain Watch queue', 'Take a turn keeping the chain alive.', '<button type="button" class="hbs-btn hbs-mini" data-onb="chain">Open ⛓ Chain</button>'],
@@ -4834,9 +4834,9 @@
         bodyEl.innerHTML = `
             <div class="hbs-sec">API keys</div>
             <div class="hbs-hint" style="opacity:.85">For Heart Breakers members. ${pda ? "Using <b>TornPDA's API key</b> - nothing to enter."
-                : 'Paste your Torn API key (a <b>Public</b> key is enough).'} The key stays on this device: the script asks Torn who you are
+                : 'Paste your Torn API key - a <b>Limited Access</b> key is needed (a Public key can\'t read your energy, cooldowns or OC pass rates).'} The key stays on this device: the script asks Torn who you are
                 and sends the Hub only your name, ID and faction.</div>
-            ${pda ? '' : `<label class="hbs-rsfld" style="margin-top:6px"><span>Torn API key</span><input class="hbs-input" type="password" autocomplete="off" data-key maxlength="16" placeholder="16-character API key" value="${esc(key)}" style="text-align:left"></label>`}
+            ${pda ? '' : `<label class="hbs-rsfld" style="margin-top:6px"><span>Torn API key <b style="color:#FFB454">· Limited Access key needed</b></span><input class="hbs-input" type="password" autocomplete="off" data-key maxlength="16" placeholder="Limited Access API key (16 characters)" value="${esc(key)}" style="text-align:left"></label>`}
             <label class="hbs-rsfld" style="margin-top:6px"><span>FFScouter key (optional - fair-fight on retals, battle stats for recruiting)</span>
                 <input class="hbs-input" type="password" autocomplete="off" data-ffkey placeholder="FFScouter key" value="${esc(ffKey())}" style="text-align:left"></label>
             <div class="hbs-hint">Both keys stay on this device - never sent to the Hub.</div>
