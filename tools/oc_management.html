@@ -1037,8 +1037,14 @@ function feedHtml(row) {
   const f = D.config.feed;
   const txt = f && f.live ? `🛰 Live from <b>${esc(f.name || "a member")}</b>'s Suite - read every minute (last ${ago(f.at)})`
     : `🕒 The Hub's own check, every 3 minutes - no Suite is feeding right now${f && f.at ? ` (last one ${ago(f.at)})` : ""}`;
-  return row("Crime list source", `<span class="tag">${txt}</span>`,
+  const main = row("Crime list source", `<span class="tag">${txt}</span>`,
     "One member's Suite at a time reads the faction's crimes with that member's own key and passes the list to the Hub; if it goes quiet another Suite takes over, and the Hub's own check keeps running as the backup.");
+  // 📡 DATA SOURCES (Nov 16 2026): the age + supplier of every shared reading (config.sources [{ds, at, by}], by "" = the Hub)
+  const LAB = {crimes: "Open crimes", recent: "Completed crimes", now: "War + chain", roster: "Roster", "war:feed": "Enemy faction"};
+  const secs = ms => { const x = Math.max(0, Math.round((Date.now() - ms) / 1000)); return x < 90 ? x + " s ago" : x < 5400 ? Math.round(x / 60) + " min ago" : Math.round(x / 3600) + " h ago"; };
+  const src = (D.config.sources || []).filter(x => LAB[x.ds] && x.at).sort((a, b) => Object.keys(LAB).indexOf(a.ds) - Object.keys(LAB).indexOf(b.ds));
+  return main + (src.length ? row("Data sources", src.map(x => `<span class="tag" style="margin:0 4px 4px 0;display:inline-block">${LAB[x.ds]}: <b>${secs(x.at)}</b> · ${x.by ? esc(x.by) + "'s Suite" : "the Hub"}</span>`).join(""),
+    "How old each shared reading was when this page loaded, and who supplied it. Members' Suites supply the newest readings; the Hub's own check replaces them every 3 minutes (the roster and the crime history only ever come from the Hub).") : "");
 }
 // SCHEDULED rebuild is the first beat once autoMinutes have passed since the last run - it also rebuilds sooner when
 // crimes, members, settings or pass rates change (gate/worker.js TRIGGERS). "Update now" = POST oc/update (once a

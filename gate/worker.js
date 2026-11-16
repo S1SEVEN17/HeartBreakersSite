@@ -733,6 +733,8 @@ async function sxRoute(env, ctx, req) {
   }
   // 🛰 SCRIPT-FIRST CRIME FEED (HB Suite 0.2.69) - see ocFeedSx
   if (op === "oc_feed") return sxJson(await ocFeedSx(env, ctx, who, b || {}));
+  // ⚔ WAR ENEMY FEED (HB Suite 0.2.71) - see warFeedSx
+  if (op === "war_feed") return sxJson(await warFeedSx(env, who, b || {}));
   // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
   if (op === "oc_contacted") {
     if (!who.leader) return leadersOnly();
@@ -921,6 +923,14 @@ async function sxExport(env, req) {
   const want = [...new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(`${env.MEMBER_DIR}|${env.LEADER_DIR}|hb-sx-export`)))]
     .map(x => x.toString(16).padStart(2, "0")).join("");
   if (!env.MEMBER_DIR || req.headers.get("X-HB-Export") !== want) return new Response("Not found", {status: 404});
+  // ?oc=1 (Nov 16 2026, API usage review): the site's 15-minute crime check takes the open crimes + members' live
+  // status from here (the Hub's / feeder's newest reading) instead of asking Torn again - {crimes, crimes_at, members,
+  // members_at} (ms). The site falls back to its own calls when either is older than a few minutes.
+  if (new URL(req.url).searchParams.get("oc") === "1") {
+    const [c, m] = env.OC_DB ? await Promise.all([ocSnapGet(env, "prod", "crimes").catch(() => null), ocSnapGet(env, "hub", "members:live").catch(() => null)]) : [null, null];
+    return Response.json({crimes: (c && c.data) || null, crimes_at: (c && c.as_of) || 0, members: (m && m.data) || null, members_at: (m && m.as_of) || 0},
+                         {headers: {"Cache-Control": "no-store"}});
+  }
   const out = {members: {}};
   if (env.OC_DB) {
     await sxShareTable(env).catch(() => {});
@@ -1215,11 +1225,11 @@ async function ocOptinPull(env, now, crimes) {
 // crime_issues): not Okay (travelling / abroad / hospital / jail), missing the slot's item, or no longer in the
 // faction. Member statuses (faction/members, 1 call) are read ONLY when some crime is ready - normally no call.
 // Saved as oc_snap env 'hub' ds 'delays': [{crime, crime_id, members: [{pid, name, position, reason, overdue_hours}], since}]
-async function ocDelayCheck(env, crimes, now, ops) {
+async function ocDelayCheck(env, crimes, now, ops, liveMembers) {
   const ready = crimes.filter(c => c && c.ready_at && c.ready_at * 1000 <= now && (c.slots || []).length && (c.slots || []).every(sl => sl.user));
   let out = [];
   if (ready.length) {
-    const m = await ocTorn(env, "faction/members");
+    const m = liveMembers && liveMembers.length ? {members: liveMembers} : await ocTorn(env, "faction/members");
     const mem = new Map((Array.isArray(m.members) ? m.members : Object.values(m.members || {})).map(x => [Number(x.id), x]));
     for (const c of ready) {
       const who = [];
@@ -1920,6 +1930,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       const pst = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
       c.auto_run = Number((pst || {}).as_of) || null;                                     // last automatic run (ms)
       c.auto_reason = ((pst && pst.data) || {}).reason || null;                            // TRIGGERS: why it ran
+      // 📡 DATA SOURCES: how old each shared reading is and who supplied it (a member's Suite, or the Hub's own check)
+      c.sources = ((await env.OC_DB.prepare("SELECT env, ds, as_of, by FROM oc_snap WHERE (env = 'prod' AND ds IN ('crimes','roster')) OR (env = 'hub' AND ds IN ('recent','now','war:feed'))")
+        .all().catch(() => ({results: []}))).results || []).map(r => ({ds: r.ds, at: Number(r.as_of) || 0, by: r.by === "hub" ? "" : String(r.by || "").replace(/\s*\[\d+\].*$/, "")}));
       { const ls = await ocSnapGet(env, "hub", "feed:lease").catch(() => null);          // 🛰 who feeds the crime list (ocFeedSx)
         c.feed = ls && ls.data ? {name: ls.data.name || "", at: ls.as_of || Number(ls.data.last) || null, live: Date.now() - ls.as_of < OC_FEED_LEASE_MS} : null; }
       c.auto_every = ((pst && pst.data) || {}).every || null;                              // scheduled interval (ms)
@@ -2112,7 +2125,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
 //      + 20/hour for the homepage's Right now (faction?selections=chain,wars, every run - Nov 12 2026).
 // =====================================================================================================
 const FEED_SETS = ["crimes", "roster", "catalog", "prices"];
-const FEED_EVERY = {crimes: 0, history: 30 * 60e3, roster: 60 * 60e3, catalog: 7 * 24 * 3600e3, prices: 24 * 3600e3};
+const FEED_EVERY = {crimes: 0, history: 6 * 3600e3, roster: 60 * 60e3, catalog: 7 * 24 * 3600e3, prices: 24 * 3600e3};
 const FEED_HIST_MAX = 500;                    // most history rows in one read
 const FEED_MAX_BODY = 1500000;                // write-back body limit (bytes)
 
@@ -2320,7 +2333,22 @@ async function ocFeedSx(env, ctx, who, b) {
   const sig = ocCrimeSig(cl), txt = JSON.stringify(cl);
   const by = `${String(who.name || "").slice(0, 40)} [${pid}]`;
   const changed = !(ls && ls.data && ls.data.sig === sig);
-  await env.OC_DB.batch([ocSnapPut(env, "prod", "crimes", now, txt, by), ocSnapPut(env, "test", "crimes", now, txt, by), lease(sig, now)]);
+  const fops = [ocSnapPut(env, "prod", "crimes", now, txt, by), ocSnapPut(env, "test", "crimes", now, txt, by), lease(sig, now)];
+  // FEEDER EXTRAS (Nov 16 2026, user: "Players should serve as the main feeders of information, while the hub updates
+  // at regular intervals in the background"): the feeder may add
+  //   completed  the newest completed crimes -> the Recently completed list (payout state) between the Hub's own reads
+  //   now        {chain, wars} -> Right now (home tile, War tab header) between the Hub's own reads
+  // Both are SHORT-LIVED views the Hub's own 3-minute read replaces. The permanent history and the roster are only
+  // ever written from the Hub's own key - a script can't add to them.
+  const extra = [];
+  if (Array.isArray(b.completed) && b.completed.length <= 100 && b.completed.every(c => c && typeof c === "object" && Number(c.id) > 0 && okName(c.name))) {
+    fops.push(ocSnapPut(env, "hub", "recent", now, JSON.stringify({rows: ocRecentRows(b.completed)}), by)); extra.push("completed");
+  }
+  if (b.now && typeof b.now === "object" && (b.now.chain == null || typeof b.now.chain === "object") && (b.now.wars == null || typeof b.now.wars === "object")
+      && JSON.stringify(b.now).length < 20000) {
+    fops.push(ocSnapPut(env, "hub", "now", now, JSON.stringify({chain: b.now.chain || null, wars: b.now.wars || null}), by)); extra.push("now");
+  }
+  await env.OC_DB.batch(fops);
   // the planner (+ the Discord seat pings that follow a plan) - after the answer, never holding the script up
   const cfg = await ocConfig(env, "prod").catch(() => ({}));
   const fast = Number(((cfg && cfg.opts) || {}).autoMinutes) > 0 && Number(cfg.opts.autoMinutes) < 3;
@@ -2328,7 +2356,7 @@ async function ocFeedSx(env, ctx, who, b) {
     try { await ocAutoPlan(env, cl, now); } catch (e) { console.log("oc feed: plan failed"); }
     if (changed) try { await ocAssignPings(env, cl); } catch (e) { console.log("oc feed: pings failed"); }
   })());
-  return {ok: true, feed: true, changed, every: OC_FEED_EVERY_S};
+  return {ok: true, feed: true, changed, extra, every: OC_FEED_EVERY_S};
 }
 async function ocFeedMe(env, ctx, who, b, now) {
   const pid = Number(who.id), all = await ocMeGet(env);
@@ -2377,6 +2405,46 @@ async function ocTorn(env, path) {
   if (d && d.error) throw new Error("torn " + d.error.code);
   return d;
 }
+// ⚔ WAR ENEMY FEED (Nov 16 2026, API usage review): every Suite with the War tab open used to read the enemy faction
+// itself once a minute. Now they share ONE reading: {do:"get", fid} answers the stored list when it's younger than
+// WAR_FEED_FRESH_MS; otherwise the FIRST script to ask is told to read Torn itself (`read: true`, own key, on the
+// device) and upload it ({do:"put", fid, members}) - the others get the last list meanwhile and the new one on their
+// next ask. fid must be the enemy of the war the Hub itself sees (oc_snap hub 'now'), so nothing else can be stored.
+// oc_snap hub 'war:feed' {fid, members: [{pid, name, level, state, until, la}], claim}. No Hub key call at all.
+const WAR_FEED_FRESH_MS = 30 * 1000, WAR_FEED_CLAIM_MS = 15 * 1000;
+async function warFeedSx(env, who, b) {
+  if (!env.OC_DB) return {ok: false, error: "not set up"};
+  const now = Date.now(), fid = Number(b.fid) || 0;
+  const snap = await ocSnapGet(env, "hub", "now").catch(() => null);
+  let w = snap && snap.data && snap.data.wars && snap.data.wars.ranked; if (Array.isArray(w)) w = w[0];
+  const F = w && w.factions ? (Array.isArray(w.factions) ? w.factions : Object.entries(w.factions).map(([id, f]) => Object.assign({id}, f))) : [];
+  const them = F.find(f => String(f.id) !== String(env.FACTION_ID));
+  if (!them || Number(them.id) !== fid) return {ok: true, none: true};
+  const cur = await ocSnapGet(env, "hub", "war:feed").catch(() => null);
+  const D = cur && cur.data && Number(cur.data.fid) === fid ? cur.data : {fid, members: null, claim: 0};
+  const save = (at, data) => env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'war:feed', ?, ?, ?) " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+    .bind(at, JSON.stringify(data), `${String(who.name || "").slice(0, 40)} [${Number(who.id)}]`).run();
+  const at = D.members ? Number(cur.as_of) : 0;
+  if (b.do === "put") {
+    const L = b.members;
+    if (!Array.isArray(L) || !L.length || L.length > 150 || !L.every(m => m && Number(m.pid) > 0)) return {ok: true, dropped: true};
+    const members = L.map(m => ({pid: Number(m.pid), name: String(m.name || "").slice(0, 40), level: Math.max(0, Math.min(100, Number(m.level) || 0)),
+      state: String(m.state || "").slice(0, 20), until: Number(m.until) || 0, la: String(m.la || "").slice(0, 12)}));
+    await save(now, {fid, members, claim: 0});
+    return {ok: true, at: now};
+  }
+  if (at && now - at < WAR_FEED_FRESH_MS) return {ok: true, at, members: D.members};
+  const read = !(now - Number(D.claim || 0) < WAR_FEED_CLAIM_MS);            // nobody is already reading it
+  if (read) await save(at || 0, Object.assign({}, D, {claim: now}));
+  return {ok: true, at: at || null, members: D.members || null, read};
+}
+// a completed-crimes list -> the compact rows of oc_snap hub 'recent' (the Hub's pull and the feeder's upload)
+const ocRecentRows = list => (Array.isArray(list) ? list : []).filter(c => c && c.id && c.executed_at).map(c => {
+  const rw = (c.rewards && typeof c.rewards === "object") ? c.rewards : {}, po = (rw.payout && typeof rw.payout === "object") ? rw.payout : null;
+  return {id: Number(c.id), name: String(c.name || "").slice(0, 60), ok: /^success/i.test(String(c.status || "")), at: Number(c.executed_at) || 0, money: Number(rw.money) || 0,
+          items: Array.isArray(rw.items) ? rw.items.length : 0, paid: !!(po && (po.paid_at || po.percentage != null || po.type)), paid_at: po ? Number(po.paid_at) || null : null,
+          pct: po && po.percentage != null ? Number(po.percentage) : null}; }).sort((a, b) => b.at - a.at).slice(0, 100);
 let NOW_MEMBERS_BAD = 0;
 async function ocFeedPull(env) {
   if (!env.OC_DB || !env.HUB_TORN_KEY) return;
@@ -2394,15 +2462,14 @@ async function ocFeedPull(env) {
   const fail = (step, e) => errs.push(step + ": " + String((e && e.message) || e).slice(0, 60));
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
-  let newHist = false, crimesNow = null, newPrices = false, rosterNow = false, rosterSeen = false;
+  let newHist = false, crimesNow = null, newPrices = false, rosterNow = false, rosterSeen = false, liveMembers = null;
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
     const cl = (d.crimes || []).map(ocFeedCleanCrime);
     try { ocApplyMe(cl, await ocMeGet(env), now); } catch (e) { fail("me", e); }   // ⚡ members' own join / leave reports (last 90 s)
     put("crimes", cl);
-    try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
-    crimesNow = cl;
+    crimesNow = cl;                                          // (the delay check runs after Right now - it reuses that call's members)
   } catch (e) { fail("crimes", e); }
   // RECENTLY COMPLETED (Nov 16 2026, HB Suite 0.2.68 - user: "'Recently Completed' tile. Show the last 5 completed
   // OCs, alert for any that have not been paid out yet." + "How often does the hub refresh crime info? Make this a
@@ -2410,13 +2477,18 @@ async function ocFeedPull(env) {
   // 30 min, so it can't tell when a crime gets PAID. This reads the newest 100 completed crimes EVERY run (1 call,
   // every 3 minutes) and keeps a compact list in oc_snap hub 'recent' = {rows: [{id, name, ok, at (s), money, items,
   // paid, paid_at, pct}], newest first}. Served by op live "recent" (ocRecentFor).
+  // HISTORY FROM THE SAME CALL (Nov 16 2026, API usage review): this list already holds every newly successful crime,
+  // so the stored history is filled from it every run (new ids only) - the separate history call is now only a
+  // 6-hourly safety net (FEED_EVERY.history) for anything that scrolled past 100 completed crimes.
   try {
     const d = await ocTorn(env, "faction/crimes?cat=completed&limit=100&sort=DESC");
-    const rows = (d.crimes || []).filter(c => c && c.id && c.executed_at).map(c => { const rw = (c.rewards && typeof c.rewards === "object") ? c.rewards : {}, po = (rw.payout && typeof rw.payout === "object") ? rw.payout : null;
-      return {id: Number(c.id), name: String(c.name || ""), ok: /^success/i.test(String(c.status || "")), at: Number(c.executed_at) || 0, money: Number(rw.money) || 0,
-              items: Array.isArray(rw.items) ? rw.items.length : 0, paid: !!(po && (po.paid_at || po.percentage != null || po.type)), paid_at: po ? Number(po.paid_at) || null : null, pct: po && po.percentage != null ? Number(po.percentage) : null}; })
-      .sort((a, b) => b.at - a.at);
-    ops.push(ocSnapPut(env, "hub", "recent", now, JSON.stringify({rows}), "hub"));
+    ops.push(ocSnapPut(env, "hub", "recent", now, JSON.stringify({rows: ocRecentRows(d.crimes)}), "hub"));
+    const done = (d.crimes || []).filter(c => c && c.id && c.executed_at && c.status === "Successful");
+    if (done.length) {
+      const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 300").all()).results || []).map(r => Number(r.id)));
+      const fresh = done.filter(c => !known.has(Number(c.id)));
+      if (fresh.length) { const hops = []; ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now))); await env.OC_DB.batch(hops); newHist = true; }
+    }
   } catch (e) { fail("recent", e); }
   // RIGHT NOW (Nov 12 2026, user: the homepage's live war + chain without asking members for a key): the faction's
   // ranked war and chain, one call every run -> oc_snap 'hub' 'now' (served by /m/now.json)
@@ -2436,6 +2508,10 @@ async function ocFeedPull(env) {
     if (d.members) {
       const out = {};
       (Array.isArray(d.members) ? d.members : Object.values(d.members)).forEach(m => { if (m && m.id) out[String(m.id)] = String(m.name || ""); });
+      liveMembers = Array.isArray(d.members) ? d.members : Object.entries(d.members).map(([id, m]) => Object.assign({id: Number(id)}, m));
+      // members as they are NOW (status, last action) for the site's crime check - 0 calls there (GET /sx/export?oc=1)
+      ops.push(ocSnapPut(env, "hub", "members:live", now, JSON.stringify(liveMembers.map(m => ({id: Number(m.id), name: m.name, status: m.status || null,
+        last_action: m.last_action || null, position: m.position || null}))), "hub"));
       if (Object.keys(out).length >= 5) {
         // stored only when it CHANGED (a join, a leave, a new name) - an unchanged roster keeps its date, so scripts
         // don't download it again and the summaries aren't rebuilt every run; the hourly call is skipped either way
@@ -2445,6 +2521,8 @@ async function ocFeedPull(env) {
       }
     }
   } catch (e) { fail("now", e); }
+  // DELAY CHECK - with the members just read above (no call of its own; it reads them itself only if that failed)
+  if (crimesNow) try { await ocDelayCheck(env, crimesNow, now, ops, liveMembers); } catch (e) { fail("delays", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
   try { await ocShareAllOn(env, now); } catch (e) { fail("oc-share-all-on", e); }

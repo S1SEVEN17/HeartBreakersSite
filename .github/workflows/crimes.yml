@@ -68,6 +68,7 @@ jobs:
           DISCORD_WEBHOOK_CRIMES: ${{ secrets.DISCORD_WEBHOOK_CRIMES }}
           DISCORD_WEBHOOK_LEADERS: ${{ secrets.DISCORD_WEBHOOK_LEADERS }}
           MEMBER_DIR: ${{ secrets.MEMBER_DIR }}
+          LEADER_DIR: ${{ secrets.LEADER_DIR }}   # with MEMBER_DIR: the private header for the Hub's crime copy (no Torn call)
         run: python generate.py --out site
 
       - name: Save alert state

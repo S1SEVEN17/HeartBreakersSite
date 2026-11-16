@@ -10989,6 +10989,34 @@ def oc_fetch_active(key: str) -> list:
                 + _as_list(fetch_section("crimes", key, {"cat": "recruiting"}).get("crimes")))
 
 
+OC_HUB_MAX_AGE = 5 * 60          # seconds: the Hub's crimes / members readings are used when younger than this
+
+
+def oc_hub_snapshot():
+    """(crimes, members) from the gatekeeper's GET /sx/export?oc=1, or None when it can't be used (gate off, not
+    reachable, either reading older than OC_HUB_MAX_AGE, or empty). Same private header as the sharing export."""
+    import hashlib
+    g_ = gate_cfg()
+    if not g_ or not os.environ.get("LEADER_DIR", "").strip():
+        return None
+    tok = hashlib.sha256(f'{os.environ.get("MEMBER_DIR", "")}|{os.environ.get("LEADER_DIR", "")}|hb-sx-export'.encode()).hexdigest()
+    try:
+        req = urllib.request.Request(g_["url"].rstrip("/") + "/sx/export?oc=1", headers={"X-HB-Export": tok, "User-Agent": "HB Hub build"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.loads(r.read().decode())
+    except Exception as ex:
+        print(f"Crime check: Hub copy not read ({type(ex).__name__})")
+        return None
+    now_ms = datetime.now(timezone.utc).timestamp() * 1000
+    crimes, members = d.get("crimes"), d.get("members")
+    if not isinstance(crimes, list) or not isinstance(members, list) or not members:
+        return None
+    if now_ms - (d.get("crimes_at") or 0) > OC_HUB_MAX_AGE * 1000 or now_ms - (d.get("members_at") or 0) > OC_HUB_MAX_AGE * 1000:
+        print("Crime check: Hub copy too old - reading Torn")
+        return None
+    return crimes, members
+
+
 CRIME_DELAY_KEEP_DAYS = 365
 
 
@@ -11070,8 +11098,17 @@ def discord_crime_alerts(key: str, cfg: dict):
         return
     now = int(datetime.now(timezone.utc).timestamp())
     try:
-        crimes = oc_fetch_active(key)            # recruiting + planning, one call
-        members = _as_list(fetch_section("members", key).get("members"))
+        # HUB FIRST (Nov 16 2026, API usage review): the gatekeeper already holds the open crimes (a member's Suite
+        # reads them every minute, the Hub itself every 3) and the members' live status (the Hub, every 3 minutes),
+        # so this run asks the Hub and makes NO Torn call when both are under OC_HUB_MAX_AGE old. Otherwise (Hub not
+        # reachable / stale) it reads Torn itself as before: crimes 1 call + members 1 call.
+        hub_ = oc_hub_snapshot()
+        if hub_:
+            crimes, members = hub_
+            print("Crime check: crimes + members from the Hub (no Torn call)")
+        else:
+            crimes = oc_fetch_active(key)            # recruiting + planning, one call
+            members = _as_list(fetch_section("members", key).get("members"))
     except SystemExit as e:
         print(f"Crime check skipped: {e}")
         return
