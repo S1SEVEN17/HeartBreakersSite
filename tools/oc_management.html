@@ -1014,7 +1014,13 @@ function tb2Fill(cid) {
   tb2Save(); return n; }
 function drawBuilder2() {
   if (!D.feed) { $("view").innerHTML = `<div class="panel"><b>🧩 Team Builder v2</b><div class="hn">The crimes in Torn haven't loaded yet - try Refresh in a moment.</div></div>`; return; }
-  if (!TB2 || !TB2.sel) TB2 = tb2FromLive();
+  // ONLY THE USER'S RULES (Nov 16 2026: "I want to scrap all rules for V2 except for the ones I mentioned when building
+  // it."): the board starts EMPTY (it used to start from the live plan's reservations - still there as the "↺ Start
+  // from Live" button), and the card no longer shows a team success % or a "below the target" note (the team target
+  // and role weights are planner rules, not v2 rules). What v2 does now is exactly: open crimes from Torn · members not
+  // in a crime · manual pick or Fill inside the flat band · Recruiting (join-now pay) before Available (pay) · the
+  // unassigned list with 🚩 for members no open role fits.
+  if (!TB2 || !TB2.sel) TB2 = {sel: {}};
   const crimes = tb2Crimes(), busy = busyMap(), up = tb2CapUp(), placed = tb2Prune(crimes, busy); tb2Save();
   const free = Object.keys(CFG.members).map(Number).filter(pid => !busy[pid]);
   const off = new Set(D.config.disabled || []);
@@ -1041,9 +1047,8 @@ function drawBuilder2() {
         ${b !== "ok" ? `<div class="rnotes"><span class="tag bad">⚠ ${b === "low" ? "under the minimum" : "over the ceiling"} - outside the band</span></div>` : cands.length ? "" : `<div class="rnotes"><span class="tag">no free member inside the band for this role</span></div>`}</div>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live" title="${started ? "Recruiting in Torn with members in it" : "Spawned in Torn, nobody has joined yet"}">${started ? "🎯 Recruiting" : "🆕 Available"} #${esc(c.id)}</span>
-        <span class="sr ${col(a)}" title="Weighted success of the members in it + the ones placed here">${a == null ? "-" : Math.round(a) + "%"}</span>
         <button class="s gold" data-b2fill="${esc(c.id)}" title="Fill the unfilled roles with the highest-rated free members inside the band">Fill</button></div>
-      <div class="tag">band ${tb2Min()}–${OPT.cap < 100 ? OPT.cap : 100}% · ${nIn}/${roles.length} in it${nPl ? ` · <b>${nPl}</b> placed here` : ""} · ${roles.length - nIn - nPl} unfilled${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}${off.has(c.name) ? ' · <span class="mid">switched off in Crimes</span>' : ""}</div>
+      <div class="tag">band ${tb2Min()}–${OPT.cap < 100 ? OPT.cap : 100}% · ${nIn}/${roles.length} in it${nPl ? ` · <b>${nPl}</b> placed here` : ""} · ${roles.length - nIn - nPl} unfilled${off.has(c.name) ? ' · <span class="mid">switched off in Crimes</span>' : ""}</div>
       <div class="tag">${payLine({kind: "live", crime: c.name, crime_id: c.id}, false)}</div>${rows}</div>`; };
   // unassigned = free and not placed on the board; do they fit any still-unfilled role inside its band?
   const openRoles = []; crimes.forEach(({c}) => (c.slots || []).forEach(sl => { if (!sl.user) openRoles.push([c, tb2Label(sl)]); }));
