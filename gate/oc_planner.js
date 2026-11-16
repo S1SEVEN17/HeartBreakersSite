@@ -678,16 +678,12 @@ export function ocPlan(X) {
     while (limit != null && pick.filter(Boolean).length > limit) { let w = -1; pick.forEach((b, k) => { if (b && (w < 0 || b.sc < pick[w].sc)) w = k; }); pick[w] = null; }
     for (;;) {
       if (!pick.some(Boolean)) return null;
-      // TARGET = STILL REACHABLE (Nov 16 2026, user: a 71% member was sent to an EMPTY copy of Leave No Trace instead of
-      // the one with a 66% member in it - together they average 68.6%, under the 70% target, so the part-filled crime
-      // refused him: "This spawned a new mission, instead of placing Alastik into the already-existing crime of the
-      // same type."). A part-filled crime is no longer judged on the members so far: the seats still empty count at the
-      // best they could be (the role cap, or 100% with the cap off), so a member is refused only when the target can no
-      // longer be reached however well the rest is filled. With every seat taken this is the real weighted average.
-      const best = O.cap < 100 ? O.cap : 100, used2 = new Map(pick.map((b, k) => [open[k], b]));
-      const all = roles.map((r, i) => r.pid != null ? r : used2.get(i) ? {position: r.position, pid: used2.get(i).pid, rate: used2.get(i).rate} : {position: r.position, pid: -1, rate: best});
-      const a = avgOf(all, c.name);
-      if (a != null && a >= TGT() && !(all.every(r => r.pid !== -1) && calcBad(all, c.name))) return pick;
+      // TARGET ON THE MEMBERS SO FAR. (A "still reachable" variant - empty seats counted at the role cap - was tried and
+      // REVERTED the same day, Nov 16 2026. User: "Revert that 'Fix.' It was actually working correctly. Alastik and
+      // Lando were both placed correctly." - a 71% member belongs in an empty copy of the crime, not beside a 66% member
+      // where the two average 68.6%, under the 70% target. Do not relax this check for part-filled crimes.)
+      const a = avgOf(fixed.concat(pick.map((b, k) => b ? {position: roles[open[k]].position, pid: b.pid, rate: b.rate} : null).filter(Boolean)), c.name);
+      if (a != null && a >= TGT()) return pick;
       let w = -1; pick.forEach((b, k) => { if (b && (w < 0 || b.rate < pick[w].rate)) w = k; }); pick[w] = null;   // drop the weakest new member
     }
   };
