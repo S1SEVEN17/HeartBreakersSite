@@ -2031,7 +2031,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            safeBack: Math.round(n(v.safeBack, 0, 336, 72)), safeProtect: v.safeProtect !== false,
            // 🔬 SHADOW SETTINGS (Nov 16 2026): only the Shadow plan reads these (see ocAutoPlan) - underperforming alert %,
            // lowest allowed % of a member's best pay (0 = off), hours ahead a crime counts as "pausing soon"
-           shAlert: Math.round(n(v.shAlert, 0, 100, 75)), shMin: Math.round(n(v.shMin, 0, 100, 50)), shPause: Math.round(n(v.shPause, 1, 72, 12))};
+           shAlert: Math.round(n(v.shAlert, 0, 100, 75)), shMin: Math.round(n(v.shMin, 0, 100, 50)), shPause: Math.round(n(v.shPause, 1, 72, 12)),
+           // LINE-UP (Nov 16 2026, user: no more all-or-nothing; fill "as planning opens up for each role"): how many
+           // members a crime may have lined up (still to plan + reserved) before it stops taking more. 0 = no limit.
+           lineUp: Math.round(n(v.lineUp, 0, 10, 2))};
     } else if (b.k === "contacted") {
       // (built above - the merged contact log)
     } else {
@@ -2787,7 +2790,8 @@ const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHo
   // 🛡 SAFEGUARDS (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings to the Team Builder
   // page under their own category"): on by default - see gate/oc_planner.js SAFEGUARDS ON THE LIVE PLAN TOO
   safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
-  shAlert: 75, shMin: 50, shPause: 12};                     // 🔬 Shadow settings (Shadow plan only)
+  shAlert: 75, shMin: 50, shPause: 12,                      // 🔬 Shadow settings (Shadow plan only)
+  lineUp: 2};                                               // LINE-UP (Nov 16 2026): members lined up per crime - gate/oc_planner.js
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':

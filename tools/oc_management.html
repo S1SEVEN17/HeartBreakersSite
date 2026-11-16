@@ -155,7 +155,7 @@ let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
 const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
   safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
-  shAlert: 75, shMin: 50, shPause: 12}, LS.get("hb_oc_opts", {}));   // sh* = 🔬 Shadow settings (Shadow plan only)
+  shAlert: 75, shMin: 50, shPause: 12, lineUp: 2}, LS.get("hb_oc_opts", {}));   // lineUp: members lined up per crime (Nov 16 2026)   // sh* = 🔬 Shadow settings (Shadow plan only)
 OPT.queueHours = 0; OPT.holdHours = 0;   // QUEUE + SPAWN HOLDS REMOVED (Nov 13 2026, user) - old saved values ignored
 OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
 delete OPT.chains;                // "Chain finals" option removed (Nov 12 2026) - prerequisite crimes are planned like any other
@@ -804,6 +804,7 @@ function drawBuilder() {
   const num0 = (id, k, hi) => $(id).onchange = () => { const v = Math.round(+$(id).value); OPT[k] = Number.isFinite(v) ? Math.max(0, Math.min(hi, v)) : 0; saveOpts(); draw(); };
   num0("o_sfg", "safeGain", 100); num0("o_sfc", "safeCooldown", 168); num0("o_sfb", "safeBack", 336);
   $("o_sf").onchange = () => { OPT.safeOn = $("o_sf").checked; saveOpts(); draw(); };
+  num0("o_line", "lineUp", 10);                            // ⏱ members lined up per crime (0 = no limit)
   // (the 🔬 Shadow rules settings went with the Shadow tab - replaced by 🧩 Team Builder v2, Nov 16 2026)
   $("o_sfp").onchange = () => { OPT.safeProtect = $("o_sfp").checked; saveOpts(); draw(); };
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
@@ -1080,7 +1081,7 @@ function settingsHtml() {
         ${nextHtml()}
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
-        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A team is only formed (and a recruiting crime only filled) when it reaches this. For a full team the Hub has checked, this is tornprobability's calculated success chance (🎲); otherwise the team's weighted success.")}
+        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "Members are only added to a crime while the members in it plus the new ones reach this (their weighted success). For a full team the Hub has checked, it is tornprobability's calculated success chance (🎲).")}
         ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), OPT.minZero == null ? "Nobody is put in a role they pass below this." : "The minimum for roles at or above the crime's average weight.")}
         ${row("Lowest rate for 0%-weight roles", `<input type="number" id="o_mz" min="0" max="100" value="${OPT.minZero ?? ""}" placeholder="off"> %`,
               OPT.minZero == null ? "Off - every role uses the lowest individual role. Set a value to let lighter roles (below the crime's average weight) go lower, in proportion to their weight; the team still has to reach the overall success."
@@ -1089,6 +1090,9 @@ function settingsHtml() {
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>
         ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the next best member gets it and they aren't put back into that crime. 0 = never.")}
+      </div>
+      <div class="sgrp"><h4>⏱ Filling crimes seat by seat</h4>
+        ${row("Members lined up per crime", numIn("o_line", OPT.lineUp ?? 2, 0, 10, "members"), "Planning runs one member at a time, 24 hours each. A crime only gets new members while fewer than this many are lined up (still to plan, or assigned and not joined yet). 2 = the one planning plus one ready behind them. 1 = strictly one at a time (the crime pauses until the next member joins). 0 = no limit: every open seat is filled at once.")}
       </div>
       <div class="sgrp"><h4>🛡 Safeguards (moving members)</h4>
         ${row("Safeguards", `<label><input type="checkbox" id="o_sf"${OPT.safeOn !== false ? " checked" : ""}> on</label>`,

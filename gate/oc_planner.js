@@ -9,6 +9,12 @@
 //     pass rates count. A crime is only filled when the whole crime (existing + new members) reaches the
 //     target average success (each new member >= the lowest-role %, role cap applies) - otherwise it's
 //     SKIPPED (left open, members go elsewhere). Best pay per day first.
+//     *** Nov 16 2026 (user) - "ALL OR NOTHING" IS GONE, crimes fill SEAT BY SEAT and JUST IN TIME: "Remove the 'All or
+//     *** Nothing' requirement. This is a BIG issue. Crimes should actually fill, preferably, as planning opens up for
+//     *** each role. Filling 6 slots, while slot 1 is still planning wastes everyones time until their turn."
+//     *** See SEAT BY SEAT / LINE-UP at fillRecruiting. The success target now applies to the members in the crime +
+//     *** the ones being added (weighted average), not to a complete team. Also the same day: a member in a FULL crime
+//     *** whose own planning hasn't started may be moved again (user's list: "Never: anyone whose planning has started").
 //   * Planning crimes: full - their members are busy until the crime pays out.
 //   * FILLED crimes leave the plan (Nov 11 2026, the user): once the last slot is taken in Torn the team is dropped
 //     (nothing left to plan); if a member then leaves, the open slot is filled again like any recruiting crime.
@@ -260,7 +266,10 @@ export function ocPlan(X) {
   // (Recruiting OR Planning: a crime that filled up and is planning again still has members waiting for their turn)
   // FULL CRIMES (Nov 13 2026, user: "If a crime is full, do not pull members from it."): a member in a crime with
   // every slot taken is never moved, planning started or not - only crimes with an open slot can lose a member
-  const idleIn = pid => { const b = busy.get(Number(pid)); return b && !b.full && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > (V2 && V2.moveHours > 0 ? Math.min(99, V2.moveHours / 24 * 100) : 0)) ? b.cid : null; };   // V2: under moveHours of planning
+  // (Nov 16 2026, user corrected the rule to "Never: anyone whose planning has started." - the FULL CRIMES exception
+  //  above is REMOVED: a member waiting in a full crime, planning not started, can be asked to move too. The 🛡
+  //  "Protect crimes that need them" safeguard, when on, still keeps them there - a full crime is the fullest.)
+  const idleIn = pid => { const b = busy.get(Number(pid)); return b && (b.status === "Recruiting" || b.status === "Planning") && !(b.prog > (V2 && V2.moveHours > 0 ? Math.min(99, V2.moveHours / 24 * 100) : 0)) ? b.cid : null; };   // V2: under moveHours of planning
   // ---- queue: members in a Planning crime that's ready within the window ----
   // QUEUE REMOVED (Nov 13 2026, user: "Remove the queue options"): members still in a crime are never queued for their
   // next one - QWIN is always 0 whatever opts.queueHours says (rotated crimes' join-order deadlines are separate)
@@ -656,7 +665,9 @@ export function ocPlan(X) {
   // V3 SEAT BY SEAT: the best member for each open seat (heaviest role first), kept only while the members in the crime
   // + the new ones reach the target on their weighted average. -> an array aligned with `open` (null = seat left open),
   // or null when nobody can be placed.
-  const v3Partial = (c, roles, open, fixed, pool) => {
+  // (Nov 16 2026: now the LIVE rule too - see SEAT BY SEAT / LINE-UP in fillRecruiting. `limit` = how many members may
+  //  be added at most; the lowest-scoring picks (script, then rate) are dropped first.)
+  const v3Partial = (c, roles, open, fixed, pool, limit) => {
     const used = new Set(), pick = open.map(() => null);
     const order = open.map((i, k) => k).sort((a, b) => wOf(c.name, roles[open[b]].position) - wOf(c.name, roles[open[a]].position));
     for (const k of order) { const pos = roles[open[k]].position; let b = null;
@@ -664,6 +675,7 @@ export function ocPlan(X) {
         if (!r || r.rate < floorOf(c.name, pos) || capped(p.pid, c.name, r.rate)) return;
         const sc = tier(p.pid, r.rate, false); if (!b || sc > b.sc) b = {pid: p.pid, rate: r.rate, src: r.src, sc}; });
       if (b) { pick[k] = b; used.add(b.pid); } }
+    while (limit != null && pick.filter(Boolean).length > limit) { let w = -1; pick.forEach((b, k) => { if (b && (w < 0 || b.sc < pick[w].sc)) w = k; }); pick[w] = null; }
     for (;;) {
       if (!pick.some(Boolean)) return null;
       const a = avgOf(fixed.concat(pick.map((b, k) => b ? {position: roles[open[k]].position, pid: b.pid, rate: b.rate} : null).filter(Boolean)), c.name);
@@ -722,15 +734,28 @@ export function ocPlan(X) {
       idleFrom.set(pid, {crime_id: xc.id, crime: xc.name, position: busy.get(pid).label}); movePool.push({pid, soft: false});
     }
     const pool = freePool().concat(softPool()).concat(movePool).filter(p => !nsBan.has(p.pid));
+    // SEAT BY SEAT + LINE-UP (Nov 16 2026, user - see the header): planning runs one member at a time, 24 h each, in
+    // join order, so a member put into a crime behind five others waits five days for their turn. A crime therefore
+    // only gets new members while fewer than opts.lineUp (default 2: the one planning + one ready behind them; 0 = no
+    // limit, fill every seat) are LINED UP = members in it who haven't finished planning + members reserved for it who
+    // haven't joined. `room` = how many more it may take now. The rest of its seats are filled on later runs, as each
+    // member finishes. A crime that can't take a full set is no longer skipped: the members who qualify are placed.
+    const LINE = Math.max(0, Math.round(Number(O.lineUp ?? 2)) || 0);
+    const linedUp = (c.slots || []).filter(sl => sl.user && (Number(sl.user.progress) || 0) < 100).length
+      + roles.filter(r => r.pid != null && !(c.slots || []).some(sl => sl.user && Number(sl.user.id) === Number(r.pid))).length;
+    const room = LINE ? Math.max(0, LINE - linedUp) : open.length;
+    if (!room && !ROT_ON.has(String(c.id))) { skip(c, "enough members lined up", {lined_up: linedUp}); continue; }
+    const seatBySeat = room < open.length && !ROT_ON.has(String(c.id));
     const k = payDayInst(c) / roles.length / 100;      // (unused for choice - pass rates never enter pay per day, Nov 13 2026)
     // CALCULATED SUCCESS: the whole crime with these new members (always full - every open slot is filled)
     const leafOk = pick => !calcBad(roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), c.name);
     let best = null;
     if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k, nsBan, leafOk);
-    if (!best) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
+    if (seatBySeat) best = v3Partial(c, roles, open, fixed, pool, room);   // fewer seats than are open: the best `room` members
+    if (!best && !seatBySeat) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool,
                            (p, rate) => tier(p.pid, rate, false), 20000, leafOk);   // MEMBER CHOICE
     // QUEUE: nobody free can fill it to the target -> let members finishing their crime soon in, as few as possible
-    if (!best && !ROT_ON.has(String(c.id))) {
+    if (!best && !seatBySeat && !ROT_ON.has(String(c.id))) {
       const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c) && !nsBan.has(p))
         .map(pid => ({pid, soft: false, q: true}));
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
@@ -739,14 +764,15 @@ export function ocPlan(X) {
     // V2: an urgent crime nobody can fill by the normal rules is tried once more, `slack` points under the target
     // and the role minimums (the pool, cap and member choice are the same)
     let usedSlack = 0;
-    if (!best && V2 && V2.slack > 0 && urgency(c) > 0 && !ROT_ON.has(String(c.id))) {
+    if (!best && !seatBySeat && V2 && V2.slack > 0 && urgency(c) > 0 && !ROT_ON.has(String(c.id))) {
       curSlack = V2.slack;
       best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool, (p, rate) => tier(p.pid, rate, false), 20000, leafOk);
       if (best) usedSlack = V2.slack;
       curSlack = 0;
     }
     // V3 SEAT BY SEAT: no full fill -> place the members who qualify, leave the other seats open (see the V3 header)
-    if (!best && V3 && !ROT_ON.has(String(c.id))) best = v3Partial(c, roles, open, fixed, pool);
+    // (live too since Nov 16 2026: every seat can't be filled at once -> the members who do qualify are placed)
+    if (!best && !seatBySeat && !ROT_ON.has(String(c.id))) best = v3Partial(c, roles, open, fixed, pool, room);
     if (!best) {                                           // can't reach the target: SKIPPED (left open)
       // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
       // free or queued, ignoring that one member can only take one slot); roles nobody can fill at all
