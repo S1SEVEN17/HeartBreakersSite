@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.55
+// @version      0.2.56
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.55';
+    const VERSION = '0.2.56';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -620,6 +620,7 @@
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
             /* 0.2.42 - ⛶ compact view (edge tab) */
             #hbs-launcher.hbs-cvhide{display:none !important;}
+            #hbs-panel .hbs-depm .hbs-cprn{flex:0 0 auto;width:auto;min-width:0;padding:2px 8px;margin:0;font-size:11px;} #hbs-panel .hbs-depm .nt{flex:1 0 100%;opacity:.7;font-size:11px;}
             #hbs-panel .hbs-pay2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:5px 0 3px;} #hbs-panel .hbs-pay2 div{background:rgba(0,0,0,.25);border-radius:7px;padding:5px 4px;text-align:center;}
             #hbs-panel .hbs-pay2 small{display:block;font-size:10px;opacity:.75;text-transform:uppercase;letter-spacing:.3px;} #hbs-panel .hbs-pay2 b{display:block;font-size:19px;color:#7CFC9A;}
             /* (0.2.48) 💩 dumping hits */
@@ -3848,12 +3849,34 @@
         let out = cwFold('data-ocshare', '📡', 'Sharing CPR rates', meta, open, false);
         if (!open) return out;
         if (!L) return out + `<div class="hbs-foldb"><div class="hbs-hint">${ocDep.busy ? 'Loading…' : ocDep.err ? esc(ocDep.err) : 'Not available right now.'}</div></div>`;
-        const row = (x, ok) => `<div class="hbs-depm"><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>
+        const NT = (ocDep.d && ocDep.d.cpr_notified) || {};
+        const noScr = x => !x.sharing && !x.off && !x.script;
+        const noteOf = x => { const n = NT[String(x.pid)]; return n && n.ts ? `<small class="nt">notified ${ago(Math.floor(num(n.ts) / 1000))}${n.by ? ' by ' + esc(n.by) : ''}</small>` : ''; };
+        const row = (x, ok) => `<div class="hbs-depm"><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>${!ok && noScr(x) ? `<button type="button" class="hbs-btn hbs-cprn" data-cprnote="${num(x.pid)}" data-name="${esc(x.name)}" title="Open a Torn mail to ${esc(x.name)} with the Suite's install link filled in - you press Send">✉ Notify</button>` : ''}
             <span class="s ${ok ? 'ok' : 'no'}">${ok ? (x.last ? '✓ ' + ago(Math.floor(num(x.last) / (num(x.last) > 1e12 ? 1000 : 1))) : '✓ sharing')
-                : x.off ? '✕ script running · sharing off' : x.script ? '… script running · no rates yet' : '✕ no script'}</span></div>`;
+                : x.off ? '✕ script running · sharing off' : x.script ? '… script running · no rates yet' : '✕ no script'}</span>${!ok && noScr(x) ? noteOf(x) : ''}</div>`;
         return out + `<div class="hbs-foldb"><div class="hbs-hint">Members whose script (or opt-in key) sends their checkpoint pass rates to the Hub, so the planner can seat them in roles they pass. Rates themselves aren't shown. The time is when their script last checked (every few minutes while it runs).</div>
             <div class="hbs-sec">Sharing · ${yes.length}</div>${yes.length ? yes.map(x => row(x, true)).join('') : '<div class="hbs-hint">Nobody yet.</div>'}
             <div class="hbs-sec">Not sharing · ${no.length}</div>${no.length ? no.map(x => row(x, false)).join('') : '<div class="hbs-hint">✅ Everyone shares.</div>'}</div>`;
+    }
+    const SUITE_GF = 'https://greasyfork.org/en/scripts/605562-heart-breakers-suite';
+    const INVITE_DEFAULT = {
+        subject: 'Please install the Heart Breakers Suite',
+        mail: 'Hi {name},\n\nHeart Breakers now runs on one script: the **Heart Breakers Suite**. It shows your Organized Crime assignment, Chain Watch and more, and shares your OC pass rates with the Hub so leaders can seat you in the roles you pass best.\n\n'
+            + 'Please install it here: [Heart Breakers Suite]({scripts})\n\nThanks! 💗' };
+    async function cprNotify(pid, name) {
+        const T = (ocDep.d && ocDep.d.invite_tpl) || {};
+        const fill = t => String(t).replace(/\{(name|scripts|hub)\}/g, (m, k) => k === 'name' ? String(name || '') : k === 'scripts' ? SUITE_GF : HUB_BASE + '/m/');
+        const md = fill(T.mail || INVITE_DEFAULT.mail), subject = mdPlain(fill(T.subject || INVITE_DEFAULT.subject));
+        const html = mdHtml(md), text = mdPlain(md);
+        store.set(K.mailFill, { pid: Number(pid), subject, html, text, at: Date.now() });
+        await copyRich(html, text).catch(() => false);
+        // [HB Suite] Hub API — op "cprnote": record that you notified this member (leaders; shown to every leader)
+        hub('cprnote', { pid: Number(pid) }).then(r => { if (ocDep.d) { ocDep.d.cpr_notified = ocDep.d.cpr_notified || {}; ocDep.d.cpr_notified[String(pid)] = { ts: (r && r.ts) || Date.now(), by: (r && r.by) || (me && me.name) || '' }; }
+            if (!collapsed && tab === 'oc') render(true); }, () => {});
+        toast('Opening the mail - subject and message are filled in; check it and press Send. (Also copied.)', true);
+        const url = `https://www.torn.com/messages.php#/p=compose&XID=${Number(pid)}`;
+        const w = window.open(url, '_blank'); if (!w) location.href = url;
     }
     const DEP_ST = { needs_spawn: ['needs spawning', 'hbs-red'], recruiting: ['recruiting', 'hbs-green'], spawned: ['spawned', ''] };
     async function ocDeployedHtml() {
@@ -3891,6 +3914,7 @@
         const rs = bodyEl.querySelector('[data-loanreset]'); if (rs) rs.addEventListener('click', () => { if (confirm('Show every ignored loan again?')) { store.set(K.loanIgn, []); render(true); } });
         const rf = bodyEl.querySelector('[data-loanref]'); if (rf) rf.addEventListener('click', loanRefresh);
         const dp = bodyEl.querySelector('[data-ocdep]'); if (dp) dp.addEventListener('click', () => { const o = !ocDepOpen(); store.set(K.ocDepOpen, o); if (o) ocDep.at = 0; render(true); });
+        bodyEl.querySelectorAll('[data-cprnote]').forEach(b => b.addEventListener('click', e => { e.preventDefault(); cprNotify(b.dataset.cprnote, b.dataset.name); }));
         const sh = bodyEl.querySelector('[data-ocshare]'); if (sh) sh.addEventListener('click', () => { const o = !ocShareOpen(); store.set(K.ocShareOpen, o); if (o && !ocDep.d) ocDep.at = 0; render(true); });
     }
     async function loanRefresh() {
