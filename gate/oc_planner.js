@@ -170,7 +170,9 @@ export function ocPlan(X) {
   for (const c of inst.values()) if (c.status === "Planning" && c.ready_at)
     for (const sl of c.slots || []) if (sl.user) freeAt.set(Number(sl.user.id), c.ready_at * 1000);
   const queueable = pid => QWIN > 0 && freeAt.has(Number(pid)) && freeAt.get(Number(pid)) <= NOW + QWIN;   // 0 h = queue off
-  const beforeExpiry = (pid, c) => !c || !c.expired_at || freeAt.get(Number(pid)) < c.expired_at * 1000;
+  // (Nov 15 2026, user: "Once a user is queued, the crime will not expire.") a crime that already has a member in it
+  // no longer expires, so its expiry date doesn't limit who can be lined up for it
+  const beforeExpiry = (pid, c) => !c || !c.expired_at || (c.slots || []).some(sl => sl.user) || freeAt.get(Number(pid)) < c.expired_at * 1000;
   // can this member be planned here? free now, or queueable (and free before the live crime `c` expires)
   const usable = (pid, c) => !busy.has(Number(pid)) || (queueable(pid) && beforeExpiry(pid, c)) || rotOk(pid, c);
   // ROTATION REMOVED (Nov 13 2026, user: "remove rotation crimes altogether. Crimes should be on a "as available"
@@ -362,10 +364,26 @@ export function ocPlan(X) {
   // ---- 2. spawn teams whose crime is now recruiting -> into that crime's open slots ----
   for (let ti = 0; ti < teams.length; ti++) {
     const t = teams[ti];
-    if (t.kind !== "spawn" || t.lock) continue;
-    const c = [...inst.values()].find(x => x.name === t.crime && x.status === "Recruiting" && !claimed.has(String(x.id)) && (x.slots || []).some(sl => !sl.user));
+    if (t.kind !== "spawn" || t._gone) continue;
+    // LOCKED SPAWN TEAMS BIND TOO (Nov 15 2026, user: "this crime is already spawned and I am already part of it. Why
+    // is the assigned mission saying 'Waiting for this crime to be spawned'??"): a locked team used to stay "to spawn"
+    // for ever. Now it moves into its crime once Torn has it recruiting - the instance one of its members has already
+    // joined comes first; if the planner had made its own (unlocked) team for that instance, the locked team takes it
+    // over. It stays locked, and keeps every member a leader placed (busy ones too - see LOCKED TEAMS KEEP BUSY MEMBERS).
+    let c = null;
+    if (t.lock) {
+      const mine = new Set(t.roles.filter(r => r.pid != null).map(r => Number(r.pid)));
+      const rec = [...inst.values()].filter(x => x.name === t.crime && x.status === "Recruiting");
+      const lockedHas = id => teams.some(x => x !== t && !x._gone && x.lock && x.crime_id != null && String(x.crime_id) === String(id));
+      c = rec.find(x => !lockedHas(x.id) && (x.slots || []).some(sl => sl.user && mine.has(Number(sl.user.id))))
+        || rec.find(x => !claimed.has(String(x.id)) && (x.slots || []).some(sl => !sl.user));
+      if (c && claimed.has(String(c.id))) teams.forEach(x => {                 // the planner's own team for it: released
+        if (x !== t && !x._gone && !x.lock && x.crime_id != null && String(x.crime_id) === String(c.id)) {
+          x._gone = true; (x.roles || []).forEach(r => { if (r.pid != null && !r.existing) assigned.delete(Number(r.pid)); }); } });
+    } else c = [...inst.values()].find(x => x.name === t.crime && x.status === "Recruiting" && !claimed.has(String(x.id)) && (x.slots || []).some(sl => !sl.user));
     if (!c) continue;
-    const want = t.roles.filter(r => r.pid != null && usable(r.pid, c));
+    const inC = new Set((c.slots || []).filter(sl => sl.user).map(sl => Number(sl.user.id)));
+    const want = t.roles.filter(r => r.pid != null && !inC.has(Number(r.pid)) && (t.lock || usable(r.pid, c)));
     const roles = (c.slots || []).map(sl => {
       const label = slotLabel(sl);
       if (sl.user) { const pid = Number(sl.user.id);
@@ -377,9 +395,10 @@ export function ocPlan(X) {
       return {position: label, pid: Number(r.pid), name: nameOf(r.pid), rate: rr.rate, src: rr.src};
     });
     want.forEach(r => assigned.delete(Number(r.pid)));       // members with no matching open role go back to the pool
-    teams[ti] = {id: t.id, crime: c.name, difficulty: c.difficulty ?? t.difficulty, kind: "live", crime_id: c.id, lock: false, roles};
+    teams[ti] = {id: t.id, crime: c.name, difficulty: c.difficulty ?? t.difficulty, kind: "live", crime_id: c.id, lock: !!t.lock, roles};
     claimed.add(String(c.id));
   }
+  for (let i = teams.length - 1; i >= 0; i--) if (teams[i]._gone) teams.splice(i, 1);   // teams a locked team took over
 
   // ---- B&B: best members for some open slots of one crime ----
   //   slots [{label}], fixedSum / n = the rates already in the crime; pool = [{pid, soft}] (soft = in a spawn team)
