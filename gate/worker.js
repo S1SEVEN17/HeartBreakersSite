@@ -2261,6 +2261,30 @@ async function ocFeedWrite(env, body, id) {
 // BACKUP: ocFeedPull (the Hub's own key, every 3 minutes) is unchanged - with no feeder online nothing is lost, and
 // every 3 minutes the Hub's own reading replaces whatever a script sent (cross-check).
 // Counts only in logs. Nothing here ever sees a Torn key.
+// ⚡ INSTANT JOIN / LEAVE REPORTS (Nov 16 2026, user: "Build the instant join/leave reports and send them to the hub for
+// members with the Suite."): {do:"me", crime} - a member's Suite saw them press a button on Torn's crimes page and read
+// THEIR OWN crime (v2 user/organizedcrime, own key, on the device). crime = the crime they're in now (must hold their
+// id in a slot; same checks as an upload) or null (in no crime). The Hub patches the shared crime list at once: the
+// member is taken out of every other slot, their crime is replaced by the reported one - then plans + pings like an
+// upload. Kept for OC_ME_KEEP_MS in oc_snap hub 'feed:me' {pid: {at, crime}} and re-applied (ocApplyMe) to feeder
+// uploads and the Hub's own pull, because Torn answers those from a cache that can be up to ~30 s behind and would
+// otherwise undo the report for a minute. One report per member per OC_ME_GAP_MS. Any member - no faction access needed.
+const OC_ME_KEEP_MS = 90 * 1000, OC_ME_GAP_MS = 8 * 1000;
+function ocApplyMe(crimes, me, now) {
+  let n = 0;
+  for (const [pid, r] of Object.entries(me || {})) {
+    if (!r || now - Number(r.at) > OC_ME_KEEP_MS) continue;
+    const cid = r.crime ? Number(r.crime.id) : 0;
+    for (const c of crimes) if (Number(c.id) !== cid) for (const sl of c.slots || [])
+      if (sl.user && Number(sl.user.id) === Number(pid)) { sl.user = null; n++; }
+    if (r.crime) { const i = crimes.findIndex(c => Number(c.id) === cid);
+      // the list's own copy wins once it shows the member in that crime (it then carries everyone's newest progress)
+      if (i < 0) { crimes.push(r.crime); n++; }
+      else if (!(crimes[i].slots || []).some(sl => sl.user && Number(sl.user.id) === Number(pid))) { crimes[i] = r.crime; n++; } }
+  }
+  return n;
+}
+const ocMeGet = async env => (((await ocSnapGet(env, "hub", "feed:me").catch(() => null)) || {}).data) || {};
 const OC_FEED_EVERY_S = 60;                   // how often the feeder reads Torn
 const OC_FEED_LEASE_MS = 150 * 1000;          // a feeder that hasn't answered for this long has lost the job
 const ocCrimeSig = crimes => ocHash(JSON.stringify((crimes || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning"))
@@ -2274,6 +2298,7 @@ async function ocFeedSx(env, ctx, who, b) {
   const lease = (sig, at) => env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'feed:lease', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data")
     .bind(at, JSON.stringify({pid, name: String(who.name || "").slice(0, 40), sig: sig || null}));
+  if (what === "me") return ocFeedMe(env, ctx, who, b, now);
   if (what === "stop") { if (held === pid) await lease(ls.data.sig, 0).run(); return {ok: true, feed: false}; }
   if (held && held !== pid) return {ok: true, feed: false, every: OC_FEED_EVERY_S};
   if (what !== "put") { await lease(ls && ls.data && Number(ls.data.pid) === pid ? ls.data.sig : null, now).run(); return {ok: true, feed: true, every: OC_FEED_EVERY_S}; }
@@ -2290,7 +2315,9 @@ async function ocFeedSx(env, ctx, who, b) {
     await lease(ls && ls.data ? ls.data.sig : null, now).run();
     return {ok: true, feed: true, dropped: true, every: OC_FEED_EVERY_S};
   }
-  const cl = crimes.map(ocFeedCleanCrime), sig = ocCrimeSig(cl), txt = JSON.stringify(cl);
+  const cl = crimes.map(ocFeedCleanCrime);
+  ocApplyMe(cl, await ocMeGet(env), now);                    // ⚡ members' own reports from the last 90 s stay in
+  const sig = ocCrimeSig(cl), txt = JSON.stringify(cl);
   const by = `${String(who.name || "").slice(0, 40)} [${pid}]`;
   const changed = !(ls && ls.data && ls.data.sig === sig);
   await env.OC_DB.batch([ocSnapPut(env, "prod", "crimes", now, txt, by), ocSnapPut(env, "test", "crimes", now, txt, by), lease(sig, now)]);
@@ -2302,6 +2329,41 @@ async function ocFeedSx(env, ctx, who, b) {
     if (changed) try { await ocAssignPings(env, cl); } catch (e) { console.log("oc feed: pings failed"); }
   })());
   return {ok: true, feed: true, changed, every: OC_FEED_EVERY_S};
+}
+async function ocFeedMe(env, ctx, who, b, now) {
+  const pid = Number(who.id), all = await ocMeGet(env);
+  if (all[pid] && now - Number(all[pid].at) < OC_ME_GAP_MS) return {ok: true, throttled: true};
+  let crime = b.crime == null ? null : b.crime;
+  if (crime) {
+    const cat = await ocSnapGet(env, "prod", "catalog");
+    const names = new Set(((cat && cat.data && cat.data.organizedcrimes) || []).map(c => c && c.name).filter(Boolean));
+    const ok = typeof crime === "object" && Number(crime.id) > 0 && typeof crime.name === "string" && crime.name.length <= 60 && (!names.size || names.has(crime.name))
+      && Array.isArray(crime.slots) && crime.slots.length <= 10 && crime.slots.every(s => s && typeof s === "object" && (!s.user || Number(s.user.id) > 0))
+      && crime.slots.some(s => s.user && Number(s.user.id) === pid) && JSON.stringify(crime).length < 20000;
+    if (!ok) return {ok: true, dropped: true};
+    if (crime.status !== "Recruiting" && crime.status !== "Planning") crime = null;      // finished: simply not in an open crime
+    else crime = ocFeedCleanCrime(crime);
+  }
+  const cur = await ocSnapGet(env, "prod", "crimes");
+  const cl = cur && Array.isArray(cur.data) ? cur.data : null;
+  for (const k of Object.keys(all)) if (now - Number(all[k].at) > OC_ME_KEEP_MS) delete all[k];
+  all[pid] = {at: now, crime};
+  const ops = [env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'feed:me', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(all))];
+  let changed = false;
+  if (cl) {
+    const before = ocCrimeSig(cl);
+    ocApplyMe(cl, {[pid]: all[pid]}, now);
+    changed = ocCrimeSig(cl) !== before;
+    if (changed) { const txt = JSON.stringify(cl), by = `${String(who.name || "").slice(0, 40)} [${pid}] (own crime)`;
+      ops.push(ocSnapPut(env, "prod", "crimes", now, txt, by), ocSnapPut(env, "test", "crimes", now, txt, by)); }
+  }
+  await env.OC_DB.batch(ops);
+  if (changed) ctx.waitUntil((async () => {
+    try { await ocAutoPlan(env, cl, now); } catch (e) { console.log("oc me: plan failed"); }
+    try { await ocAssignPings(env, cl); } catch (e) { console.log("oc me: pings failed"); }
+  })());
+  return {ok: true, changed};
 }
 
 // ---- the Hub's own pull (timer, every 3 min) ----
@@ -2315,6 +2377,7 @@ async function ocTorn(env, path) {
   if (d && d.error) throw new Error("torn " + d.error.code);
   return d;
 }
+let NOW_MEMBERS_BAD = 0;
 async function ocFeedPull(env) {
   if (!env.OC_DB || !env.HUB_TORN_KEY) return;
   const now = Date.now(), ENVS = ["prod", "test"];
@@ -2331,11 +2394,12 @@ async function ocFeedPull(env) {
   const fail = (step, e) => errs.push(step + ": " + String((e && e.message) || e).slice(0, 60));
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
-  let newHist = false, crimesNow = null, newPrices = false;
+  let newHist = false, crimesNow = null, newPrices = false, rosterNow = false, rosterSeen = false;
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
     const cl = (d.crimes || []).map(ocFeedCleanCrime);
+    try { ocApplyMe(cl, await ocMeGet(env), now); } catch (e) { fail("me", e); }   // ⚡ members' own join / leave reports (last 90 s)
     put("crimes", cl);
     try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
     crimesNow = cl;
@@ -2358,15 +2422,35 @@ async function ocFeedPull(env) {
   // ranked war and chain, one call every run -> oc_snap 'hub' 'now' (served by /m/now.json)
   try {
     // API: Heart Breakers Hub - Right now (faction chain + wars, one call)
-    const d = await ocTorn(env, "faction?selections=chain,wars");
+    // ROSTER WITH THE SAME CALL (Nov 16 2026, user: "Roster refresh can happen more regularly with other calls where
+    // possible."): `members` is asked for in the same request, so the roster is as fresh as Right now (every run)
+    // at no extra call. If Torn refuses the combined request the old two-call way is used and the combined one is
+    // not tried again for 6 hours (NOW_MEMBERS_BAD, per Worker instance).
+    let d = null;
+    if (now - NOW_MEMBERS_BAD > 6 * 3600e3) {
+      try { d = await ocTorn(env, "faction?selections=chain,wars,members"); if (!d.members) throw new Error("no members in the answer"); }
+      catch (e) { NOW_MEMBERS_BAD = now; d = null; fail("now+members", e); }
+    }
+    if (!d) d = await ocTorn(env, "faction?selections=chain,wars");
     ops.push(ocSnapPut(env, "hub", "now", now, JSON.stringify({chain: d.chain || null, wars: d.wars || null}), "hub"));
+    if (d.members) {
+      const out = {};
+      (Array.isArray(d.members) ? d.members : Object.values(d.members)).forEach(m => { if (m && m.id) out[String(m.id)] = String(m.name || ""); });
+      if (Object.keys(out).length >= 5) {
+        // stored only when it CHANGED (a join, a leave, a new name) - an unchanged roster keeps its date, so scripts
+        // don't download it again and the summaries aren't rebuilt every run; the hourly call is skipped either way
+        const old = await ocSnapGet(env, "prod", "roster").catch(() => null);
+        const same = old && old.data && JSON.stringify(Object.entries(old.data).sort()) === JSON.stringify(Object.entries(out).sort());
+        if (same) { mark("roster"); rosterSeen = true; } else { put("roster", out); rosterNow = true; }
+      }
+    }
   } catch (e) { fail("now", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
   try { await ocShareAllOn(env, now); } catch (e) { fail("oc-share-all-on", e); }
   // roster - hourly (1 call)
-  let newRoster = false;
-  if (due("roster")) try {
+  let newRoster = rosterNow;
+  if (!rosterNow && !rosterSeen && due("roster")) try {
     const d = await ocTorn(env, "faction/members");
     const out = {};
     (Array.isArray(d.members) ? d.members : Object.values(d.members || {})).forEach(m => { if (m && m.id) out[String(m.id)] = String(m.name || ""); });
