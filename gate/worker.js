@@ -2775,8 +2775,13 @@ async function ocMine(env, pid) {
     const id = String(c.id), m = Number(mult[id]) || 0, d = Number(days[id]) || 0, j = Number(sl && sl.user && sl.user.joined_at) || 0;
     if (!(m > 0) || !(d > 0) || !j) return Object.assign({}, base, {join_now: false});
     const typeDays = m * d, down = Math.max(0, typeDays - ((c.slots || []).length || 1)), nowS = Date.now() / 1000;
-    const toReady = Number(c.ready_at) > 0 ? (Number(c.ready_at) - nowS) / 86400 : Math.max(0, d - down);
-    const mine = Math.max(1, toReady + Math.max(0, nowS - j) / 86400 + down), k = typeDays / mine;
+    // FIX (Nov 15 2026, user: a Recruiting crime 1/4 filled showed $24.5m against a normal $6.1m): Torn's ready_at on
+    // a crime that still has OPEN seats only covers the members already in it - each empty seat adds its own planning
+    // day - so it can't be used as the payout time. For a crime with open seats the planner's own figure is used
+    // (days = from now until it pays out, open seats and downtime included); ready_at only once every seat is taken.
+    const full = (c.slots || []).length > 0 && (c.slots || []).every(x => x && x.user);
+    const fromNow = full && Number(c.ready_at) > 0 ? Math.max(0, (Number(c.ready_at) - nowS) / 86400) + down : d;
+    const mine = Math.max(1, fromNow + Math.max(0, nowS - j) / 86400), k = typeDays / mine;
     return {pay_day: Math.round(base.normal * k), pay_day_min: pmin[c.name] != null ? Math.round(pmin[c.name] * k) : null, normal: base.normal,
             join_now: false, est: true, yours: true, days: base.days, your_days: Math.round(mine * 10) / 10};
   };
