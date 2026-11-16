@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.51
+// @version      0.2.53
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,9 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.53 (Nov 15 2026) - 💩 Dumping: the red STOP banner now goes away when the chain ends (it used to stay up).
+ *  v0.2.52 (Nov 15 2026) - 🧰 Loans: Retrieve / the Armoury link open
+ *          factions.php?step=your&type=1#/tab=armoury&sub=utilities&start=0 (the address the user gave).
  *  v0.2.51 (Nov 15 2026) - ✉ OC Notify: the message's script tip now names the Heart Breakers Suite and links to its
  *          Greasy Fork page ({scripts} fills in that link). User: "All references to [the OC and Chain watching
  *          scripts] should now link to the Suite." Keep in step with OC Management's NOTIFY_DEFAULT / SUITE_URL.
@@ -386,7 +389,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.51';
+    const VERSION = '0.2.53';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -4522,7 +4525,10 @@
         const d = dmMine(), S = dmGet();
         if (d && d.st === 'on') { const done = Math.max(num(d.done), num(S.done));
             return `<div class="hbs-dmline"><span>💩 <b>${int(done)} / ${int(d.allow)}</b></span><i><em style="width:${Math.min(100, Math.round(done / Math.max(1, num(d.allow)) * 100))}%"></em></i><small>stop at ${int(d.stop_at)}</small></div>`; }
-        if ((d && d.st === 'stopped') || dm.stop) return `<div class="hbs-dmstop"><b>STOP · bonus protected</b><span>${esc((dm.stop && dm.stop.text) || S.stopText || `Hits before the bonus at ${int((d || {}).bonus)} are reserved.`)}</span><small>You'll be told when dumping opens again.</small></div>`;
+        // (0.2.53 FIX, user: "This 'Dump' alert never disappears when the chain dies.") the STOP banner only shows while
+        // the Hub still lists you as a dumper - when the chain ends (or the bonus is taken) the Hub drops that and the
+        // banner goes with it; before, a STOP remembered by the script stayed up for ever
+        if (d && (d.st === 'stopped' || dm.stop)) return `<div class="hbs-dmstop"><b>STOP · bonus protected</b><span>${esc((dm.stop && dm.stop.text) || S.stopText || `Hits before the bonus at ${int((d || {}).bonus)} are reserved.`)}</span><small>You'll be told when dumping opens again.</small></div>`;
         if (dm.offer) return `<div class="hbs-dmline"><span>Dump <b>${int(dm.offer.allow)} hit${num(dm.offer.allow) === 1 ? '' : 's'}</b> · stop at ${int(dm.offer.stop_at)}</span><button type="button" class="hbs-btn" data-dm="start">Start</button><button type="button" class="hbs-btn hbs-ghost" data-dm="cancel" title="Cancel">✕</button></div>`;
         if (dm.asking) return `<div class="hbs-dmline"><span>Asking the Hub…</span></div>`;
         if (dm.msg) return `<div class="hbs-dmline"><span>💩 ${esc(dm.msg)}</span><button type="button" class="hbs-btn hbs-ghost" data-dm="cancel" title="Dismiss">✕</button></div>`;
@@ -4567,7 +4573,10 @@
             if (!me || !modOn('chain')) return;
             const d = dmMine(), S = dmGet();
             if (d && (d.st !== S.st || S.cover !== (dmCfg().dumpCover !== false))) dmSet({ st: d.st, bonus: num(d.bonus), buffer: num(dmCfg().dumpBuffer), cover: dmCfg().dumpCover !== false });                       // mirror for the next page load
-            if (!d && cw.state && S.st && !dm.asking) store.set(K.cwDump, null);                    // the Hub no longer lists us as dumping
+            if (!d && cw.state && !dm.asking) {                                                     // the Hub no longer lists us as dumping
+                if (S.st) store.set(K.cwDump, null);
+                if (dm.stop) { dm.stop = null; cwShow(); }                                          // (0.2.53) chain over / bonus taken: STOP banner off
+            }
             if (d && d.st === 'on') {
                 const cur = num(cwChain().current), last = num(S.last);
                 if (cur > last) {
@@ -4744,7 +4753,7 @@
         out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🧰 Loans</span></div>
             ${chips('loanv', [['toloan', `To loan · ${missing.length}`], ['unused', `Unused loans${C.unused ? ' · ' + unused.length : ''}`]], loanView)}
             <div class="hbs-hint">${onArm ? `You're on the Armoury: rows to <b style="color:#7cfc9a">loan</b> / <b style="color:#ff7a70">retrieve</b> are outlined. Loan opens Torn's form with the member filled in, Retrieve opens Torn's confirm - you press Torn's own LOAN / Yes.`
-                : `Open your faction <a href="https://www.torn.com/factions.php?step=your#/tab=armoury&sub=utilities">Armoury → Utilities</a>, then press Loan / Retrieve here to jump to the row.`}</div>`;
+                : `Open your faction <a href="https://www.torn.com/factions.php?step=your&type=1#/tab=armoury&sub=utilities&start=0">Armoury → Utilities</a>, then press Loan / Retrieve here to jump to the row.`}</div>`;
         if (loanView === 'toloan') out += missing.length ? missing.map(m => `<div class="hbs-li"><span><b>${esc(m.item || '#' + m.item_id)}</b> → ${pl(m.pid, m.name)}
                 <br><span style="opacity:.75">${esc(m.crime)} #${esc(m.crime_id)} · ${esc(m.position)} · ${esc(m.status)}</span></span>
                 <button type="button" class="hbs-btn" data-loan="loan" data-iid="${m.item_id}" data-pid="${m.pid}" data-name="${esc(m.name)}">Loan</button></div>`).join('')
@@ -4901,12 +4910,13 @@
     // to the loaned copy and pulses it - that tap's one action is the navigation, so Torn's Retrieve is NOT pressed;
     // tap Retrieve again for that. Every Retrieve tap also switches "Hide loaned items" off (K.armHide), since a hidden
     // row can't be seen or retrieved.
-    const ARM_UTIL = '#/tab=armoury&sub=utilities';
+    // (0.2.52, user: "Needs to link: https://www.torn.com/factions.php?step=your&type=1#/tab=armoury&sub=utilities&start=0")
+    const ARM_UTIL = '#/tab=armoury&sub=utilities&start=0';
     function armGoRetrieve(iid, pid) {
         toast('Opening Armoury → Utilities - tap Retrieve again once the item is highlighted.', true);
         if (/factions\.php/.test(location.pathname) && /step=your/.test(location.search)) location.hash = ARM_UTIL;   // Torn's own tab switch
         else { try { sessionStorage.setItem('hbs_arm_go', JSON.stringify({ iid, pid, at: Date.now() })); } catch (e) { /* */ }
-            location.href = 'https://www.torn.com/factions.php?step=your' + ARM_UTIL; return; }
+            location.href = 'https://www.torn.com/factions.php?step=your&type=1' + ARM_UTIL; return; }
         armFindLoaned(iid, pid, 0);
     }
     function armFindLoaned(iid, pid, n) {
