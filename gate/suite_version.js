@@ -6,5 +6,5 @@
 //   SUITE_LATEST   - the version just published (Greasy Fork gets it from the same push).
 //   SUITE_REQUIRED - "" or the lowest version members must run: older Suites show a red "Update required" banner
 //                    that can't be dismissed. Only set when the user says so (Claude prompts on major updates).
-export const SUITE_LATEST = "0.2.53";
+export const SUITE_LATEST = "0.2.54";
 export const SUITE_REQUIRED = "";
