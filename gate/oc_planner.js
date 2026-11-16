@@ -191,6 +191,14 @@ export function ocPlan(X) {
   //   Unchanged: role minimums, team target, the role cap, never moving a member whose planning has started, and the
   //   move safeguards (the Team Builder's 🛡 numbers).
   // =====================================================================================================
+  //   7. SEAT BY SEAT (Nov 16 2026, user's answer 5 "Remove that rule. When members join a high tier crime, the Join Now
+  //      pay per day will begin to increase for new joins" + "This crime already exists. Why are players not being put
+  //      into it?" - a 1/6 Stage Fright with two qualifying members waiting): today's rules only fill a crime when EVERY
+  //      open seat can be filled and the whole team reaches the target; otherwise it is skipped and nobody is placed.
+  //      Under V3, when that all-seats fill fails, the members who do qualify are placed anyway (v3Partial): heaviest
+  //      role first, best member each (script, then rate), as long as the weighted average of the members in it + the
+  //      new ones still reaches the target (the weakest new member is dropped until it does). Seats nobody qualifies
+  //      for stay open.
   //   6. DROP CAP (Nov 16 2026, user: "Cap how low someone can drop to 50%"): however long a member has waited, they are
   //      never placed in a crime that pays them (join now) under minFloor x their BEST crime's pay per day (rung 0).
   const V3 = X.v3 && typeof X.v3 === "object" ? {minFloor: (Number(X.v3.minFloor) || 50) / 100, floor: (Number(X.v3.floor) || 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
@@ -621,6 +629,24 @@ export function ocPlan(X) {
     }
     return null;
   }
+  // V3 SEAT BY SEAT: the best member for each open seat (heaviest role first), kept only while the members in the crime
+  // + the new ones reach the target on their weighted average. -> an array aligned with `open` (null = seat left open),
+  // or null when nobody can be placed.
+  const v3Partial = (c, roles, open, fixed, pool) => {
+    const used = new Set(), pick = open.map(() => null);
+    const order = open.map((i, k) => k).sort((a, b) => wOf(c.name, roles[open[b]].position) - wOf(c.name, roles[open[a]].position));
+    for (const k of order) { const pos = roles[open[k]].position; let b = null;
+      pool.forEach(p => { if (used.has(p.pid)) return; const r = rateOf(p.pid, c.name, pos);
+        if (!r || r.rate < floorOf(c.name, pos) || capped(p.pid, c.name, r.rate)) return;
+        const sc = tier(p.pid, r.rate, false); if (!b || sc > b.sc) b = {pid: p.pid, rate: r.rate, src: r.src, sc}; });
+      if (b) { pick[k] = b; used.add(b.pid); } }
+    for (;;) {
+      if (!pick.some(Boolean)) return null;
+      const a = avgOf(fixed.concat(pick.map((b, k) => b ? {position: roles[open[k]].position, pid: b.pid, rate: b.rate} : null).filter(Boolean)), c.name);
+      if (a != null && a >= TGT()) return pick;
+      let w = -1; pick.forEach((b, k) => { if (b && (w < 0 || b.rate < pick[w].rate)) w = k; }); pick[w] = null;   // drop the weakest new member
+    }
+  };
   const fillOrder = new Map(recruiting.map((c, i) => [String(c.id), i]));   // V2: this crime's place in the fill order
   const fillRecruiting = () => { for (const c of recruiting) {
     curPaused = paused(c);                                 // PAUSED CRIMES: cap maxed for this crime (reset below)
@@ -695,6 +721,8 @@ export function ocPlan(X) {
       if (best) usedSlack = V2.slack;
       curSlack = 0;
     }
+    // V3 SEAT BY SEAT: no full fill -> place the members who qualify, leave the other seats open (see the V3 header)
+    if (!best && V3 && !ROT_ON.has(String(c.id))) best = v3Partial(c, roles, open, fixed, pool);
     if (!best) {                                           // can't reach the target: SKIPPED (left open)
       // the gap: the average the new members would need vs the best possible (each open slot's best candidate,
       // free or queued, ignoring that one member can only take one slot); roles nobody can fill at all
@@ -708,6 +736,7 @@ export function ocPlan(X) {
       continue;
     }
     best.forEach((b, k) => {
+      if (!b) return;                                      // V3 seat by seat: this seat stays open
       const i = open[k];
       roles[i] = {position: roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src};
       if (idleFrom.has(b.pid)) roles[i].leave = idleFrom.get(b.pid);   // must leave the crime they're idle in first
