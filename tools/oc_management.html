@@ -1031,6 +1031,15 @@ function drawSharing() {
 // else (gate/worker.js ocAutoPlan). Saved with the Team Builder settings (oc_config 'opts'.auto); default on.
 // NEXT UPDATE + UPDATE NOW (Nov 12 2026, user: "Add a countdown for when the next scheduled update is, with a
 // "Update" button for leadership"): the Hub's beat is every 3 minutes (on the clock's 3-minute marks); the next
+// 🛰 CRIME LIST SOURCE (Nov 16 2026): which reading the Hub is working from - a member's Suite (the feeder, once a
+// minute, config.feed {name, at} while its lease is good) or the Hub's own 3-minute check (the backup)
+function feedHtml(row) {
+  const f = D.config.feed;
+  const txt = f && f.live ? `🛰 Live from <b>${esc(f.name || "a member")}</b>'s Suite - read every minute (last ${ago(f.at)})`
+    : `🕒 The Hub's own check, every 3 minutes - no Suite is feeding right now${f && f.at ? ` (last one ${ago(f.at)})` : ""}`;
+  return row("Crime list source", `<span class="tag">${txt}</span>`,
+    "One member's Suite at a time reads the faction's crimes with that member's own key and passes the list to the Hub; if it goes quiet another Suite takes over, and the Hub's own check keeps running as the backup.");
+}
 // SCHEDULED rebuild is the first beat once autoMinutes have passed since the last run - it also rebuilds sooner when
 // crimes, members, settings or pass rates change (gate/worker.js TRIGGERS). "Update now" = POST oc/update (once a
 // minute): reads the crimes and rebuilds the plan at once, then the page reloads.
@@ -1077,8 +1086,9 @@ function settingsHtml() {
       <div class="sgrp"><h4>🤖 Automatic assignment</h4>
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
               "On: the Hub builds teams, reserves slots and keeps the live plan up to date by itself. Off: the live plan only changes when a leader deploys one.")}
-        ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[3, 5, 10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${(OPT.autoMinutes || 3) === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
-              `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once (on its next 3-minute check) when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated.`)}
+        ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[1, 2, 3, 5, 10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${(OPT.autoMinutes || 3) === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
+              `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated. <b>1 and 2 minutes</b> only apply while a member's Suite is feeding the crime list (below) - with none online the Hub's own check runs every 3 minutes.`)}
+        ${feedHtml(row)}
         ${nextHtml()}
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
@@ -1126,8 +1136,8 @@ function wireAuto() {
   if ($("autoOn")) { $("autoOn").onclick = () => set(true); $("autoOff").onclick = () => set(false); }
   // AUTOMATIC TIMER (Nov 2026): minutes between the Hub's automatic re-plans (opts.autoMinutes, 3-60)
   if ($("autoMin")) $("autoMin").onchange = () => {
-    OPT.autoMinutes = Math.max(3, Math.min(60, +$("autoMin").value || 3)); LS.set("hb_oc_opts", OPT);
-    saveConfig("opts", OPT).then(() => st(`The Hub now re-plans every ${OPT.autoMinutes} minutes.`)).catch(e => st("Not saved: " + e.message, true));
+    OPT.autoMinutes = Math.max(1, Math.min(60, +$("autoMin").value || 3)); LS.set("hb_oc_opts", OPT);
+    saveConfig("opts", OPT).then(() => st(`The Hub now re-plans every ${OPT.autoMinutes} minute${OPT.autoMinutes === 1 ? "" : "s"}.`)).catch(e => st("Not saved: " + e.message, true));
     draw(); };
 }
 // LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
