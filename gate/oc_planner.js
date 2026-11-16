@@ -15,6 +15,12 @@
 //     *** See SEAT BY SEAT / LINE-UP at fillRecruiting. The success target now applies to the members in the crime +
 //     *** the ones being added (weighted average), not to a complete team. Also the same day: a member in a FULL crime
 //     *** whose own planning hasn't started may be moved again (user's list: "Never: anyone whose planning has started").
+//     *** TOLD = LOCKED IN (Nov 16 2026, user: "Once a member without the script is notified, their role should be
+//     *** locked in. This will prevent them from swapping constantly and requiring multiple notifications to go out."):
+//     *** a reservation carrying told: true (set by the Hub, gate/worker.js ocAutoPlan: a leader has sent that member
+//     *** the Notify message for exactly this crime + role, and they don't use the script) is never switched to another
+//     *** crime, never handed to a script user, and survives a reconfigure. It ends as before when they join, the seat
+//     *** is taken, the crime goes, or the no-show limit passes (counted from when they were told).
 //   * Planning crimes: full - their members are busy until the crime pays out.
 //   * FILLED crimes leave the plan (Nov 11 2026, the user): once the last slot is taken in Torn the team is dropped
 //     (nothing left to plan); if a member then leaves, the open slot is filled again like any recruiting crime.
@@ -460,7 +466,7 @@ export function ocPlan(X) {
         // LOCKED TEAMS KEEP BUSY MEMBERS (Nov 15 2026, user: "Team Builder should allow placement of all members,
         // regardless of their crime status."): a leader's placement on a locked team stands even while the member is
         // still in another crime (shown as queued when that crime has a ready time) - only leaving the faction drops it
-        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock) && roster[String(o.pid)] != null && (t.lock || usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
+        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock || o.told) && roster[String(o.pid)] != null && (t.lock || usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
           const k = Object.assign({}, o, {joined: false}); delete k.replaces; if (!moving) delete k.leave; return k;   // the old member has left: a normal open slot now
         }
         return {position: label, pid: null, name: "", rate: null};
@@ -587,7 +593,7 @@ export function ocPlan(X) {
       curPaused = paused(c);                               // PAUSED CRIMES: no cap in this crime's seats
       curInst = c || null;                                 // V3 floor
       t.roles.forEach((r, ri) => {
-        if (r.pid == null || r.existing || !noScr(r.pid)) return;
+        if (r.pid == null || r.existing || r.told || !noScr(r.pid)) return;   // told: locked in (see the header)
         let b = null;
         for (const p of freeSU()) {
           if (c && (t.noshow || {})[String(p)]) continue;                 // a no-show isn't put back into this crime
@@ -724,7 +730,7 @@ export function ocPlan(X) {
       // V2: crimes aren't filled in pay order any more, so a seat emptied in a crime the loop has ALREADY passed (an
       // urgent / fuller one) would never be refilled - reservations are only pulled from crimes still to come
       if (V2 && (fillOrder.get(String(x.crime_id)) ?? 1e9) < (fillOrder.get(String(c.id)) ?? 0)) return;
-      x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
+      x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || r.told || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
         if (safeBlock(Number(r.pid), xc, c)) return;         // SAFEGUARDS: a reserved member isn't switched around either
         moveFrom.set(Number(r.pid), {t: x, ri}); movePool.push({pid: Number(r.pid), soft: false}); });
     });

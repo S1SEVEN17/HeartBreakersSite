@@ -1700,10 +1700,12 @@ async function ocPlanObj(env, envName, id) {
     }
   }
   let assignment = null;
+  const movedTo = await ocMovedTo(env, id && id.player_id);
   for (const t of teamsCfg) {
     for (const r of (t.roles || [])) {
       if (Number(r.pid) === Number(id.player_id)) {
         if (r.existing) continue;                           // already in that crime in Torn - nothing to do
+        if (!ocSettled(t, r, Date.now(), movedTo)) continue;   // SETTLE: not announced until it has held for 30 minutes
         const b = bound.get(t.id);                          // a spawn team sent bound to a live instance (above)
         if (b && (b.c.slots || []).some(x => x.user && Number(x.user.id) === Number(r.pid))) continue;   // already seated there
         assignment = {crime: t.crime, position: (b && b.slot[r.pid]) || r.position, team: t.id, rate: r.rate ?? null,
@@ -2454,6 +2456,21 @@ function ocPingText(did, x, T) {
     + (x.leave ? "\n" + dcFill(P.leave, v) : "")
     + (rate || succ ? "\n" + dcFill(P.stats, v) : "")).slice(0, 1900);
 }
+// SETTLE TIME (Nov 16 2026, user: "Settle for at least 30 minutes before a notification for members with the Suite."):
+// a reservation (role.since = when the plan made it) is only ANNOUNCED - the member's assignment in the Suite, the
+// first Discord ping, the leaders' Notify list - once it has stayed the same for OC_SETTLE_MS. Exceptions: a leader's
+// LOCKED team (placed by hand - shown at once), a member already told by a leader (told), and a member the planner MOVED
+// here (movedTo: the live move log's entry for them points at this crime) - that is a QUIET UPDATE of something they
+// already saw, shown straight away with a "changed from" note instead of disappearing for half an hour.
+const OC_SETTLE_MS = 30 * 60e3;
+const ocSettled = (t, r, now, movedTo) => !!(t && t.lock) || !!r.told || !r.since || now - Number(r.since) >= OC_SETTLE_MS
+  || !!(movedTo && t && t.crime_id != null && String(movedTo.to) === String(t.crime_id));
+// the live move log's entry for one member ({at, to, from} crime ids) when it is under a day old, else null
+async function ocMovedTo(env, pid) {
+  if (!pid) return null;
+  const ml = ((await ocSnapGet(env, "hub", "plan:moves").catch(() => null)) || {}).data || {}, m = ml[String(pid)];
+  return m && Date.now() - Number(m.at) < 864e5 ? m : null;
+}
 async function ocAssignPings(env, crimes) {
   if (!env.OC_DB || !env.OC_DISCORD_WEBHOOK) return;
   await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS oc_ping (k TEXT PRIMARY KEY, msg_id TEXT, pid INTEGER, crime_id INTEGER, created INTEGER)").run();
@@ -2465,6 +2482,7 @@ async function ocAssignPings(env, crimes) {
   // is posted) straight from the crimes feed, without waiting for the planner to drop their reservation
   const inCrime = new Map();                                 // pid -> the crime id they sit in
   for (const c of crimes || []) for (const sl of c.slots || []) if (sl.user && sl.user.id) inCrime.set(Number(sl.user.id), String(c.id));
+  const pinged = new Set((((await env.OC_DB.prepare("SELECT pid FROM oc_ping").all().catch(() => null)) || {}).results || []).map(x => Number(x.pid)));
   const want = new Map();                                    // k -> {pid, name, crime, crime_id, position, rate, succ}
   for (const t of plan.teams || []) {
     if (t.kind !== "live" || t.crime_id == null) continue;
@@ -2476,6 +2494,7 @@ async function ocAssignPings(env, crimes) {
       // "leave it first" line; sitting in any other crime -> no ping (as before)
       const sit = inCrime.get(Number(r.pid)), moving = !!(r.leave && sit != null && sit === String(r.leave.crime_id));
       if (r.pid == null || r.existing || r.queued || !open.has(r.position) || (sit != null && !moving)) continue;
+      if (!ocSettled(t, r, Date.now(), null) && !pinged.has(Number(r.pid))) continue;   // SETTLE: no first ping until it has held 30 min (a member with a ping already gets it EDITED - quiet)
       want.set(`${t.crime_id}|${r.position}|${r.pid}`, {pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id,
         position: r.position, rate: r.rate, succ: t.succ, calc: !!t.succ_calc, leave: moving ? r.leave : null});
     }
@@ -2921,11 +2940,17 @@ async function ocMine(env, pid) {
                seats: (c.slots || []).length, rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}, detail(c),
                {pay: payMine(c, sl)});   // (Nov 15 2026) your pay per day from when you joined
   let assignment = null;
+  const movedTo = await ocMovedTo(env, pid);
   for (const t of plan.teams || []) for (const r of t.roles || []) if (Number(r.pid) === pid && !assignment) {
+    if (!(r.existing || r.joined) && !ocSettled(t, r, Date.now(), movedTo)) continue;   // SETTLE (see ocSettled)
     const c = t.crime_id != null ? crimes.find(x => String(x.id) === String(t.crime_id)) : null;
     assignment = {crime: t.crime, crime_id: t.crime_id || null, kind: t.kind || "spawn", position: r.position, rate: r.rate ?? null,
                   weight: (tpRoleShares(tpW, t.crime, (t.roles || []).map(x => x.position)) || {})[r.position] ?? null,   // (0.2.25)
                   joined: !!(r.existing || r.joined), queued: !!r.queued, leave: r.leave || null,
+                  // QUIET UPDATE (Nov 16 2026, user: "Quiet Updates is a must"): the planner moved them here from another
+                  // crime in the last day -> {from: crime name, at} so the Suite can say "changed from ..." without a new alert
+                  changed: movedTo && t.crime_id != null && String(movedTo.to) === String(t.crime_id) && !(r.existing || r.joined)
+                    ? {from: (crimes.find(x => String(x.id) === String(movedTo.from)) || {}).name || null, at: Number(movedTo.at) || null} : null,
                   // (0.2.24) the planned team's success: exact (tornprobability) or role-weighted from the team's rates
                   succ: (() => { const o = succOf(t.crime, (t.roles || []).map(x => ({position: x.position, pid: x.pid, rate: x.rate})), t.succ); return o.success; })(),
                   difficulty: t.difficulty ?? null, pay: payOf(c, t.crime), detail: c ? detail(c) : null};
@@ -2961,6 +2986,10 @@ async function ocSpawnAlerts(env) {
         if (t.kind !== "live" || t.crime_id == null) continue;
         for (const r of t.roles || []) {
           if (r.pid == null || r.existing || r.queued || seen[String(r.pid)]) continue;
+          // SETTLE (Nov 16 2026, user: "Leadership Sent message/alerts for new crimes are the bigger issue, these are
+          // occurring too frequently for the same users."): listed only once the reservation has held for 30 minutes,
+          // so leaders aren't asked to message someone the planner is still shuffling. Once messaged it is locked in.
+          if (!ocSettled(t, r, Date.now(), null)) continue;
           oc_notify.push({pid: Number(r.pid), name: r.name || "", crime: t.crime, crime_id: t.crime_id, position: r.position, since: Number(r.since) || null,
                           // last contact (Nov 14 2026) - {at, crime, crime_id, role, how, by} or null
                           contacted: (cfg.contacted && cfg.contacted[String(r.pid)]) || null});
@@ -3253,6 +3282,18 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   }
   let tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null);   // role weights (tornprobability.com)
   if (!tpW) { await tpWeightsRefresh(env, true).catch(() => {}); tpW = await ocSnapGet(env, "hub", "tp:weights").catch(() => null); }   // first run
+  // TOLD = LOCKED IN (Nov 16 2026, user: "Once a member without the script is notified, their role should be locked in.
+  // This will prevent them from swapping constantly and requiring multiple notifications to go out."): a reservation
+  // whose member doesn't use the script and whom a leader has sent the Notify message for exactly this crime + role
+  // (the contact log, oc_config "contacted") is marked told - the planner then leaves it where it is (gate/
+  // oc_planner.js TOLD). The no-show clock runs from when they were told, so they get the full time to act on it.
+  { const seen0 = await ocScriptSeen(env, "prod").catch(() => ({})), log = cfg.contacted || {};
+    for (const t of prevTeams) for (const r0 of (t && t.roles) || []) {
+      if (!r0 || r0.pid == null || r0.existing) { if (r0) delete r0.told; continue; }
+      const lc = log[String(r0.pid)];
+      if (lc && lc.at && !seen0[String(r0.pid)] && t.crime_id != null && String(lc.crime_id) === String(t.crime_id) && lc.role === r0.position) {
+        r0.told = true; r0.since = Math.max(Number(r0.since) || 0, Number(lc.at) || 0); }
+      else delete r0.told; } }
   const lastStats = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);   // SPAWN HOLD cooldowns (hold_log)
   const seen = await ocScriptSeen(env, "prod");
   // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability.com's success chance for a full team,
