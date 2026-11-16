@@ -622,7 +622,9 @@ export function ocPlan(X) {
   const safeBlock = (pid, xc, c) => {
     if (!SAFE) return false;
     if (SAFE.minGain > 0 && !(each(xc) * (1 + SAFE.minGain / 100) < each(c))) { v2Blocked.gain.add(pid); return true; }
-    if (SAFE.protect && (urgRaw(xc, SAFE.pauseHours) > 0 || filled(xc) > filled(c))) { v2Blocked.source.add(pid); return true; }
+    // (Nov 16 2026, user: "Remove the highlighted portion of this rule" = "or a crime that is fuller than the one being
+    //  filled") - only paused / about-to-pause crimes are protected now; a fuller crime can lose a not-yet-planning member
+    if (SAFE.protect && urgRaw(xc, SAFE.pauseHours) > 0) { v2Blocked.source.add(pid); return true; }
     const L = moveLog[String(pid)];
     if (L && ((SAFE.cooldownHours > 0 && NOW - Number(L.at) < SAFE.cooldownHours * 3600e3 && String(L.to) !== String(c.id))
            || (SAFE.backHours > 0 && NOW - Number(L.at) < SAFE.backHours * 3600e3 && String(L.from) === String(c.id)))) { v2Blocked.cooldown.add(pid); return true; }
