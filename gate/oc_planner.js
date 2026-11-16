@@ -983,7 +983,13 @@ export function ocPlan(X) {
   // ---- result ----
   // queued flag, recomputed every run: planned (not already in this crime) but still busy in their current crime
   teams.forEach(t => t.roles.forEach(r => {
-    const q = r.pid != null && !r.existing && busy.has(Number(r.pid)) && freeAt.has(Number(r.pid));
+    // LEAVE FIRST IS NOT QUEUED (Nov 16 2026, user: a member asked to leave a full crime for a better seat showed as
+    // "Queued · finishing ..." - "add this for members who are expected to leave for better positions. Members who are
+    // already planning should still show 'Queued' until their crimes end."): a MOVE (r.leave - they sit in that crime
+    // with their own planning not started) is never flagged queued, so the page, the Notify list and the Discord ping
+    // treat it as "leave <crime> first" instead of waiting for that crime to pay out.
+    const moving = !!(r.leave && String((busy.get(Number(r.pid)) || {}).cid || "") === String(r.leave.crime_id));
+    const q = r.pid != null && !r.existing && !moving && busy.has(Number(r.pid)) && freeAt.has(Number(r.pid));
     if (q) { r.queued = true; r.free_at = freeAt.get(Number(r.pid)); } else { delete r.queued; delete r.free_at; }
   }));
   // NO-SHOW clock: every reservation in a recruiting crime gets since = when it was made (kept while it stays)
