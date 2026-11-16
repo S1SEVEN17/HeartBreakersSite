@@ -2028,7 +2028,10 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            // 🛡 SAFEGUARDS on moves (Nov 16 2026): on/off, % more pay per day a move must give, hours between moves for
            // one member, hours before they may be sent back to the crime they left, never out of a crime that needs them
            safeOn: v.safeOn !== false, safeGain: Math.round(n(v.safeGain, 0, 100, 10)), safeCooldown: Math.round(n(v.safeCooldown, 0, 168, 24)),
-           safeBack: Math.round(n(v.safeBack, 0, 336, 72)), safeProtect: v.safeProtect !== false};
+           safeBack: Math.round(n(v.safeBack, 0, 336, 72)), safeProtect: v.safeProtect !== false,
+           // 🔬 SHADOW SETTINGS (Nov 16 2026): only the Shadow plan reads these (see ocAutoPlan) - underperforming alert %,
+           // lowest allowed % of a member's best pay (0 = off), hours ahead a crime counts as "pausing soon"
+           shAlert: Math.round(n(v.shAlert, 0, 100, 75)), shMin: Math.round(n(v.shMin, 0, 100, 50)), shPause: Math.round(n(v.shPause, 1, 72, 12))};
     } else if (b.k === "contacted") {
       // (built above - the merged contact log)
     } else {
@@ -2783,7 +2786,8 @@ async function ocBackfill(env, now, ENVS) {
 const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
   // 🛡 SAFEGUARDS (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings to the Team Builder
   // page under their own category"): on by default - see gate/oc_planner.js SAFEGUARDS ON THE LIVE PLAN TOO
-  safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true};
+  safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
+  shAlert: 75, shMin: 50, shPause: 12};                     // 🔬 Shadow settings (Shadow plan only)
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
@@ -3096,7 +3100,8 @@ const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHou
 // V3 LADDER RULES for the shadow plan (user's answers, Nov 16 2026): never placed under 75% of their best crime's pay
 // per day; 24 h of waiting for a spawn drops them one rung; paused / pausing-within-12-h crimes are filled first.
 // minFloor (user: "Cap how low someone can drop to 50%"): never under 50% of their best crime's pay, however long they wait.
-const OC_V3 = {floor: 75, minFloor: 50, waitHours: 24, pauseHours: 12};
+// (later Nov 16: "Measure against whats open" - the 75% floor is gone; alert = the underperforming warning's %)
+const OC_V3 = {floor: 0, alert: 75, minFloor: 50, waitHours: 24, pauseHours: 12};
 function ocShadowReport(A, B, crimes, members, now) {
   const byId = new Map((crimes || []).map(c => [String(c.id), c]));
   const nm = pid => members[String(pid)] || ("#" + pid);
@@ -3139,7 +3144,7 @@ function ocShadowReport(A, B, crimes, members, now) {
   // (the "v2" keys keep their names - they are "the new rules" columns on the 🔬 Shadow tab)
   const v3 = (B.stats && B.stats.v3) || null;
   return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows, blocked: (B.stats && B.stats.v2_blocked) || null,
-          v3: v3 ? {floor: v3.floor, minFloor: v3.minFloor, waitHours: v3.waitHours, waiting: v3.waiting, requests: v3.requests.map(r => Object.assign({}, r, {names: r.members.map(nm)})),
+          v3: v3 ? {floor: v3.floor, minFloor: v3.minFloor, alert: v3.alert, under: v3.under, pauseHours: v3.pauseHours, waitHours: v3.waitHours, waiting: v3.waiting, requests: v3.requests.map(r => Object.assign({}, r, {names: r.members.map(nm)})),
                     norates: v3.norates, floor_blocked: v3.floor_blocked} : null};
 }
 async function ocAutoPlan(env, crimes, now, run = {}) {
@@ -3292,7 +3297,11 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     // 'plan:shadow-wait' {pid: ms}) = since when each member has been free with no seat above their pay floor; a member
     // who is placed or in a crime drops out of it (the planner returns the next clock in stats.v3.wait_log).
     const wl0 = ((await ocSnapGet(env, "hub", "plan:shadow-wait").catch(() => null)) || {}).data || {};
-    const A = ocPlan(Object.assign({}, base, {moveLog})), B = ocPlan(Object.assign({}, base, {v3: OC_V3, waitLog: wl0, moveLog: ml0}));
+    const A = ocPlan(Object.assign({}, base, {moveLog})), B = ocPlan(Object.assign({}, base, {waitLog: wl0, moveLog: ml0,
+      // 🔬 SHADOW SETTINGS (Nov 16 2026, user: "Add a 'Shadow' setting for the rules in Team Builder. These modify the Shadow
+      // version."): opts.shAlert = warn when a placement pays under this % of the member's best crime; opts.shMin = never
+      // place below this % (0 = off); opts.shPause = "pausing soon" window in hours. floor 0 = measure against what's open.
+      v3: {floor: 0, alert: Number(opts.shAlert ?? OC_V3.alert), minFloor: Number(opts.shMin ?? OC_V3.minFloor), pauseHours: Number(opts.shPause ?? OC_V3.pauseHours), waitHours: OC_V3.waitHours}}));
     await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:shadow-wait', ?, ?, 'hub') " +
       "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify((B.stats.v3 && B.stats.v3.wait_log) || {})).run();
     const ml = {};

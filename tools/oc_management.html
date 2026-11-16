@@ -154,7 +154,8 @@ const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
 const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
-  safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true}, LS.get("hb_oc_opts", {}));
+  safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
+  shAlert: 75, shMin: 50, shPause: 12}, LS.get("hb_oc_opts", {}));   // sh* = 🔬 Shadow settings (Shadow plan only)
 OPT.queueHours = 0; OPT.holdHours = 0;   // QUEUE + SPAWN HOLDS REMOVED (Nov 13 2026, user) - old saved values ignored
 OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
 delete OPT.chains;                // "Chain finals" option removed (Nov 12 2026) - prerequisite crimes are planned like any other
@@ -803,6 +804,7 @@ function drawBuilder() {
   const num0 = (id, k, hi) => $(id).onchange = () => { const v = Math.round(+$(id).value); OPT[k] = Number.isFinite(v) ? Math.max(0, Math.min(hi, v)) : 0; saveOpts(); draw(); };
   num0("o_sfg", "safeGain", 100); num0("o_sfc", "safeCooldown", 168); num0("o_sfb", "safeBack", 336);
   $("o_sf").onchange = () => { OPT.safeOn = $("o_sf").checked; saveOpts(); draw(); };
+  num0("o_sha", "shAlert", 100); num0("o_shm", "shMin", 100); num("o_shp", "shPause", 1, 72);   // 🔬 Shadow rules
   $("o_sfp").onchange = () => { OPT.safeProtect = $("o_sfp").checked; saveOpts(); draw(); };
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
@@ -950,18 +952,23 @@ function v3Html(S) {
   const V = S.v3; if (!V) return "";
   const money = n => n >= 1e6 ? "$" + (n / 1e6).toFixed(2) + "m" : "$" + Math.round(n / 1e3) + "k";
   const hrs = ms => { const h = Math.max(0, (Date.now() - ms) / 36e5); return h < 1 ? "just now" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " d"; };
-  const byPid = new Map(V.waiting.map(w => [Number(w.pid), w]));
+  const byPid = new Map(V.waiting.concat(V.under || []).map(w => [Number(w.pid), w]));
   const req = V.requests.map(r => `<div style="border-top:1px solid #2c313a;padding:6px 0"><span class="tag mid">Spawn difficulty ${esc(r.tier)}</span> <b>${r.members.length}</b> waiting <span class="hn">· longest ${hrs(r.longest)}</span>
       ${r.members.map((pid, i) => { const w = byPid.get(Number(pid));   // (user: "This should show their highest crimes pay per day.")
-        return `<div class="hn">${esc(r.names[i] || (w && w.name) || "#" + pid)}${w ? ` · best: <b>${esc(w.best)}</b> <b style="color:#7CFC9A">${money(w.best_pay)}/day</b>` : ""}</div>`; }).join("")}</div>`).join("");
+        return `<div class="hn">${esc(r.names[i] || (w && w.name) || "#" + pid)}${w ? ` · best: <b>${esc(w.best)}</b> <b style="color:#7CFC9A">${money(w.best_pay)}/day</b>${w.crime ? ` · placed in ${esc(w.crime)} at ${w.pct}%` : " · not placed"}` : ""}</div>`; }).join("")}</div>`).join("");
   const wait = V.waiting.slice().sort((a, b) => a.since - b.since).map(w => `<div style="border-top:1px solid #2c313a;padding:5px 0">${esc(w.name)}
       <span class="hn">· best: ${esc(w.best)} ${money(w.best_pay)}/day${w.dropped ? ` · now accepts ${esc(w.rung)} ${money(w.rung_pay)}/day (dropped ${w.dropped} step${w.dropped === 1 ? "" : "s"})` : ""} · tier ${esc(w.tier)} · waiting ${hrs(w.since)}</span>
       ${w.floor_blocked ? ' <span class="tag">held out of a lower-paying crime</span>' : ""}
       ${(w.why || []).length ? `<details><summary class="hn">Why not the ${w.why.length} open crime${w.why.length === 1 ? "" : "s"}?</summary>${w.why.map(y => `<div class="hn">· <b>${esc(y.crime)}</b> #${esc(y.id)} ${money(y.pay)}/day joining now - ${
         y.r === "norate" ? "no recorded rate for its open roles" : y.r === "lowrate" ? `best rate ${y.rate}% is under the role minimum (${y.min}%)`
-        : y.r === "pay" ? `pays ${y.pct}% of their best crime (under the floor)` : y.r === "cap" ? `rate ${y.rate}% is over the pass-rate ceiling for a crime this easy`
+        : y.r === "pay" ? `pays ${y.pct}% of their best crime (under the lowest allowed)` : y.r === "cap" ? `rate ${y.rate}% is over the pass-rate ceiling for a crime this easy`
         : `qualifies (${y.rate}%), but the team's average with them stays under the target or another member took the seat`}</div>`).join("")}</details>` : ""}</div>`).join("");
-  return `<div class="panel"><b>📣 Spawn requests · ${V.requests.length}</b><div class="hn">Members the new rules would hold for a better crime instead of placing them lower. Spawning is by tier and the crime is random, so a request is a tier, not a crime. ${V.floor_blocked} member${V.floor_blocked === 1 ? " was" : "s were"} kept out of a crime paying under ${V.floor}% of their best.</div>
+  const U = V.under || [];
+  const under = U.slice().sort((a, b) => a.pct - b.pct).map(u => `<div style="border-top:1px solid #2c313a;padding:5px 0">${esc(u.name)} <span class="hn">→ ${esc(u.crime)} #${esc(u.id)} · ${esc(u.role)} · <b>${money(u.pay)}/day</b></span>
+      <span class="tag bad">${u.pct}% of their best</span> <span class="hn">best: ${esc(u.best)} ${money(u.best_pay)}/day · needs a tier ${esc(u.tier)} spawn</span></div>`).join("");
+  return `<div class="panel"><b>⚠️ Underperforming placements · ${U.length}</b><div class="hn">Placed in the best open crime, but it pays under ${V.alert}% of the best crime they have a rate for. When these rules go live this is the warning the member and leaders get.</div>
+      ${under || '<div class="hn">Nobody is placed under the alert level.</div>'}</div>
+    <div class="panel"><b>📣 Spawn requests · ${V.requests.length}</b><div class="hn">Tiers to spawn for members who are underperforming or waiting. Spawning is by tier and the crime is random, so a request is a tier, not a crime.</div>
       ${req || '<div class="hn">Nobody is waiting for a spawn.</div>'}</div>
     <details class="panel"${V.waiting.length ? " open" : ""}><summary><b>Waiting for a spawn · ${V.waiting.length}</b></summary>${wait || '<div class="hn">Nobody.</div>'}</details>
     <details class="panel"><summary><b>Free with no recorded rates (never placed) · ${V.norates.length}</b></summary><div class="hn">${V.norates.map(x => esc(x.name)).join(", ") || "Nobody."}</div></details>`;
@@ -975,7 +982,7 @@ async function drawShadow() {
   const S = SHADOW;
   const intro = `<div class="panel"><b>🔬 Shadow mode - nothing here is live</b>
     <div class="hn">The Hub plans the same crimes twice from scratch, with the same members and pass rates: once by <b>today's rules</b> and once by the <b>new rules</b>. Members only ever see the live plan (🚀 Deployed), which still uses today's rules.<br>
-    <b>New rules (the "ladder", Nov 16 2026)</b>: every member is ranked against the crimes they have a <b>recorded pass rate</b> for, best pay per day first. They are only placed in a recruiting crime that pays them, if they join now, at least <b>${S && S.v3 ? S.v3.floor : 75}%</b> of their best crime's pay per day. With no such seat they <b>wait for a spawn</b> of that crime's tier (listed below for leaders); every <b>${S && S.v3 ? S.v3.waitHours : 24} h</b> of waiting lets them drop to their next-best crime, but never to a crime paying under <b>${S && S.v3 && S.v3.minFloor ? S.v3.minFloor : 50}%</b> of their best. Paused crimes are filled first, then crimes pausing within <b>${S ? S.rules.pauseHours : 12} h</b>, then best join-now pay. Members with no recorded rates are never placed. Role minimums, the team target and the pass-rate ceiling are unchanged.<br>
+    <b>New rules (Nov 16 2026)</b>: every member is ranked against the crimes they have a <b>recorded pass rate</b> for. Each one is placed in the <b>best-paying open crime</b> they qualify for (join-now pay), seat by seat - a crime doesn't have to be filled completely. A member placed under <b>${S && S.v3 ? S.v3.alert : 75}%</b> of their best crime's pay per day is flagged <b>underperforming</b> and listed in the spawn requests; under <b>${S && S.v3 ? S.v3.minFloor : 50}%</b> they aren't placed and wait for a spawn. Paused crimes are filled first, then crimes pausing within <b>${S && S.v3 && S.v3.pauseHours ? S.v3.pauseHours : 12} h</b>. Members with no recorded rates are never placed. Role minimums, the team target and the pass-rate ceiling are unchanged. Change the numbers in the Team Builder's ⚙️ Settings → 🔬 Shadow rules.<br>
     <b>Safeguards on moves</b> (set in the Team Builder's ⚙️ Settings → 🛡 Safeguards, and applied to today's rules too): the other crime must pay them at least <b>${S && S.rules.minGain ? S.rules.minGain : 10}% more</b> per day; a member is asked to move <b>at most once in ${S && S.rules.cooldownHours ? S.rules.cooldownHours : 24} h</b> and never back to the crime they left (within ${S && S.rules.backHours ? S.rules.backHours : 72} h); nobody is taken out of a paused or about-to-pause crime, or out of a crime that is fuller than the one being filled.</div></div>`;
   if (!S) { $("view").innerHTML = intro + `<div class="panel"><div class="hn">No comparison yet - it's made the next time the Hub rebuilds the plan (a few minutes, or press Update now on 🚀 Deployed).</div></div>`; return; }
   const tile = (label, a, b, better) => { const d = b - a, good = better === "more" ? d > 0 : d < 0;
@@ -1087,6 +1094,12 @@ function settingsHtml() {
         ${row("Protect crimes that need them", `<label><input type="checkbox" id="o_sfp"${OPT.safeProtect !== false ? " checked" : ""}> on</label>`,
               "Nobody is moved out of a paused crime, a crime that will pause within 12 hours, or a crime that is fuller than the one being filled.")}
       </div>
+      <div class="sgrp"><h4>🔬 Shadow rules (the comparison on the 🔬 Shadow tab only)</h4>
+        <div class="hn">These change how the <b>Shadow</b> plan is built - never the live plan or anyone's assignment. The Shadow plan places each member in the best-paying open crime they qualify for.</div>
+        ${row("Underperforming alert below", numIn("o_sha", OPT.shAlert, 0, 100, "% of their best"), "A member placed in a crime paying less per day than this share of the best crime they have a recorded rate for is flagged as underperforming, and counts in the spawn requests. 0 = never flag.")}
+        ${row("Never place below", numIn("o_shm", OPT.shMin, 0, 100, "% of their best"), "Under this share of their best crime's pay they aren't placed at all and wait for a spawn. 0 = always place them in the best open crime.")}
+        ${row("Pausing soon means within", numIn("o_shp", OPT.shPause, 1, 72, "hours"), "Paused crimes are filled first, then crimes whose members finish planning within this many hours.")}
+      </div>
       <div class="sgrp"><h4>🧪 Spawn alerts</h4>
       </div>
       <div class="sgrp"><h4>💰 Pay</h4>
@@ -1098,6 +1111,14 @@ function wireAuto() {
   if ($("updNow")) $("updNow").onclick = updateNow;
   const sd = document.querySelector("details.sets");
   if (sd) sd.ontoggle = () => { SET_OPEN = sd.open; LS.set("hb_oc_set_open", SET_OPEN); };
+  // FIX (Nov 16 2026, user: "I can't disable automatic team building."): the On / Off buttons called set(), which was
+  // lost when the setting moved into ⚙️ Settings (commit acc9dab) - every click threw and nothing was saved.
+  const set = on => { if ((OPT.auto !== false) === on) return;
+    if (!on && !confirm("Turn off automatic team building? The live plan will stay exactly as it is until a leader deploys a new one.")) return;
+    OPT.auto = on; LS.set("hb_oc_opts", OPT);
+    saveConfig("opts", OPT).then(() => st(on ? `Automatic team building on - the Hub re-plans within ${OPT.autoMinutes || 3} minutes.` : "Automatic team building off - the live plan only changes when a leader deploys one."))
+      .catch(e => st("Not saved: " + e.message, true));
+    draw(); };
   if ($("autoOn")) { $("autoOn").onclick = () => set(true); $("autoOff").onclick = () => set(false); }
   // AUTOMATIC TIMER (Nov 2026): minutes between the Hub's automatic re-plans (opts.autoMinutes, 3-60)
   if ($("autoMin")) $("autoMin").onchange = () => {

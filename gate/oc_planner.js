@@ -191,6 +191,20 @@ export function ocPlan(X) {
   //   Unchanged: role minimums, team target, the role cap, never moving a member whose planning has started, and the
   //   move safeguards (the Team Builder's 🛡 numbers).
   // =====================================================================================================
+  //   8. MEASURE AGAINST WHAT'S OPEN (Nov 16 2026, later the same day - user: seven members sat waiting while Dish It
+  //      Out / Guardian Ángels stayed open: "Measure against whats open. If the 'best ever' is 5m per day, but the
+  //      available roles only pay 1m per day, go with the 1m per day crime, but warn the user/leader that they're
+  //      joining an underperforming role and need a new, higher paying crime spawned to be efficient. Only show this
+  //      alert when users drop below a certain % of their highest pay per day. This % can be adjusted in the Team
+  //      Builder section."). This REPLACES rules 2 and 3 (X.v3.floor now defaults to 0 = no 75% floor, no rung drops):
+  //        - BEST OPEN FIRST: on the first fill pass a member is not offered a crime while another recruiting crime
+  //          with an open seat they qualify for pays them more if joined now (v3Better); a second pass then places
+  //          whoever is left wherever they qualify. So nobody sits out because of a crime that isn't there.
+  //        - UNDERPERFORMING (stats.v3.under): a member placed in a crime paying under X.v3.alert % of their best
+  //          crime's pay per day - the warning for the member / leaders, and they count in the tier spawn requests.
+  //        - LOWEST ALLOWED: rule 6's cap stays as a setting (X.v3.minFloor %, 0 = off): below it they are not
+  //          placed at all and wait for a spawn (the Mob Mentality case).
+  //      The numbers come from the Team Builder's 🔬 Shadow settings (opts.shAlert / shMin / shPause).
   //   7. SEAT BY SEAT (Nov 16 2026, user's answer 5 "Remove that rule. When members join a high tier crime, the Join Now
   //      pay per day will begin to increase for new joins" + "This crime already exists. Why are players not being put
   //      into it?" - a 1/6 Stage Fright with two qualifying members waiting): today's rules only fill a crime when EVERY
@@ -201,7 +215,8 @@ export function ocPlan(X) {
   //      for stay open.
   //   6. DROP CAP (Nov 16 2026, user: "Cap how low someone can drop to 50%"): however long a member has waited, they are
   //      never placed in a crime that pays them (join now) under minFloor x their BEST crime's pay per day (rung 0).
-  const V3 = X.v3 && typeof X.v3 === "object" ? {minFloor: (Number(X.v3.minFloor) || 50) / 100, floor: (Number(X.v3.floor) || 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
+  const V3 = X.v3 && typeof X.v3 === "object" ? {minFloor: (X.v3.minFloor != null ? Math.max(0, Number(X.v3.minFloor) || 0) : 50) / 100, floor: (Number(X.v3.floor) || 0) / 100,
+    alert: (X.v3.alert != null ? Math.max(0, Number(X.v3.alert) || 0) : 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
   const V2 = V3 ? {pauseHours: V3.pauseHours, slack: 0, moveHours: 0, minGain: O.safeOn === false ? 0 : Number(O.safeGain ?? 10) || 0,
                    cooldownHours: O.safeOn === false ? 0 : Number(O.safeCooldown ?? 24) || 0, backHours: O.safeOn === false ? 0 : Number(O.safeBack ?? 72) || 0}
     : X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
@@ -353,13 +368,22 @@ export function ocPlan(X) {
   if (V3) Object.keys(roster).forEach(pid => {
     ladder[pid] = Object.keys(cat).filter(n => crimeOk(n) && ladPay(n) > 0 && rolesOf(n).some(pos => { const r = rateOf(pid, n, pos); return r && r.rate >= floorOf(n, pos); }))
       .map(n => ({crime: n, pay: ladPay(n), diff: diffOf(n)})).sort((a, b) => b.pay - a.pay); });
-  const v3Drop = pid => { const since = Number(waitLog[String(pid)]) || 0; return since ? Math.max(0, Math.floor((NOW - since) / (V3.waitHours * 3600e3))) : 0; };
+  const v3Drop = pid => { if (!V3.floor) return 0;          // no pay floor (rule 8) = no rung drops
+    const since = Number(waitLog[String(pid)]) || 0; return since ? Math.max(0, Math.floor((NOW - since) / (V3.waitHours * 3600e3))) : 0; };
   const v3Rung = pid => { const L = ladder[String(pid)] || []; return L.length ? L[Math.min(L.length - 1, v3Drop(pid))] : null; };
   let curInst = null;                                      // the recruiting crime being filled (set by the fill loops)
   // true = this crime pays the member less than floor x their reference rung if they join now -> not offered to them
   const v3Low = pid => { if (!V3 || !curInst) return false; const r = v3Rung(pid); if (!r) return false;
     const top = (ladder[String(pid)] || [])[0];             // DROP CAP: never under minFloor x their best crime
-    if (each(curInst) + 1e-9 < Math.max(V3.floor * r.pay, top ? V3.minFloor * top.pay : 0)) { v3Blocked.add(Number(pid)); return true; } return false; };
+    if (each(curInst) + 1e-9 < Math.max(V3.floor * r.pay, top ? V3.minFloor * top.pay : 0)) { v3Blocked.add(Number(pid)); return true; }
+    return v3Pass === 1 && v3Better(pid, curInst); };
+  // BEST OPEN FIRST (rule 8): is another recruiting crime, with an open seat this member has the minimum rate for, paying
+  // them at least 1% more if joined now? (first fill pass only - the second pass places whoever is left)
+  let v3Pass = 0;
+  const v3Open = () => [...inst.values()].filter(x => x.status === "Recruiting" && !X.disabled.has(x.name) && (x.slots || []).some(sl => !sl.user));
+  const v3Better = (pid, c) => { const mine = each(c) * 1.01;
+    return v3Open().some(x => String(x.id) !== String(c.id) && each(x) > mine && !teams.some(t => t.lock && String(t.crime_id) === String(x.id))
+      && (x.slots || []).some(sl => { if (sl.user) return false; const q = rateOf(pid, x.name, slotLabel(sl)); return q && q.rate >= floorOf(x.name, slotLabel(sl)); })); };
   // DELAYS (Nov 2026): X.delays {pid: {n, long, hrs, runs}} - a member's crime delays over the last 30 days. The hours
   // of delay they're likely to cause per crime (hrs / crimes they took part in) hold up EVERYONE's payout, so the
   // cost charged against them = the team's pay per day x those hours / (24 x the crime's days) - a member who often
@@ -752,6 +776,7 @@ export function ocPlan(X) {
     if (V2) { t.urgency = urgency(c); if (usedSlack) t.slack = usedSlack; }   // V2 report: why this crime came first / filled below the floor
   } curPaused = false; curInst = null; };
   curInst = null;
+  if (V3) { v3Pass = 1; fillRecruiting(); v3Pass = 2; skipped.length = 0; }   // V3 rule 8: best open crime first, then everyone left
   fillRecruiting();
 
   // ---- 3b. SPAWN HOLDS (see the header) ----
@@ -964,10 +989,17 @@ export function ocPlan(X) {
       }).sort((a, b) => b.pay - a.pay);
       waiting.push({pid, name: nameOf(pid), since, why, best: L[0].crime, best_pay: Math.round(L[0].pay), rung: r.crime, rung_pay: Math.round(r.pay),
                     dropped: Math.min(L.length - 1, v3Drop(pid)), tier: tierOf(r.diff), floor_blocked: v3Blocked.has(pid)}); });
+    // UNDERPERFORMING (rule 8): placed by this plan in a crime paying under alert % of their best crime's pay per day
+    const under = [];
+    teams.forEach(t => { if (t.kind !== "live") return; const c = inst.get(String(t.crime_id)); if (!c) return;
+      t.roles.forEach(r => { if (r.pid == null || r.existing) return; const top = (ladder[String(r.pid)] || [])[0]; if (!top || !(top.pay > 0)) return;
+        const pay = each(c); if (pay + 1e-9 >= V3.alert * top.pay) return;
+        under.push({pid: Number(r.pid), name: nameOf(r.pid), since: NOW, crime: c.name, id: c.id, role: r.position, pay: Math.round(pay), pct: Math.round(100 * pay / top.pay),
+                    best: top.crime, best_pay: Math.round(top.pay), tier: tierOf(top.diff)}); }); });
     const byTier = {};
-    waiting.forEach(w => { (byTier[w.tier] = byTier[w.tier] || []).push(w); });
+    waiting.concat(under).forEach(w => { (byTier[w.tier] = byTier[w.tier] || []).push(w); });
     const requests = Object.keys(byTier).sort((a, b) => parseInt(b) - parseInt(a)).map(t => ({tier: t, members: byTier[t].map(w => w.pid), longest: Math.min(...byTier[t].map(w => w.since))}));
-    v3 = {floor: Math.round(V3.floor * 100), minFloor: Math.round(V3.minFloor * 100), waitHours: V3.waitHours, pauseHours: V3.pauseHours, waiting, requests, norates, wait_log: wl, floor_blocked: v3Blocked.size};
+    v3 = {floor: Math.round(V3.floor * 100), minFloor: Math.round(V3.minFloor * 100), alert: Math.round(V3.alert * 100), under, waitHours: V3.waitHours, pauseHours: V3.pauseHours, waiting, requests, norates, wait_log: wl, floor_blocked: v3Blocked.size};
   }
   return {teams, changed, stats: {v3, v2_blocked: V2 ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
     safe_blocked: SAFE ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
