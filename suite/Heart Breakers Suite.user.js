@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.57
+// @version      0.2.60
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.57';
+    const VERSION = '0.2.60';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -77,6 +77,7 @@
         rsSetAt: 'hbs_rs_set_at', rsSetAt0: 'hbs_rs_set_at0',
         rsSetNote: 'hbs_rs_set_note',
         rtOpen: 'hbs_rt_open',
+        cwHits: 'hbs_cw_hits',
         cwDump: 'hbs_cw_dump',
         cwCompact: 'hbs_cw_compact',
 
@@ -620,6 +621,32 @@
             #hbs-panel .hbs-li{padding:5px 0;align-items:center;}
             /* 0.2.42 - ⛶ compact view (edge tab) */
             #hbs-launcher.hbs-cvhide{display:none !important;}
+            /* (0.2.60) ⛓ queue: podium (top 3) + "also queued" tiles */
+            #hbs-panel .hbs-qyou{font-size:11px;color:#bcd9ff;text-align:center;margin:0 0 5px;}
+            #hbs-panel .hbs-pod{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;}
+            #hbs-panel .hbs-pt{background:#1b1e24;border:1px solid #2c313a;border-radius:8px;padding:5px 3px 6px;text-align:center;min-width:0;}
+            #hbs-panel .hbs-pt.up{border-color:#FFB454;} #hbs-panel .hbs-pt.me, #hbs-panel .hbs-ch.me{box-shadow:inset 0 0 0 1px #6aa9ff;} #hbs-panel .hbs-pt.dim, #hbs-panel .hbs-ch.dim{opacity:.55;}
+            #hbs-panel .hbs-pt .hd{display:flex;align-items:center;justify-content:center;gap:4px;min-height:16px;flex-wrap:nowrap;overflow:hidden;} #hbs-panel .hbs-pt .ps{font-size:10px;opacity:.65;flex:0 0 auto;}
+            #hbs-panel .hbs-pt b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;font-weight:bold;}
+            #hbs-panel .hbs-pt .hbs-qe{display:block;font-size:16px;font-weight:bold;line-height:1.25;} #hbs-panel .hbs-pt .hbs-qe.none{font-size:12px;line-height:20px;}
+            #hbs-panel .hbs-qe{cursor:pointer;text-decoration:underline dotted #555;text-underline-offset:3px;white-space:nowrap;} #hbs-panel .hbs-qe.none{cursor:default;text-decoration:none;opacity:.6;}
+            #hbs-panel .hbs-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px;vertical-align:middle;flex:0 0 7px;background:#4caf50;} #hbs-panel .hbs-dot.idle{background:#FFB454;} #hbs-panel .hbs-dot.off{background:#666;}
+            #hbs-panel .hbs-pt .ic, #hbs-panel .hbs-ch .ic{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 2px;}
+            #hbs-panel .hbs-pt .ic{margin-top:5px;padding-top:5px;border-top:1px solid #2c313a;} #hbs-panel .hbs-ch .ic{margin-top:3px;gap:2px 4px;}
+            #hbs-panel .hbs-ci{display:flex;align-items:center;justify-content:center;gap:2px;font-size:10px;white-space:nowrap;line-height:13px;} #hbs-panel .hbs-ch .hbs-ci{justify-content:flex-start;}
+            #hbs-panel .hbs-ci svg{width:13px;height:13px;flex:0 0 13px;} #hbs-panel .hbs-ci em{font-style:normal;}
+            #hbs-panel .hbs-ci.free{color:#7CFC9A;} #hbs-panel .hbs-ci.cd{color:#FFB454;} #hbs-panel .hbs-ci.off{color:#6b7078;}
+            #hbs-panel .hbs-qsub{font-size:10.5px;opacity:.65;text-transform:uppercase;letter-spacing:.5px;margin:8px 0 4px;}
+            #hbs-panel .hbs-chg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
+            #hbs-panel .hbs-ch{background:#1b1e24;border:1px solid #2c313a;border-radius:7px;padding:4px 5px;min-width:0;} #hbs-panel .hbs-ch.up{border-color:#FFB454;}
+            #hbs-panel .hbs-ch .t{display:flex;align-items:center;gap:4px;min-width:0;} #hbs-panel .hbs-ch .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:bold;min-width:0;flex:0 1 auto;}
+            #hbs-panel .hbs-ch .hbs-qe{margin-left:auto;font-size:11px;padding-left:3px;flex:0 0 auto;}
+            #hbs-panel .hbs-pt .hbs-qt, #hbs-panel .hbs-ch .hbs-qt{font-size:10px;line-height:15px;padding:0 6px;border-radius:8px;white-space:nowrap;margin:0;flex:0 0 auto;} #hbs-panel .hbs-qt em{font-style:normal;}
+            #hbs-panel .hbs-pt .hbs-qt.up, #hbs-panel .hbs-ch .hbs-qt.up{background:#FFB454;color:#2a1c00;} #hbs-panel .hbs-pt .hbs-qt.bon, #hbs-panel .hbs-ch .hbs-qt.bon{background:#4a3a10;color:#FFD48A;}
+            #hbs-panel .hbs-qt.you{background:#1f3a5c;color:#bcd9ff;} #hbs-panel .hbs-rot{display:inline-flex;flex:0 0 auto;} #hbs-panel .hbs-rot > span[hidden]{display:none;}
+            /* (0.2.59) key fields: text inputs drawn as dots - not type=password, so password managers leave the page alone */
+            #hbs-panel input.hbs-secret{-webkit-text-security:disc;text-security:disc;font-family:text-security-disc,monospace;}
+            #hbs-panel label.hbs-ck.hbs-ckx{pointer-events:none;cursor:default;} #hbs-panel label.hbs-ck.hbs-ckx input{pointer-events:auto;cursor:pointer;}
             #hbs-panel .hbs-depm .hbs-cprn{flex:0 0 auto;width:auto;min-width:0;padding:2px 8px;margin:0;font-size:11px;} #hbs-panel .hbs-depm .nt{flex:1 0 100%;opacity:.7;font-size:11px;}
             #hbs-panel .hbs-pay2{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:5px 0 3px;} #hbs-panel .hbs-pay2 div{background:rgba(0,0,0,.25);border-radius:7px;padding:5px 4px;text-align:center;}
             #hbs-panel .hbs-pay2 small{display:block;font-size:10px;opacity:.75;text-transform:uppercase;letter-spacing:.3px;} #hbs-panel .hbs-pay2 b{display:block;font-size:19px;color:#7CFC9A;}
@@ -2141,6 +2168,9 @@
             m.querySelector('i').textContent = !live || !min ? 'hits' : ok ? 'met' : 'alerts off'; }
     }
     setInterval(() => { if (!collapsed && tab === 'chain') cwAlTilesTick(); }, 1000);
+    setInterval(() => { try { document.querySelectorAll('#hbs-panel input:not([data-lpignore]), #hbs-panel textarea:not([data-lpignore]), #hbs-compact input:not([data-lpignore])').forEach(i => {
+        i.setAttribute('data-lpignore', 'true'); i.setAttribute('data-1p-ignore', ''); i.setAttribute('data-bwignore', ''); i.setAttribute('data-form-type', 'other');
+        if (!i.hasAttribute('autocomplete')) i.setAttribute('autocomplete', 'off'); }); } catch (e) {   } }, 1200);
     function cwSyncSoon() { if (cw.syncT && !(cw.ws && cw.ws.readyState === 1)) { clearTimeout(cw.syncT); cw.syncT = setTimeout(cwSyncRun, 120); } }
     function cwWatch() { if (cwWanted()) cwConnect(); else if (cw.ws || cw.syncT) cwDisconnect(); }
     setInterval(() => {
@@ -2223,7 +2253,7 @@
             const d = await tornGet('https://api.torn.com/user/?selections=bars,cooldowns,refills');
             const e = (d && d.energy) || {}, cd = (d && d.cooldowns) || {}, rf = (d && d.refills) || {};
             const st = { energyCur: num(e.current), energyMax: num(e.maximum), energyInc: num(e.increment), energyInt: num(e.interval),
-                         energyTick: num(e.ticktime), drug: num(cd.drug), booster: num(cd.booster), refill: rf.energy_refill_used ? 0 : 1 };
+                         energyTick: num(e.ticktime), drug: num(cd.drug), booster: num(cd.booster), medical: num(cd.medical), refill: rf.energy_refill_used ? 0 : 1 };
             store.set(K.cwStats, { s: st, at: Date.now() });
             cwSend(Object.assign({ t: 'stats' }, st));
             cw.statsErr = '';
@@ -2403,17 +2433,7 @@
         out += dmLineHtml();
         out += cwAlTilesHtml(cfg);
         out += sec(`Queue · ${q.length}`) + (q.length ? `<div class="hbs-cap${capHits === 0 ? ' low' : capHits < 5 ? ' warn' : ''}">${qOk.length ? `⚡ ~${int(capHits)} hits available · ${qOk.length} online` : '⚠ no watchers online'}</div>`
-            + `<div class="hbs-q">` + q.map((x, i) => { const s = st[x.pid] || {}, en = cwEnergy(x), hits = en ? Math.floor(en.cur / 25) : null;
-            const up = num(turn.up) === num(x.pid), bk = num(turn.backup) === num(x.pid), bon = bonus.pid && num(bonus.pid) === num(x.pid);
-            const hitting = x.hitting_until && x.hitting_until > cwNow(), idle = !x.away && ((x.presence && x.presence !== 'active') || x.inactive);
-            const tags = [up ? `<span class="hbs-qt up">${turn.reason === 'bonus' ? '★ UP · BONUS' : 'UP'}</span>` : bk ? '<span class="hbs-qt">BACKUP</span>' : '',
-                bon && !(up && turn.reason === 'bonus') ? '<span class="hbs-qt bon">★ BONUS</span>' : '',
-                x.can_hit === false ? `<span class="hbs-qt cant">${esc(s.state || "Can't hit")}${s.until ? ' <span data-until="' + s.until + '">-</span>' : ''}</span>` : '',
-                x.dump ? `<span class="hbs-qt dmp">💩 ${x.dump.st === 'on' ? int(x.dump.left) + ' left' : 'stopped'}</span>` : '',
-                hitting ? '<span class="hbs-qt hit">HITTING</span>' : '', x.away ? '<span class="hbs-qt">💤 Away</span>' : idle ? `<span class="hbs-qt">${x.presence === 'idle' ? '💤 Idle' : '⚪ Offline'}</span>` : ''].filter(Boolean).join('');
-            return `<div class="hbs-qr${up ? ' up' : ''}${bk ? ' bk' : ''}${bon ? ' bon' : ''}${num(x.pid) === me.id ? ' me' : ''}${x.away || idle ? ' dim' : ''}${hits === 0 ? ' dry' : ''}">
-                <div class="m"><span class="p">${i + 1}</span><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>${tags}<span class="h">${hits == null ? '–' : hits}<small>hits</small></span></div>
-                <div class="st">${cwStatsHtml(x)}${x.hits ? `<span class="n">${int(x.hits)} landed</span>` : ''}</div></div>`; }).join('') + '</div>'
+            + cwQueueHtml(q, st, turn, bonus)
             : '<div class="hbs-hint">Nobody queued.</div>');
         out += retalsHtml();
         out += schedHtml();
@@ -2486,6 +2506,65 @@
     const cwFmtCd = sec => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? `${h}h${String(m).padStart(2, '0')}` : `${m}:${String(sec % 60).padStart(2, '0')}`; };
     const CW_WEED = '<svg class="hbs-ic" viewBox="0 0 24 24" aria-label="drug"><g fill="#5fbf6a"><path d="M12 22C11 14 11 6 12 2C13 6 13 14 12 22Z"/><path d="M12 22C9 15 6 10 3 8C7 10 10 15 12 22Z"/><path d="M12 22C15 15 18 10 21 8C17 10 14 15 12 22Z"/><path d="M12 22C8 17 4 15 1 15C5 16 9 18 12 22Z"/><path d="M12 22C16 17 20 15 23 15C19 16 15 18 12 22Z"/></g><path d="M12 21.5V24" stroke="#7a5230" stroke-width="1.2" fill="none"/></svg>';
     const CW_CAN = '<img class="hbs-ic" src="https://www.torn.com/images/items/555/large.png" alt="booster" loading="lazy" onerror="this.replaceWith(\'🥫\')">';
+    const CW_ICO = {
+        drug: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="8.5" width="18" height="7" rx="3.5" transform="rotate(-45 12 12)" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.6 9.6l4.8 4.8" stroke="currentColor" stroke-width="2"/></svg>',
+        booster: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="5" width="10" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7 10h10M10 2.5h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+        medical: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+        refill: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2L4.5 13.5h6L9.5 22l9-12h-6z" fill="currentColor"/></svg>' };
+    const cwCdTxt = sec => { sec = num(sec); if (!(sec > 0)) return '';
+        if (sec < 3570) return Math.max(1, Math.ceil(sec / 60)) + 'm';
+        const h = Math.round(sec / 360) / 10; return (h % 1 ? h.toFixed(1) : String(h)) + 'h'; };
+    function cwIcons(x) {
+        const sT = x.stats, one = (k, title, endMs, known, offWhy) => {
+            if (!known) return `<span class="hbs-ci off" title="${title}: ${offWhy}">${CW_ICO[k]}</span>`;
+            const left = (endMs - Date.now()) / 1000;
+            return left > 0 ? `<span class="hbs-ci cd" title="${title} cooldown" data-cdend="${Math.round(endMs)}">${CW_ICO[k]}<em>${cwCdTxt(left)}</em></span>`
+                            : `<span class="hbs-ci free" title="${title}: free">${CW_ICO[k]}</span>`; };
+        if (!sT) return ['drug', 'booster', 'medical', 'refill'].map(k => `<span class="hbs-ci off" title="not shared">${CW_ICO[k]}</span>`).join('');
+        const at = num(sT.at);
+        return one('drug', 'Drug', at + num(sT.drug) * 1000, sT.drug != null, 'not known')
+            + one('booster', 'Booster', at + num(sT.booster) * 1000, sT.booster != null, 'not known')
+            + one('medical', 'Medical', at + num(sT.medical) * 1000, sT.medical != null, 'not known (their script is older than 0.2.60)')
+            + (num(sT.refill) === 1 ? `<span class="hbs-ci free" title="Energy refill available">${CW_ICO.refill}</span>` : `<span class="hbs-ci off" title="Energy refill used">${CW_ICO.refill}</span>`);
+    }
+    function cwQueueHtml(q, st, turn, bonus) {
+        const hitsMode = !!store.get(K.cwHits, false), myIx = me ? q.findIndex(x => num(x.pid) === me.id) : -1;
+        const tile = (x, i, pod) => {
+            const s0 = st[x.pid] || {}, en = cwEnergy(x), hits = en ? Math.floor(en.cur / 25) : null, mine = !!me && num(x.pid) === me.id;
+            const up = num(turn.up) === num(x.pid), bk = num(turn.backup) === num(x.pid), bon = bonus.pid && num(bonus.pid) === num(x.pid);
+            const hitting = x.hitting_until && x.hitting_until > cwNow(), cant = x.can_hit === false;
+            const pres = x.presence === 'idle' ? 'idle' : ((x.presence && x.presence !== 'active') || x.inactive) ? 'off' : 'on';
+            const urgent = cant ? `<span class="hbs-qt cant">${esc(s0.state || "Can't hit")}${s0.until && num(s0.until) * 1000 > Date.now() ? ` <em data-cdend="${num(s0.until) * 1000}">${cwCdTxt(num(s0.until) - Date.now() / 1000)}</em>` : ''}</span>`
+                : hitting ? '<span class="hbs-qt hit">HITTING</span>'
+                : up ? `<span class="hbs-qt up">${turn.reason === 'bonus' ? '★ UP · BONUS' : 'UP'}</span>` : '';
+            const rest = urgent ? [] : [bk ? '<span class="hbs-qt">BACKUP</span>' : '', bon ? '<span class="hbs-qt bon">★ BONUS</span>' : '',
+                x.dump ? `<span class="hbs-qt dmp">💩 ${x.dump.st === 'on' ? int(x.dump.left) + ' left' : 'stopped'}</span>` : '',
+                x.away ? '<span class="hbs-qt">Away</span>' : '', pres === 'off' && !x.away ? '<span class="hbs-qt">Offline</span>' : '',
+                mine ? '<span class="hbs-qt you">you</span>' : ''].filter(Boolean);
+            const tag = urgent || (rest.length > 1 ? `<span class="hbs-rot" data-rot="${rest.length}">${rest.map((t, k) => `<span${k ? ' hidden' : ''}>${t}</span>`).join('')}</span>` : rest[0] || '');
+            const enTxt = !en ? '<span class="hbs-qe none">no data</span>'
+                : `<span class="hbs-qe" data-cwhits title="Tap to switch between energy and hits">${hitsMode ? `${int(hits)} hit${hits === 1 ? '' : 's'}` : int(en.cur) + (pod ? ' E' : '')}</span>`;
+            const cls = `${up ? ' up' : ''}${mine ? ' me' : ''}${cant || pres === 'off' ? ' dim' : ''}`, tip = x.hits ? ` title="${int(x.hits)} hit${num(x.hits) === 1 ? '' : 's'} landed this chain"` : '';
+            return pod
+                ? `<div class="hbs-pt${cls}"${tip}><div class="hd"><span class="ps">#${i + 1}</span>${tag}</div><b><span class="hbs-dot ${pres}"></span>${esc(x.name)}</b>${enTxt}<div class="ic">${cwIcons(x)}</div></div>`
+                : `<div class="hbs-ch${cls}"${tip}><div class="t"><span class="hbs-dot ${pres}"></span><span class="n">${esc(x.name)}</span>${tag}${cant ? '' : enTxt}</div><div class="ic">${cwIcons(x)}</div></div>`;
+        };
+        return (myIx >= 3 ? `<div class="hbs-qyou">You're #${myIx + 1}</div>` : '')
+            + `<div class="hbs-pod">${q.slice(0, 3).map((x, i) => tile(x, i, true)).join('')}</div>`
+            + (q.length > 3 ? `<div class="hbs-qsub">Also queued · ${q.length - 3}</div><div class="hbs-chg">${q.slice(3).map((x, i) => tile(x, i + 3, false)).join('')}</div>` : '');
+    }
+    let cwRotN = 0, cwQT = 0;
+    function cwQueueTick(force) {
+        if (collapsed || tab !== 'chain' || !bodyEl) return;
+        cwQT++;
+        if (force || cwQT % 3 === 0) { if (!force) cwRotN++;
+            bodyEl.querySelectorAll('[data-rot]').forEach(r => { const n = num(r.dataset.rot), k = cwRotN % n; [...r.children].forEach((c, i) => { c.hidden = i !== k; }); }); }
+        if (force || cwQT % 15 === 0) { let done = false;
+            bodyEl.querySelectorAll('[data-cdend]').forEach(e => { const left = (num(e.dataset.cdend) - Date.now()) / 1000, em = e.tagName === 'EM' ? e : e.querySelector('em');
+                if (left <= 0) done = true; else if (em) em.textContent = cwCdTxt(left); });
+            if (done) cwShow(); }
+    }
+    setInterval(() => { try { cwQueueTick(false); } catch (e) {   } }, 1000);
     function cwStatsHtml(x) {
         const s = x.stats; if (!s) return '<span class="n">no energy / cooldown info shared</span>';
         const en = cwEnergy(x), drug = cwCd(s.drug, s.at), boost = cwCd(s.booster, s.at), ref = num(s.refill) === 1;
@@ -2529,6 +2608,8 @@
     }
     function chainBind() {
         cwAlTilesTick(); dmBind();
+        try { cwQueueTick(true); } catch (e) {   }
+        bodyEl.querySelectorAll('[data-cwhits]').forEach(e => e.addEventListener('click', () => { store.set(K.cwHits, !store.get(K.cwHits, false)); render(true); }));
         bodyEl.querySelectorAll('[data-cw]').forEach(b => b.addEventListener('click', () => cwAction(b.dataset.cw, b)));
         const sel = bodyEl.querySelector('[data-cwbonus]');
         const setBonus = pid => { cwSend({ t: 'bonus', pid });
@@ -3231,8 +3312,8 @@
     function displayBox(box) {
         const U = Object.assign({}, UI_DEF, store.get(K.ui, {}) || {});
         box.innerHTML = `<div class="hbs-sec">Display (this device)</div>
-            <label class="hbs-ck"><input type="checkbox" data-ui="compact"${U.compact ? ' checked' : ''}> 🗜 Compact mode - smaller cards and text</label>
-            <label class="hbs-ck"><input type="checkbox" data-ui="pin"${U.pin ? ' checked' : ''}> 📌 Pinned Chain Watch tile on every tab</label>
+            <label class="hbs-ck hbs-ckx"><input type="checkbox" data-ui="compact"${U.compact ? ' checked' : ''}> 🗜 Compact mode - smaller cards and text</label>
+            <label class="hbs-ck hbs-ckx"><input type="checkbox" data-ui="pin"${U.pin ? ' checked' : ''}> 📌 Pinned Chain Watch tile on every tab</label>
             <div class="hbs-tzrow"><span><b>🕒 Times shown in</b><small>Every clock time and date in the Suite - the same switch as on the chain watching schedule.</small></span>
                 <span class="hbs-tzset" data-tzset><span class="hbs-chips">${[['tct', '<span class="hbs-tct" aria-label="TCT"></span>'], ['local', 'Local']].map(([v, l]) => `<button type="button" data-v="${v}" class="${(tzLocal() ? 'local' : 'tct') === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>
                 ${tzLocal() ? `<span class="hbs-chips">${[['12', '12h'], ['24', '24h']].map(([v, l]) => `<button type="button" data-hr="${v}" class="${(store.get(K.schHr, '24') === '12' ? '12' : '24') === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>` : ''}</span></div>
@@ -4836,9 +4917,9 @@
             <div class="hbs-hint" style="opacity:.85">For Heart Breakers members. ${pda ? "Using <b>TornPDA's API key</b> - nothing to enter."
                 : 'Paste your Torn API key - a <b>Limited Access</b> key is needed (a Public key can\'t read your energy, cooldowns or OC pass rates).'} The key stays on this device: the script asks Torn who you are
                 and sends the Hub only your name, ID and faction.</div>
-            ${pda ? '' : `<label class="hbs-rsfld" style="margin-top:6px"><span>Torn API key <b style="color:#FFB454">· Limited Access key needed</b></span><input class="hbs-input" type="password" autocomplete="off" data-key maxlength="16" placeholder="Limited Access API key (16 characters)" value="${esc(key)}" style="text-align:left"></label>`}
+            ${pda ? '' : `<label class="hbs-rsfld" style="margin-top:6px"><span>Torn API key <b style="color:#FFB454">· Limited Access key needed</b></span><input class="hbs-input hbs-secret" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" data-key maxlength="16" placeholder="Limited Access API key (16 characters)" value="${esc(key)}" style="text-align:left"></label>`}
             <label class="hbs-rsfld" style="margin-top:6px"><span>FFScouter key (optional - fair-fight on retals, battle stats for recruiting)</span>
-                <input class="hbs-input" type="password" autocomplete="off" data-ffkey placeholder="FFScouter key" value="${esc(ffKey())}" style="text-align:left"></label>
+                <input class="hbs-input hbs-secret" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" data-ffkey placeholder="FFScouter key" value="${esc(ffKey())}" style="text-align:left"></label>
             <div class="hbs-hint">Both keys stay on this device - never sent to the Hub.</div>
             <div class="hbs-actions">
                 <button type="button" class="hbs-btn" data-x="save">${pda ? 'Sign in' : 'Save & sign in'}</button>

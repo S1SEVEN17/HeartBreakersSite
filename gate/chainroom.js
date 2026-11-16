@@ -1719,6 +1719,9 @@ function sanitizeStats(s) {
     energyCur: n(s.energyCur), energyMax: n(s.energyMax),
     energyInc: n(s.energyInc), energyInt: n(s.energyInt), energyTick: n(s.energyTick),
     drug: n(s.drug), booster: n(s.booster), refill: n(s.refill), at: Date.now(),
+    // MEDICAL COOLDOWN (Nov 16 2026, HB Suite 0.2.60, user: "Medical can be shown."): seconds left, from the member's own
+    // reading; null when their script doesn't send it (older than 0.2.60) - the queue then draws the icon grey
+    medical: s.medical == null || !Number.isFinite(Number(s.medical)) ? null : Number(s.medical),
   };
 }
 function canRestoreEnergy(s, now) {
