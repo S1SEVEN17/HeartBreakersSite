@@ -271,6 +271,15 @@ export default {
     if (area === "l" && rest.startsWith("oc/")) return ocLeaderRoute(env, req, url, who, rest.slice(3));
     // leaders: Chain Watch settings (chainwatch.html) - D1 oc_config 'chainwatch', pushed to every connected script
     if (area === "l" && rest.startsWith("cw/")) return cwLeaderRoute(env, req, who, rest.slice(3));
+    // leaders: 📢 Suite announcement page (suite-announce.html) - GET /l/ann/state.json, POST /l/ann/do {do: send|delete, ...}
+    if (area === "l" && rest.startsWith("ann/")) {
+      const H = {headers: {"Cache-Control": "no-store"}};
+      if (req.method === "GET" && rest === "ann/state.json") return Response.json(await annDo(env, ctx, who, {do: "get"}), H);
+      if (req.method === "POST" && rest === "ann/do") { let b; try { b = await req.json(); } catch (e) { b = null; }
+        if (!b || !["send", "delete"].includes(b.do)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+        const out = await annDo(env, ctx, who, b); return Response.json(out, Object.assign({status: out.ok ? 200 : 400}, H)); }
+      return new Response("not found", {status: 404});
+    }
     // leaders: Recruitment page (recruitment.html) - recruits shared by the Torn Recruit Scout script (D1 rc_recruit)
     if (area === "l" && rest.startsWith("rc/")) return rcLeaderRoute(env, req, who, rest.slice(3));
     // leaders: live war readiness of members who opted in
@@ -477,7 +486,9 @@ async function sxRoute(env, ctx, req) {
     }
     if (what === "myoc") return sxJson(await ocMine(env, who.id));   // the Hub script's Home "My OC" tile (Nov 14 2026)
     // HB SUITE (Nov 14 2026): the header's live status chips - ranked war + chain now (same as the site's now.json)
-    if (what === "now") return sxJson(await liveMemo("now", () => hubNowData(env)));
+    // + 📢 the member's ANNOUNCEMENT tile (HB Suite 0.2.66): the shared "now" answer with this member's own view of the
+    // current announcement added (annFor - audience checked here, per member; no extra request from the Suite)
+    if (what === "now") return sxJson(Object.assign({}, await liveMemo("now", () => hubNowData(env)), {announce: await annFor(env, who).catch(() => null)}));
     return sxJson({ok: false, error: "unknown"}, 400);
   }
   // 🤝 RECRUITMENT from the HB Suite script (Nov 14 2026) - leaders; the same list / actions as the Leaders' Recruitment
@@ -711,6 +722,12 @@ async function sxRoute(env, ctx, req) {
     await env.OC_DB.prepare("INSERT INTO sx_prefs (pid, data, updated) VALUES (?, ?, ?) ON CONFLICT (pid) DO UPDATE SET data = excluded.data, updated = excluded.updated")
       .bind(who.id, txt, now).run();
     return sxJson({ok: true, updated: now});
+  }
+  // 📢 ANNOUNCEMENTS from the Suite's leaders' Announce tab (HB Suite 0.2.66) - see annDo
+  if (op === "announce") {
+    if (!who.leader) return leadersOnly();
+    const out = await annDo(env, ctx, who, b || {});
+    return sxJson(out, out.ok ? 200 : 400);
   }
   // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
   if (op === "oc_contacted") {
@@ -2455,6 +2472,75 @@ function ocPingText(did, x, T) {
     // MOVING (Nov 13 2026): a better-paying seat while they wait in another crime (their planning hasn't started)
     + (x.leave ? "\n" + dcFill(P.leave, v) : "")
     + (rate || succ ? "\n" + dcFill(P.stats, v) : "")).slice(0, 1900);
+}
+// ======================================================================================================
+// 📢 SUITE ANNOUNCEMENTS (Nov 16 2026, HB Suite 0.2.66). User: "Can we get an ability for Leaders to send out an Alert
+// Tile to the Suite. Kind of like the Update one, but customizable for leadership to send messages to Suite users. This
+// can be an option in both the HUB and on the Suite for leadership under an 'Announcement' tab."  User's choices:
+//   1. ONE at a time (a new one replaces the current one).
+//   2/3/4. Two kinds: "announce" (yellow - a member can dismiss it; optional expiry) and "urgent" (red - can't be
+//      dismissed by members, only deleted by leaders, and MUST expire within 24 h: the leader picks 1-24 hours).
+//   5. no link button.  6. no sound / phone alert.
+//   7. AUDIENCE, multi-select (a member sees it when ANY selected group fits): all · queue (in the chain queue right
+//      now - the ChainRoom's board) · leaders · roles (faction positions).
+//   8. HISTORY of past announcements (who sent, when, how it ended) - no "seen by" counts.
+//   9. Discord post: optional later, via a webhook - NOT built ("Disabled for now").
+// Stored in oc_snap hub 'announce' = {cur: {id, text, type, aud: {all, queue, leaders, roles: []}, by, at, until|null}
+// | null, log: [newest first, 50 at most: cur's fields + ended: replaced|deleted|expired, ended_at, ended_by]}.
+// Leaders: annDo (the Suite's op "announce" and the site's /l/ann/*). Members: annFor, sent with op live "now".
+// Plain text only, 200 characters at most.
+// ======================================================================================================
+const ANN_MAX = 200;
+async function annState(env) { const s = await ocSnapGet(env, "hub", "announce").catch(() => null); const d = (s && s.data) || {}; return {cur: d.cur || null, log: Array.isArray(d.log) ? d.log : []}; }
+async function annSave(env, st) {
+  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'announce', ?, ?, 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(Date.now(), JSON.stringify(st)).run();
+  delete LIVE_MEMO.ann;                                    // members see the change on their next "now" (this instance at once)
+}
+// an expired current announcement moves to the log (done lazily, whenever a leader looks or sends)
+function annRetire(st, how, by) { if (!st.cur) return;
+  st.log.unshift(Object.assign({}, st.cur, {ended: how, ended_at: how === "expired" ? st.cur.until : Date.now(), ended_by: by || null}));
+  st.log = st.log.slice(0, 50); st.cur = null; }
+async function annDo(env, ctx, who, b) {
+  if (!env.OC_DB) return {ok: false, error: "Hub storage isn't set up yet"};
+  const st = await annState(env), now = Date.now(), by = `${who.name} [${who.id}]`;
+  let dirty = false;
+  if (st.cur && st.cur.until && st.cur.until <= now) { annRetire(st, "expired"); dirty = true; }
+  if (b.do === "send") {
+    const text = String(b.text || "").replace(/\s+/g, " ").trim();
+    if (!text) return {ok: false, error: "Write a message first."};
+    if (text.length > ANN_MAX) return {ok: false, error: `Keep it to ${ANN_MAX} characters (this is ${text.length}).`};
+    const type = b.type === "urgent" ? "urgent" : "announce", hours = Math.round(Number(b.hours) || 0);
+    if (type === "urgent" && !(hours >= 1 && hours <= 24)) return {ok: false, error: "An urgent announcement must expire in 1 to 24 hours."};
+    if (type === "announce" && !(hours >= 0 && hours <= 168)) return {ok: false, error: "Expiry must be 0 (none) to 168 hours."};
+    const a = b.aud && typeof b.aud === "object" ? b.aud : {};
+    const aud = {all: !!a.all, queue: !!a.queue, leaders: !!a.leaders, roles: (Array.isArray(a.roles) ? a.roles : []).map(x => String(x).slice(0, 40)).filter(Boolean).slice(0, 20)};
+    if (!aud.all && !aud.queue && !aud.leaders && !aud.roles.length) return {ok: false, error: "Pick who should see it."};
+    if (aud.all) { aud.queue = false; aud.leaders = false; aud.roles = []; }
+    if (st.cur) annRetire(st, "replaced", by);
+    st.cur = {id: now.toString(36), text, type, aud, by, at: now, until: hours ? now + hours * 3600e3 : null};
+    dirty = true;
+  } else if (b.do === "delete") {
+    if (st.cur) { annRetire(st, "deleted", by); dirty = true; }
+  }
+  if (dirty) await annSave(env, st);
+  // the positions leaders can pick from: the current roster's
+  let positions = [];
+  try { const ms = await currentMembers(env, ctx); positions = [...new Set([...(ms ? ms.values() : [])].map(m => m.position || "").filter(Boolean))].sort((x, y) => x.localeCompare(y)); } catch (e) {}
+  return {ok: true, cur: st.cur, log: st.log.slice(0, 30), positions, max: ANN_MAX};
+}
+// one member's view of the current announcement: {id, text, type, by, at, until} or null (none / expired / not for them)
+async function annFor(env, who) {
+  if (!env.OC_DB || !who) return null;
+  const st = await liveMemo("ann", () => annState(env)), c = st && st.cur, now = Date.now();
+  if (!c || (c.until && c.until <= now)) return null;
+  const a = c.aud || {}, pos = String(who.position || "").trim().toLowerCase();
+  let ok = !!a.all || (a.leaders && !!who.leader) || (a.roles || []).some(r => String(r).trim().toLowerCase() === pos);
+  if (!ok && a.queue && env.CHAINROOM) {
+    try { const bd = await liveMemo("board", async () => (await cwStub(env).fetch("https://do/board")).json());
+      ok = ((bd && bd.queue) || []).some(x => Number(x.pid) === Number(who.id)); } catch (e) {}
+  }
+  return ok ? {id: c.id, text: c.text, type: c.type, by: c.by, at: c.at, until: c.until || null} : null;
 }
 // SETTLE TIME (Nov 16 2026, user: "Settle for at least 30 minutes before a notification for members with the Suite."):
 // a reservation (role.since = when the plan made it) is only ANNOUNCED - the member's assignment in the Suite, the

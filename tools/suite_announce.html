@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Suite announcement - Heart Breakers</title>
+<!--
+  SUITE ANNOUNCEMENT (leaders' folder: suite-announce.html, published by generate.py write_optin_pages). Nov 16 2026,
+  user: "an ability for Leaders to send out an Alert Tile to the Suite ... an option in both the HUB and on the Suite
+  for leadership under an 'Announcement' tab". One announcement at a time; yellow "announce" (members can dismiss it,
+  optional expiry) or red "urgent" (can't be dismissed, expires in 1-24 h); audience multi-select (everyone / in the
+  chain queue / leadership / positions); history below. No Torn call from this page. Gatekeeper: GET /l/ann/state.json,
+  POST /l/ann/do {do: "send", text, type, hours, aud: {all, queue, leaders, roles: []}} | {do: "delete"} - worker.js
+  annDo (the same code the Suite's Announce tab uses). Placeholders: __CONFIG__ ({gate}), __MENU__.
+-->
+<style>
+:root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+*{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:720px}
+h1{color:var(--red);font-size:24px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
+.sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--edge);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card h2{color:var(--gold);font-size:15px;margin:0 0 10px;text-transform:uppercase;letter-spacing:1px}
+textarea{width:100%;min-height:76px;background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:8px;padding:10px;font:15px system-ui;resize:vertical}
+select{background:#1a1012;color:#fff;border:1px solid var(--edge);border-radius:7px;padding:9px;font:15px system-ui}
+button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:11px 18px;font:600 15px system-ui;cursor:pointer;min-height:44px}
+button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weight:400}
+.pick{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.pick label{display:inline-flex;align-items:center;gap:6px;background:#1a1012;border:1px solid #2a1416;border-radius:999px;padding:7px 12px;font-size:13px;cursor:pointer;min-height:36px}
+.pick label.on{border-color:var(--gold);color:var(--gold)}.pick input{accent-color:var(--red)}
+.lab{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-top:12px}
+.acts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;align-items:center;margin-top:12px}
+.msg{min-height:20px;font-size:13px;text-align:right;margin-top:6px}.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+.note{color:var(--sub);font-size:12px;margin-top:8px}.cnt{color:var(--sub);font-size:12px;text-align:right}
+.tile{border-radius:9px;padding:9px 12px;font-size:14px;line-height:1.4;word-break:break-word}
+.tile.announce{background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0}.tile.urgent{background:#4a1616;border:1px solid #ff6b6b;color:#ffe0e0}
+.tile small{display:block;opacity:.75;font-size:11.5px;margin-top:3px}
+.h{border-top:1px solid #2a1416;padding:9px 0}.h:first-child{border-top:0}.h .m{color:var(--sub);font-size:12px;margin-top:3px}
+.pill{font-size:11px;padding:2px 8px;border-radius:8px;background:#2a1416;color:var(--sub);white-space:nowrap}.pill.y{background:#3a2e12;color:var(--gold)}.pill.r{background:#3a1414;color:#f08a84}
+.empty{color:var(--sub);text-align:center;padding:10px}
+</style></head><body>
+__MENU__
+<h1>Suite announcement</h1>
+<div class="sub">Send a message tile to members using the Heart Breakers Suite. One announcement at a time - a new one replaces the current one.</div>
+
+<div class="card"><h2>Showing now</h2><div id="cur"><div class="empty">Loading…</div></div></div>
+
+<div class="card"><h2>New announcement</h2>
+  <textarea id="tx" maxlength="200" placeholder="Chain starts at 20:00 TCT - join the queue"></textarea>
+  <div class="cnt"><span id="cn">0</span> / 200</div>
+  <div class="lab">Kind</div>
+  <div class="pick" id="kind"><label><input type="radio" name="k" value="announce" checked> Announcement (yellow - members can dismiss it)</label>
+    <label><input type="radio" name="k" value="urgent"> Urgent (red - can't be dismissed, must expire)</label></div>
+  <div class="lab">Expires</div>
+  <div><select id="hrs"></select></div>
+  <div class="lab">Who sees it</div>
+  <div class="pick" id="aud"></div>
+  <div class="note">Tick more than one group and a member sees it when any of them fits. "In the chain queue" means queued in Chain Watch at that moment.</div>
+  <div class="acts"><button id="send">Send</button></div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div class="card"><h2>History</h2><div id="log"><div class="empty">Loading…</div></div></div>
+
+<script>
+const CFG = __CONFIG__;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const when = ms => ms ? new Date(ms).toLocaleString([], {weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) : "-";
+let S = null;
+const audTxt = a => !a ? "-" : a.all ? "Everyone" : [a.queue ? "Chain queue" : "", a.leaders ? "All leaders" : ""].concat(a.roles || []).filter(Boolean).join(", ");
+function hoursOpts() { const urgent = document.querySelector("input[name=k]:checked").value === "urgent";
+  const L = urgent ? [1, 2, 3, 6, 12, 24] : [0, 1, 6, 12, 24, 72, 168];
+  $("hrs").innerHTML = L.map(h => `<option value="${h}"${h === (urgent ? 6 : 0) ? " selected" : ""}>${h === 0 ? "Stays until replaced or deleted" : h < 48 ? h + " hour" + (h === 1 ? "" : "s") : (h / 24) + " days"}</option>`).join(""); }
+function marks() { document.querySelectorAll(".pick label").forEach(l => l.classList.toggle("on", l.querySelector("input").checked)); }
+function draw() {
+  const c = S.cur;
+  $("cur").innerHTML = c ? `<div class="tile ${c.type === "urgent" ? "urgent" : "announce"}">${c.type === "urgent" ? "🚨" : "📢"} ${esc(c.text)}<small>${esc(c.by)} · ${when(c.at)} · ${esc(audTxt(c.aud))} · ${c.until ? "expires " + when(c.until) : "no expiry"}</small></div>
+      <div class="acts"><button class="alt" id="del">Delete it</button></div>` : `<div class="empty">Nothing is showing right now.</div>`;
+  if ($("del")) $("del").onclick = () => { if (confirm("Delete the current announcement? It disappears from every member's Suite.")) act({do: "delete"}, "Deleted."); };
+  if (!$("aud").dataset.done) { $("aud").dataset.done = "1";
+    $("aud").innerHTML = `<label><input type="checkbox" value="all" checked> Everyone</label><label><input type="checkbox" value="queue"> In the chain queue</label><label><input type="checkbox" value="leaders"> All leaders</label>`
+      + (S.positions || []).map(p => `<label><input type="checkbox" data-role="1" value="${esc(p)}"> ${esc(p)}</label>`).join("");
+    $("aud").onchange = e => { const all = $("aud").querySelector("input[value=all]");
+      if (e.target === all && all.checked) $("aud").querySelectorAll("input").forEach(i => { if (i !== all) i.checked = false; });
+      else if (e.target !== all && e.target.checked) all.checked = false;
+      marks(); };
+  }
+  marks();
+  $("log").innerHTML = (S.log || []).length ? S.log.map(x => `<div class="h"><span class="pill ${x.type === "urgent" ? "r" : "y"}">${x.type === "urgent" ? "Urgent" : "Announcement"}</span> ${esc(x.text)}
+      <div class="m">${esc(x.by)} · ${when(x.at)} · ${esc(audTxt(x.aud))} · ${x.ended === "deleted" ? "deleted" : x.ended === "replaced" ? "replaced" : "expired"} ${when(x.ended_at)}${x.ended_by ? " by " + esc(x.ended_by) : ""}</div></div>`).join("") : `<div class="empty">No past announcements.</div>`;
+}
+const msg = (t, bad) => { $("msg").textContent = t; $("msg").className = "msg " + (bad ? "bad" : "ok"); };
+async function load() {
+  try { const r = await fetch("ann/state.json", {cache: "no-store", credentials: "same-origin"}); S = await r.json(); if (!S.ok) throw new Error(S.error || r.status); draw(); }
+  catch (e) { $("cur").innerHTML = `<div class="empty">Couldn't load: ${esc(e.message)}</div>`; }
+}
+async function act(body, done) {
+  try { const r = await fetch("ann/do", {method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const j = await r.json(); if (!j.ok) { msg(j.error || "Not saved.", true); return false; } S = j; draw(); msg(done); return true; }
+  catch (e) { msg("Not saved: " + e.message, true); return false; }
+}
+$("tx").oninput = () => { $("cn").textContent = $("tx").value.length; };
+$("kind").onchange = () => { hoursOpts(); marks(); };
+$("send").onclick = async () => {
+  const text = $("tx").value.trim(), type = document.querySelector("input[name=k]:checked").value, hours = +$("hrs").value;
+  const A = [...$("aud").querySelectorAll("input:checked")], aud = {all: A.some(i => i.value === "all"), queue: A.some(i => i.value === "queue"), leaders: A.some(i => i.value === "leaders"), roles: A.filter(i => i.dataset.role).map(i => i.value)};
+  if (!text) { msg("Write a message first.", true); return; }
+  if (!confirm(`Send this ${type === "urgent" ? "URGENT " : ""}announcement to: ${audTxt(aud) || "nobody"}?${S && S.cur ? "\n\nIt replaces the one showing now." : ""}`)) return;
+  if (await act({do: "send", text, type, hours, aud}, "Sent - members see it within about half a minute.")) { $("tx").value = ""; $("cn").textContent = "0"; }
+};
+hoursOpts(); marks(); load();
+</script>
+</body></html>

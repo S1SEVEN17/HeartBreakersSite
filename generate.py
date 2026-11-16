@@ -4072,6 +4072,7 @@ def header_default() -> dict:
                                                      L("🗂️ Recap archive", "M:recaps.html")]},
                 # Nov 13 2026 (user): script configuration / settings pages together in a Settings folder
                 {"label": "⚙️ Settings", "items": [L("⛓️ Chain Watch", "L:chainwatch.html"),
+                                                  L("📣 Suite announcement", "L:suite-announce.html"),
                                                   L("🕵️ OC Management", "L:oc.html"),
                                                   L("🏠 Site settings", "L:homepage.html"),
                                                   L("💬 Discord messages", "L:discord.html")]}]}]}
@@ -4925,7 +4926,7 @@ def homepage_default() -> dict:
         ("🗄️", "Armory monitor", "L:armory.html"), ("🕵️", "OC Management", "L:oc.html"), ("💪", "Member stats", "L:stats.html"),
         ("⛓️", "Chain Watch", "L:chainwatch.html"),
         ("🤝", "Recruitment", "L:recruitment.html"),
-        ("📢", "Announcements", "L:announcements.html"), ("🖼️", "Description", "L:description.html"),
+        ("📢", "Announcements", "L:announcements.html"), ("📣", "Suite announcement", "L:suite-announce.html"), ("🖼️", "Description", "L:description.html"),
         ("🎨", "Newsletter builder", "L:builder.html"), ("🏠", "Homepage editor", "L:homepage.html"),
         ("🧭", "Header editor", "L:header-editor.html"), ("🧩", "Profile layout", "L:profile-default.html"),
         ("🧷", "Newsletter filler", "L:hb-newsletter-filler.user.js"), ("🏡", "Members Hub", "M:index.html")])}
@@ -6124,6 +6125,8 @@ def write_optin_pages(out: Path):
         (lout / "stats.html").write_text(page("member_stats.html", conf, leader_menu("") + tab_bar(MEMBER_DATA_TABS, "stats.html")), encoding="utf-8")
         # Chain Watch settings (Nov 2026): the Faction Chain Watch script's faction settings, saved through the gate
         (lout / "chainwatch.html").write_text(page("chainwatch_settings.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
+        # Suite announcement (Nov 16 2026): leaders send a message tile to members' Heart Breakers Suite (gatekeeper /l/ann/*)
+        (lout / "suite-announce.html").write_text(page("suite_announce.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
         # Recruitment (Nov 11 2026): recruits shared by the Torn Recruit Scout script - claim / status / notes / remove
         # (gatekeeper /l/rc/*, D1 rc_recruit; contract claude/recruitment-hub-contract.md)
         (lout / "recruitment.html").write_text(page("recruitment.html", {"gate": gate}, leader_menu("")), encoding="utf-8")
