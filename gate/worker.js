@@ -3746,7 +3746,10 @@ async function hubNowData(env) {
     const F = Array.isArray(w.factions) ? w.factions : Object.entries(w.factions).map(([id, f]) => Object.assign({id}, f));
     const me = F.find(f => String(f.id) === FID) || {}, them = F.find(f => String(f.id) !== FID) || {};
     war = {kind: w.start && w.start <= t ? "ongoing" : "upcoming", opponent: them.name || "?", start: w.start || 0, end: w.end || 0,
-           our: me.score || 0, their: them.score || 0};
+           our: me.score || 0, their: them.score || 0,
+           // (HB Suite 0.2.64, Nov 16 2026: War tab priority targets) the enemy faction's id - each member's script reads
+           // that faction's member list with their OWN key while their War tab is open - and the war's target score
+           opponent_id: Number(them.id) || 0, target: Number(w.target) || 0};
   }
   const sAt = snap ? Number(snap.as_of) / 1e3 : 0, c = d.chain || null;
   const secs = (v, base) => !v ? 0 : (+v > 1e9 ? +v : base + +v);
