@@ -1313,7 +1313,7 @@ function drawDeployed() {
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
-      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${t.lock && !t.unplanned ? ` <button class="s" data-pdel="${esc(t.id)}" title="Delete this locked team from the deployed list">🗑</button>` : ""}
+      ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${!t.unplanned ? ` <button class="s" data-pdel="${esc(t.id)}" title="Delete this team from the deployed list">🗑</button>` : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       <div class="tag">${payLine(t, false)}</div>
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
@@ -1339,9 +1339,12 @@ function drawDeployed() {
     try { await saveConfig("plan", {teams: keep}); D.config.plan = {teams: keep}; st(keep.length ? `Cleared - ${keep.length} locked team${keep.length === 1 ? "" : "s"} kept.` : "Deployed list cleared."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
   document.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => {
     const all = ((D.config.plan && D.config.plan.teams) || []), t = all.find(x => x.id === b.dataset.pdel); if (!t) return;
-    if (!confirm(`Delete the locked team for ${t.crime}${t.crime_id ? " #" + t.crime_id : ""} from the deployed list? Its members stop seeing this assignment.`)) return;
+    // (Nov 15 2026, user: "Deployed List on the hub should have options to delete each individual crime.") every
+    // deployed team has the 🗑 now, not only locked ones. With automatic assignment on, the planner may plan an
+    // unlocked crime again on its next run - the confirm says so.
+    if (!confirm(`Delete the ${t.lock ? "locked " : ""}team for ${t.crime}${t.crime_id ? " #" + t.crime_id : ""} from the deployed list? Its members stop seeing this assignment.${!t.lock && OPT.auto ? "\n\nAutomatic assignment is on, so the planner may plan this crime again on its next run." : ""}`)) return;
     const left = all.filter(x => x.id !== t.id && !x.unplanned);
-    try { await saveConfig("plan", {teams: left}); D.config.plan = Object.assign({}, D.config.plan, {teams: left}); st("Locked team deleted."); draw(); } catch (e) { st("Failed: " + e.message, true); } });
+    try { await saveConfig("plan", {teams: left}); D.config.plan = Object.assign({}, D.config.plan, {teams: left}); st("Team deleted from the deployed list."); draw(); } catch (e) { st("Failed: " + e.message, true); } });
 }
 
 // ---------- Refresh (once a minute - the gatekeeper enforces it for all leaders together) ----------
