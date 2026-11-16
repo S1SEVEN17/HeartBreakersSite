@@ -463,6 +463,8 @@ async function sxRoute(env, ctx, req) {
     // 🧰 "loans" (HB Suite 0.2.62): the item-loan lists ONLY (missing = member in / planned for a crime without the
     // role's item; needs = "pid:itemId" in use) for loan staff (isLoanStaff: Heart Stopper / HR + leaders). Nothing else
     // from the leaders' spawn read (notify list, delays, paused crimes) is included.
+    // ✅ "recent" (HB Suite 0.2.68): the OC tab's Recently completed tile - everyone; see ocRecentFor
+    if (what === "recent") return sxJson(await ocRecentFor(env, who));
     if (what === "loans") {
       if (!(who.leader || who.loans)) return leadersOnly();
       const A = await ocSpawnAlerts(env);
@@ -2267,6 +2269,20 @@ async function ocFeedPull(env) {
     try { await ocDelayCheck(env, cl, now, ops); } catch (e) { fail("delays", e); }
     crimesNow = cl;
   } catch (e) { fail("crimes", e); }
+  // RECENTLY COMPLETED (Nov 16 2026, HB Suite 0.2.68 - user: "'Recently Completed' tile. Show the last 5 completed
+  // OCs, alert for any that have not been paid out yet." + "How often does the hub refresh crime info? Make this a
+  // regular check."): the stored history (oc_hist) keeps a crime as it was when first seen and is only read every
+  // 30 min, so it can't tell when a crime gets PAID. This reads the newest 100 completed crimes EVERY run (1 call,
+  // every 3 minutes) and keeps a compact list in oc_snap hub 'recent' = {rows: [{id, name, ok, at (s), money, items,
+  // paid, paid_at, pct}], newest first}. Served by op live "recent" (ocRecentFor).
+  try {
+    const d = await ocTorn(env, "faction/crimes?cat=completed&limit=100&sort=DESC");
+    const rows = (d.crimes || []).filter(c => c && c.id && c.executed_at).map(c => { const rw = (c.rewards && typeof c.rewards === "object") ? c.rewards : {}, po = (rw.payout && typeof rw.payout === "object") ? rw.payout : null;
+      return {id: Number(c.id), name: String(c.name || ""), ok: /^success/i.test(String(c.status || "")), at: Number(c.executed_at) || 0, money: Number(rw.money) || 0,
+              items: Array.isArray(rw.items) ? rw.items.length : 0, paid: !!(po && (po.paid_at || po.percentage != null || po.type)), paid_at: po ? Number(po.paid_at) || null : null, pct: po && po.percentage != null ? Number(po.percentage) : null}; })
+      .sort((a, b) => b.at - a.at);
+    ops.push(ocSnapPut(env, "hub", "recent", now, JSON.stringify({rows}), "hub"));
+  } catch (e) { fail("recent", e); }
   // RIGHT NOW (Nov 12 2026, user: the homepage's live war + chain without asking members for a key): the faction's
   // ranked war and chain, one call every run -> oc_snap 'hub' 'now' (served by /m/now.json)
   try {
@@ -2541,6 +2557,23 @@ async function annFor(env, who) {
       ok = ((bd && bd.queue) || []).some(x => Number(x.pid) === Number(who.id)); } catch (e) {}
   }
   return ok ? {id: c.id, text: c.text, type: c.type, by: c.by, at: c.at, until: c.until || null} : null;
+}
+// ✅ RECENTLY COMPLETED for one member (op live "recent"). User's choices (Nov 16 2026): "1. Everyone" sees it ·
+// the last 5 completed crimes · "6. Yes keep them if they're unpaid" (an unpaid crime older than the last 5 stays
+// listed) · "5. Total crime payout" · "3. 1 hour" before unpaid counts as late · "2. Heart Stopper+" are the ones
+// shown it as late · "4. Red tag only. No need for any actual alerts."  UNPAID = a successful crime with money that
+// has no payout recorded. late: true is only sent to Heart Stopper / HR / leaders (who.loans - the same staff group
+// as the item loans) once the crime finished over an hour ago; everyone else just sees it as waiting.
+const OC_UNPAID_LATE_MS = 3600e3;
+async function ocRecentFor(env, who) {
+  if (!env.OC_DB) return {ok: true, rows: [], as_of: null};
+  const s = await liveMemo("recent", () => ocSnapGet(env, "hub", "recent").catch(() => null));
+  const all = (s && s.data && Array.isArray(s.data.rows)) ? s.data.rows : [], now = Date.now(), staff = !!(who && (who.leader || who.loans));
+  const unpaid = r => r.ok && r.money > 0 && !r.paid;
+  const pick = all.slice(0, 5).concat(all.slice(5).filter(unpaid));
+  return {ok: true, as_of: s ? s.as_of : null, staff,
+    rows: pick.map(r => ({id: r.id, name: r.name, ok: r.ok, at: r.at, money: r.money, items: r.items, paid: r.paid, paid_at: r.paid_at,
+                          unpaid: unpaid(r), late: staff && unpaid(r) && now - r.at * 1000 > OC_UNPAID_LATE_MS}))};
 }
 // SETTLE TIME (Nov 16 2026, user: "Settle for at least 30 minutes before a notification for members with the Suite."):
 // a reservation (role.since = when the plan made it) is only ANNOUNCED - the member's assignment in the Suite, the
