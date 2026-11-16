@@ -956,7 +956,11 @@ function v3Html(S) {
         return `<div class="hn">${esc(r.names[i] || (w && w.name) || "#" + pid)}${w ? ` · best: <b>${esc(w.best)}</b> <b style="color:#7CFC9A">${money(w.best_pay)}/day</b>` : ""}</div>`; }).join("")}</div>`).join("");
   const wait = V.waiting.slice().sort((a, b) => a.since - b.since).map(w => `<div style="border-top:1px solid #2c313a;padding:5px 0">${esc(w.name)}
       <span class="hn">· best: ${esc(w.best)} ${money(w.best_pay)}/day${w.dropped ? ` · now accepts ${esc(w.rung)} ${money(w.rung_pay)}/day (dropped ${w.dropped} step${w.dropped === 1 ? "" : "s"})` : ""} · tier ${esc(w.tier)} · waiting ${hrs(w.since)}</span>
-      ${w.floor_blocked ? ' <span class="tag">held out of a lower-paying crime</span>' : ""}</div>`).join("");
+      ${w.floor_blocked ? ' <span class="tag">held out of a lower-paying crime</span>' : ""}
+      ${(w.why || []).length ? `<details><summary class="hn">Why not the ${w.why.length} open crime${w.why.length === 1 ? "" : "s"}?</summary>${w.why.map(y => `<div class="hn">· <b>${esc(y.crime)}</b> #${esc(y.id)} ${money(y.pay)}/day joining now - ${
+        y.r === "norate" ? "no recorded rate for its open roles" : y.r === "lowrate" ? `best rate ${y.rate}% is under the role minimum (${y.min}%)`
+        : y.r === "pay" ? `pays ${y.pct}% of their best crime (under the floor)` : y.r === "cap" ? `rate ${y.rate}% is over the pass-rate ceiling for a crime this easy`
+        : `qualifies (${y.rate}%), but the team's average with them stays under the target or another member took the seat`}</div>`).join("")}</details>` : ""}</div>`).join("");
   return `<div class="panel"><b>📣 Spawn requests · ${V.requests.length}</b><div class="hn">Members the new rules would hold for a better crime instead of placing them lower. Spawning is by tier and the crime is random, so a request is a tier, not a crime. ${V.floor_blocked} member${V.floor_blocked === 1 ? " was" : "s were"} kept out of a crime paying under ${V.floor}% of their best.</div>
       ${req || '<div class="hn">Nobody is waiting for a spawn.</div>'}</div>
     <details class="panel"${V.waiting.length ? " open" : ""}><summary><b>Waiting for a spawn · ${V.waiting.length}</b></summary>${wait || '<div class="hn">Nobody.</div>'}</details>

@@ -945,7 +945,24 @@ export function ocPlan(X) {
       const L = ladder[String(pid)] || [];
       if (!L.length) { norates.push({pid, name: nameOf(pid)}); return; }   // "Don't place members when there is no recorded rates"
       const since = Number(waitLog[String(pid)]) || NOW, r = v3Rung(pid); wl[pid] = since;
-      waiting.push({pid, name: nameOf(pid), since, best: L[0].crime, best_pay: Math.round(L[0].pay), rung: r.crime, rung_pay: Math.round(r.pay),
+      // WHY NOT (Nov 16 2026, user: "Why are there open crimes that aren't being filled by these members?"): for every
+      // recruiting crime with an open seat, the first thing that keeps this member out - shown on the 🔬 Shadow tab.
+      //   norate = no recorded rate for any open role · lowrate = best rate under the role minimum (v = rate, min)
+      //   pay = joining now pays under the floor (v = % of their best crime, pay) · cap = over the pass-rate ceiling
+      //   team = they qualify, but the team's average with them stays under the target, or another member was chosen
+      const need = Math.max(V3.floor * r.pay, V3.minFloor * L[0].pay);
+      const why = [...inst.values()].filter(c => c.status === "Recruiting" && !X.disabled.has(c.name) && (c.slots || []).some(sl => !sl.user)).map(c => {
+        let bestR = null, bestMin = null, any = false;
+        (c.slots || []).forEach(sl => { if (sl.user) return; const pos = slotLabel(sl), q = rateOf(pid, c.name, pos); if (!q) return; any = true;
+          if (bestR == null || q.rate - floorOf(c.name, pos) > bestR - bestMin) { bestR = q.rate; bestMin = Math.round(floorOf(c.name, pos)); } });
+        const o = {crime: c.name, id: c.id, pay: Math.round(each(c))};
+        if (!any) return Object.assign(o, {r: "norate"});
+        if (bestR < bestMin) return Object.assign(o, {r: "lowrate", rate: bestR, min: bestMin});
+        if (each(c) + 1e-9 < need) return Object.assign(o, {r: "pay", pct: Math.round(100 * each(c) / L[0].pay)});
+        if (!paused(c) && O.cap < 100 && bestR > O.cap && (capUp[pid] || 0) > (diffOf(c.name) || 0)) return Object.assign(o, {r: "cap", rate: bestR});
+        return Object.assign(o, {r: "team", rate: bestR});
+      }).sort((a, b) => b.pay - a.pay);
+      waiting.push({pid, name: nameOf(pid), since, why, best: L[0].crime, best_pay: Math.round(L[0].pay), rung: r.crime, rung_pay: Math.round(r.pay),
                     dropped: Math.min(L.length - 1, v3Drop(pid)), tier: tierOf(r.diff), floor_blocked: v3Blocked.has(pid)}); });
     const byTier = {};
     waiting.forEach(w => { (byTier[w.tier] = byTier[w.tier] || []).push(w); });
