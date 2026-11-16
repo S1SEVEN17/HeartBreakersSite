@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.50
+// @version      0.2.51
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,9 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.51 (Nov 15 2026) - ✉ OC Notify: the message's script tip now names the Heart Breakers Suite and links to its
+ *          Greasy Fork page ({scripts} fills in that link). User: "All references to [the OC and Chain watching
+ *          scripts] should now link to the Suite." Keep in step with OC Management's NOTIFY_DEFAULT / SUITE_URL.
  *  v0.2.50 (Nov 15 2026) - 🧰 Loans: Retrieve pressed away from Armoury -> Utilities now takes you there and highlights
  *          the loaned copy; it also switches "Hide loaned items" off so the row can be seen and retrieved.
  *  v0.2.49 (Nov 15 2026) - 🕵 OC: the pay per day on YOUR crime is now your join-now figure from when you joined (worked
@@ -383,7 +386,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.50';
+    const VERSION = '0.2.51';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -522,11 +525,11 @@
         chat: "Hi {name}! You've been picked for an Organized Crime: {crime} - {role}. Please join it here: {link} - thank you! 💗",
         subject: 'OC: please join {crime} ({role})',
         mail: "Hi {name},\n\nYou've been picked for an Organized Crime: **{crime}**, role **{role}**.\nPlease join it here: [{crime} #{crime_id}]({link})\n\n"
-            + 'Tip: the OC Optimizer script shows your OC assignment automatically, so you never miss one - install it from the [Heart Breakers Hub Scripts page]({scripts}).\n'
+            + 'Tip: the Heart Breakers Suite script shows your OC assignment automatically, so you never miss one - [install the Heart Breakers Suite]({scripts}).\n'
             + 'You can also see your crimes and pass rates on [the Hub]({hub}).\n\nThanks!' };
     function notifyFill(tpl, x) {
         const v = { name: x.name, crime: x.crime, role: x.position, crime_id: x.crime_id, link: OC_CRIME_LINK(x.crime_id),
-            scripts: HUB_BASE + '/m/scripts.html', hub: HUB_BASE + '/m/' };
+            scripts: 'https://greasyfork.org/en/scripts/605562-heart-breakers-suite', hub: HUB_BASE + '/m/' };   // (0.2.51) {scripts} = the Suite on Greasy Fork
         return String(tpl).replace(/\{(name|crime|role|crime_id|link|scripts|hub)\}/g, (m, k) => v[k] == null ? '' : String(v[k]));
     }
     const mdPlain = t => t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '$1: $2').replace(/\*\*([^*]+)\*\*/g, '$1');
@@ -5982,7 +5985,7 @@
                 but your key is <b>never uploaded</b>: this script reads Torn on this device and sends only the results. It only updates while the script is running.</div>
             ${opt('💪', 'Battle stats', 'Strength, defense, speed, dexterity - read once a day (the first time the script runs after 00:00 TCT) so your gains are tracked.', sel('bs', st.bs))}
             ${opt('🧰', 'Work stats', 'Manual labor, intelligence, endurance - read once a day.', sel('ws', st.ws))}
-            ${opt('🕵️', 'OC pass rates', 'Your checkpoint pass rate per organized crime role - read when the Hub finds a new crime, so leaders\' Team Builder and the OC Optimizer script can put you in the roles you pass best.', onoff('oc', st.oc, 'On'))}
+            ${opt('🕵️', 'OC pass rates', 'Your checkpoint pass rate per organized crime role - read when the Hub finds a new crime, so leaders\' Team Builder and the Suite can put you in the roles you pass best.', onoff('oc', st.oc, 'On'))}
             <div class="hbs-hint">Sharing on the Hub too? The two are combined.</div>
             <div class="hbs-actions"><button type="button" class="hbs-btn" data-shsave>Save sharing</button></div>
             <div class="hbs-msg" data-shmsg>${g.last && (g.last.bs || g.last.ws || g.last.rd_at) ? 'Last sent: ' + [g.last.bs || g.last.ws ? 'stats ' + (g.last.bs || g.last.ws) : '',
