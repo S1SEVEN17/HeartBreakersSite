@@ -164,7 +164,18 @@ export function ocPlan(X) {
   //      stats.v2_blocked counts the moves each safeguard held back.
   const V2 = X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
     minGain: Number(X.v2.minGain) || 0, cooldownHours: Number(X.v2.cooldownHours) || 0, backHours: Number(X.v2.backHours) || 0} : null;
-  const moveLog = (V2 && X.moveLog) || {}, v2Blocked = {gain: new Set(), source: new Set(), cooldown: new Set()};   // members a safeguard held back (at least once)
+  // SAFEGUARDS ON THE LIVE PLAN TOO (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings
+  // to the Team Builder page under their own category to adjust where feasible."): the same four checks now also guard
+  // today's rules - both kinds of move the live planner makes: a member asked to LEAVE a crime they sit in (planning
+  // not started) and a RESERVED member (not joined yet) switched to another crime (JOIN NOW MOVES). Settings (Team
+  // Builder -> ⚙️ Settings -> 🛡 Safeguards, opts): safeOn, safeGain (% more pay per day), safeCooldown (hours between
+  // moves), safeBack (hours before they may be sent back), safeProtect (never out of a crime that needs them).
+  // Active only when the caller passes X.moveLog (the Hub's live run does; drafts and tests without it are unchanged).
+  // Under V2 (shadow) the V2 numbers are used. stats.safe_blocked = members each check held back.
+  const SAFE = V2 ? {minGain: V2.minGain, cooldownHours: V2.cooldownHours, backHours: V2.backHours, protect: true, pauseHours: V2.pauseHours}
+    : (X.moveLog && O.safeOn !== false ? {minGain: Number(O.safeGain ?? 10) || 0, cooldownHours: Number(O.safeCooldown ?? 24) || 0, backHours: Number(O.safeBack ?? 72) || 0,
+                                          protect: O.safeProtect !== false, pauseHours: 12} : null);
+  const moveLog = X.moveLog || {}, v2Blocked = {gain: new Set(), source: new Set(), cooldown: new Set()};   // members a safeguard held back (at least once)
   let curSlack = 0;                                        // V2: points under the target / role minimums for the crime being filled
   const TGT = () => O.target - curSlack;
   const floorOf = (crime, label) => {
@@ -514,9 +525,20 @@ export function ocPlan(X) {
   const filled = c => { const sl = c.slots || []; return sl.length ? sl.filter(x => x.user).length / sl.length : 0; };
   // V2 urgency: 2 = paused now, 1 = will pause within pauseHours (has members + open seats and Torn's ready_at - when
   // the members in it finish planning - falls inside the window), 0 = neither
-  const urgency = c => { if (!V2 || !c || !(c.slots || []).some(sl => sl.user)) return 0;
+  const urgRaw = (c, hours) => { if (!c || !(c.slots || []).some(sl => sl.user)) return 0;
     if (paused(c) || (c.ready_at && c.ready_at * 1000 <= NOW)) return 2;
-    return c.ready_at && c.ready_at * 1000 - NOW <= V2.pauseHours * 3600e3 ? 1 : 0; };
+    return c.ready_at && c.ready_at * 1000 - NOW <= hours * 3600e3 ? 1 : 0; };
+  const urgency = c => V2 ? urgRaw(c, V2.pauseHours) : 0;
+  // SAFEGUARDS: may member `pid` be moved out of crime xc into crime c? true = held back (and counted)
+  const safeBlock = (pid, xc, c) => {
+    if (!SAFE) return false;
+    if (SAFE.minGain > 0 && !(each(xc) * (1 + SAFE.minGain / 100) < each(c))) { v2Blocked.gain.add(pid); return true; }
+    if (SAFE.protect && (urgRaw(xc, SAFE.pauseHours) > 0 || filled(xc) > filled(c))) { v2Blocked.source.add(pid); return true; }
+    const L = moveLog[String(pid)];
+    if (L && ((SAFE.cooldownHours > 0 && NOW - Number(L.at) < SAFE.cooldownHours * 3600e3 && String(L.to) !== String(c.id))
+           || (SAFE.backHours > 0 && NOW - Number(L.at) < SAFE.backHours * 3600e3 && String(L.from) === String(c.id)))) { v2Blocked.cooldown.add(pid); return true; }
+    return false;
+  };
   const each = c => payDayInst(c) / ((c.slots || []).length || 1);   // TIME IN THE CRIME: this instance's days
   const recruiting = [...inst.values()].filter(c => c.status === "Recruiting" && (c.slots || []).some(sl => !sl.user))
     .sort((a, b) => ROT_ON.has(String(b.id)) - ROT_ON.has(String(a.id))
@@ -586,6 +608,7 @@ export function ocPlan(X) {
       // urgent / fuller one) would never be refilled - reservations are only pulled from crimes still to come
       if (V2 && (fillOrder.get(String(x.crime_id)) ?? 1e9) < (fillOrder.get(String(c.id)) ?? 0)) return;
       x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
+        if (safeBlock(Number(r.pid), xc, c)) return;         // SAFEGUARDS: a reserved member isn't switched around either
         moveFrom.set(Number(r.pid), {t: x, ri}); movePool.push({pid: Number(r.pid), soft: false}); });
     });
     // ... and members SITTING in another crime (recruiting or planning) that pays them less if joined now, who haven't started
@@ -596,13 +619,7 @@ export function ocPlan(X) {
       if (!cid || cid === String(c.id) || assigned.has(pid) || nsBan.has(pid) || roster[String(pid)] == null || moveFrom.has(pid)) continue;
       const xc = inst.get(cid); if (!xc || !(each(xc) * 1.01 < each(c))) continue;
       if (teams.some(x => x.lock && String(x.crime_id) === cid)) continue;
-      if (V2) {                                              // V2 SAFEGUARDS (see the header)
-        if (V2.minGain > 0 && !(each(xc) * (1 + V2.minGain / 100) < each(c))) { v2Blocked.gain.add(pid); continue; }
-        if (urgency(xc) > 0 || filled(xc) > filled(c)) { v2Blocked.source.add(pid); continue; }
-        const L = moveLog[String(pid)];
-        if (L && ((V2.cooldownHours > 0 && NOW - Number(L.at) < V2.cooldownHours * 3600e3 && String(L.to) !== String(c.id))
-               || (V2.backHours > 0 && NOW - Number(L.at) < V2.backHours * 3600e3 && String(L.from) === String(c.id)))) { v2Blocked.cooldown.add(pid); continue; }
-      }
+      if (safeBlock(pid, xc, c)) continue;                  // SAFEGUARDS (see the header)
       idleFrom.set(pid, {crime_id: xc.id, crime: xc.name, position: busy.get(pid).label}); movePool.push({pid, soft: false});
     }
     const pool = freePool().concat(softPool()).concat(movePool).filter(p => !nsBan.has(p.pid));
@@ -839,6 +856,7 @@ export function ocPlan(X) {
   teams.forEach(t => { const c = calcOf(t.roles, t.crime), a = c != null ? c : avgOf(t.roles.filter(r => r.pid != null), t.crime);
     t.succ = a == null ? null : Math.round(a * 10) / 10; t.succ_calc = c != null; });
   return {teams, changed, stats: {v2_blocked: V2 ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
+    safe_blocked: SAFE ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
     live: teams.filter(t => t.kind === "live").length, spawn: teams.filter(t => t.kind === "spawn").length,
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
     holds: teams.filter(t => t.hold).length, hold_log: holdLog,

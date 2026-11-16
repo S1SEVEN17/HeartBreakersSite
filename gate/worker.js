@@ -2005,7 +2005,11 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            // only changes when a leader deploys one
            auto: v.auto !== false,
            // AUTOMATIC TIMER (Nov 2026): how often the Hub re-plans, in minutes - 3 (the Worker timer's own beat) to 60
-           autoMinutes: Math.round(n(v.autoMinutes, 3, 60, 3))};
+           autoMinutes: Math.round(n(v.autoMinutes, 3, 60, 3)),
+           // 🛡 SAFEGUARDS on moves (Nov 16 2026): on/off, % more pay per day a move must give, hours between moves for
+           // one member, hours before they may be sent back to the crime they left, never out of a crime that needs them
+           safeOn: v.safeOn !== false, safeGain: Math.round(n(v.safeGain, 0, 100, 10)), safeCooldown: Math.round(n(v.safeCooldown, 0, 168, 24)),
+           safeBack: Math.round(n(v.safeBack, 0, 336, 72)), safeProtect: v.safeProtect !== false};
     } else if (b.k === "contacted") {
       // (built above - the merged contact log)
     } else {
@@ -2757,7 +2761,10 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3};
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
+  // 🛡 SAFEGUARDS (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings to the Team Builder
+  // page under their own category"): on by default - see gate/oc_planner.js SAFEGUARDS ON THE LIVE PLAN TOO
+  safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true};
 // DELAY RECORD for placement (Nov 2026): each member's crime delays in the last 30 days (data/crime_delays.json - the
 // same log behind the Discord delay posts and the reliability score's "Crimes" part) and how many crimes they took
 // part in (oc_hist), refreshed HOURLY into oc_snap hub 'delay-stats':
@@ -3215,11 +3222,27 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
   const tpNames = (tpW && tpW.data && tpW.data.names) || null;
   const succOf = (crime, roles) => { if (!tpSucc || !tpNames) return null; const h = tpSuccessOf(tpSucc, tpNames, crime, roles); return h ? h.chance : null; };
-  const r = ocPlan({succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
+  // 🛡 SAFEGUARDS: the live MOVE LOG (oc_snap hub 'plan:moves' {pid: {at, to, from}}) - the last time each member was
+  // moved by the plan (asked to leave a crime, or their reserved crime switched). Passing it turns the safeguards on.
+  const moveLog = ((await ocSnapGet(env, "hub", "plan:moves").catch(() => null)) || {}).data || {};
+  const r = ocPlan({moveLog, succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                     rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now,
                     reshuffle: moves.length > 0, holdLog: ((lastStats && lastStats.data) || {}).hold_log || {},
                     // SCRIPT USERS: null until anyone has been seen (the table is new) - no preference until then
                     scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null});
+  try {                                                    // record this run's moves for the next runs' once-a-day check
+    const was = new Map();                                 // pid -> the live crime they were reserved in before
+    (prevTeams || []).forEach(t => { if (t.kind === "live" && t.crime_id != null) (t.roles || []).forEach(x => { if (x.pid != null && !x.existing) was.set(Number(x.pid), String(t.crime_id)); }); });
+    const ml = {}; let dirty = false;
+    Object.keys(moveLog).forEach(k => { if (now - Number((moveLog[k] || {}).at) < 14 * 864e5) ml[k] = moveLog[k]; else dirty = true; });
+    (r.teams || []).forEach(t => { if (t.kind !== "live" || t.crime_id == null) return; (t.roles || []).forEach(x => {
+      if (x.pid == null || x.existing) return;
+      const pid = String(x.pid), to = String(t.crime_id), from = x.leave ? String(x.leave.crime_id) : (was.has(Number(pid)) && was.get(Number(pid)) !== to ? was.get(Number(pid)) : null);
+      if (from == null || (ml[pid] && String(ml[pid].to) === to)) return;      // not a move, or the same move still pending
+      ml[pid] = {at: now, to: t.crime_id, from}; dirty = true; }); });
+    if (dirty) await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:moves', ?, ?, 'hub') " +
+      "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify(ml)).run();
+  } catch (e) { console.log("oc move log: failed (" + String((e && e.message) || e).slice(0, 80) + ")"); }
   // 🔬 SHADOW MODE (Nov 15 2026, user: "Enable this in Shadow Mode. I want to see how things would work with the new
   // system compared to our current system."): the same crimes, members and rates are planned twice more FROM SCRATCH
   // (locked teams kept, members already in a crime stay) - once by today's rules, once by the V2 rules (paused /
@@ -3233,7 +3256,9 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     // the shadow's own MOVE LOG (oc_snap hub 'plan:shadow-moves' {pid: {at, to, from}}): the last move the new rules
     // proposed for each member - what the once-a-day safeguard checks. A move still proposed keeps its first time.
     const ml0 = ((await ocSnapGet(env, "hub", "plan:shadow-moves").catch(() => null)) || {}).data || {};
-    const A = ocPlan(Object.assign({}, base)), B = ocPlan(Object.assign({}, base, {v2: OC_V2, moveLog: ml0}));
+    const v2 = Object.assign({}, OC_V2, opts.safeOn === false ? {minGain: 0, cooldownHours: 0, backHours: 0}
+      : {minGain: Number(opts.safeGain ?? 10), cooldownHours: Number(opts.safeCooldown ?? 24), backHours: Number(opts.safeBack ?? 72)});   // the Team Builder's 🛡 Safeguards numbers
+    const A = ocPlan(Object.assign({}, base, {moveLog})), B = ocPlan(Object.assign({}, base, {v2, moveLog: ml0}));
     const ml = {};
     Object.keys(ml0).forEach(k => { if (now - Number((ml0[k] || {}).at) < 7 * 864e5) ml[k] = ml0[k]; });
     (B.teams || []).forEach(t => (t.roles || []).forEach(r => { if (r.pid != null && r.leave && t.crime_id != null) {
@@ -3243,7 +3268,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
       "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify(ml)).run();
     await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:shadow', ?, ?, 'hub') " +
       "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
-      .bind(now, JSON.stringify(ocShadowReport(A, B, crimes, members, now))).run();
+      .bind(now, JSON.stringify(Object.assign(ocShadowReport(A, B, crimes, members, now), {rules: v2}))).run();
   } catch (e) { console.log("oc shadow: failed (" + String((e && e.message) || e).slice(0, 80) + ")"); }
   if (moves.length) {
     r.stats.reconfigured = {at: now, moves};
