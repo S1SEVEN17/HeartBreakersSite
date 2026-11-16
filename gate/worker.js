@@ -417,6 +417,22 @@ async function sxRoute(env, ctx, req) {
   if (op === "mine") return sxPass(await mine(env, who));
   // sharing from the script (the member's own key stays on their device) - see SCRIPT SHARING below
   if (op === "share_get" || op === "share_set" || op === "share_push" || op === "share_ping") return sxShareOp(env, who, op, b);
+  // 📡 "LAST NOTIFIED" (HB Suite 0.2.56, Nov 15 2026, user: 'Add a "Notify" button next to the "No Script" users on the
+  // "Not Sharing CPR" list. Add a "Last Notified" timestamp.'): leaders only - records that this leader pressed Notify
+  // for member `pid` just now, shared between leaders (oc_config all/'cpr_notified' {pid: {ts, by}}; entries older
+  // than 90 days dropped). Nothing is sent by the Hub - the leader sends the Torn mail themselves.
+  if (op === "cprnote") {
+    if (!who.leader) return leadersOnly();
+    const pid = Number(b.pid); if (!pid) return sxJson({ok: false, error: "bad member"}, 400);
+    const r0 = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'all' AND k = 'cpr_notified'").first().catch(() => null);
+    let m = {}; try { m = r0 ? JSON.parse(r0.v) || {} : {}; } catch (e) { m = {}; }
+    const now = Date.now();
+    Object.keys(m).forEach(k => { if (now - Number((m[k] || {}).ts) > 90 * 864e5) delete m[k]; });
+    m[String(pid)] = {ts: now, by: String(who.name || "").slice(0, 40)};
+    await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'cpr_notified', ?, ?, ?) ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
+      .bind(JSON.stringify(m), now, String(who.name || "")).run();
+    return sxJson({ok: true, pid, ts: now, by: m[String(pid)].by});
+  }
   if (op === "live") {
     const what = String(b.what || ""), u = new URL("https://sx.local/"), get = new Request(u.toString());
     if (what === "board") return sxPass(await cwLive(env));
@@ -433,7 +449,10 @@ async function sxRoute(env, ctx, req) {
     if (what === "deployed") {
       if (!who.leader) return leadersOnly();
       const o = await liveMemo("deployed", () => ocPlanObj(env, "prod", {player_id: who.id}));
-      return sxJson({ok: true, plan_ts: o.plan_ts || null, teams: o.teams || [], sharing: o.sharing || null});   // + 📡 who shares CPR rates (0.2.23, leaders)
+      // + cpr_notified {pid: {ts, by}} - when a leader last pressed Notify for a member without the script (HB Suite 0.2.56)
+      const nt = await env.OC_DB.prepare("SELECT v FROM oc_config WHERE env = 'all' AND k = 'cpr_notified'").first().catch(() => null);
+      let cprN = {}; try { cprN = nt ? JSON.parse(nt.v) || {} : {}; } catch (e) { cprN = {}; }
+      return sxJson({ok: true, plan_ts: o.plan_ts || null, teams: o.teams || [], sharing: o.sharing || null, cpr_notified: cprN});   // + 📡 who shares CPR rates (0.2.23, leaders)
     }
     if (what === "myoc") return sxJson(await ocMine(env, who.id));   // the Hub script's Home "My OC" tile (Nov 14 2026)
     // HB SUITE (Nov 14 2026): the header's live status chips - ranked war + chain now (same as the site's now.json)
@@ -1799,7 +1818,8 @@ async function ocPlanObj(env, envName, id) {
   }
   if (assignment && assignment.crime_id != null && !assignment.queued && join_now[String(assignment.crime_id)])
     assignment.join_now = join_now[String(assignment.crime_id)];
-  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing, join_now,
+  // (Nov 15 2026, user: 'Hide "Sharing CPR Rates" section to only leaders.') the who-shares list goes to leaders only
+  return {ok: true, disabled: cfg.disabled, assignment, plan_ts: cfg.plan_ts || null, is_leader, teams, delays, sharing: is_leader ? sharing : null, join_now,
           weights_at: tpRow ? Number(tpRow.as_of) || null : null};   // when the role weights were last fetched (null = none yet)
 }
 function ocSpawnState(crimes, snap, crime, position) {
