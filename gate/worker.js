@@ -101,6 +101,17 @@ function isLeader(env, position) {
   return want.includes(String(position || "").toLowerCase());
 }
 
+// 🧰 LOAN STAFF (HB Suite 0.2.62, Nov 16 2026, user: "Open Loans tab to Heart Stoppers+HR+Leadership roles."): who may
+// see the OC item-loan list (who needs which item) besides leaders. env LOAN_POSITIONS = comma list (case-insensitive),
+// default "Heart Stopper,HR" (the faction's position names, as in generate.py POSITION_ORDER; a trailing "s" is ignored
+// so "Heart Stoppers" matches too). Leaders always count. Loans only - every other leaders' read stays leaders-only.
+function isLoanStaff(env, position) {
+  if (isLeader(env, position)) return true;
+  const norm = x => String(x || "").trim().toLowerCase().replace(/s$/, "");
+  const want = String(env.LOAN_POSITIONS || "Heart Stopper,HR").split(",").map(norm).filter(Boolean);
+  return want.includes(norm(position));
+}
+
 // who is this? -> {id, name, position, leader, since, until} or null. Position comes from the live member list;
 // since / until = when this device signed in / when the pass runs out (ms) - shown on My Account.
 async function whoIs(env, ctx, req) {
@@ -374,7 +385,7 @@ async function sxMember(env, ctx, pid) {
   const members = await currentMembers(env, ctx);
   const mm = members && members.get(Number(pid));
   if (!mm) return {error: "Not a current Heart Breakers member."};
-  return {who: {id: Number(pid), name: mm.name, position: mm.position || "", leader: isLeader(env, mm.position)}};
+  return {who: {id: Number(pid), name: mm.name, position: mm.position || "", leader: isLeader(env, mm.position), loans: isLoanStaff(env, mm.position)}};
 }
 async function sxWho(env, ctx, code) {
   const m = /^hbsx2\.(\d+)\.(\d+)\.([\w-]+)$/.exec(String(code || "").trim());
@@ -386,7 +397,7 @@ async function sxWho(env, ctx, code) {
   const a = await sxMember(env, ctx, pid);
   return a.who ? {who: a.who, exp: Number(exp)} : a;
 }
-const sxMe = (who) => ({id: who.id, name: who.name, position: who.position, leader: !!who.leader});
+const sxMe = (who) => ({id: who.id, name: who.name, position: who.position, leader: !!who.leader, loans: !!(who.leader || who.loans)});   // loans: may see the OC item-loan list (isLoanStaff)
 async function sxRoute(env, ctx, req) {
   if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: SX_CORS});
   if (req.method !== "POST") return sxJson({ok: false, error: "POST only"}, 405);
@@ -440,6 +451,14 @@ async function sxRoute(env, ctx, req) {
     if (what === "scripts") return sxPass(await scriptsRoute(env, get, u, who));
     if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
     if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
+    // 🧰 "loans" (HB Suite 0.2.62): the item-loan lists ONLY (missing = member in / planned for a crime without the
+    // role's item; needs = "pid:itemId" in use) for loan staff (isLoanStaff: Heart Stopper / HR + leaders). Nothing else
+    // from the leaders' spawn read (notify list, delays, paused crimes) is included.
+    if (what === "loans") {
+      if (!(who.leader || who.loans)) return leadersOnly();
+      const A = await ocSpawnAlerts(env);
+      return sxJson({ok: true, as_of: A.as_of || null, missing: A.missing || [], needs: A.needs || []});
+    }
     // 🚀 DEPLOYED CRIMES (HB Suite 0.2.23, Nov 15 2026, user: "Show Deployed Crimes in the OC Tab within a dropdown. Put
     // this under the Loans tab. This should only be seen by leadership."): the live OC plan's teams - crime, status
     // (needs spawn / recruiting / spawned), success, each member's slot, joined / queued, pass rate - the same teams as
