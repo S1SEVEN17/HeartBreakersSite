@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.60
+// @version      0.2.62
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.60';
+    const VERSION = '0.2.62';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -77,6 +77,7 @@
         rsSetAt: 'hbs_rs_set_at', rsSetAt0: 'hbs_rs_set_at0',
         rsSetNote: 'hbs_rs_set_note',
         rtOpen: 'hbs_rt_open',
+        cfold: 'hbs_cfold',
         cwHits: 'hbs_cw_hits',
         cwDump: 'hbs_cw_dump',
         cwCompact: 'hbs_cw_compact',
@@ -1025,6 +1026,29 @@
             #hbs-panel.hbs-compact .hbs-big{font-size:22px;} #hbs-panel.hbs-compact .hbs-btn{padding:4px 8px;font-size:10.5px;}
             #hbs-panel.hbs-compact .hbs-tabs button{padding:4px 2px 3px;font-size:9px;} #hbs-panel.hbs-compact .hbs-tabs button span{font-size:14px;}
             #hbs-panel.hbs-compact .hbs-li{padding:3px 0;font-size:11px;} #hbs-panel.hbs-compact .hbs-sec{margin:9px 0 3px;}
+            /* (0.2.62) compact-mode layouts: Chain + OC */
+            #hbs-panel.hbs-compact .hbs-fold{margin-top:5px;padding:6px 9px;} #hbs-panel.hbs-compact .hbs-fold .tt{font-size:11.5px;}
+            #hbs-panel.hbs-compact .hbs-foldb{padding:4px 8px 6px;}
+            #hbs-panel .hbs-cmtop{display:flex;align-items:center;gap:8px;min-width:0;}
+            #hbs-panel .hbs-cmt{font:700 24px/1 var(--font);color:#fff;font-variant-numeric:tabular-nums;flex:0 0 auto;} #hbs-panel .hbs-cmt.dead{color:#777;}
+            #hbs-panel .hbs-cmi{flex:1 1 auto;min-width:0;line-height:1.25;text-align:left;} #hbs-panel .hbs-cmi > b{display:block;font-size:12.5px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-cmi > small{display:block;font-size:10.5px;color:#aaa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} #hbs-panel .hbs-cmi > small b{color:var(--acc);}
+            #hbs-panel .hbs-cmdot{flex:0 0 auto;font-size:10px;color:#7CFC9A;} #hbs-panel .hbs-cmdot.poll{color:#FFB454;} #hbs-panel .hbs-cmdot.off{color:#777;}
+            #hbs-panel .hbs-cmic{flex:0 0 auto !important;width:34px;min-width:34px;padding:6px 0 !important;font-size:14px !important;text-align:center;}
+            #hbs-panel .hbs-cmup{margin-top:4px;font-size:11px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-cmcov{display:flex;align-items:center;gap:6px;margin:5px 0 0;padding:5px 9px;font-size:11.5px;cursor:pointer;white-space:nowrap;overflow:hidden;}
+            #hbs-panel .hbs-cmcov b{flex:0 0 auto;} #hbs-panel .hbs-cmcov span{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;opacity:.9;} #hbs-panel .hbs-cmcov em{font-style:normal;flex:0 0 auto;opacity:.8;}
+            #hbs-panel .hbs-cmcovd{margin:0;border-radius:0 0 9px 9px;border-top:0;padding:4px 9px 6px;font-size:11px;} #hbs-panel .hbs-cmcov.open{border-radius:9px 9px 0 0;}
+            #hbs-panel .hbs-cmact{flex-wrap:nowrap;} #hbs-panel .hbs-cmact > .hbs-btn:first-child{flex:1 1 auto;padding:7px 8px !important;font-size:12px !important;}
+            #hbs-panel .hbs-cmact .hbs-dmbtn{width:34px;min-width:34px;padding:6px 0 !important;font-size:14px !important;}
+            /* (0.2.62, user: "Add small text under the icons. 'Target' 'Dump'. Remove the X, replace it as 'Leave'. Use small text ... so they fit in the existing buttons") */
+            #hbs-panel .hbs-cmact .hbs-cmic, #hbs-panel .hbs-cmact .hbs-dmbtn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 0 !important;line-height:1;font-size:13px !important;}
+            #hbs-panel .hbs-cmact small{display:block;font-size:7.5px;font-weight:bold;letter-spacing:.1px;line-height:1;white-space:nowrap;opacity:.9;} #hbs-panel .hbs-cmact small.only{font-size:8.5px;}
+            #hbs-panel .hbs-cmal .hbs-altiles{gap:4px;margin-top:5px;} #hbs-panel .hbs-cmal .hbs-altiles div{padding:2px 2px 3px;border-radius:7px;}
+            #hbs-panel .hbs-cmal .hbs-altiles i{display:none;} #hbs-panel .hbs-cmal .hbs-altiles b{font-size:12.5px;} #hbs-panel .hbs-cmal .hbs-altiles span{font-size:8.5px;}
+            #hbs-panel .hbs-cmq{display:flex;align-items:baseline;gap:8px;} #hbs-panel .hbs-cmq .hbs-cap{margin:0 0 0 auto;font-size:11px;}
+            #hbs-panel .hbs-cmpay{flex:0 0 auto;text-align:right;line-height:1.15;} #hbs-panel .hbs-cmpay b{display:block;font-size:17px;color:#7CFC9A;} #hbs-panel .hbs-cmpay small{font-size:9.5px;opacity:.75;text-transform:uppercase;}
+            #hbs-panel .hbs-cm4 .hbs-rsg{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:5px;} #hbs-panel .hbs-cm4 .hbs-rsg b{font-size:12px;}
             /* ⚙ Layout rows (0.2.0) */
             #hbs-panel .hbs-lay{display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--line);font-size:11.5px;}
             #hbs-panel .hbs-lay > span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -2369,6 +2393,96 @@
         if (cw.syncT && !(cw.ws && cw.ws.readyState === 1)) { clearTimeout(cw.syncT); cw.syncT = setTimeout(cwSyncRun, 50); } };
     document.addEventListener('visibilitychange', cwWake); window.addEventListener('focus', cwWake);
 
+    const CMP = () => !!uiOpt('compact');
+    const cfOpen = k => !!(store.get(K.cfold, {}) || {})[k];
+    function cFold(key, icon, title, meta, body, alert) {
+        const o = cfOpen(key);
+        return cwFold(`data-cfold="${key}"`, icon, title, meta, o, alert) + (o ? `<div class="hbs-foldb">${body}</div>` : '');
+    }
+    document.addEventListener('click', e => {
+        const b = e.target && e.target.closest && e.target.closest('#hbs-panel [data-cfold]'); if (!b) return;
+        const m = store.get(K.cfold, {}) || {}; m[b.dataset.cfold] = !m[b.dataset.cfold]; store.set(K.cfold, m); render(true);
+    });
+    function cmCard(key, icon, title, meta, alert, html) {
+        if (!CMP()) return html;
+        const m = /^\s*<div class="hbs-card[^"]*"><div class="hbs-r1">[\s\S]*?<\/div>/.exec(html), e = html.lastIndexOf('</div>');
+        if (!m || e < m[0].length) return html;
+        return cFold(key, icon, title, meta, html.slice(m[0].length, e), alert);
+    }
+    async function chainCompactHtml(X) {
+        const { S, c, cfg, turn, bonus, rw, q, st, nm, live, hubAge } = X, lead = !!(S.me || {}).is_leader;
+        let out = hubAge > 75000 ? `<div class="hbs-banner hbs-warnb">⚠ No update from the Hub for <b>${dur(hubAge / 1000)}</b> - may be out of date. Asking again…</div>` : '';
+        const go = live && bonus.next ? Math.max(0, num(bonus.next) - c.current) : 0, pc = num(bonus.pace_per_min);
+        const conn = cw.ws && cw.ws.readyState === 1 ? ['', 'Live'] : cw.syncT ? [' poll', 'Polling'] : [' off', 'Offline'];
+        const sub = !live ? (S.cooldown && S.cooldown.until ? `next chain in <b data-exp="${cwLocal(S.cooldown.until)}">-</b>` : 'no active chain')
+            : cwVerifyAt && cwLeft() <= 0 ? 'timer ran out - checking…'
+            : bonus.next ? `🎯 bonus ${int(bonus.next)} · <b>${int(go)}</b> to go${pc > 0 ? ` · ~${dur(go / pc * 60)}` : ''}` : 'left on the timer';
+        out += `<div class="hbs-card hbs-hero"><div class="hbs-cmtop">
+            <div class="hbs-cmt${live ? '' : ' dead'}">${live ? `<span data-cwexp data-exp="${cwLocal(c.expires_at)}" data-zero="00:00">-</span>` : '00:00'}</div>
+            <div class="hbs-cmi"><b>⛓ ${live ? int(c.current) + ' / ' + int(c.max) : 'No live chain'}</b><small>${sub}</small></div>
+            <span class="hbs-cmdot${conn[0]}" title="${conn[1]}">●</span>
+            <button type="button" class="hbs-btn${cvOptOpen ? '' : ' hbs-ghost'} hbs-cmic" data-cvopt title="Compact View - a small tab on the screen edge">⛶</button></div>
+            ${cw.err ? `<div class="hbs-hint">${esc(cw.err)}</div>` : ''}`;
+        if (live && turn.up) out += `<div class="hbs-cmup">Up: ${nm(turn.up)}${num(turn.up) === me.id ? ' <b class="hbs-good">(you)</b>' : ''}${turn.backup ? ` · Backup: ${nm(turn.backup)}${num(turn.backup) === me.id ? ' <b class="hbs-good">(you)</b>' : ''}` : ''}</div>`;
+        if (live && bonus.next && c.current >= num(bonus.warn_from))
+            out += `<div class="hbs-banner">🎯 Bonus hit <b>${int(bonus.next)}</b> in ${int(bonus.next - c.current)}${bonus.name ? ` · taken by <b>${esc(bonus.name)}</b>` : ''}
+                ${bonus.pid && c.current === bonus.next - 1 && num(bonus.pid) !== me.id ? '<br><b>Hold - the bonus is theirs</b>' : ''}</div>`;
+        else if (bonus.pid) out += `<div class="hbs-bonusline">★ Bonus <b>${bonus.next ? int(bonus.next) : ''}</b> → <b>${esc(bonus.name || '#' + bonus.pid)}</b>
+            ${lead ? ' <button type="button" class="hbs-btn hbs-ghost hbs-mini" data-cwbonusclr>Clear</button>' : ''}</div>`;
+        if (rw) {
+            const mins = rw.hours != null ? Math.max(0, Math.round(+rw.hours * 60)) : null;
+            const canNow = q.filter(x => x.can_hit !== false && !x.away && !x.inactive && (!x.presence || x.presence === 'active') && (() => { const e = cwEnergy(x); return e && e.cur >= 25; })()).length;
+            const lvl = mins == null ? 'ok' : mins < 15 ? 'low' : mins < 30 ? 'warn' : 'ok';
+            const span = mins == null ? '' : mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ' ' + (mins % 60) + ' min' : ''}`;
+            const head = mins == null ? 'Covered - regen keeps pace' : mins === 0 ? "Can't cover" : `Covered ~${span}`, o = cfOpen('cwcov');
+            out += `<div class="hbs-cover ${lvl} hbs-cmcov${o ? ' open' : ''}" data-cfold="cwcov" role="button"><b>${lvl === 'low' ? '⚠' : lvl === 'warn' ? '⏳' : '✓'} ${head}</b>
+                <span>· ${int(rw.banked_hits)} hit${num(rw.banked_hits) === 1 ? '' : 's'} · ${canNow}/${q.length} can hit</span><em>${o ? '▾' : '▸'}</em></div>`
+                + (o ? `<div class="hbs-cover ${lvl} hbs-cmcovd"><div class="d">${mins ? `Holds the chain at the slowest safe pace until ~${tzClock(Math.floor(cwNow() / 1000) + mins * 60)} ${tzTagH()}. ` : mins === 0 ? 'No hits ready in the queue right now. ' : ''}
+                    ${int(rw.banked_hits)} hits ready · ${canNow} of ${q.length} can hit now${bonus.next ? ` · <span class="${rw.bonus_reachable ? 'y' : 'n'}">bonus ${int(bonus.next)} ${rw.bonus_reachable ? 'in reach ✓' : 'out of reach ✗'}</span>` : ''}</div></div>` : '');
+        }
+        out += cw.queued ? `<div class="hbs-actions hbs-cmact">${hitBtn('chain')}
+                <button type="button" class="hbs-btn hbs-ghost hbs-cmic" data-cw="target" title="Find target - open a weak target's attack page (level 1-3, inactive 60+ days)">🎯<small>Target</small></button>
+                <button type="button" class="hbs-btn hbs-ghost hbs-cmic" data-cw="away" title="${(q.find(x => num(x.pid) === me.id) || {}).away ? "I'm back" : 'Away - skip me for now'}">${(q.find(x => num(x.pid) === me.id) || {}).away ? '↩<small>Back</small>' : '⏸<small>Away</small>'}</button>${dmBtnHtml().replace('💩</button>', '💩<small>Dump</small></button>')}
+                <button type="button" class="hbs-btn hbs-ghost hbs-cmic" data-cw="leave" title="Leave the queue"><small class="only">Leave</small></button></div>`
+            : `<div class="hbs-actions hbs-cmact"><button type="button" class="hbs-btn" data-cw="join">Join the queue</button></div>`;
+        out += '</div>' + cvChainHtml().replace(/^<div class="hbs-actions">[\s\S]*?<\/div>/, '');
+        { const mineQ = q.find(x => num(x.pid) === me.id);
+          if (mineQ && !mineQ.stats && (cw.statsErr || !cwStatsCached(600000)))
+            out += `<div class="hbs-banner hbs-warnb">⚠ <b>Your energy and cooldowns aren't reaching the queue.</b>
+                ${cw.statsErr ? `Torn said: <i>${esc(cw.statsErr)}</i>. ` : ''}Needs a <b>Limited Access</b> key or higher, and Torn open in a visible tab.
+                <div class="hbs-actions"><button type="button" class="hbs-btn hbs-mini" data-cw="statsretry">↻ Try again</button></div></div>`; }
+        const qOk = q.filter(x => !x.away && !x.inactive && (!x.presence || x.presence === 'active'));
+        const capHits = qOk.reduce((a, x) => { const e = cwEnergy(x); return a + (e ? Math.floor(e.cur / 25) : 0); }, 0);
+        out += dmLineHtml() + `<div class="hbs-cmal">${cwAlTilesHtml(cfg)}</div>`;
+        out += `<div class="hbs-sec hbs-cmq"><span>Queue · ${q.length}</span>${q.length ? `<span class="hbs-cap${capHits === 0 ? ' low' : capHits < 5 ? ' warn' : ''}">${qOk.length ? `⚡ ~${int(capHits)} hits · ${qOk.length} online` : '⚠ no watchers online'}</span>` : ''}</div>`
+            + (q.length ? cwQueueHtml(q, st, turn, bonus) : '<div class="hbs-hint">Nobody queued.</div>');
+        out += retalsHtml() + schedHtml();
+        if (lead && (S.me || {}).members) out += cFold('cwbonus', '★', 'Bonus hitter', bonus.pid ? `<span class="hbs-foldme">${esc(bonus.name || '#' + bonus.pid)}</span>` : '<small>not assigned</small>',
+            `<div class="hbs-actions"><select class="hbs-input" data-cwbonus><option value="">🎯 Assign bonus…</option><option value="clear">Clear</option>
+                ${S.me.members.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' })).map(m => `<option value="${m.pid}">${esc(m.name)}</option>`).join('')}</select></div>`, false);
+        const cfgUrl = lead && cfg.edit_url ? String(cfg.edit_url) : '';
+        out += cFold('cwset', '⚙', 'Alerts & settings', `<small>${[cfg.topAlertSeconds, cfg.restAlertSeconds, cfg.thirdAlertSeconds].filter(x => num(x) > 0).map(mSec).join(' / ')} · min ${int(cfg.minChain)}</small>`,
+            `<div class="hbs-actions"><button type="button" class="hbs-btn${alOpen ? '' : ' hbs-ghost'}" data-alopen>⚙ Configure alerts</button>${alOpen ? '' : '<button type="button" class="hbs-btn hbs-ghost" data-cw="test">🔔 Test my alerts</button>'}
+                ${lead ? `<button type="button" class="hbs-btn${cwCfg.open ? '' : ' hbs-ghost'}" data-cwcfgopen>🛠 Chain settings ${cwCfg.open ? '▾' : '▸'}</button>` : ''}</div>` + cwCfgHtml(cfg, cfgUrl) + alertsCfgHtml(), false);
+        { let meta = '';
+          try { const C = await readOpt('m', 'db/chains.json'), L = ((C && C.chains) || []).map(x => (x.m || []).find(r => num(r[0]) === me.id)).filter(Boolean);
+                meta = L.length ? `<small>${L.length} chain${L.length === 1 ? '' : 's'} · ${int(L.reduce((a, r) => a + num(r[1]), 0))} hits</small>` : '<small>none yet</small>'; } catch (e) {   }
+          out += cFold('cwsum', '⛓', 'Your chain summary', meta, cfOpen('cwsum') ? (await chainSummaryHtml()).replace(/^<div class="hbs-sec">[^<]*<\/div>/, '') : '', false); }
+        return out;
+    }
+    function ocCmHero(cur) {
+        const p = cur.pay || {}, open = num(cur.filled) < num(cur.seats);
+        return `<div class="hbs-card hbs-hero hbs-cm4"><div class="hbs-cmtop">
+            <div class="hbs-cmi"><b>${esc(cur.crime)} <span class="hbs-chip">${esc(cur.status)}</span></b>
+                <small>${esc(cur.position)}${cur.rate != null ? ` · <b>${cur.rate}%</b> CPR` : ''}${cur.difficulty != null ? ` · difficulty ${esc(String(cur.difficulty))}` : ''}</small></div>
+            ${p.pay_day ? `<div class="hbs-cmpay"><b>${shortMoney(p.pay_day)}</b><small>${p.yours ? 'joined at' : 'pay'} / day</small></div>` : ''}</div>
+            ${rsTiles([[`${cur.filled}/${cur.seats}`, 'Filled'], [Math.round(cur.progress) + '%', 'Planning'], [cur.success != null ? Math.round(cur.success) + '%' : '-', 'Team'],
+                cur.ready_at ? [`<span data-until="${ocEarliest(cur)}">-</span>`, open ? 'Earliest' : 'Ready in'] : null])}
+            ${cFold('ocseats', '💺', 'Seats & pay', `<small>${cur.filled}/${cur.seats} filled${p.normal ? ` · normal ${shortMoney(p.normal)}` : ''}</small>`,
+                payHero(cur.pay, 0, false, true) + (cur.ready_at ? `<div class="hbs-hint">${open ? 'Earliest ready time' : 'Ready'}: ${ocWhen(ocEarliest(cur))}</div>` : '')
+                + slotsHtml(cur).replace(/^<div class="hbs-sec">[^<]*<\/div>/, ''), false)}
+            <div class="hbs-actions"><a class="hbs-btn hbs-ghost" href="${OC_LINK(cur.crime_id)}">Open the crime</a></div></div>`;
+    }
     async function chainHtml() {
         if (!modOn('chain')) return `<div class="hbs-empty">The Chain module is off - turn it on in ⚙.</div>`;
         if (cw.denied) return `<div class="hbs-empty">Chain Watch refused this account (${esc(cw.denied)}).</div>`;
@@ -2387,6 +2501,7 @@
         const live = c.current > 0;
         const hubAge = cw.lastMsg ? Date.now() - cw.lastMsg : 0;
         if (hubAge > 75000) cwSyncSoon();
+        if (CMP()) return await chainCompactHtml({ S, c, cfg, turn, bonus, rw, q, st, nm, live, hubAge });
         let out = cvChainHtml() + (hubAge > 75000 ? `<div class="hbs-banner hbs-warnb">⚠ No update from the Hub for <b>${dur(hubAge / 1000)}</b> - what's below may be out of date. Asking again…</div>` : '')
             + `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">⛓ ${live ? int(c.current) + ' / ' + int(c.max) : 'No live chain'}</span>
             <span class="hbs-chip">${cw.ws && cw.ws.readyState === 1 ? '● Live' : cw.syncT ? '● Polling' : '○ Offline'}</span></div>${cw.err ? `<div class="hbs-hint">${esc(cw.err)}</div>` : ''}`;
@@ -2652,7 +2767,8 @@
         const [MY, O] = await Promise.all([loadMyOc(true), readOpt('m', 'db/crimes.json')]);
         const cur = MY && MY.current, as = MY && MY.assignment;
         let out = '';
-        if (cur) out += `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">${esc(cur.crime)}</span><span class="hbs-chip">${esc(cur.status)}</span></div>
+        if (cur && CMP()) out += ocCmHero(cur);
+        else if (cur) out += `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">${esc(cur.crime)}</span><span class="hbs-chip">${esc(cur.status)}</span></div>
             ${payHero(cur.pay, 0, false, true)}
             ${rsTiles([[esc(cur.position), 'Your role'], [cur.rate != null ? cur.rate + '%' : '-', 'Your CPR'], [cur.difficulty != null ? esc(String(cur.difficulty)) : '-', 'Difficulty'],
                   [`${cur.filled}/${cur.seats}`, 'Filled'], [Math.round(cur.progress) + '%', 'Your planning'], [cur.success != null ? Math.round(cur.success) + '%' : '-', cur.success_kind === 'weighted' ? 'Team success · weighted' : 'Team success']])}
@@ -2666,18 +2782,23 @@
                 <div class="hbs-sub">Role <b>${esc(as.position)}</b>${as.weight != null ? ` <small class="hbs-wt">${as.weight}% weight</small>` : ''}${as.difficulty != null ? ` · difficulty ${esc(String(as.difficulty))}` : ''}${as.succ != null ? ` · team success ${Math.round(as.succ)}%` : ''}</div>
                 ${as.leave ? `<div class="hbs-banner">↪ Leave <b>${esc(as.leave.crime)}</b> (${esc(as.leave.position)}) first - your planning there hasn't started and this seat pays more.</div>` : ''}
                 ${as.kind !== 'live' ? '<div class="hbs-hint">Waiting for this crime to be spawned.</div>' : ''}
-                ${as.detail ? slotsHtml(as.detail) : ''}
+                ${as.detail ? (CMP() ? cFold('ocasg', '💺', 'Seats', `<small>${as.detail.slots.filter(x => x.pid).length}/${as.detail.slots.length} filled</small>`, slotsHtml(as.detail).replace(/^<div class="hbs-sec">[^<]*<\/div>/, ''), false) : slotsHtml(as.detail)) : ''}
                 ${as.kind === 'live' && as.crime_id ? `<div class="hbs-actions"><a class="hbs-btn" href="${OC_LINK(as.crime_id)}">${as.pay && as.pay.join_now ? '⚡ Join now' : 'Go to the crime'}</a></div>` : ''}</div>`;
         if (!cur && !(as && !as.joined)) out += `<div class="hbs-card"><div class="hbs-sub">You're not in a crime and nothing is assigned right now. The Hub re-plans every few minutes.</div></div>`;
         const sh = store.get(K.share, {}) || {};
-        out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🕵️ Share CPR (OC pass rates)</span>
+        out += CMP() ? cFold('occpr', '🕵️', 'Share CPR', sh.oc ? '<span class="hbs-foldme">On</span>' : '<small>Off</small>',
+                `<div class="hbs-actions"><button type="button" class="hbs-btn${sh.oc ? '' : ' hbs-ghost'}" data-occpr>${sh.oc ? '✓ On - tap to turn off' : 'Off - tap to turn on'}</button></div>
+                <div class="hbs-hint">Your checkpoint pass rate per role, read on this device, so leaders and the planner can put you in the roles you pass best. Same setting as ⚙ sharing.</div>
+                <div class="hbs-msg" data-occprmsg></div>`, false)
+            : `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🕵️ Share CPR (OC pass rates)</span>
             <button type="button" class="hbs-btn${sh.oc ? '' : ' hbs-ghost'}" data-occpr>${sh.oc ? '✓ On' : 'Off'}</button></div>
             <div class="hbs-hint">Your checkpoint pass rate per role, read on this device when the Hub finds a new crime, so leaders and the planner can put you in the roles you pass best. Same setting as ⚙ sharing.</div>
             <div class="hbs-msg" data-occprmsg></div></div>`;
         const mine = ((O && O.crimes) || []).filter(c => (c.m || []).includes(me.id));
         const okN = mine.filter(c => String(c.status).toLowerCase() === 'successful').length, earned = mine.reduce((a, c) => a + num(c.share), 0);
-        const leadHtml = me.leader ? await ocLeadersHtml() : '';
-        if (me.leader) out += ocLoansOut;
+        const leadHtml = (me.leader || me.loans) ? await ocLeadersHtml() : '';
+        if (me.leader || me.loans) out += ocLoansOut;
+        const cmMark = out.length;
         {
             const best = mine.reduce((a, c) => num(c.share) > num(a && a.share) ? c : a, null), cnt = {};
             mine.forEach(c => { cnt[c.name] = (cnt[c.name] || 0) + 1; });
@@ -2692,11 +2813,14 @@
         if (mine.length) out += sec('Latest crimes');
         out += mine.slice(-6).reverse().map(c => `<div class="hbs-li"><span>${fmtD(c.t)} · ${esc(c.name || '?')}</span>
             <b class="${String(c.status).toLowerCase() === 'successful' ? 'hbs-good' : 'hbs-bad'}">${esc(c.status || '')}${c.share ? ' · ' + shortMoney(c.share) : ''}</b></div>`).join('');
+        if (CMP()) out = out.slice(0, cmMark) + cFold('ocsum', '🕵', 'Your OC summary',
+            mine.length ? `<small>${mine.length} crime${mine.length === 1 ? '' : 's'} · ${Math.round(100 * okN / mine.length)}%${earned ? ' · ' + shortMoney(earned) : ''}</small>` : '<small>none yet</small>',
+            out.slice(cmMark).replace(/^\s*<div class="hbs-card"><div class="hbs-r1">[\s\S]*?<\/div>/, '<div>'), false);
         if (me.leader) out += leadHtml;
         return out;
     }
     function ocBind() {
-        if (me.leader) ocLeadersBind();
+        if (me.leader || me.loans) ocLeadersBind();
         const b = bodyEl.querySelector('[data-occpr]'); if (!b) return;
         b.addEventListener('click', async () => {
             const m = bodyEl.querySelector('[data-occprmsg]'); b.disabled = true; if (m) m.textContent = 'Saving…';
@@ -3847,7 +3971,8 @@
     let loanView = 'toloan', loanBusy = false, loanErr = '';
     async function ocLeadersHtml() {
         // [HB Suite] Hub API — op "live" what "spawn" (leaders): Notify list, delayed / paused crimes, missing items
-        ocLead = await live('spawn').catch(() => null);
+        // just the two loan lists (missing / needs) - [HB Suite] Hub API — op "live" what "loans"
+        ocLead = await live(me.leader ? 'spawn' : 'loans').catch(() => null);
         const S = ocLead || {}, N = await names().catch(() => ({ byId: {} }));
         const pl = (pid, name) => `<a href="#" data-prof="${pid}">${esc(name || nameOf(N, pid))}</a>`;
         let out = sec('Leaders');
@@ -3855,24 +3980,24 @@
         notifyList = NT; notifyTplS = S.notify_tpl || null;
         const todo = NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position)).length;
         const lastAt = c => c && c.at ? ` · last contact ${new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '';
-        out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">📣 Notify (no OC script)</span><span class="hbs-chip">${todo} to do</span></div>`
+        out += cmCard('ocntf', '📣', 'Notify (no OC script)', `<b class="hbs-foldn">${todo}</b><small>to do</small>`, todo > 0, `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">📣 Notify (no OC script)</span><span class="hbs-chip">${todo} to do</span></div>`
             + (NT.length ? `<div class="hbs-hint">They can't see their OC seat. ✉️ opens the mail with the subject and message filled in; 💬 opens their profile - tap Chat and the message is typed in. You press Send. ✓ just logs it. Every leader sees the contact.</div>`
                 + NT.map((x, i) => `<div class="hbs-li"><span>${pl(x.pid, x.name)}<br><span style="opacity:.75">${esc(x.crime)} #${esc(x.crime_id)} · ${esc(x.position)}${lastAt(x.contacted)}</span>
                     <br><span data-ntfst="${i}">${ntfBadge(x)}</span></span>
                     <span style="white-space:nowrap"><button class="hbs-btn" data-ntf="chat" data-i="${i}">💬</button> <button class="hbs-btn" data-ntf="mail" data-i="${i}">✉️</button> <button class="hbs-btn" data-ntf="sent" data-i="${i}">✓</button></span></div>`).join('')
                 + '<div class="hbs-hint" data-ntfmsg></div>'
-            : '<div class="hbs-hint">✅ Nobody to notify.</div>') + '</div>';
+            : '<div class="hbs-hint">✅ Nobody to notify.</div>') + '</div>');
         const D = S.delays || [];
-        out += `<div class="hbs-card ${D.length ? 'hbs-red' : ''}"><div class="hbs-r1"><span class="hbs-name">⏰ Delayed crimes</span><span class="hbs-chip">${D.length}</span></div>`
+        out += cmCard('ocdel', '⏰', 'Delayed crimes', `<b class="hbs-foldn">${D.length}</b>`, D.length > 0, `<div class="hbs-card ${D.length ? 'hbs-red' : ''}"><div class="hbs-r1"><span class="hbs-name">⏰ Delayed crimes</span><span class="hbs-chip">${D.length}</span></div>`
             + (D.length ? D.map(d => `<div class="hbs-li"><span><a href="${OC_LINK(d.crime_id)}"><b>${esc(d.crime)}</b></a> #${esc(d.crime_id)}
                     ${(d.members || []).map(m => `<br>${pl(m.pid, m.name)} · ${esc(m.position)} - <b class="hbs-bad">${esc(m.reason)}</b>`).join('')}</span>
                     <span>${d.since ? `late ${dur((Date.now() - num(d.since)) / 1000)}` : ''}</span></div>`).join('')
-                : '<div class="hbs-hint">✅ No ready crime is held up.</div>') + '</div>';
+                : '<div class="hbs-hint">✅ No ready crime is held up.</div>') + '</div>');
         const P = S.paused || [];
-        out += `<div class="hbs-card ${P.length ? 'hbs-alert' : ''}"><div class="hbs-r1"><span class="hbs-name">⏸️ Paused planning</span><span class="hbs-chip">${P.length}</span></div>`
+        out += cmCard('ocpau', '⏸️', 'Paused planning', `<b class="hbs-foldn">${P.length}</b>`, false, `<div class="hbs-card ${P.length ? 'hbs-alert' : ''}"><div class="hbs-r1"><span class="hbs-name">⏸️ Paused planning</span><span class="hbs-chip">${P.length}</span></div>`
             + (P.length ? P.map(c => `<div class="hbs-li"><span><a href="${OC_LINK(c.crime_id)}"><b>${esc(c.crime)}</b></a> #${esc(c.crime_id)} · ${c.filled}/${c.seats} filled
                     <br><span style="opacity:.75">open: ${esc((c.open || []).join(', ') || '?')}${c.expired_at ? ` · expires ${new Date(c.expired_at * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}</span></span></div>`).join('')
-                : '<div class="hbs-hint">✅ No crime is waiting on an empty seat.</div>') + '</div>';
+                : '<div class="hbs-hint">✅ No crime is waiting on an empty seat.</div>') + '</div>');
         const missing = Array.isArray(S.missing) ? S.missing : (loanRead().missing || []);
         if (ocLead && Array.isArray(S.needs)) loanWrite({ missing, needs: S.needs, mts: Date.now() });
         loanHighlight();
@@ -3897,7 +4022,7 @@
                 <button type="button" class="hbs-btn hbs-ghost" data-loanign="${e.pid}:${e.iid}">Ignore</button></span></div>`).join('')
                 : '<div class="hbs-hint">✅ No loaned utilities that nobody needs.</div>') : '';
         }
-        ocLoansOut = out + '</div>' + await ocDeployedHtml() + ocSharingHtml();
+        ocLoansOut = cmCard('ocloan', '🧰', 'Loans', `<b class="hbs-foldn">${missing.length}</b><small>to loan${C.unused ? ' · ' + unused.length + ' unused' : ''}</small>`, missing.length > 0, out + '</div>') + await ocDeployedHtml() + ocSharingHtml();
         return before;
     }
     let ocLoansOut = '';
@@ -4043,12 +4168,13 @@
         ['input', 'keydown', 'keyup', 'change'].forEach(t => { try { input.dispatchEvent(new Event(t, { bubbles: true })); } catch (e) {   } });
     }
     const ARM_UTIL = '#/tab=armoury&sub=utilities&start=0';
-    function armGoRetrieve(iid, pid) {
-        toast('Opening Armoury → Utilities - tap Retrieve again once the item is highlighted.', true);
+    function armGoRetrieve(iid, pid, mode) {
+        mode = mode === 'loan' ? 'loan' : 'retrieve';
+        toast(`Opening Armoury → Utilities - tap ${mode === 'loan' ? 'Loan' : 'Retrieve'} again once the item is highlighted.`, true);
         if (/factions\.php/.test(location.pathname) && /step=your/.test(location.search)) location.hash = ARM_UTIL;
-        else { try { sessionStorage.setItem('hbs_arm_go', JSON.stringify({ iid, pid, at: Date.now() })); } catch (e) {   }
+        else { try { sessionStorage.setItem('hbs_arm_go', JSON.stringify({ iid, pid, mode, at: Date.now() })); } catch (e) {   }
             location.href = 'https://www.torn.com/factions.php?step=your&type=1' + ARM_UTIL; return; }
-        armFindLoaned(iid, pid, 0);
+        armFindLoaned(iid, pid, 0, mode);
     }
     let armTabTried = false;
     function armOpenUtilTab() {
@@ -4058,20 +4184,21 @@
         if (!armTabTried) { const a = li.querySelector('a.ui-tabs-anchor, a'); if (a) { armTabTried = true; a.click(); } }
         return false;
     }
-    function armFindLoaned(iid, pid, n) {
+    function armFindLoaned(iid, pid, n, mode) {
+        const loan = mode === 'loan';
         if (!n) armTabTried = false;
         if (pageScrapeAllowed() && /factions\.php/.test(location.pathname)) { try { armOpenUtilTab(); } catch (e) {   } }
-        if (n > 60) { toast('Couldn\'t find that loaned copy on Armoury → Utilities - it may be in another category.', true); return; }
+        if (n > 60) { toast(loan ? 'Couldn\'t find a free copy of that item on Armoury → Utilities - it may be in another category, or every copy is out on loan.' : 'Couldn\'t find that loaned copy on Armoury → Utilities - it may be in another category.', true); return; }
         setTimeout(() => {
-            const row = onArmoury() && pageScrapeAllowed() ? armRows().filter(r => r.iid === iid).find(r => rowPid(r) === pid) : null;
-            if (!row) return armFindLoaned(iid, pid, n + 1);
+            const row = onArmoury() && pageScrapeAllowed() ? armRows().filter(r => r.iid === iid).find(r => loan ? !rowPid(r) : rowPid(r) === pid) : null;
+            if (!row) return armFindLoaned(iid, pid, n + 1, mode);
             try { armFilterApply(); } catch (e) {   }
             row.el.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.el.classList.add('hbs-arm-pulse'); setTimeout(() => row.el.classList.remove('hbs-arm-pulse'), 2400);
-            loanHighlight(); toast('Item highlighted - tap Retrieve again to open Torn\'s confirm.');
+            loanHighlight(); toast(loan ? 'Item highlighted - tap Loan again to fill in the member.' : 'Item highlighted - tap Retrieve again to open Torn\'s confirm.');
         }, 300);
     }
     try { const g = JSON.parse(sessionStorage.getItem('hbs_arm_go') || 'null'); sessionStorage.removeItem('hbs_arm_go');
-        if (g && Date.now() - g.at < 30000) setTimeout(() => armFindLoaned(Number(g.iid), Number(g.pid), 0), 1200); } catch (e) {   }
+        if (g && Date.now() - g.at < 30000) setTimeout(() => armFindLoaned(Number(g.iid), Number(g.pid), 0, g.mode), 1200); } catch (e) {   }
     function armouryAct(mode, iid, pid, name) {
         if (mode === 'retrieve') {
             if (store.get(K.armHide, false)) { store.set(K.armHide, false); try { armFilterApply(); } catch (e) {   } }
@@ -4079,6 +4206,7 @@
                 if (!(onArmoury() && /sub=utilities/i.test(location.hash))) { armGoRetrieve(iid, pid); return; }
             }
         }
+        if (mode === 'loan' && (!onArmoury() || !armRows().some(r => r.iid === iid)) && !(onArmoury() && /sub=utilities/i.test(location.hash))) { armGoRetrieve(iid, pid, 'loan'); return; }
         if (!onArmoury()) { toast('Open your faction Armoury → Utilities first, then tap this again.', true); return; }
         const rows = armRows().filter(r => r.iid === iid);
         if (!rows.length) { toast('That item isn\'t on this Armoury tab - open Utilities (or its category) and try again.', true); return; }
@@ -4118,7 +4246,7 @@
     let loanPageT = null;
     function loanPageWatch() {
         if (!/factions\.php/.test(location.href)) return;
-        const sched = () => { clearTimeout(loanPageT); loanPageT = setTimeout(() => { if (me && me.leader) loanHighlight(); }, 500); };
+        const sched = () => { clearTimeout(loanPageT); loanPageT = setTimeout(() => { if (me && (me.leader || me.loans)) loanHighlight(); }, 500); };
         new MutationObserver(sched).observe(document.body, { childList: true, subtree: true });
         window.addEventListener('hashchange', sched); window.addEventListener('focus', sched); sched();
     }
