@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.62
+// @version      0.2.64
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,11 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.64 (Nov 16 2026) - ⚔ WAR tab rebuilt: the live (or upcoming) war's header, "Your war so far", and 🎯 Priority
+ *          targets - enemy members inside YOUR fair-fight range (FFScouter key needed; default 2.0 - 2.5), the ones
+ *          you can hit right now first. Past wars, your war / chain / OC summaries now live in a new 📜 History tab.
+ *  v0.2.63 (Nov 16 2026) - COMPACT MODE: the Home tab gets its compact layout - your header stays, and Your stats,
+ *          My organized crime, Latest war, Latest chain and Latest fold to one-line summaries (closed by default).
  *  v0.2.62 (Nov 16 2026) - COMPACT MODE (⚙ Display → Compact mode) now has its own layouts for the Chain and OC tabs:
  *          one timer row, the queue-cover card as a one-line strip, icon buttons, slimmer alert tiles, and every extra
  *          section folded to a one-line summary (closed by default, remembered). 🧰 Loans is now also shown to
@@ -423,7 +428,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.62';
+    const VERSION = '0.2.64';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -460,6 +465,9 @@
         cwStats: 'hbs_cw_stats',               // your last energy / cooldown reading {s, at} (Torn caches a key ~30 s)
         cwSnap: 'hbs_cw_snap',                 // the last chain timer from the Hub (shown instantly on the next page load)
         ffKey: 'hbs_ff_key',                   // your FFScouter key (this device only - never sent to the Hub) (0.2.1)
+        warRange: 'hbs_war_range',             // 🎯 Priority targets: your fair-fight range {lo, hi} (default 2 - 2.5) (0.2.64)
+        warFF: 'hbs_war_ff',                   // FFScouter fair fight per enemy member for the current war {fid, at, m: {pid: {ff, est}}}
+        warMine: 'hbs_war_mine',               // "Your war so far": {key: 'fid:start', hits, resp, last, ids: [...at last]} from your own attack log
         ffCache: 'hbs_ff_cache',               // FFScouter results, newest 300
         rtHide: 'hbs_rt_hide',                 // retal targets hidden for you only {attacker: expiry}
         rtSort: 'hbs_rt_sort',                 // retal sort: timer | ff
@@ -1471,6 +1479,18 @@
             #hbs-panel .hbs-cmal .hbs-altiles{gap:4px;margin-top:5px;} #hbs-panel .hbs-cmal .hbs-altiles div{padding:2px 2px 3px;border-radius:7px;}
             #hbs-panel .hbs-cmal .hbs-altiles i{display:none;} #hbs-panel .hbs-cmal .hbs-altiles b{font-size:12.5px;} #hbs-panel .hbs-cmal .hbs-altiles span{font-size:8.5px;}
             #hbs-panel .hbs-cmq{display:flex;align-items:baseline;gap:8px;} #hbs-panel .hbs-cmq .hbs-cap{margin:0 0 0 auto;font-size:11px;}
+            /* (0.2.64) ⚔ War tab: priority targets */
+            #hbs-panel .hbs-wscore{font:700 24px/1.1 var(--font);color:#fff;text-align:center;margin-top:6px;font-variant-numeric:tabular-nums;} #hbs-panel .hbs-wscore small{display:block;font:normal 11.5px var(--font);color:#aaa;margin-top:3px;}
+            #hbs-panel .hbs-wscore .up{color:#7CFC9A;} #hbs-panel .hbs-wscore .dn{color:#ff8f8f;}
+            #hbs-panel .hbs-wrange{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11.5px;color:#bbb;} #hbs-panel .hbs-wrange input{width:58px;margin:0;text-align:center;}
+            #hbs-panel .hbs-wrow{display:flex;align-items:center;gap:6px;padding:6px 0;border-top:1px solid var(--edge);text-align:left;min-width:0;}
+            #hbs-panel .hbs-wrow .n{flex:1 1 auto;min-width:0;line-height:1.25;} #hbs-panel .hbs-wrow .n a{font-weight:bold;font-size:12.5px;} #hbs-panel .hbs-wrow .n small{display:block;font-size:10.5px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-wrow .hbs-btn{flex:0 0 auto;text-decoration:none;} #hbs-panel .hbs-wrow.off{opacity:.5;}
+            #hbs-panel .hbs-wst{font-size:10px;font-weight:700;padding:1px 5px;border-radius:4px;white-space:nowrap;background:#2f5f3a;color:#b6f0c4;} #hbs-panel .hbs-wst.no{background:#5f2f2f;color:#ffbcbc;} #hbs-panel .hbs-wst.aw{background:#2b2f37;color:#cfd3da;}
+            #hbs-panel .hbs-wgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;margin-top:6px;}
+            #hbs-panel .hbs-wgrid a{display:block;text-decoration:none;text-align:left;padding:5px 7px;border-radius:7px;background:var(--well);border:1px solid var(--edge);min-width:0;}
+            #hbs-panel .hbs-wgrid a b{display:block;font-size:12px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;} #hbs-panel .hbs-wgrid a span{display:block;font-size:10.5px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-wgrid a.ok{border-color:#2f5d33;} #hbs-panel .hbs-wgrid a.ok span i{font-style:normal;color:#7CFC9A;} #hbs-panel .hbs-wgrid a.off{opacity:.5;}
             #hbs-panel .hbs-cmpay{flex:0 0 auto;text-align:right;line-height:1.15;} #hbs-panel .hbs-cmpay b{display:block;font-size:17px;color:#7CFC9A;} #hbs-panel .hbs-cmpay small{font-size:9.5px;opacity:.75;text-transform:uppercase;}
             #hbs-panel .hbs-cm4 .hbs-rsg{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:5px;} #hbs-panel .hbs-cm4 .hbs-rsg b{font-size:12px;}
             /* ⚙ Layout rows (0.2.0) */
@@ -1519,7 +1539,7 @@
         { id: 'oc', icon: '🕵', label: 'OC', main: true }, { id: 'wars', icon: '⚔', label: 'War', main: true },
         { id: 'more', icon: '•••', label: 'More', main: true },
         { id: 'boards', icon: '🏆', label: 'Boards' }, { id: 'me', icon: '👤', label: 'Me' }, { id: 'members', icon: '👥', label: 'Members' },
-        { id: 'news', icon: '📰', label: 'News' }, { id: 'payouts', icon: '💰', label: 'Payouts' }, { id: 'scripts', icon: '🧩', label: 'Scripts' },
+        { id: 'history', icon: '📜', label: 'History' }, { id: 'news', icon: '📰', label: 'News' }, { id: 'payouts', icon: '💰', label: 'Payouts' }, { id: 'scripts', icon: '🧩', label: 'Scripts' },
         // href = a Hub page that opens in a new tab (0.2.1, user: "OC Management, Panel Editor and Payout Calculator should
         // just link to the hub, not have independently built pages")
         { id: 'alerts', icon: '🔔', label: 'Alerts', lead: true }, { id: 'ocm', icon: '🗂', label: 'OC Management ↗', lead: true, href: '/l/oc.html' },
@@ -1769,6 +1789,7 @@
             <span class="hbs-chip">${esc(me.position || m.position || 'Member')}</span></div>
             <div class="hbs-sub">${[m.level != null ? 'Level ' + m.level : '', (row && row[0] != null ? row[0] : m.days) != null ? int(row && row[0] != null ? row[0] : m.days) + ' days in the faction' : '']
                 .filter(Boolean).join(' · ')}</div>`;
+        const cmH = out.length;   // (0.2.63) compact mode: everything the block below adds is split into header buttons + a 📊 fold
         {
             // (0.2.4) the header's figures + the Hub-profile totals, grouped and centred; no reliability scores here
             const [, wh, gym, oc] = row || [], t = m.t || {};
@@ -1783,7 +1804,10 @@
                 + `</div><div class="hbs-actions"><button type="button" class="hbs-btn" data-homeme>Full profile</button>
                 <a class="hbs-btn hbs-ghost" href="${HUB_BASE}/m/member.html?id=${me.id}" target="_blank" rel="noopener">On the Hub</a></div>`;
         }
-        out += '</div>';
+        if (CMP()) { const g = out.slice(cmH), i = g.indexOf('<div class="hbs-actions">'), t = m.t || {};
+            out = out.slice(0, cmH) + (i >= 0 ? g.slice(i) : '') + '</div>'
+                + cFold('homestats', '📊', 'Your stats', `<small>${int(t.war_hits)} war hits · ${int(t.chain_hits)} chain hits${row && row[3] != null ? ` · OC ${row[3]}%` : ''}</small>`, i >= 0 ? g.slice(0, i) : g, false); }
+        else out += '</div>';
         // (🔔 Leader alerts moved to their own leaders' tab in 0.2.0 - user: "Move Leader Alerts from the home page")
         // ---- 🕵 MY ORGANIZED CRIME ----
         {
@@ -1807,7 +1831,9 @@
             body += tiles([[mineOC.length ? `${okN}/${mineOC.length}` : '-', 'Crimes passed'],
                 [mineOC.length ? Math.round(100 * okN / mineOC.length) + '%' : '-', 'Success rate'], [earned ? shortMoney(earned) : '-', 'OC earnings'],
                 last ? [esc(last.name || '?'), 'Last crime', `${fmtD(last.t)} · <span class="${String(last.status).toLowerCase() === 'successful' ? 'hbs-good' : 'hbs-bad'}">${esc(last.status || '')}</span>`] : null]);
-            out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🕵 My organized crime</span></div>${body}</div>`;
+            const asWait = !!(as && !as.joined && !(cur && String(cur.crime_id) === String(as.crime_id)));
+            out += cmCard('homeoc', '🕵', 'My organized crime', asWait ? `<span class="hbs-foldme">📌 ${esc(as.crime)}</span>` : cur ? `<small>${esc(cur.crime)} · ${Math.round(cur.progress)}%</small>` : '<small>not in a crime</small>', asWait,
+                `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🕵 My organized crime</span></div>${body}</div>`);
         }
         // ---- ⚔ LATEST WAR ----
         {
@@ -1817,12 +1843,13 @@
                 const avg = ranked.length ? ranked.reduce((a, r) => a + r[1], 0) / ranked.length : 0;
                 const pay = ((PO && PO.payouts) || []).find(p => p.end === w.end && (p.m || []).some(r => r[0] === me.id));
                 const paid = pay ? pay.m.find(r => r[0] === me.id) : null;
-                out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">⚔ Latest war · vs ${esc(w.opponent || '?')}</span><span class="hbs-chip">${fmtD(w.end)}</span></div>`
+                out += cmCard('homewar', '⚔', 'Latest war', `<small>vs ${esc(w.opponent || '?')} · ${x ? int(x[1]) + ' hits' : 'not in it'}${paid && paid[1] ? ' · ' + shortMoney(paid[1]) : ''}</small>`, false,
+                    `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">⚔ Latest war · vs ${esc(w.opponent || '?')}</span><span class="hbs-chip">${fmtD(w.end)}</span></div>`
                     + (x ? tiles([[int(x[1]), 'Your hits', `#${ranked.findIndex(r => r[0] === me.id) + 1} of ${ranked.length}<br>${vsAvg(x[1], avg)}`], [int(x[2]), 'Respect'],
                                   [int(x[3]), 'Assists'], [paid && paid[1] ? shortMoney(paid[1]) : (w.payout ? '-' : 'pending'), 'Your payout']])
                          : '<div class="hbs-hint">You weren\'t in this war.</div>')
                     + `<div class="hbs-hint">Faction: ${int(w.hits)} hits · ${w.attackers}/${w.members} members hit${w.termed ? ' · 🤝 termed' : ''}${x && x[1] < MIN_HITS ? ` · <span class="hbs-bad">under ${MIN_HITS} hits</span>` : ''}</div>`
-                    + `<div class="hbs-actions">${w.report ? `<a class="hbs-btn hbs-ghost" href="${esc(w.report)}" target="_blank" rel="noopener">📄 Report</a>` : ''}</div></div>`;
+                    + `<div class="hbs-actions">${w.report ? `<a class="hbs-btn hbs-ghost" href="${esc(w.report)}" target="_blank" rel="noopener">📄 Report</a>` : ''}</div></div>`);
             }
         }
         // ---- ⛓ LATEST CHAIN ----
@@ -1830,10 +1857,11 @@
             const chains = ((C && C.chains) || []).slice().sort((a, b) => num(a.end) - num(b.end)), c = chains[chains.length - 1];
             if (c) {
                 const x = (c.m || []).find(r => r[0] === me.id), ranked = (c.m || []).slice().sort((a, b) => b[1] - a[1]);
-                out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">⛓ Latest chain · ${int(c.length)} hits</span><span class="hbs-chip">${fmtD(c.end)}</span></div>`
+                out += cmCard('homechain', '⛓', 'Latest chain', `<small>${int(c.length)} hits · ${x ? 'yours ' + int(x[1]) : 'you: none'}</small>`, false,
+                    `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">⛓ Latest chain · ${int(c.length)} hits</span><span class="hbs-chip">${fmtD(c.end)}</span></div>`
                     + (x ? tiles([[int(x[1]), 'Your hits', `#${ranked.findIndex(r => r[0] === me.id) + 1} of ${ranked.length}`], [int(x[2]), 'Respect'], [int(x[3]), 'Retals'],
                                   [c.length ? (100 * x[1] / c.length).toFixed(1) + '%' : '-', 'Of the chain']])
-                         : '<div class="hbs-hint">You didn\'t hit in this chain.</div>') + '</div>';
+                         : '<div class="hbs-hint">You didn\'t hit in this chain.</div>') + '</div>');
             }
         }
         // 📰 LATEST (0.2.15, user: "Home page should have a 'Latest' Section ... latest entry tiles for Newsletters, War
@@ -1841,7 +1869,11 @@
         {
             const pick = (l, label) => { const x = ((F && F[l]) || [])[0]; return x ? [x, label] : null; };
             const T = [pick('newsletters', '📰 Newsletter'), pick('war_reports', '⚔ War report'), pick('chain_reports', '⛓ Chain report')].filter(Boolean);
-            if (T.length) out += sec('Latest') + `<div class="hbs-latest">${T.map(([x, label]) => `<a class="hbs-lt" href="${esc(x.url)}" target="_blank" rel="noopener">
+            if (T.length && CMP()) out += cFold('homelatest', '📰', 'Latest', `<small>${T.map(([, label]) => label.replace(/^\S+\s/, '')).join(' · ')}</small>`,
+                `<div class="hbs-latest">${T.map(([x, label]) => `<a class="hbs-lt" href="${esc(x.url)}" target="_blank" rel="noopener">
+                <span class="k">${label}</span>${x.img ? `<img src="${esc(x.img)}" alt="" loading="lazy">` : ''}<b>${esc(x.title || '')}</b><small>${esc(x.sub || '')}</small></a>`).join('')}</div>
+                <div class="hbs-hint">More in 📰 News.</div>`, false);
+            else if (T.length) out += sec('Latest') + `<div class="hbs-latest">${T.map(([x, label]) => `<a class="hbs-lt" href="${esc(x.url)}" target="_blank" rel="noopener">
                 <span class="k">${label}</span>${x.img ? `<img src="${esc(x.img)}" alt="" loading="lazy">` : ''}<b>${esc(x.title || '')}</b><small>${esc(x.sub || '')}</small></a>`).join('')}</div>
                 <div class="hbs-hint">More in 📰 News.</div>`;
         }
@@ -2218,6 +2250,194 @@
     // =====================================================================
     // ⚔ WARS — recent wars (script feed), per-member hits; leaders: Termed toggle
     // =====================================================================
+    // =====================================================================
+    // ⚔ WAR TAB (0.2.64, user: "War tab now. I want to provide war targets for members when they provide a FFScouter
+    // key. Members select a FF Range, by default it's between 2 - 2.5. These should be 'priority targets' for members
+    // during wars. These members will provide the best respect gains per hit.")
+    //   User's choices (Nov 16 2026): layout "A normal. B when compact" (rows / two-column tiles); data from "Members own
+    //   keys while their war tab is open"; unavailable targets "Replaced if other enemies are available, greyed out if
+    //   not. Targets at the top should be available to hit."; "War Header, foldable in compact with score summary";
+    //   "Your war so far, foldable"; "No active war = show upcoming data. Move war history and summary to a new History
+    //   page with chain and OC info included."  NOT built (offered, not picked): enemy status counts, hospital-soon
+    //   list, top hitters, hits available.
+    //   DATA - all only while the War tab is open, the panel is open and the Torn tab is visible:
+    //     - the war itself (opponent, opponent_id, scores, target, start) from the Hub's op live "now" (nowData.war)
+    //     - enemy members: ONE Torn call (faction/<id>?selections=basic) at most every 60 s -> wt.mem
+    //     - fair fight: FFScouter get-stats in batches of 200 with the member's own FFScouter key, kept per war in
+    //       K.warFF and refreshed every 30 min (FF is relative to the key's owner - which is the point)
+    //     - Your war so far: your own attack log (user/?selections=attacks), read incrementally from the war's start
+    //       at most every 60 s, at most 6 calls a pass; kept in K.warMine. A "hit" = an attack on the enemy faction
+    //       with respect gained.
+    //   LIST: in-range (lo <= FF <= hi) members, hittable (status Okay) first by FF high -> low; if those don't fill the
+    //   slots (10 rows / 6 compact tiles) the rest are greyed-out unavailable ones, soonest out first. "Attack" is a
+    //   plain link to Torn's attack page - nothing is started for the member.
+    // =====================================================================
+    const WT_SLOTS = 10, WT_SLOTS_C = 6;
+    const wt = { fid: 0, mem: null, memAt: 0, busy: false, err: '', ffBusy: false, ffErr: '', mineBusy: false, mineAt: 0, mineErr: '' };
+    const warRange = () => { const r = store.get(K.warRange, null) || {}; let lo = Number(r.lo), hi = Number(r.hi);
+        if (!(lo >= 1)) lo = 2; if (!(hi >= lo)) hi = Math.max(lo, 2.5); return { lo, hi }; };
+    const warNow = () => (nowData && nowData.war && num(nowData.war.opponent_id)) ? nowData.war : null;
+    const warVisible = () => tab === 'wars' && !collapsed && !showSettings && document.visibilityState === 'visible';
+    function warHttp(url) {   // FFScouter GET (PDA + desktop) -> text
+        return new Promise((res, rej) => { try {
+            if (typeof PDA_httpGet === 'function') { Promise.resolve(PDA_httpGet(url)).then(r => res((r && (r.responseText || r.response || r.body)) || ''), rej); return; }
+            GM_xmlhttpRequest({ method: 'GET', url, timeout: 15000, onload: r => res(r.responseText), onerror: () => rej(new Error('no answer')), ontimeout: () => rej(new Error('timed out')) });
+        } catch (e) { rej(e); } });
+    }
+    async function warLoad() {
+        const W = warNow(); if (!W || !warVisible() || wt.busy) return;
+        const fid = num(W.opponent_id);
+        if (wt.fid !== fid) { wt.fid = fid; wt.mem = null; wt.memAt = 0; }
+        if (!ffKey()) { warMine(); return; }                       // no FFScouter key = no target list: the enemy faction isn't read at all
+        if (Date.now() - wt.memAt < 60000) return;
+        wt.busy = true; wt.memAt = Date.now();
+        try {
+            // [HB Suite] Torn API — War tab: the enemy faction's members + status (your key; at most once a minute, War tab open)
+            const d = await tornGet(`https://api.torn.com/faction/${fid}?selections=basic`);
+            wt.mem = Object.entries((d && d.members) || {}).map(([pid, m]) => ({ pid: num(pid), name: m.name || '#' + pid, level: num(m.level),
+                state: String((m.status || {}).state || ''), until: num((m.status || {}).until), la: String((m.last_action || {}).status || '') }));
+            wt.err = '';
+        } catch (e) { wt.err = e.message || 'Could not read the enemy faction.'; }
+        wt.busy = false;
+        warFF(); warMine();
+        if (warVisible() && !cwBusy()) render(true);
+    }
+    async function warFF() {
+        const key = ffKey(); if (!key || !wt.mem || !wt.mem.length || wt.ffBusy) return;
+        let C = store.get(K.warFF, null) || {}; if (num(C.fid) !== wt.fid) C = { fid: wt.fid, at: 0, m: {} };
+        const stale = Date.now() - num(C.at) > 30 * 60000, need = wt.mem.map(x => x.pid).filter(p => stale || !C.m[p]);
+        if (!need.length) return;
+        wt.ffBusy = true;
+        try {
+            for (let i = 0; i < need.length; i += 200) {
+                // [HB Suite] FFScouter API — War tab: fair fight + stat estimate for the enemy faction (your FFScouter key, this device)
+                const rows = JSON.parse(await warHttp(`https://ffscouter.com/api/v1/get-stats?key=${encodeURIComponent(key)}&targets=${need.slice(i, i + 200).join(',')}`));
+                if (!Array.isArray(rows)) throw new Error((rows && (rows.error || rows.message)) || 'FFScouter refused the request');
+                rows.forEach(r => { if (r && r.player_id != null) C.m[r.player_id] = { ff: r.fair_fight != null ? Number(r.fair_fight) : null, est: r.bs_estimate_human || '' }; });
+                need.slice(i, i + 200).forEach(p => { if (!C.m[p]) C.m[p] = { ff: null, est: '' }; });   // asked, no data: don't ask again until stale
+            }
+            C.at = Date.now(); store.set(K.warFF, C); wt.ffErr = '';
+        } catch (e) { wt.ffErr = 'FFScouter: ' + (e.message || 'no answer'); }
+        wt.ffBusy = false;
+        if (warVisible() && !cwBusy()) render(true);
+    }
+    // Your war so far: count your attacks on the enemy faction since the war began (incremental; newest attack time kept)
+    async function warMine() {
+        const W = warNow(); if (!W || W.kind !== 'ongoing' || !num(W.start) || wt.mineBusy || Date.now() - wt.mineAt < 60000) return;
+        const key = wt.fid + ':' + num(W.start);
+        let M = store.get(K.warMine, null) || {}; if (M.key !== key) M = { key, hits: 0, resp: 0, last: num(W.start), ids: [] };
+        wt.mineBusy = true; wt.mineAt = Date.now();
+        try {
+            const seen = new Set(M.ids || []), from0 = num(M.last);
+            let from = from0, to = 0, maxTs = from0;
+            for (let n = 0; n < 6; n++) {
+                // [HB Suite] Torn API — War tab "Your war so far": your own attack log since the war began (War tab open, once a minute)
+                const d = await tornGet(`https://api.torn.com/user/?selections=attacks&from=${from}${to ? '&to=' + to : ''}`);
+                const L = Object.entries((d && d.attacks) || {}).map(([id, a]) => Object.assign({ id: String(id) }, a));
+                let lo = Infinity, hi = 0;
+                L.forEach(a => { const ts = num(a.timestamp_ended || a.timestamp_started); lo = Math.min(lo, ts); hi = Math.max(hi, ts);
+                    if (seen.has(a.id)) return; seen.add(a.id);
+                    if (num(a.attacker_id) === me.id && num(a.defender_faction) === wt.fid && num(a.respect_gain != null ? a.respect_gain : a.respect) > 0) { M.hits++; M.resp += num(a.respect_gain != null ? a.respect_gain : a.respect); } });
+                maxTs = Math.max(maxTs, hi);
+                if (L.length < 100) break;
+                // a full page: Torn either sent the newest 100 (gap below -> page back with `to`) or the oldest 100 (gap above -> move `from`)
+                if (lo - from > Math.floor(Date.now() / 1000) - hi) to = lo; else from = hi;
+            }
+            M.last = maxTs; M.ids = [...seen].slice(-300); M.at = Date.now(); store.set(K.warMine, M); wt.mineErr = '';
+        } catch (e) { wt.mineErr = e.message || 'Could not read your attacks.'; }
+        wt.mineBusy = false;
+        if (warVisible() && !cwBusy()) render(true);
+    }
+    setInterval(() => { if (warVisible()) warLoad(); }, 15000);
+    const warStat = x => x.state === 'Okay' ? ['', 'Okay'] : x.state === 'Hospital' ? ['no', `Hosp <span data-until="${x.until}" data-zero="out">-</span>`]
+        : x.state === 'Jail' ? ['no', `Jail <span data-until="${x.until}" data-zero="out">-</span>`] : ['aw', esc(x.state || '?')];
+    function warTargetsHtml(compact) {
+        const R = warRange(), key = ffKey(), C = store.get(K.warFF, null) || {}, FM = num(C.fid) === wt.fid ? C.m || {} : {};
+        const rng = `FF ${R.lo.toFixed(1)} – ${R.hi.toFixed(1)}`;
+        const inputs = `<div class="hbs-wrange"><span>Your FF range</span><input type="number" class="hbs-input" data-wrange="lo" min="1" max="10" step="0.1" value="${R.lo}"><span>to</span>
+            <input type="number" class="hbs-input" data-wrange="hi" min="1" max="10" step="0.1" value="${R.hi}"></div>`;
+        let head = `<div class="hbs-r1"><span class="hbs-name">🎯 Priority targets</span>${compact ? `<button type="button" class="hbs-btn hbs-ghost hbs-mini" data-cfold="warrange">${rng} ✎</button>` : `<span class="hbs-chip">${rng}</span>`}</div>`;
+        if (!key) return `<div class="hbs-card">${head}<div class="hbs-hint">Add your <b>FFScouter key</b> in ⚙ Settings to see the enemy members in your fair-fight range - the hits that pay the most respect. The key stays on this device.</div></div>`;
+        head += !compact || cfOpen('warrange') ? inputs : '';
+        if (!wt.mem) return `<div class="hbs-card">${head}<div class="hbs-hint">${wt.err ? esc(wt.err) : 'Reading the enemy faction…'}</div></div>`;
+        const all = wt.mem.map(x => Object.assign({ ff: (FM[x.pid] || {}).ff, est: (FM[x.pid] || {}).est || '' }, x));
+        const inR = all.filter(x => x.ff != null && x.ff >= R.lo - 1e-9 && x.ff <= R.hi + 1e-9), noFF = all.filter(x => x.ff == null).length;
+        const ok = inR.filter(x => x.state === 'Okay').sort((a, b) => b.ff - a.ff);
+        const off = inR.filter(x => x.state !== 'Okay').sort((a, b) => (a.until || 9e12) - (b.until || 9e12) || b.ff - a.ff);
+        const slots = compact ? WT_SLOTS_C : WT_SLOTS, show = ok.slice(0, slots).concat(off.slice(0, Math.max(0, slots - ok.length)));
+        const atk = pid => `https://www.torn.com/loader.php?sid=attack&user2ID=${pid}`;
+        let list;
+        if (!Object.keys(FM).length && wt.ffBusy) list = '<div class="hbs-hint">Asking FFScouter…</div>';
+        else if (!show.length) list = `<div class="hbs-hint">Nobody in ${rng} right now. Widen your range to see more targets.</div>`;
+        else if (compact) list = `<div class="hbs-wgrid">${show.map(x => { const s = warStat(x); return `<a class="${x.state === 'Okay' ? 'ok' : 'off'}" href="${atk(x.pid)}"><b>${esc(x.name)}</b><span>FF ${x.ff.toFixed(2)} · <i>${s[1]}</i></span></a>`; }).join('')}</div>`;
+        else list = show.map(x => { const s = warStat(x); return `<div class="hbs-wrow${x.state === 'Okay' ? '' : ' off'}"><span class="n"><a href="#" data-prof="${x.pid}">${esc(x.name)}</a>
+            <small>Lvl ${x.level}${x.est ? ' · est ' + esc(x.est) : ''}${x.la ? ' · ' + esc(x.la.toLowerCase()) : ''}</small></span>
+            <span class="hbs-ff hbs-ffm">FF ${x.ff.toFixed(2)}</span><span class="hbs-wst ${s[0]}">${s[1]}</span><a class="hbs-btn${x.state === 'Okay' ? '' : ' hbs-ghost'}" href="${atk(x.pid)}">Attack</a></div>`; }).join('');
+        return `<div class="hbs-card">${head}${list}
+            <div class="hbs-hint">Higher FF = more respect per hit. ${inR.length} in range · <b>${ok.length}</b> hittable now${ok.length > slots ? ` (top ${slots} shown)` : ''}${noFF ? ` · ${noFF} without FF data` : ''}${wt.memAt ? ` · checked ${ago(Math.floor(wt.memAt / 1000))}` : ''}</div>
+            ${wt.ffErr ? `<div class="hbs-msg">${esc(wt.ffErr)}</div>` : ''}${wt.err ? `<div class="hbs-msg">${esc(wt.err)}</div>` : ''}</div>`;
+    }
+    async function warTabHtml() {
+        if (!nowData) { try { await refreshNow(true); } catch (e) { /* */ } }
+        const W = nowData && nowData.war, compact = CMP();
+        if (!W) return `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">⚔ No war right now</span></div>
+            <div class="hbs-hint">When a ranked war is matched, the opponent, the score and your priority targets show here. Past wars and your war summary are in 📜 History (••• More).</div></div>`;
+        warLoad();                                                 // background; redraws when the enemy list arrives
+        const on = W.kind === 'ongoing', lead = num(W.our) - num(W.their);
+        // ---- header ----
+        const when = on ? (num(W.start) ? `started ${ago(num(W.start))}` : 'ongoing') : `starts in <b><span data-until="${num(W.start)}" data-zero="now">-</span></b>`;
+        const hBody = on ? `<div class="hbs-wscore">${int(W.our)} – ${int(W.their)}<small>Lead <b class="${lead >= 0 ? 'up' : 'dn'}">${lead >= 0 ? '+' : '−'}${int(Math.abs(lead))}</b>${num(W.target) ? ` · target ${int(W.target)}` : ''} · ${when}</small></div>`
+            : `<div class="hbs-wscore"><span data-until="${num(W.start)}" data-zero="now">-</span><small>until the war starts${num(W.start) ? ' · ' + ocWhen(num(W.start)) : ''}</small></div>`;
+        let out = compact ? cFold('warhead', '⚔', `vs ${esc(W.opponent || '?')}`, on ? `<b class="hbs-foldn">${lead >= 0 ? '+' : '−'}${int(Math.abs(lead))}</b><small>${int(W.our)} – ${int(W.their)}</small>` : `<small>starts in <span data-until="${num(W.start)}" data-zero="now">-</span></small>`, hBody, false)
+            : `<div class="hbs-card hbs-hero"><div class="hbs-r1"><span class="hbs-name">⚔ vs ${esc(W.opponent || '?')}</span><span class="hbs-chip">${on ? 'Ongoing' : 'Upcoming'}</span></div>${hBody}</div>`;
+        // ---- your war so far (ongoing only) ----
+        if (on) { const M = store.get(K.warMine, null) || {}, mine = M.key === num(W.opponent_id) + ':' + num(W.start) ? M : null;
+            out += cFold('warmine', '🗡', 'Your war so far', mine ? `<small>${int(mine.hits)} hit${mine.hits === 1 ? '' : 's'} · ${num(mine.resp).toFixed(1)} respect</small>` : '<small>reading…</small>',
+                (mine ? tiles([[int(mine.hits), 'Your hits', mine.hits >= MIN_HITS ? `<span class="hbs-good">min ${MIN_HITS} met</span>` : `<span class="hbs-bad">${MIN_HITS - mine.hits} more to reach ${MIN_HITS}</span>`],
+                                [num(mine.resp).toFixed(1), 'Your respect'], [mine.hits ? (num(mine.resp) / mine.hits).toFixed(2) : '-', 'Respect / hit']])
+                       : `<div class="hbs-hint">${wt.mineErr ? esc(wt.mineErr) : 'Reading your attack log…'}</div>`)
+                + '<div class="hbs-hint">Counted from your own attack log on this device (attacks on the enemy faction with respect gained) - the official figures are in the war report.</div>', false, !compact); }
+        out += warTargetsHtml(compact);
+        return out;
+    }
+    function warTabBind() {
+        bodyEl.querySelectorAll('[data-wrange]').forEach(i => i.addEventListener('change', () => {
+            const R = warRange(), v = Math.round(Number(i.value) * 10) / 10; if (!(v >= 1 && v <= 10)) { i.value = R[i.dataset.wrange]; return; }
+            R[i.dataset.wrange] = v; if (R.hi < R.lo) { if (i.dataset.wrange === 'lo') R.hi = R.lo; else R.lo = R.hi; }
+            store.set(K.warRange, R); render(true); }));
+    }
+    // =====================================================================
+    // 📜 HISTORY TAB (0.2.64, user: "Move war history and summary to a new History page with chain and OC info
+    // included."): chips Wars / Chains / OCs. Wars = what the War tab was before (your war summary + every war, tap to
+    // open); Chains = your chain summary + the latest chains with your hits; OCs = your OC record + latest crimes.
+    // The Chain and OC tabs keep their own summaries. Opens from ••• More (or the bar, ⚙ → Layout).
+    // =====================================================================
+    let histSec = 'wars';
+    async function historyHtml() {
+        let out = chips('hs', [['wars', '⚔ Wars'], ['chains', '⛓ Chains'], ['ocs', '🕵 OCs']], histSec);
+        if (histSec === 'chains') {
+            const C = await readOpt('m', 'db/chains.json');
+            const L = ((C && C.chains) || []).slice().sort((a, b) => num(b.end) - num(a.end)).slice(0, 15);
+            out += await chainSummaryHtml();
+            if (L.length) out += sec('Latest chains') + L.map(c => { const x = (c.m || []).find(r => num(r[0]) === me.id);
+                return `<div class="hbs-li"><span>${c.end ? fmtD(c.end) + ' · ' : ''}<b>${int(c.length)}</b>-hit chain</span><b class="${x ? 'hbs-good' : ''}" style="${x ? '' : 'opacity:.6;font-weight:normal'}">${x ? `your hits ${int(x[1])}` : 'not in it'}</b></div>`; }).join('');
+            return out;
+        }
+        if (histSec === 'ocs') {
+            const O = await readOpt('m', 'db/crimes.json');
+            const mine = ((O && O.crimes) || []).filter(c => (c.m || []).includes(me.id));
+            const okN = mine.filter(c => String(c.status).toLowerCase() === 'successful').length, earned = mine.reduce((a, c) => a + num(c.share), 0);
+            const best = mine.reduce((a, c) => num(c.share) > num(a && a.share) ? c : a, null), m30 = mine.filter(c => num(c.t) > Date.now() / 1000 - 30 * 86400);
+            out += `<div class="hbs-card hbs-gold"><div class="hbs-r1"><span class="hbs-name">🕵 Your OC summary</span></div>
+                ${mine.length ? `<div class="hbs-ctiles">${tiles([[int(mine.length), 'Crimes'], [`${okN}/${mine.length}`, 'Passed'], [Math.round(100 * okN / mine.length) + '%', 'Success rate'],
+                    [earned ? shortMoney(earned) : '-', 'OC earnings'], [okN ? shortMoney(earned / okN) : '-', 'Avg payout'], [best && num(best.share) ? shortMoney(best.share) : '-', 'Best payout', best && num(best.share) ? esc(best.name || '') : ''],
+                    [int(m30.length), 'Last 30 days']])}</div>` : '<div class="hbs-hint">No organized crimes on record for you yet.</div>'}</div>`;
+            if (mine.length) out += sec('Latest crimes') + mine.slice(-15).reverse().map(c => `<div class="hbs-li"><span>${fmtD(c.t)} · ${esc(c.name || '?')}</span>
+                <b class="${String(c.status).toLowerCase() === 'successful' ? 'hbs-good' : 'hbs-bad'}">${esc(c.status || '')}${c.share ? ' · ' + shortMoney(c.share) : ''}</b></div>`).join('');
+            return out;
+        }
+        return out + await warsHtml();
+    }
     async function warsHtml() {
         const [F, N] = await Promise.all([readFile('m', 'db/script_feed.json'), names()]);
         const wars = F.wars || [];
@@ -3061,13 +3281,13 @@
     // =====================================================================
     const CMP = () => !!uiOpt('compact');
     const cfOpen = k => !!(store.get(K.cfold, {}) || {})[k];
-    function cFold(key, icon, title, meta, body, alert) {
-        const o = cfOpen(key);
-        return cwFold(`data-cfold="${key}"`, icon, title, meta, o, alert) + (o ? `<div class="hbs-foldb">${body}</div>` : '');
+    function cFold(key, icon, title, meta, body, alert, defOpen) {   // defOpen (0.2.64): open until the member closes it
+        const M = store.get(K.cfold, {}) || {}, o = key in M ? !!M[key] : !!defOpen;
+        return cwFold(`data-cfold="${key}"${defOpen ? ' data-cfdef="1"' : ''}`, icon, title, meta, o, alert) + (o ? `<div class="hbs-foldb">${body}</div>` : '');
     }
     document.addEventListener('click', e => {
         const b = e.target && e.target.closest && e.target.closest('#hbs-panel [data-cfold]'); if (!b) return;
-        const m = store.get(K.cfold, {}) || {}; m[b.dataset.cfold] = !m[b.dataset.cfold]; store.set(K.cfold, m); render(true);
+        const m = store.get(K.cfold, {}) || {}, k = b.dataset.cfold; m[k] = !(k in m ? m[k] : b.dataset.cfdef === '1'); store.set(K.cfold, m); render(true);
     });
     function cmCard(key, icon, title, meta, alert, html) {
         if (!CMP()) return html;
@@ -6272,7 +6492,8 @@
         more: { html: moreHtml }, alerts: { html: alertsHtml, bind: alertsSeen },
         home: { html: homeHtml, bind: homeBind }, boards: { html: boardsHtml, bind: boardsBind },
         me: { html: () => profileHtml(me.id, true), bind: profileBind },
-        members: { html: membersHtml, bind: membersBind }, wars: { html: warsHtml },
+        members: { html: membersHtml, bind: membersBind }, wars: { html: warTabHtml, bind: warTabBind },
+        history: { html: historyHtml, bind: () => bindChips('hs', v => { histSec = v; }) },   // (0.2.64) past wars + war / chain / OC summaries
         news: { html: newsHtml, bind: () => bindChips('ns', v => { newsSec = v; }) },
         payouts: { html: payoutsHtml }, scripts: { html: scriptsHtml },
 
