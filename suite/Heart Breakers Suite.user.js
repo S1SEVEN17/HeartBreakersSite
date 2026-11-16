@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.64
+// @version      0.2.66
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.64';
+    const VERSION = '0.2.66';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -99,6 +99,7 @@
         alerts: 'hbs_alerts',
         alertSeen: 'hbs_alert_seen',
         ui: 'hbs_ui',
+        annDismiss: 'hbs_ann_dismiss',
         upd: 'hbs_update',
         layout: 'hbs_layout',
         meC: 'hbs_me',
@@ -1003,6 +1004,15 @@
             #hbs-panel .hbs-li{max-width:520px;margin-left:auto;margin-right:auto;text-align:left;}
             #hbs-panel .hbs-pin{justify-content:center;} #hbs-panel .hbs-pin-l{flex:0 1 auto;justify-content:center;}
             #hbs-panel .hbs-upd{text-align:center;}
+            /* (0.2.66) 📢 announcement tile + the leaders' Announce tab */
+            #hbs-panel .hbs-ann{margin:0 12px 6px;padding:7px 10px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:12.5px;line-height:1.4;word-break:break-word;position:relative;}
+            #hbs-panel .hbs-ann.urgent{background:#4a1616;border-color:#ff6b6b;color:#ffe0e0;}
+            #hbs-panel .hbs-ann small{display:block;opacity:.7;font-size:10.5px;margin-top:2px;}
+            #hbs-panel .hbs-ann.dis{padding-right:30px;} #hbs-panel .hbs-ann button{position:absolute;top:2px;right:2px;width:28px;height:28px;background:none;border:0;color:inherit;cursor:pointer;font-size:13px;}
+            #hbs-panel .hbs-annbox{width:100%;min-height:64px;resize:vertical;font:13px var(--font);margin:0;}
+            #hbs-panel .hbs-annpick{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px;}
+            #hbs-panel .hbs-annpick label{display:inline-flex;align-items:center;gap:5px;padding:5px 9px;border-radius:999px;border:1px solid var(--edge);background:var(--well);font-size:11.5px;cursor:pointer;min-height:30px;}
+            #hbs-panel .hbs-annpick label.on{border-color:var(--acc);color:var(--acc);} #hbs-panel .hbs-annpick input{margin:0;accent-color:var(--acc);}
             #hbs-panel .hbs-ck,#hbs-panel .hbs-form label.hbs-ck{justify-content:center;}
             #hbs-panel .hbs-lay{text-align:left;}
             #hbs-panel table.hbs-tbl{margin-left:auto;margin-right:auto;}
@@ -1103,7 +1113,7 @@
         { id: 'more', icon: '•••', label: 'More', main: true },
         { id: 'boards', icon: '🏆', label: 'Boards' }, { id: 'me', icon: '👤', label: 'Me' }, { id: 'members', icon: '👥', label: 'Members' },
         { id: 'history', icon: '📜', label: 'History' }, { id: 'news', icon: '📰', label: 'News' }, { id: 'payouts', icon: '💰', label: 'Payouts' }, { id: 'scripts', icon: '🧩', label: 'Scripts' },
-        { id: 'alerts', icon: '🔔', label: 'Alerts', lead: true }, { id: 'ocm', icon: '🗂', label: 'OC Management ↗', lead: true, href: '/l/oc.html' },
+        { id: 'alerts', icon: '🔔', label: 'Alerts', lead: true }, { id: 'announce', icon: '📢', label: 'Announce', lead: true }, { id: 'ocm', icon: '🗂', label: 'OC Management ↗', lead: true, href: '/l/oc.html' },
         { id: 'panels', icon: '🖼', label: 'Panel Editor ↗', lead: true, href: '/l/panels.html' },
         { id: 'recruit', icon: '🤝', label: 'Recruit', lead: true, mod: 'recruit' },
         { id: 'stats', icon: '💪', label: 'Stats', lead: true },
@@ -1128,6 +1138,7 @@
             </div>
             <div class="hbs-chipbar"></div>
             <div class="hbs-upd" style="display:none"></div>
+            <div class="hbs-ann" style="display:none"></div>
             <div class="hbs-pin" style="display:none"></div>
             <div class="hbs-pin hbs-ocpin" style="display:none"></div>
             <div class="hbs-tabs"></div>
@@ -1144,6 +1155,8 @@
         ocPinEl = panel.querySelector('.hbs-ocpin');
         ocPinEl.addEventListener('click', e => { if (e.target.closest('a')) return; if (!e.target.closest('[data-ocpin]')) return; tab = 'oc'; store.set(K.tab, tab); showSettings = false; render(); });
         pinEl.addEventListener('click', e => { const b = e.target.closest('[data-pin]'); if (b) cwAction(b.dataset.pin, b.tagName === 'BUTTON' ? b : null); });
+        annEl = panel.querySelector('.hbs-ann');
+        annEl.addEventListener('click', e => { if (!e.target.closest('[data-anndis]')) return; const a = nowData && nowData.announce; if (a) store.set(K.annDismiss, a.id); drawAnn(); });
         updEl.addEventListener('click', e => { if (!e.target.closest('[data-upd]')) return; const U = store.get(K.upd, {}) || {}; U.dismissed = U.ver; store.set(K.upd, U); drawUpdate(); });
         chipsEl.addEventListener('click', e => { const b = e.target.closest('[data-gotab]'); if (!b || hrefTab(b.dataset.gotab) || !tabOk(b.dataset.gotab)) return;
             tab = b.dataset.gotab; store.set(K.tab, tab); showSettings = false; render(); });
@@ -2213,7 +2226,69 @@
         try { nowData = await live('now'); } catch (e) {   }   // [HB Suite] Hub API — op live "now"
         drawChips();
     }
+    let annEl = null;
+    function drawAnn() {
+        if (!annEl) return;
+        const a = nowData && nowData.announce, dead = !a || (a.until && a.until <= Date.now()) || (a.type !== 'urgent' && store.get(K.annDismiss, '') === a.id);
+        if (dead) { annEl.style.display = 'none'; annEl.innerHTML = ''; return; }
+        const urgent = a.type === 'urgent';
+        annEl.className = 'hbs-ann' + (urgent ? ' urgent' : ' dis'); annEl.style.display = '';
+        annEl.innerHTML = `${urgent ? '🚨' : '📢'} ${esc(a.text)}<small>${esc(String(a.by || '').replace(/\s*\[\d+\]$/, ''))}${a.at ? ' · ' + ago(Math.floor(a.at / 1000)) : ''}${urgent && a.until ? ` · until ${ocWhen(Math.floor(a.until / 1000))}` : ''}</small>`
+            + (urgent ? '' : '<button type="button" data-anndis title="Dismiss">✕</button>');
+    }
+    let annS = null, annAt = 0, annMsg = '';
+    const annAud = a => !a ? '-' : a.all ? 'Everyone' : [a.queue ? 'Chain queue' : '', a.leaders ? 'All leaders' : ''].concat(a.roles || []).filter(Boolean).join(', ');
+    async function annHtml() {
+        if (!me.leader) return '<div class="hbs-empty">Leaders only.</div>';
+        // [HB Suite] Hub API — op "announce" get (leaders: the current announcement, history, positions)
+        if (!annS || Date.now() - annAt > 30000) { try { annS = await hub('announce', { do: 'get' }); annAt = Date.now(); } catch (e) { return `<div class="hbs-empty">${esc(e.message)}</div>`; } }
+        const c = annS.cur, max = annS.max || 200;
+        const hist = (annS.log || []).map(x => `<div class="hbs-li" style="display:block;text-align:left"><span class="hbs-tag ${x.type === 'urgent' ? 'hbs-red' : ''}">${x.type === 'urgent' ? 'Urgent' : 'Announcement'}</span> ${esc(x.text)}
+            <div class="hbs-hint" style="text-align:left;margin:2px 0 0">${esc(x.by || '')} · ${fmtD(Math.floor(num(x.at) / 1000))} · ${esc(annAud(x.aud))} · ${esc(x.ended || 'expired')}${x.ended_by ? ' by ' + esc(x.ended_by) : ''}</div></div>`).join('');
+        return `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">📢 Showing now</span></div>
+                ${c ? `<div class="hbs-ann${c.type === 'urgent' ? ' urgent' : ''}" style="margin:6px 0 0">${c.type === 'urgent' ? '🚨' : '📢'} ${esc(c.text)}<small>${esc(c.by || '')} · ${esc(annAud(c.aud))} · ${c.until ? 'expires ' + ocWhen(Math.floor(c.until / 1000)) : 'no expiry'}</small></div>
+                    <div class="hbs-actions"><button type="button" class="hbs-btn hbs-ghost" data-anndel>Delete it</button></div>` : '<div class="hbs-hint">Nothing is showing right now.</div>'}</div>
+            <div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">✍ New announcement</span><span class="hbs-chip" data-anncn>0 / ${max}</span></div>
+                <div class="hbs-hint" style="text-align:left">One at a time - sending replaces the one showing now. Members see it within about half a minute.</div>
+                <textarea class="hbs-input hbs-annbox" data-anntx maxlength="${max}" placeholder="Chain starts at 20:00 TCT - join the queue"></textarea>
+                ${sec('Kind')}<div class="hbs-annpick" data-annkind><label class="on"><input type="radio" name="hbs-annk" value="announce" checked> Announcement (yellow, can be dismissed)</label>
+                    <label><input type="radio" name="hbs-annk" value="urgent"> Urgent (red, can't be dismissed)</label></div>
+                ${sec('Expires')}<select class="hbs-input" data-annhrs></select>
+                ${sec('Who sees it')}<div class="hbs-annpick" data-annaud><label class="on"><input type="checkbox" value="all" checked> Everyone</label><label><input type="checkbox" value="queue"> In the chain queue</label>
+                    <label><input type="checkbox" value="leaders"> All leaders</label>${(annS.positions || []).map(p => `<label><input type="checkbox" data-role="1" value="${esc(p)}"> ${esc(p)}</label>`).join('')}</div>
+                <div class="hbs-actions"><button type="button" class="hbs-btn" data-annsend>Send</button></div>
+                <div class="hbs-msg" data-annmsg>${esc(annMsg)}</div></div>
+            ${sec('History')}${hist || '<div class="hbs-hint">No past announcements.</div>'}`;
+    }
+    function annBind() {
+        const q = s => bodyEl.querySelector(s), tx = q('[data-anntx]'); if (!tx) return;
+        const kind = () => (q('[data-annkind] input:checked') || {}).value || 'announce';
+        const marks = () => bodyEl.querySelectorAll('.hbs-annpick label').forEach(l => l.classList.toggle('on', l.querySelector('input').checked));
+        const hours = () => { const u = kind() === 'urgent', L = u ? [1, 2, 3, 6, 12, 24] : [0, 1, 6, 12, 24, 72, 168];
+            q('[data-annhrs]').innerHTML = L.map(h => `<option value="${h}"${h === (u ? 6 : 0) ? ' selected' : ''}>${h === 0 ? 'Stays until replaced or deleted' : h < 48 ? h + ' hour' + (h === 1 ? '' : 's') : (h / 24) + ' days'}</option>`).join(''); };
+        hours();
+        tx.addEventListener('input', () => { q('[data-anncn]').textContent = `${tx.value.length} / ${annS.max || 200}`; });
+        q('[data-annkind]').addEventListener('change', () => { hours(); marks(); });
+        q('[data-annaud]').addEventListener('change', e => { const all = q('[data-annaud] input[value=all]');
+            if (e.target === all && all.checked) bodyEl.querySelectorAll('[data-annaud] input').forEach(i => { if (i !== all) i.checked = false; });
+            else if (e.target !== all && e.target.checked) all.checked = false;
+            marks(); });
+        const act = async (body, done) => { const m = q('[data-annmsg]'); if (m) m.textContent = 'Saving…';
+            // [HB Suite] Hub API — op "announce" send / delete (leaders)
+            try { annS = await hub('announce', body); annAt = Date.now(); annMsg = done; delete liveMemo.now; nowAt = 0; refreshNow(true); render(true); }
+            catch (e) { if (m) m.textContent = e.message; } };
+        q('[data-annsend]').addEventListener('click', () => {
+            const text = tx.value.trim(), A = [...bodyEl.querySelectorAll('[data-annaud] input:checked')];
+            const aud = { all: A.some(i => i.value === 'all'), queue: A.some(i => i.value === 'queue'), leaders: A.some(i => i.value === 'leaders'), roles: A.filter(i => i.dataset.role).map(i => i.value) };
+            if (!text) { q('[data-annmsg]').textContent = 'Write a message first.'; return; }
+            if (!confirm(`Send this ${kind() === 'urgent' ? 'URGENT ' : ''}announcement to: ${annAud(aud) || 'nobody'}?${annS && annS.cur ? '\n\nIt replaces the one showing now.' : ''}`)) return;
+            act({ do: 'send', text, type: kind(), hours: Number(q('[data-annhrs]').value), aud }, 'Sent ✓');
+        });
+        const del = q('[data-anndel]');
+        if (del) del.addEventListener('click', () => { if (confirm("Delete the current announcement? It disappears from every member's Suite.")) act({ do: 'delete' }, 'Deleted ✓'); });
+    }
     function drawChips() {
+        drawAnn();
         if (!chipsEl) return;
         const out = [], S = cw.state, t = Date.now() / 1000;
         const PC = cwChain();
@@ -2961,6 +3036,7 @@
             <div class="hbs-actions"><a class="hbs-btn hbs-ghost" href="${OC_LINK(cur.crime_id)}">Open the crime</a></div></div>`;
         if (as && !as.joined && !(cur && String(cur.crime_id) === String(as.crime_id)))
             out += `<div class="hbs-card hbs-alert"><div class="hbs-r1"><span class="hbs-name">📌 Assigned: ${esc(as.crime)}</span>${as.rate != null ? `<span class="hbs-chip">${Math.round(as.rate)}% CPR</span>` : ''}</div>
+                ${as.changed ? `<div class="hbs-hint">↻ Your assignment changed${as.changed.from ? ` from <b>${esc(as.changed.from)}</b>` : ''} - this is the one to join now.</div>` : ''}
                 ${payHero(as.pay, as.ready_at)}
                 <div class="hbs-sub">Role <b>${esc(as.position)}</b>${as.weight != null ? ` <small class="hbs-wt">${as.weight}% weight</small>` : ''}${as.difficulty != null ? ` · difficulty ${esc(String(as.difficulty))}` : ''}${as.succ != null ? ` · team success ${Math.round(as.succ)}%` : ''}</div>
                 ${as.leave ? `<div class="hbs-banner">↪ Leave <b>${esc(as.leave.crime)}</b> (${esc(as.leave.position)}) first - your planning there hasn't started and this seat pays more.</div>` : ''}
@@ -3454,12 +3530,12 @@
         const on = me && modOn('oc') && tab !== 'oc' && !showSettings && as && !as.joined && !(M && M.current);
         if (!on) { ocPinEl.style.display = 'none'; ocPinEl.innerHTML = ''; delete ocPinEl.dataset.sig; return; }
         const live = as.kind === 'live' && as.crime_id, p = as.pay || {};
-        const sig = [as.crime, as.position, as.crime_id, as.kind, p.pay_day, p.join_now].join('|');
+        const sig = [as.crime, as.position, as.crime_id, as.kind, p.pay_day, p.join_now, as.changed && as.changed.from].join('|');
         ocPinEl.style.display = '';
         if (ocPinEl.dataset.sig === sig) return;
         ocPinEl.dataset.sig = sig;
         ocPinEl.innerHTML = `<div class="hbs-pin-l" data-ocpin="open"><b>📌 OC assigned</b>
-            <span class="hbs-pin-t">${esc(as.crime)}</span>
+            <span class="hbs-pin-t">${esc(as.crime)}</span>${as.changed ? `<span class="hbs-pin-s">↻ changed${as.changed.from ? ' from ' + esc(as.changed.from) : ''}</span>` : ''}
             <span class="hbs-pin-s">${esc(as.position)}${as.weight != null ? ` · ${as.weight}% weight` : ''}${p.pay_day ? ` · ${p.join_now ? '⚡ ' : ''}${payDay(p)}/day (est)` : ''}</span></div>
             <div class="hbs-pin-b">${live ? `<a class="hbs-btn" href="${OC_LINK(as.crime_id)}">Join</a>` : '<span class="hbs-hint">waiting to be spawned</span>'}</div>`;
     }
@@ -5211,6 +5287,7 @@
     const VIEWS = {
         chain: { html: chainHtml, bind: chainBind }, oc: { html: ocHtml, bind: ocBind }, recruit: { html: recruitHtml, bind: recruitBind },
         more: { html: moreHtml }, alerts: { html: alertsHtml, bind: alertsSeen },
+        announce: { html: async () => { const h = await annHtml(); annMsg = ''; return h; }, bind: annBind },
         home: { html: homeHtml, bind: homeBind }, boards: { html: boardsHtml, bind: boardsBind },
         me: { html: () => profileHtml(me.id, true), bind: profileBind },
         members: { html: membersHtml, bind: membersBind }, wars: { html: warTabHtml, bind: warTabBind },
