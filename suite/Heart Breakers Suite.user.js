@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.66
+// @version      0.2.69
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.66';
+    const VERSION = '0.2.69';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -54,6 +54,9 @@
         ocShareAt: 'hbs_share_ocat',
         sharePingAt: 'hbs_share_pingat',
         shareDay: 'hbs_share_day',
+        feedOn: 'hbs_feed_on',
+        feedAt: 'hbs_feed_at',
+        feedNo: 'hbs_feed_no',
         ocTag: 'hbs_share_octag',
         mods: 'hbs_mods',
         cwTok: 'hbs_cw_token',
@@ -2741,6 +2744,21 @@
                 + slotsHtml(cur).replace(/^<div class="hbs-sec">[^<]*<\/div>/, ''), false)}
             <div class="hbs-actions"><a class="hbs-btn hbs-ghost" href="${OC_LINK(cur.crime_id)}">Open the crime</a></div></div>`;
     }
+    async function ocRecentHtml() {
+        let R = null;
+        // [HB Suite] Hub API — op live "recent" (OC tab: the last completed crimes and their payout state; no Torn call)
+        try { R = await live('recent'); } catch (e) { return ''; }
+        const rows = (R && R.rows) || []; if (!rows.length) return '';
+        const late = rows.filter(r => r.late).length, unpaid = rows.filter(r => r.unpaid).length;
+        const tag = r => r.late ? `<span class="hbs-tag hbs-red">Not paid · ${dur(Math.max(0, Date.now() / 1000 - r.at))}</span>`
+            : r.unpaid ? '<span class="hbs-tag">Awaiting payout</span>' : r.paid ? '<span class="hbs-tag hbs-good">Paid</span>' : '<span class="hbs-tag">No payout</span>';
+        const list = rows.map(r => `<div class="hbs-li"><span style="min-width:0"><a href="${OC_LINK(r.id)}"><b>${esc(r.name || '?')}</b></a>
+            <small style="display:block;opacity:.7;font-size:10.5px">${r.ok ? 'Success' : 'Failed'} · ${ago(r.at)}${r.money ? ' · ' + shortMoney(r.money) : ''}${r.items ? ` · ${r.items} item${r.items === 1 ? '' : 's'}` : ''}</small></span>${tag(r)}</div>`).join('');
+        const head = late ? `<span class="hbs-chip" style="background:#5f2f2f;color:#ffbcbc">${late} unpaid</span>` : '';
+        if (CMP()) return cFold('ocrecent', '✅', 'Recently completed', late ? `<b class="hbs-foldn">${late}</b><small>unpaid</small>` : `<small>${rows.length} crime${rows.length === 1 ? '' : 's'}${unpaid ? ` · ${unpaid} awaiting payout` : ' · all paid'}</small>`, list, late > 0);
+        return `<div class="hbs-card${late ? ' hbs-red' : ''}"><div class="hbs-r1"><span class="hbs-name">✅ Recently completed</span>${head}</div>
+            ${late ? `<div class="hbs-hint">${late} crime${late === 1 ? " hasn't" : "s haven't"} been paid out after more than an hour.</div>` : ''}${list}</div>`;
+    }
     async function chainHtml() {
         if (!modOn('chain')) return `<div class="hbs-empty">The Chain module is off - turn it on in ⚙.</div>`;
         if (cw.denied) return `<div class="hbs-empty">Chain Watch refused this account (${esc(cw.denied)}).</div>`;
@@ -3057,6 +3075,7 @@
         const okN = mine.filter(c => String(c.status).toLowerCase() === 'successful').length, earned = mine.reduce((a, c) => a + num(c.share), 0);
         const leadHtml = (me.leader || me.loans) ? await ocLeadersHtml() : '';
         if (me.leader || me.loans) out += ocLoansOut;
+        out += await ocRecentHtml();
         const cmMark = out.length;
         {
             const best = mine.reduce((a, c) => num(c.share) > num(a && a.share) ? c : a, null), cnt = {};
@@ -5420,6 +5439,7 @@
                     const p = await hub('share_ping');
                     const ps = p.settings || st;
                     if (p.settings) store.set(K.share, p.settings);
+                    if (p.feed_free) feedAsk();
                     if (ps.oc && ((p.oc_tag && p.oc_tag !== store.get(K.ocTag, '')) || Date.now() - num(store.get(K.ocShareAt, 0)) > OC_SHARE_MS - 20000)) {
                         store.set(K.ocShareAt, Date.now());
                         // [HB Suite] Torn API — sharing: own OC pass rates (v2 user/organizedcrimes - every 5 min while the script runs, 1 call)
@@ -5440,6 +5460,41 @@
         shareTimer = setTimeout(shareTick, next);
     }
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !shareTimer) shareTick(); });
+
+    const FEED_MS = 60000, FEED_LEASE_MS = 150000, FEED_NO_MS = 6 * 3600e3;
+    let feedBusy = false;
+    const feedAllowed = () => !!getKey() && (store.get(K.share, null) || { oc: true }).oc !== false && num(store.get(K.feedNo, 0)) < Date.now();
+    const feedMine = () => num(store.get(K.feedOn, 0)) > Date.now();
+    async function feedAsk() {
+        if (feedMine() || !feedAllowed()) return;
+        try {
+            // [HB Suite] Hub API — op "oc_feed" ask: may this script be the crime feeder? (no data sent)
+            const r = await hub('oc_feed', { do: 'ask' });
+            if (r && r.feed) { store.set(K.feedOn, Date.now() + FEED_LEASE_MS); feedTick(); }
+        } catch (e) {   }
+    }
+    async function feedTick() {
+        if (feedBusy || !feedMine()) return;
+        if (!feedAllowed()) { store.set(K.feedOn, 0); hub('oc_feed', { do: 'stop' }).catch(() => {}); return; }
+        if (Date.now() - num(store.get(K.feedAt, 0)) < FEED_MS - 2000) return;
+        feedBusy = true; store.set(K.feedAt, Date.now());
+        try {
+            // [HB Suite] Torn API — crime feed: the faction's recruiting + planning crimes (v2 faction/crimes, 1 call a
+            const d = await tornGet('https://api.torn.com/v2/faction/crimes?cat=available&limit=100&sort=ASC');
+            // [HB Suite] Hub API — op "oc_feed" put: the crime list (no key; the Hub blanks this member's own open-slot rates)
+            const r = await hub('oc_feed', { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] });
+            store.set(K.feedOn, r && r.feed ? Date.now() + FEED_LEASE_MS : 0);
+            if (r && r.changed) { try { liveClear(); } catch (e) {   } }
+        } catch (e) {
+            const m = String((e && e.message) || '');
+            if (/^Torn: /.test(m)) {
+                if (/Faction API access|Access level|Incorrect ID/i.test(m)) store.set(K.feedNo, Date.now() + FEED_NO_MS);
+                store.set(K.feedOn, 0); hub('oc_feed', { do: 'stop' }).catch(() => {});
+            }
+        }
+        feedBusy = false;
+    }
+    setInterval(feedTick, 15000);
 
     function bindBody() {
         bodyEl.addEventListener('scroll', viewOnScroll, { passive: true });
@@ -5526,7 +5581,7 @@
         row('Hits per chain (when hitting)', C.avg == null ? '-' : String(C.avg), C.avg == null ? '' : vs(C.avg, C.fac_avg).replace('faction avg', 'faction avg per hitter'));
         y += 6;
         if (X.leave && X.leave.length) { T('Excused leave (not counted): ' + X.leave.map(l => fmtD(l.from) + ' – ' + fmtD(l.to)).join(', '), pad, y, 11, '#e8be5a'); y += 20; }
-        T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars and excused leave aren't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, '#6f6f72', 400, 'center');
+        T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars count only when you took part · excused leave isn't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, '#6f6f72', 400, 'center');
         return cv;
     }
 

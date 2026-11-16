@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.66
+// @version      0.2.69
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,15 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.69 (Nov 16 2026) - 🕵 Faster crime updates: one member's Suite at a time now reads the faction's crimes every
+ *          minute (own key, 1 call a minute, never sent anywhere) and passes the list to the Hub, which re-plans as soon
+ *          as something changes. Another Suite takes over if that one goes quiet; the Hub's own 3-minute check stays
+ *          as the backup. Runs under ⚙ → Share from this script → OC pass rates; needs a key with Faction API access.
+ *  v0.2.68 (Nov 16 2026) - 🕵 OC tab: new "Recently completed" tile - the last 5 finished crimes with their total
+ *          payout and whether they've been paid out. An unpaid crime stays listed until it is paid; Heart Stoppers,
+ *          HR and leaders see a red "Not paid" tag once it has waited over an hour.
+ *  v0.2.67 (Nov 16 2026) - Reliability note updated: a termed war now counts in your favour when you took part in it,
+ *          and still never against you (the score itself comes from the Hub).
  *  v0.2.66 (Nov 16 2026) - 📢 ANNOUNCEMENTS: leaders can send a message tile to Suite users (yellow = announcement, can
  *          be dismissed; red = urgent, stays until it expires or a leader deletes it). Leaders: ••• More → 📢 Announce
  *          (or the Hub site). Pick who sees it: everyone, the chain queue, leadership or positions.
@@ -433,7 +442,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.66';
+    const VERSION = '0.2.69';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -464,6 +473,9 @@
         ocShareAt: 'hbs_share_ocat',           // ms the OC pass rates were last read + sent (any tab) (0.2.55)
         sharePingAt: 'hbs_share_pingat',       // ms the Hub was last asked (any tab) (0.2.55)
         shareDay: 'hbs_share_day',             // TCT day (YYYY-MM-DD) the stats were last sent
+        feedOn: 'hbs_feed_on',                 // (0.2.69) ms until which THIS member's script is the crime feeder (any tab)
+        feedAt: 'hbs_feed_at',                 // (0.2.69) ms the crimes were last read for the feed (any tab)
+        feedNo: 'hbs_feed_no',                 // (0.2.69) ms until which this key isn't offered as feeder (no Faction API access)
         ocTag: 'hbs_share_octag',              // the Hub's crime-list signature when OC pass rates were last sent
         mods: 'hbs_mods',                      // module switches {chain, ocpage, recruit} (⚙ → Modules)
         cwTok: 'hbs_cw_token',                 // Chain Watch session token {token, exp, pid} (24 h, from /cw/hello - not a key)
@@ -3461,6 +3473,23 @@
                 + slotsHtml(cur).replace(/^<div class="hbs-sec">[^<]*<\/div>/, ''), false)}
             <div class="hbs-actions"><a class="hbs-btn hbs-ghost" href="${OC_LINK(cur.crime_id)}">Open the crime</a></div></div>`;
     }
+    // ✅ RECENTLY COMPLETED (0.2.68) - see build note above. Tags: Paid (green) · No payout (failed, or nothing to share) ·
+    // Awaiting payout (unpaid, not late / not staff) · Not paid <how long> (red - late, staff only).
+    async function ocRecentHtml() {
+        let R = null;
+        // [HB Suite] Hub API — op live "recent" (OC tab: the last completed crimes and their payout state; no Torn call)
+        try { R = await live('recent'); } catch (e) { return ''; }
+        const rows = (R && R.rows) || []; if (!rows.length) return '';
+        const late = rows.filter(r => r.late).length, unpaid = rows.filter(r => r.unpaid).length;
+        const tag = r => r.late ? `<span class="hbs-tag hbs-red">Not paid · ${dur(Math.max(0, Date.now() / 1000 - r.at))}</span>`
+            : r.unpaid ? '<span class="hbs-tag">Awaiting payout</span>' : r.paid ? '<span class="hbs-tag hbs-good">Paid</span>' : '<span class="hbs-tag">No payout</span>';
+        const list = rows.map(r => `<div class="hbs-li"><span style="min-width:0"><a href="${OC_LINK(r.id)}"><b>${esc(r.name || '?')}</b></a>
+            <small style="display:block;opacity:.7;font-size:10.5px">${r.ok ? 'Success' : 'Failed'} · ${ago(r.at)}${r.money ? ' · ' + shortMoney(r.money) : ''}${r.items ? ` · ${r.items} item${r.items === 1 ? '' : 's'}` : ''}</small></span>${tag(r)}</div>`).join('');
+        const head = late ? `<span class="hbs-chip" style="background:#5f2f2f;color:#ffbcbc">${late} unpaid</span>` : '';
+        if (CMP()) return cFold('ocrecent', '✅', 'Recently completed', late ? `<b class="hbs-foldn">${late}</b><small>unpaid</small>` : `<small>${rows.length} crime${rows.length === 1 ? '' : 's'}${unpaid ? ` · ${unpaid} awaiting payout` : ' · all paid'}</small>`, list, late > 0);
+        return `<div class="hbs-card${late ? ' hbs-red' : ''}"><div class="hbs-r1"><span class="hbs-name">✅ Recently completed</span>${head}</div>
+            ${late ? `<div class="hbs-hint">${late} crime${late === 1 ? " hasn't" : "s haven't"} been paid out after more than an hour.</div>` : ''}${list}</div>`;
+    }
     async function chainHtml() {
         if (!modOn('chain')) return `<div class="hbs-empty">The Chain module is off - turn it on in ⚙.</div>`;
         if (cw.denied) return `<div class="hbs-empty">Chain Watch refused this account (${esc(cw.denied)}).</div>`;
@@ -3872,6 +3901,7 @@
         // the rest (Notify / delayed / paused) stays at the bottom
         const leadHtml = (me.leader || me.loans) ? await ocLeadersHtml() : '';   // (0.2.62) loan staff get the 🧰 Loans card only
         if (me.leader || me.loans) out += ocLoansOut;
+        out += await ocRecentHtml();   // (0.2.68) ✅ Recently completed
         const cmMark = out.length;   // (0.2.62) compact mode folds everything from here to the leaders' block into "Your OC summary"
         // 🕵 YOUR OC SUMMARY (0.2.6, user: "OC Tab, add a brief player summary with OC stats")
         {
@@ -6725,6 +6755,7 @@
                     const p = await hub('share_ping');
                     const ps = p.settings || st;
                     if (p.settings) store.set(K.share, p.settings);
+                    if (p.feed_free) feedAsk();        // (0.2.69) nobody is feeding the crime list - offer this script
                     // (0.2.55) every OC_SHARE_MS, or at once when the Hub found a new crime (its tag changed)
                     if (ps.oc && ((p.oc_tag && p.oc_tag !== store.get(K.ocTag, '')) || Date.now() - num(store.get(K.ocShareAt, 0)) > OC_SHARE_MS - 20000)) {
                         store.set(K.ocShareAt, Date.now());
@@ -6747,6 +6778,47 @@
         shareTimer = setTimeout(shareTick, next);
     }
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !shareTimer) shareTick(); });
+
+    // ---------------------------------------------------------------------
+    // 🛰 CRIME FEED (0.2.69) — see the build note in build_patch_0269.py. The Hub picks ONE script at a time; that
+    // script reads the faction's crimes every FEED_MS and uploads the list. Lease: the Hub drops a feeder that hasn't
+    // answered for 150 s (K.feedOn mirrors that here), so closing Torn simply hands the job to the next script.
+    // ---------------------------------------------------------------------
+    const FEED_MS = 60000, FEED_LEASE_MS = 150000, FEED_NO_MS = 6 * 3600e3;
+    let feedBusy = false;
+    const feedAllowed = () => !!getKey() && (store.get(K.share, null) || { oc: true }).oc !== false && num(store.get(K.feedNo, 0)) < Date.now();
+    const feedMine = () => num(store.get(K.feedOn, 0)) > Date.now();
+    async function feedAsk() {
+        if (feedMine() || !feedAllowed()) return;
+        try {
+            // [HB Suite] Hub API — op "oc_feed" ask: may this script be the crime feeder? (no data sent)
+            const r = await hub('oc_feed', { do: 'ask' });
+            if (r && r.feed) { store.set(K.feedOn, Date.now() + FEED_LEASE_MS); feedTick(); }
+        } catch (e) { /* next share_ping */ }
+    }
+    async function feedTick() {
+        if (feedBusy || !feedMine()) return;
+        if (!feedAllowed()) { store.set(K.feedOn, 0); hub('oc_feed', { do: 'stop' }).catch(() => {}); return; }   // switched off: give it back
+        if (Date.now() - num(store.get(K.feedAt, 0)) < FEED_MS - 2000) return;      // this or another tab read it under a minute ago
+        feedBusy = true; store.set(K.feedAt, Date.now());
+        try {
+            // [HB Suite] Torn API — crime feed: the faction's recruiting + planning crimes (v2 faction/crimes, 1 call a
+            // minute, ONLY while the Hub has picked this script as the feeder)
+            const d = await tornGet('https://api.torn.com/v2/faction/crimes?cat=available&limit=100&sort=ASC');
+            // [HB Suite] Hub API — op "oc_feed" put: the crime list (no key; the Hub blanks this member's own open-slot rates)
+            const r = await hub('oc_feed', { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] });
+            store.set(K.feedOn, r && r.feed ? Date.now() + FEED_LEASE_MS : 0);
+            if (r && r.changed) { try { liveClear(); } catch (e) { /* not set up yet */ } }   // this panel's OC reads are re-asked
+        } catch (e) {
+            const m = String((e && e.message) || '');
+            if (/^Torn: /.test(m)) {                           // Torn refused the read: give the job back so another script takes it
+                if (/Faction API access|Access level|Incorrect ID/i.test(m)) store.set(K.feedNo, Date.now() + FEED_NO_MS);
+                store.set(K.feedOn, 0); hub('oc_feed', { do: 'stop' }).catch(() => {});
+            }                                                  // (Torn / the Hub not answering: try again next minute; the lease lapses by itself)
+        }
+        feedBusy = false;
+    }
+    setInterval(feedTick, 15000);
 
     // ---------------------------------------------------------------------
     // CLICKS (event delegation shared by every tab)
@@ -6842,7 +6914,7 @@
         row('Hits per chain (when hitting)', C.avg == null ? '-' : String(C.avg), C.avg == null ? '' : vs(C.avg, C.fac_avg).replace('faction avg', 'faction avg per hitter'));
         y += 6;
         if (X.leave && X.leave.length) { T('Excused leave (not counted): ' + X.leave.map(l => fmtD(l.from) + ' – ' + fmtD(l.to)).join(', '), pad, y, 11, '#e8be5a'); y += 20; }
-        T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars and excused leave aren't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, '#6f6f72', 400, 'center');
+        T(`Whole time in the faction · taking part = ${RU.min_hits}+ hits · termed wars count only when you took part · excused leave isn't counted · crimes aren't rated.`, Wd / 2, H - 22, 10, '#6f6f72', 400, 'center');
         return cv;
     }
 
