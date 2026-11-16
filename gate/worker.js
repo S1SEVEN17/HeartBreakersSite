@@ -3095,7 +3095,8 @@ const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or lef
 const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHours: 24, backHours: 72};
 // V3 LADDER RULES for the shadow plan (user's answers, Nov 16 2026): never placed under 75% of their best crime's pay
 // per day; 24 h of waiting for a spawn drops them one rung; paused / pausing-within-12-h crimes are filled first.
-const OC_V3 = {floor: 75, waitHours: 24, pauseHours: 12};
+// minFloor (user: "Cap how low someone can drop to 50%"): never under 50% of their best crime's pay, however long they wait.
+const OC_V3 = {floor: 75, minFloor: 50, waitHours: 24, pauseHours: 12};
 function ocShadowReport(A, B, crimes, members, now) {
   const byId = new Map((crimes || []).map(c => [String(c.id), c]));
   const nm = pid => members[String(pid)] || ("#" + pid);
@@ -3138,7 +3139,7 @@ function ocShadowReport(A, B, crimes, members, now) {
   // (the "v2" keys keep their names - they are "the new rules" columns on the 🔬 Shadow tab)
   const v3 = (B.stats && B.stats.v3) || null;
   return {at: now, rules: OC_V2, cur: a.n, v2: b.n, changed_members: changed, rows, blocked: (B.stats && B.stats.v2_blocked) || null,
-          v3: v3 ? {floor: v3.floor, waitHours: v3.waitHours, waiting: v3.waiting, requests: v3.requests.map(r => Object.assign({}, r, {names: r.members.map(nm)})),
+          v3: v3 ? {floor: v3.floor, minFloor: v3.minFloor, waitHours: v3.waitHours, waiting: v3.waiting, requests: v3.requests.map(r => Object.assign({}, r, {names: r.members.map(nm)})),
                     norates: v3.norates, floor_blocked: v3.floor_blocked} : null};
 }
 async function ocAutoPlan(env, crimes, now, run = {}) {

@@ -191,7 +191,9 @@ export function ocPlan(X) {
   //   Unchanged: role minimums, team target, the role cap, never moving a member whose planning has started, and the
   //   move safeguards (the Team Builder's 🛡 numbers).
   // =====================================================================================================
-  const V3 = X.v3 && typeof X.v3 === "object" ? {floor: (Number(X.v3.floor) || 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
+  //   6. DROP CAP (Nov 16 2026, user: "Cap how low someone can drop to 50%"): however long a member has waited, they are
+  //      never placed in a crime that pays them (join now) under minFloor x their BEST crime's pay per day (rung 0).
+  const V3 = X.v3 && typeof X.v3 === "object" ? {minFloor: (Number(X.v3.minFloor) || 50) / 100, floor: (Number(X.v3.floor) || 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
   const V2 = V3 ? {pauseHours: V3.pauseHours, slack: 0, moveHours: 0, minGain: O.safeOn === false ? 0 : Number(O.safeGain ?? 10) || 0,
                    cooldownHours: O.safeOn === false ? 0 : Number(O.safeCooldown ?? 24) || 0, backHours: O.safeOn === false ? 0 : Number(O.safeBack ?? 72) || 0}
     : X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
@@ -348,7 +350,8 @@ export function ocPlan(X) {
   let curInst = null;                                      // the recruiting crime being filled (set by the fill loops)
   // true = this crime pays the member less than floor x their reference rung if they join now -> not offered to them
   const v3Low = pid => { if (!V3 || !curInst) return false; const r = v3Rung(pid); if (!r) return false;
-    if (each(curInst) + 1e-9 < V3.floor * r.pay) { v3Blocked.add(Number(pid)); return true; } return false; };
+    const top = (ladder[String(pid)] || [])[0];             // DROP CAP: never under minFloor x their best crime
+    if (each(curInst) + 1e-9 < Math.max(V3.floor * r.pay, top ? V3.minFloor * top.pay : 0)) { v3Blocked.add(Number(pid)); return true; } return false; };
   // DELAYS (Nov 2026): X.delays {pid: {n, long, hrs, runs}} - a member's crime delays over the last 30 days. The hours
   // of delay they're likely to cause per crime (hrs / crimes they took part in) hold up EVERYONE's payout, so the
   // cost charged against them = the team's pay per day x those hours / (24 x the crime's days) - a member who often
@@ -918,7 +921,7 @@ export function ocPlan(X) {
     const byTier = {};
     waiting.forEach(w => { (byTier[w.tier] = byTier[w.tier] || []).push(w); });
     const requests = Object.keys(byTier).sort((a, b) => parseInt(b) - parseInt(a)).map(t => ({tier: t, members: byTier[t].map(w => w.pid), longest: Math.min(...byTier[t].map(w => w.since))}));
-    v3 = {floor: Math.round(V3.floor * 100), waitHours: V3.waitHours, pauseHours: V3.pauseHours, waiting, requests, norates, wait_log: wl, floor_blocked: v3Blocked.size};
+    v3 = {floor: Math.round(V3.floor * 100), minFloor: Math.round(V3.minFloor * 100), waitHours: V3.waitHours, pauseHours: V3.pauseHours, waiting, requests, norates, wait_log: wl, floor_blocked: v3Blocked.size};
   }
   return {teams, changed, stats: {v3, v2_blocked: V2 ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
     safe_blocked: SAFE ? {gain: v2Blocked.gain.size, source: v2Blocked.source.size, cooldown: v2Blocked.cooldown.size} : undefined,
