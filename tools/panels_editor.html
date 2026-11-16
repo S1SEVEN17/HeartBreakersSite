@@ -89,7 +89,7 @@ const ann = C => (C.announcements = C.announcements && typeof C.announcements ==
 const lb = C => { const a = ann(C); a.leaderboard = a.leaderboard || {}; const o = Array.isArray(a.leaderboard.order) ? a.leaderboard.order : (a.leaderboard.order = ["war", "chain", "gym"]);
   ["war", "chain", "gym"].forEach(k => { if (!o.includes(k)) o.push(k); }); return a.leaderboard; };
 const GROUP_TPL = [["⚔️ War rules", ["Hit only your assigned targets", "Stay online for the war start", "Ask before using armory Xanax"]],
-  ["🕵️ OC reminder", ["Install the OC Optimizer script", "Join the crime you're assigned to", "Share your pass rates on the Hub"]],
+  ["🕵️ OC reminder", ["Install the Heart Breakers Suite: https://greasyfork.org/en/scripts/605562-heart-breakers-suite", "Join the crime you're assigned to", "Share your pass rates on the Hub"]],
   ["⛓️ Chain etiquette", ["Sign up for a Chain Watch shift on the Hub", "Don't let the timer drop under 1 minute", "Call out in chat before you hit"]],
   ["👋 New members", ["Welcome to Heart Breakers!", "Read the faction rules on the Hub", "Say hi on Discord"]]]
   .map(([t, l]) => ({label: t, make: () => ({title: t.replace(/^\S+\s/, ""), lines: l.slice()})}));

@@ -44,7 +44,7 @@ button.alt{background:#1a1012;color:#ddd;border:1px solid var(--edge);font-weigh
 </style></head><body>
 __MENU__
 <h1>Chain Watch</h1>
-<div class="sub">Faction settings for the Faction Chain Watch script. Members see them view-only; changes reach every connected script straight away.</div>
+<div class="sub">Faction settings for Chain Watch in the <a href="https://greasyfork.org/en/scripts/605562-heart-breakers-suite" target="_blank" rel="noopener noreferrer">Heart Breakers Suite</a>. Members see them view-only; changes reach every connected script straight away.</div>
 
 <div class="card">
   <h2>Chain</h2>
@@ -55,7 +55,7 @@ __MENU__
 <div class="card">
   <h2>Queue <span class="pill" id="qn"></span></h2>
   <div class="q" id="q"><div class="empty">Loading…</div></div>
-  <div class="note">Ordered by current energy (most first). Members in hospital, jail or mid-flight drop to the back until they can attack again. Energy and cooldowns come from each member's own Chain Watch script; between its reports the Hub adds regen and takes 25 off for each hit it sees. Recruits (first 72 h) can't join.</div>
+  <div class="note">Ordered by current energy (most first). Members in hospital, jail or mid-flight drop to the back until they can attack again. Energy and cooldowns come from each member's own Heart Breakers Suite; between its reports the Hub adds regen and takes 25 off for each hit it sees. Recruits (first 72 h) can't join.</div>
 </div>
 
 <div class="card">
@@ -145,7 +145,7 @@ function drawChain(s) {
   $("cxn").textContent = (b && b.name ? `Bonus ${b.next} assigned to ${b.name} by ${b.by}. ` : "")
     + (r.hits_to_bonus ? `${r.hits_to_bonus} hits to the next bonus - ${r.bonus_reachable ? "the queue has enough energy right now" : "the queue doesn't have enough energy for it right now"}. ` : "")
     + "Runway = how long the queue's energy (plus regen) keeps the chain alive at one hit every 5 minutes. "
-    + (x.cooldown ? "The chain is cooling down - the queue is for the next chain." : "") + " Leaders assign the bonus hitter in the Chain Watch script.";
+    + (x.cooldown ? "The chain is cooling down - the queue is for the next chain." : "") + " Leaders assign the bonus hitter in the Heart Breakers Suite.";
 }
 function showStatus(s) {
   if (s && Array.isArray(s.queue)) { Q = s.queue; X = s.extras || null; QT = Number(s.now) || Date.now(); QL = Date.now(); drawQueue(); drawChain(s); }

@@ -124,11 +124,11 @@ function cover(s, startS, endS) {
   return {hits: Math.floor((e + regen + refill + xanax) / 25), need, start_e: Math.round(e), regen_e: regen, refill_e: refill, xanax_e: xanax};
 }
 function coverHtml(c, s) {
-  if (!c) return `<div class="chk warn"><b>No energy reading yet.</b> Open Torn with the Faction Chain Watch script running, or turn on War readiness in My data &amp; sharing, so the Hub can check whether you'll have enough energy.</div>`;
+  if (!c) return `<div class="chk warn"><b>No energy reading yet.</b> Open Torn with the <a href="https://greasyfork.org/en/scripts/605562-heart-breakers-suite" target="_blank" rel="noopener noreferrer">Heart Breakers Suite</a> running, so the Hub can check whether you'll have enough energy.</div>`;
   const ok = c.hits >= c.need;
   const parts = [`${c.start_e} at the start`, c.regen_e ? `+${c.regen_e} regen` : "", c.refill_e ? `+${c.refill_e} refill` : "", c.xanax_e ? "+250 Xanax" : ""].filter(Boolean).join(", ");
   return `<div class="chk ${ok ? "ok" : "warn"}">${ok ? "✅ <b>Enough energy to cover it alone</b>" : `⚠️ <b>Covers about ${c.hits} of ${c.need} hits alone</b> - fine with others hitting too, short if you're the only one`}`
-    + ` (${c.hits} hits possible, 1 every 5 min needs ${c.need}).<small>Energy: ${parts}. From your ${s.src === "readiness" ? "War readiness reading" : "Chain Watch script report"} ${ago(Date.now() - Number(s.at))} ago; boosters not counted.</small></div>`;
+    + ` (${c.hits} hits possible, 1 every 5 min needs ${c.need}).<small>Energy: ${parts}. From your ${s.src === "readiness" ? "War readiness reading" : "Heart Breakers Suite report"} ${ago(Date.now() - Number(s.at))} ago; boosters not counted.</small></div>`;
 }
 const energyPill = x => x.est_hits == null ? `<span class="pill">energy ?</span>`
   : x.need_hits && x.est_hits < x.need_hits ? `<span class="pill w" title="Their energy covers about ${x.est_hits} of ${x.need_hits} hits alone">⚠ ${x.est_hits}/${x.need_hits} hits</span>`
