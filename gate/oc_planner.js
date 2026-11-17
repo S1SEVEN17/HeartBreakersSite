@@ -344,6 +344,15 @@ export function ocPlan(X) {
   Object.entries(X.holdLog || {}).forEach(([c, v]) => { if (Number(v) > NOW) holdLog[c] = Number(v); });
   const SU = X.scriptUsers instanceof Set ? X.scriptUsers : null;
   const noScr = pid => !!SU && !SU.has(Number(pid));
+  // NO SCRIPT = NO AUTOMATIC PLACEMENT (Nov 17 2026, user: "Remove users who do not run the script from automatic
+  // placement. They should only be placed if a leader assigns them."): a member who doesn't use the script is left
+  // out of every pool the planner picks from (free, queued, moving, spawn teams). They stay where a LEADER put them:
+  // a LOCKED team (Team Builder), a reservation a leader assigned by hand (role.by_leader - the Deployed page's
+  // Assign) and a TOLD reservation (the leader sent them the Notify message). An automatic reservation they still
+  // hold from before this rule is dropped on the next run. Members already sitting in a crime in Torn are untouched.
+  // When nobody has been seen using the script yet (SU null) the rule is off - there'd be nobody left to place.
+  // The older "secondary" rules below (NS_LAST, SCRIPT-USER TAKEOVER) only matter for those leader-placed seats now.
+  const autoOk = pid => !noScr(pid);
   // RECRUITING SLOTS (Nov 12 2026, user: "Non Script members should be secondary"): in a recruiting crime's open
   // slots a member who doesn't use the script only gets a slot when no script user can fill it at the targets - a
   // penalty bigger than any pay difference, so the fewest possible non-script members are used (spawn teams keep the
@@ -467,7 +476,9 @@ export function ocPlan(X) {
         // LOCKED TEAMS KEEP BUSY MEMBERS (Nov 15 2026, user: "Team Builder should allow placement of all members,
         // regardless of their crime status."): a leader's placement on a locked team stands even while the member is
         // still in another crime (shown as queued when that crime has a ready time) - only leaving the faction drops it
-        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock || o.told) && roster[String(o.pid)] != null && (t.lock || usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
+        // (NO SCRIPT = NO AUTOMATIC PLACEMENT: a non-script member's reservation stays only on a locked team, when a
+        // leader assigned it - by_leader - or once they've been told)
+        if (o.pid != null && !o.existing && (!X.reshuffle || t.lock || o.told || o.by_leader) && (t.lock || o.told || o.by_leader || autoOk(o.pid)) && roster[String(o.pid)] != null && (t.lock || usable(o.pid, c) || moving) && !assigned.has(Number(o.pid))) {
           const k = Object.assign({}, o, {joined: false}); delete k.replaces; if (!moving) delete k.leave; return k;   // the old member has left: a normal open slot now
         }
         return {position: label, pid: null, name: "", rate: null};
@@ -572,10 +583,10 @@ export function ocPlan(X) {
   }
 
   // free = current members not busy in Torn and not planned anywhere; soft = members in (unlocked) spawn teams
-  const freePool = () => Object.keys(roster).map(Number).filter(p => !busy.has(p) && !assigned.has(p)).map(pid => ({pid, soft: false}));
+  const freePool = () => Object.keys(roster).map(Number).filter(p => autoOk(p) && !busy.has(p) && !assigned.has(p)).map(pid => ({pid, soft: false}));
   const softPool = () => {
     const out = [];
-    teams.forEach(t => { if (t.kind === "spawn" && !t.lock && !t.hold) t.roles.forEach(r => { if (r.pid != null && !busy.has(Number(r.pid))) out.push({pid: Number(r.pid), soft: true}); }); });   // queued spawn members aren't moved to live slots
+    teams.forEach(t => { if (t.kind === "spawn" && !t.lock && !t.hold) t.roles.forEach(r => { if (r.pid != null && autoOk(r.pid) && !busy.has(Number(r.pid))) out.push({pid: Number(r.pid), soft: true}); }); });   // queued spawn members aren't moved to live slots
     return out;
   };
 
@@ -594,7 +605,7 @@ export function ocPlan(X) {
       curPaused = paused(c);                               // PAUSED CRIMES: no cap in this crime's seats
       curInst = c || null;                                 // V3 floor
       t.roles.forEach((r, ri) => {
-        if (r.pid == null || r.existing || r.told || !noScr(r.pid)) return;   // told: locked in (see the header)
+        if (r.pid == null || r.existing || r.told || r.by_leader || !noScr(r.pid)) return;   // told / a leader's own assignment: locked in
         let b = null;
         for (const p of freeSU()) {
           if (c && (t.noshow || {})[String(p)]) continue;                 // a no-show isn't put back into this crime
@@ -731,7 +742,7 @@ export function ocPlan(X) {
       // V2: crimes aren't filled in pay order any more, so a seat emptied in a crime the loop has ALREADY passed (an
       // urgent / fuller one) would never be refilled - reservations are only pulled from crimes still to come
       if (V2 && (fillOrder.get(String(x.crime_id)) ?? 1e9) < (fillOrder.get(String(c.id)) ?? 0)) return;
-      x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || r.told || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
+      x.roles.forEach((r, ri) => { if (r.pid == null || r.existing || r.joined || r.replaces || r.told || r.by_leader || !autoOk(r.pid) || busy.has(Number(r.pid)) || nsBan.has(Number(r.pid))) return;
         if (safeBlock(Number(r.pid), xc, c)) return;         // SAFEGUARDS: a reserved member isn't switched around either
         moveFrom.set(Number(r.pid), {t: x, ri}); movePool.push({pid: Number(r.pid), soft: false}); });
     });
@@ -740,7 +751,7 @@ export function ocPlan(X) {
     const idleFrom = new Map();
     for (const [pid0] of busy) {
       const pid = Number(pid0), cid = idleIn(pid);
-      if (!cid || cid === String(c.id) || assigned.has(pid) || nsBan.has(pid) || roster[String(pid)] == null || moveFrom.has(pid)) continue;
+      if (!cid || cid === String(c.id) || !autoOk(pid) || assigned.has(pid) || nsBan.has(pid) || roster[String(pid)] == null || moveFrom.has(pid)) continue;
       const xc = inst.get(cid); if (!xc || !(each(xc) * 1.01 < each(c))) continue;
       if (teams.some(x => x.lock && String(x.crime_id) === cid)) continue;
       if (safeBlock(pid, xc, c)) continue;                  // SAFEGUARDS (see the header)
@@ -769,7 +780,7 @@ export function ocPlan(X) {
                            (p, rate) => tier(p.pid, rate, false), 20000, leafOk);   // MEMBER CHOICE
     // QUEUE: nobody free can fill it to the target -> let members finishing their crime soon in, as few as possible
     if (!best && !seatBySeat && !ROT_ON.has(String(c.id))) {
-      const qpool = Object.keys(roster).map(Number).filter(p => busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c) && !nsBan.has(p))
+      const qpool = Object.keys(roster).map(Number).filter(p => autoOk(p) && busy.has(p) && !assigned.has(p) && queueable(p) && beforeExpiry(p, c) && !nsBan.has(p))
         .map(pid => ({pid, soft: false, q: true}));
       if (qpool.length) best = fillSlots(c.name, open.map(i => ({label: roles[i].position})), fixedSum, roles.length, pool.concat(qpool),
                            (p, rate) => tier(p.pid, rate, p.q), 20000, leafOk);     // MEMBER CHOICE (free before queued)
@@ -832,7 +843,7 @@ export function ocPlan(X) {
     let pulled = false;
     for (const C of cands) {
       const roles = rolesOf(C), n = roles.length || 1, k = payDay(C) / n / 100;
-      const pool = Object.keys(roster).map(Number).filter(p => resv.has(p) ? liveDen(resv.get(p).t) < density(C) : (!assigned.has(p) && usable(p)));
+      const pool = Object.keys(roster).map(Number).filter(p => autoOk(p) && (resv.has(p) ? liveDen(resv.get(p).t) < density(C) : (!assigned.has(p) && usable(p))));
       if (pool.length < n) continue;
       const best = fillSlots(C, roles.map(l => ({label: l})), 0, n, pool.map(pid => ({pid})),
         (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 40000,   // MEMBER CHOICE: script, free, best rate
@@ -874,7 +885,7 @@ export function ocPlan(X) {
     const open = t.roles.map((r, i) => r.pid == null ? i : -1).filter(i => i >= 0);
     if (!open.length) continue;
     const fixed = t.roles.filter(r => r.pid != null), fixedSum = wSum(t.crime, fixed);
-    const pool = Object.keys(roster).map(Number).filter(p => (O.includeBusy || usable(p)) && !assigned.has(p) && overQ(p)).map(pid => ({pid, soft: false}));
+    const pool = Object.keys(roster).map(Number).filter(p => autoOk(p) && (O.includeBusy || usable(p)) && !assigned.has(p) && overQ(p)).map(pid => ({pid, soft: false}));
     const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 20000,   // MEMBER CHOICE: script, free, best rate
       pick => !calcBad(t.roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), t.crime));
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
