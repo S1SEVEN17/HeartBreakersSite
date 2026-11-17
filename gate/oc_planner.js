@@ -266,7 +266,7 @@ export function ocPlan(X) {
     inst.set(String(c.id), c);
     const full = (c.slots || []).length > 0 && (c.slots || []).every(x => x.user);   // every slot taken
     for (const sl of c.slots || []) if (sl.user) busy.set(Number(sl.user.id), {cid: String(c.id), label: slotLabel(sl), status: c.status,
-      prog: Number(sl.user.progress) || 0, full});
+      prog: Number(sl.user.progress) || 0, full, joinedAt: Number(sl.user.joined_at) > 0 ? Number(sl.user.joined_at) * 1000 : 0});   // joinedAt: ms (Torn joined_at, s)
   }
   // NOT PLANNING YET -> CAN BE MOVED (Nov 13 2026, user: "members who joined or were assigned, but are not actively
   // planning, can be reassigned to better jobs if available ... as long as their planning has not started yet"):
@@ -471,6 +471,18 @@ export function ocPlan(X) {
         // NO-SHOW: reserved too long without joining -> the slot is opened again and they're kept out of this crime
         if (o.pid != null && !o.existing && !t.lock && NS > 0 && o.since && NOW - Math.max(Number(o.since), busy.has(Number(o.pid)) ? (freeAt.get(Number(o.pid)) || NOW) : 0) > NS) {
           return {position: label, pid: null, name: "", rate: null};
+        }
+        // NOTIFIED, THEN JOINED ELSEWHERE (Nov 17 2026, user picked "Release the seat if they join a different crime
+        // themselves"): a TOLD reservation on an unlocked team is let go once the member sits in a DIFFERENT crime they
+        // joined after being told (joined_at later than the told time, o.since) - they chose somewhere else. Kept when
+        // that crime is the one the plan asked them to leave (o.leave) and they were already in it when told.
+        if (o.pid != null && !o.existing && o.told && !t.lock) {
+          const b = busy.get(Number(o.pid));
+          if (b && b.cid !== String(c.id)) {
+            const askedToLeave = o.leave && String(o.leave.crime_id) === b.cid;
+            const joinedAfter = b.joinedAt ? b.joinedAt > (Number(o.since) || 0) : !askedToLeave;
+            if (joinedAfter || !askedToLeave) return {position: label, pid: null, name: "", rate: null};
+          }
         }
         // a MOVING member (o.leave): kept while they still sit idle (progress 0) in the crime they're leaving, or once
         // they've left it and are free; started planning there -> dropped (locked in)
