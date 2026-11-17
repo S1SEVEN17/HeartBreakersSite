@@ -20,6 +20,9 @@ jobs:
         run: |
           mkdir w && cd w && npm init -y >/dev/null && npm install --silent wrangler@4 >/dev/null 2>&1
           printf 'name = "oc-check"\ncompatibility_date = "2025-06-01"\n' > wrangler.toml
+          # how many members hold the Recruit position (kept out of OC planning) - a count only
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT COUNT(*) AS n, SUM(lower(json_extract(j.value, '$.position')) = 'recruit') AS recruits FROM oc_snap, json_each(oc_snap.data) AS j WHERE oc_snap.env = 'hub' AND oc_snap.ds = 'members:live'" > rec.json 2>/dev/null \
+            && python3 -c "import json; r = json.load(open('rec.json'))[0]['results'][0]; print(f\"Live member list: {r['n']} members, {r['recruits'] or 0} with the Recruit position\")" || true
           # which queries read the most rows today (D1's daily row-read allowance) - query text + counts only
           npx wrangler d1 insights hb-oc --timePeriod 1d --sort-type sum --sort-by reads --limit 14 --json > ins.json 2> ins.err || true
           python3 - <<'PY' || true

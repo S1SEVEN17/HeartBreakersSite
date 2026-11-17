@@ -99,6 +99,20 @@ const physDir = async dir => (await sha256hex(`${dir}|gate`)).slice(0, 32);
 // alone, exactly as before. Read from D1 at most once a minute per Worker instance.
 const MEMBERS_LIVE_MAX_AGE = 20 * 60 * 1000;
 let LIVE_ROSTER = {at: 0, list: null, as_of: 0};
+// RECRUITS STAY OUT OF ORGANIZED CRIMES (Nov 17 2026, user: "'Recruit' ranked employees should never be placed or
+// counted, even if they have the script installed. They are restricted from entering organized crimes until they
+// reach Heart Beat rank after 3 days of membership."): the ids of every member whose faction position is "Recruit",
+// from the live member list (re-read every 3 minutes, so a promotion shows on the next run). Used to take them out of
+// the member list the automatic planner works from (ocAutoPlan) and the one OC Management loads (summaries.json ->
+// Team Builder pool, Auto-build, its counts). Unknown positions (no live list yet) exclude nobody.
+const OC_NO_OC_POSITIONS = new Set(["recruit"]);
+async function ocRecruitIds(env) {
+  const R = await liveRoster(env).catch(() => null), out = new Set();
+  for (const m of (R && R.list) || []) if (m && OC_NO_OC_POSITIONS.has(String(m.position || "").trim().toLowerCase())) out.add(String(m.id));
+  return out;
+}
+const ocNoRecruits = (members, rec) => { if (!members || !rec || !rec.size) return members;
+  const o = {}; for (const k of Object.keys(members)) if (!rec.has(String(k))) o[k] = members[k]; return o; };
 async function liveRoster(env) {
   const now = Date.now();
   if (now - LIVE_ROSTER.at < 60000) return LIVE_ROSTER;
@@ -2072,6 +2086,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     const {results} = await env.OC_DB.prepare("SELECT ds, data, as_of FROM oc_snap WHERE env = ? AND ds IN ('summaries', 'prices', 'roster')").bind(envName).all();
     const by = {}, at = {};
     (results || []).forEach(r => { by[r.ds] = r.data; at[r.ds] = Number(r.as_of) || 0; });
+    // Recruits are left out of the page's member list (ocRecruitIds)
+    if (by.roster) try { const rec = await ocRecruitIds(env); if (rec.size) by.roster = JSON.stringify(ocNoRecruits(JSON.parse(by.roster), rec)); } catch (e) { /* the full roster */ }
     return new Response(`{"summaries":${by.summaries || "null"},"prices":${by.prices || "null"},"roster":${by.roster || "null"},"roster_at":${at.roster || 0}}`,
                         {headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
   }
@@ -3843,7 +3859,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   const reason = run.force ? "update now" + (run.by ? " by " + run.by : "") : changed.length && last ? changed.map(k => OC_TRIG_LABEL[k]).join(", ") : "scheduled";
   const [ros, catS, sumS, priS] = await Promise.all([ocSnapGet(env, "prod", "roster"), ocSnapGet(env, "prod", "catalog"),
                                                      ocSnapGet(env, "prod", "summaries"), ocSnapGet(env, "prod", "prices")]);
-  const members = (ros && ros.data) || null;
+  const members = ocNoRecruits((ros && ros.data) || null, await ocRecruitIds(env));   // Recruits are never placed or counted
   if (!members || !catS) return;
   const catalog = {};
   for (const c of (catS.data.organizedcrimes || [])) if (c && c.name)
