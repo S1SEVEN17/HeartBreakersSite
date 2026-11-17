@@ -22,7 +22,7 @@ jobs:
           printf 'name = "oc-check"\ncompatibility_date = "2025-06-01"\n' > wrangler.toml
           if ! npx wrangler d1 execute hb-oc --remote --json --command \
               "SELECT env, COUNT(*) AS members, MAX(ts) AS newest, MIN(ts) AS oldest FROM oc_cpr GROUP BY env" > out.json 2> err.log; then
-            echo "::error::couldn't query the database"; grep -iE "error|auth|not found" err.log | head -5; exit 1
+            echo "::error::couldn't query the database"; grep -iE "error|auth|not found" err.log | head -5; grep -oiE '"(text|message)": *"[^"]{0,300}' out.json | head -5; exit 1
           fi
           python3 - <<'PY'
           import json, time
