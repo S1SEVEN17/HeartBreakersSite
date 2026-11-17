@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.73
+// @version      0.2.74
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,8 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.74 (Nov 16 2026) - 🕵 Torn's crimes page: crimes leadership has disabled are hatched red and their Join buttons
+ *          can't be pressed (nothing else is blocked), and the crime you're assigned to sits at the top of the list.
  *  v0.2.73 (Nov 16 2026) - 🤝 Recruit (Torn PDA): the pool and scout list are now kept in the device's larger
  *          database instead of the small page storage that filled up and silently stopped saving. Unsaved changes
  *          are written when you leave a page, and the Recruit tab says so if a save ever fails.
@@ -455,7 +457,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.73';
+    const VERSION = '0.2.74';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -1552,7 +1554,17 @@
             #hbs-full span{color:#ccc;font:12px system-ui,Arial,sans-serif;}
             /* crimes page: your assigned crime + seat (OC module) */
             .hbs-occard{outline:2px solid #FFB454 !important;outline-offset:2px;border-radius:6px;}
-            .hbs-ocseat{box-shadow:0 0 0 2px #FFB454, 0 0 14px rgba(255,180,84,.7) !important;border-radius:6px;}
+            /* (0.2.74) a crime leadership disabled: red hatch (never catches a press itself) + dead Join buttons */
+            .hbs-ocdis{position:relative !important;}
+            .hbs-ocdis::before{content:'';position:absolute;inset:0;z-index:3;border-radius:6px;pointer-events:none;
+                background:repeating-linear-gradient(135deg,rgba(255,118,118,.13) 0 5px,rgba(0,0,0,.34) 5px 10px);box-shadow:inset 0 0 0 1px rgba(255,118,118,.6);}
+            .hbs-ocdis::after{content:'⛔ Disabled by leadership';position:absolute;top:2px;left:2px;z-index:4;max-width:calc(100% - 4px);pointer-events:none;
+                background:#FF7676;color:#2a0000;font:bold 10px Arial,sans-serif;padding:1px 6px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            .hbs-ocdis [class*="joinButton"]{pointer-events:none !important;opacity:.35 !important;cursor:not-allowed !important;}
+            .hbs-ocseat{position:relative !important;outline:3px solid #4caf50 !important;outline-offset:1px;border-radius:6px;animation:hbsSeatPulse 1.4s ease-in-out infinite;}
+            .hbs-ocseat::after{content:'★ Your role';position:absolute;top:1px;left:1px;z-index:5;max-width:calc(100% - 2px);pointer-events:none;
+                background:#4caf50;color:#06240a;font:bold 9px Arial,sans-serif;padding:0 5px;border-radius:3px;line-height:1.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            @keyframes hbsSeatPulse{0%,100%{box-shadow:0 0 0 2px rgba(76,175,80,.4),0 0 10px rgba(76,175,80,.4);}50%{box-shadow:0 0 0 3px rgba(76,175,80,.7),0 0 20px rgba(76,175,80,.75);}}
         `;
         (document.head || document.documentElement).appendChild(s);
     }
@@ -4012,21 +4024,59 @@
             if (!b || b.closest('#hbs-panel, .torn-launcher')) return;
             ocMeSoon();
         }, true);
+        // (0.2.74) a Join button inside a disabled crime's card is never pressed - mouse, touch or keyboard
+        document.addEventListener('click', e => {
+            const b = e.target && e.target.closest ? e.target.closest('.hbs-ocdis [class*="joinButton"]') : null;
+            if (b) { e.preventDefault(); e.stopImmediatePropagation(); }
+        }, true);
+        const norm = t => String(t || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        // the crime card (smallest box holding seats) around an element of it
+        const cardOf = el => { let box = el; for (let i = 0; i < 12 && box; i++) { if (box.querySelector && box.querySelector('[class*="slotBody___"]')) return box; box = box.parentElement; } return null; };
+        // (0.2.74) DISABLED CRIMES: cards of a switched-off crime that still have a Join button and that you're not in
+        const markDisabled = names => {
+            const off = new Set((names || []).map(norm)), want = new Set();
+            if (off.size) document.querySelectorAll('[class*="panelTitle"]').forEach(t => {
+                if (!off.has(norm(t.textContent))) return;
+                const card = cardOf(t.parentElement); if (!card || !card.querySelector('[class*="joinButton"]')) return;
+                const mine = me && [...card.querySelectorAll('a[href*="XID="]')].some(a => { const m = /XID=(\d+)/.exec(a.getAttribute('href') || ''); return m && num(m[1]) === num(me.id); });
+                if (!mine) want.add(card);
+            });
+            document.querySelectorAll('.hbs-ocdis').forEach(n => { if (!want.has(n)) n.classList.remove('hbs-ocdis'); });
+            want.forEach(n => { if (!n.classList.contains('hbs-ocdis')) n.classList.add('hbs-ocdis'); });
+        };
+        // (0.2.74) YOUR CRIME ON TOP: CSS `order` on the row of Torn's list that holds your crime (the child whose parent
+        // has 2+ children with a crime title) - no DOM move; `null` puts everything back
+        const topRow = inner => { let el = inner; while (el && el.parentElement) { const p = el.parentElement; let n = 0, isRow = false;
+            for (const c of p.children) if (c.querySelector && c.querySelector('[class*="panelTitle"]')) { n++; if (c === el) isRow = true; }
+            if (n >= 2 && isRow) return el; el = p; } return null; };
+        const pinTop = card => { try {
+            const keep = card ? topRow(card) : null;
+            document.querySelectorAll('[data-hbs-octop]').forEach(el => { if (el !== keep) { el.style.removeProperty('order'); el.removeAttribute('data-hbs-octop'); } });
+            document.querySelectorAll('[data-hbs-ocflex]').forEach(c => { if (!keep || c !== keep.parentElement) { c.style.removeProperty('display'); c.style.removeProperty('flex-direction'); c.removeAttribute('data-hbs-ocflex'); } });
+            if (!keep) return;
+            const box = keep.parentElement, disp = String(getComputedStyle(box).display || '');
+            if (!/flex|grid/.test(disp)) { box.style.display = 'flex'; box.style.flexDirection = 'column'; box.setAttribute('data-hbs-ocflex', '1'); }   // both honour `order`
+            if (keep.getAttribute('data-hbs-octop') !== '1') { keep.style.order = '-1'; keep.setAttribute('data-hbs-octop', '1'); }
+        } catch (e) { /* never let a page quirk break Torn */ } };
         const run = async () => {
-            if (!/tab=crimes/.test(location.hash)) return;
+            if (!/tab=crimes/.test(location.hash)) { markDisabled([]); pinTop(null); return; }
             const MY = await loadMyOc(false), as = MY && MY.assignment;
             document.querySelectorAll('.hbs-ocseat,.hbs-occard').forEach(n => n.classList.remove('hbs-ocseat', 'hbs-occard'));
+            markDisabled(MY && MY.disabled);
+            const aRoot = as && as.crime_id ? document.getElementById('crime-history-root-' + as.crime_id) : null;
+            pinTop(aRoot ? cardOf(aRoot) : null);
             if (!as || as.joined || !as.crime_id) return;
-            const root = document.getElementById('crime-history-root-' + as.crime_id); if (!root) return;
+            const root = aRoot; if (!root) return;
             let card = root; for (let i = 0; i < 10 && card && !card.querySelector('[class*="slotBody___"]'); i++) card = card.parentElement;
             if (!card) return;
             card.classList.add('hbs-occard');
-            const want = String(as.position).replace(/\s+/g, ' ').trim().toLowerCase();
-            card.querySelectorAll('[class*="slotBody___"]').forEach(b => {
-                const slot = b.closest('[class*="slot___"]') || b.parentElement;
-                const hit = [...slot.querySelectorAll('*')].some(x => (x.textContent || '').length <= 40 && x.textContent.replace(/\s+/g, ' ').trim().toLowerCase().replace(/\s+\d+%?$/, '') === want);
-                if (hit) slot.classList.add('hbs-ocseat');
-            });
+            // (0.2.74) the seat: exact title, else the role without its "#n" (an open seat first)
+            const clean = t => norm(t).replace(/\s+\d+%?$/, ''), base = t => clean(String(t).replace(/#\s*\d+/g, ''));
+            const slots = [...card.querySelectorAll('[class*="slotBody___"]')].map(b => b.closest('[class*="slot___"]') || b.parentElement).filter(Boolean);
+            const titled = (slot, f, want) => [...slot.querySelectorAll('*')].some(x => (x.textContent || '').length <= 40 && f(x.textContent) === want);
+            let seat = slots.find(sl => titled(sl, clean, clean(as.position)));
+            if (!seat) { const same = slots.filter(sl => titled(sl, base, base(as.position))); seat = same.find(sl => sl.querySelector('[class*="joinButton"]')) || same[0]; }
+            if (seat) seat.classList.add('hbs-ocseat');
         };
         const sched = () => { clearTimeout(ocPageT); ocPageT = setTimeout(run, 400); };
         new MutationObserver(sched).observe(document.body, { childList: true, subtree: true });
