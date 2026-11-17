@@ -491,7 +491,7 @@ async function sxRoute(env, ctx, req) {
     if (what === "schedule") return sxPass(await cwSchedule(env, get, u, who));
     if (what === "scripts") return sxPass(await scriptsRoute(env, get, u, who));
     if (what === "readiness") return who.leader ? sxPass(await readiness(env, ctx)) : leadersOnly();
-    if (what === "spawn") return who.leader ? sxJson(await ocSpawnAlerts(env)) : leadersOnly();
+    if (what === "spawn") return who.leader ? sxJson(Object.assign({}, await ocSpawnAlerts(env), await loansUtil(env))) : leadersOnly();   // + loaned utilities (0.2.79)
     // 🧰 "loans" (HB Suite 0.2.62): the item-loan lists ONLY (missing = member in / planned for a crime without the
     // role's item; needs = "pid:itemId" in use) for loan staff (isLoanStaff: Heart Stopper / HR + leaders). Nothing else
     // from the leaders' spawn read (notify list, delays, paused crimes) is included.
@@ -504,7 +504,7 @@ async function sxRoute(env, ctx, req) {
     if (what === "loans") {
       if (!(who.leader || who.loans)) return leadersOnly();
       const A = await ocSpawnAlerts(env);
-      return sxJson({ok: true, as_of: A.as_of || null, missing: A.missing || [], needs: A.needs || []});
+      return sxJson(Object.assign({ok: true, as_of: A.as_of || null, missing: A.missing || [], needs: A.needs || []}, await loansUtil(env)));
     }
     // 🚀 DEPLOYED CRIMES (HB Suite 0.2.23, Nov 15 2026, user: "Show Deployed Crimes in the OC Tab within a dropdown. Put
     // this under the Loans tab. This should only be seen by leadership."): the live OC plan's teams - crime, status
@@ -774,6 +774,8 @@ async function sxRoute(env, ctx, req) {
   if (op === "war_feed") return sxJson(await warFeedSx(env, who, b || {}));
   // 🧰 ARMORY MINIMUMS (HB Suite 0.2.78): leaders set the stock level each tracked item should stay above.
   // {min: {key: n}} - only known keys, whole numbers 0..1,000,000; a key left out keeps its value
+  // 🧰 LOANS FROM THE ARMOURY PAGE (HB Suite 0.2.79) - loan staff; see loansSeen
+  if (op === "loans_seen") { if (!(who.leader || who.loans)) return leadersOnly(); return sxJson(await loansSeen(env, who, b || {})); }
   if (op === "armory_cfg") {
     if (!who.leader) return leadersOnly();
     const cur = await armoryMins(env), inb = (b && b.min && typeof b.min === "object") ? b.min : {};
@@ -2435,6 +2437,8 @@ async function ocFeedSx(env, ctx, who, b) {
   if (changed || fast) ctx.waitUntil((async () => {
     try { await ocAutoPlan(env, cl, now); } catch (e) { console.log("oc feed: plan failed"); }
     if (changed) try { await ocAssignPings(env, cl); } catch (e) { console.log("oc feed: pings failed"); }
+    // 🧰 an item seat vacated -> the loaned utilities are read again at once (armoryPull, option 4)
+    if (changed) try { const o = []; await armoryPull(env, Date.now(), o, cl); if (o.length) await env.OC_DB.batch(o); } catch (e) { console.log("oc feed: loans check failed"); }
   })());
   return {ok: true, feed: true, changed, extra, every: OC_FEED_EVERY_S};
 }
@@ -2562,15 +2566,53 @@ async function tornV1(env, path) {
   if (d && d.error) throw new Error("torn " + d.error.code);
   return d;
 }
-async function armoryPull(env, now, ops) {
-  const cur = await ocSnapGet(env, "hub", "armory").catch(() => null);
-  if (cur && now - cur.as_of < ARMORY_EVERY_MS - 60000) return;
+// 🧰 LOANED UTILITIES (Nov 17 2026, HB Suite 0.2.79 - user: "OC Loans arent refreshing as often as I'd like" ->
+// chosen: 1. the Hub reads utilities every 15 minutes · 3. update from the Armoury page · 4. refresh on crime changes).
+//   oc_snap hub 'loans:util' = {rows: [{pid, iid, item}], at, seats: ["crimeId:pid"], kick}
+//   1. `utilities` rides the armory stock call (same ONE call, no extra) -> rows = every utility out on loan to a
+//      current member. Served to loan staff in live "loans" / "spawn" as `loaned` + `loaned_at`.
+//   4. seats = every filled seat that needs an item (Recruiting / Planning crimes). When one disappears (the member
+//      left, or the crime finished) a loan may just have become unused -> `kick`: the next armoryPull reads at once
+//      (LOANS_KICK_GAP_MS apart at most) instead of waiting for the 15 minutes. Called with the crime list from the
+//      members' feed (every minute) and from the Hub's own pull.
+//   3. sx op "loans_seen" (loansSeen): loan staff on Armoury -> Utilities report what the page shows - see there.
+const LOANS_KICK_GAP_MS = 2 * 60 * 1000;
+const loanSeats = crimes => { const out = [];
+  for (const c of crimes || []) { if (!c || !["Recruiting", "Planning"].includes(c.status)) continue;
+    for (const sl of c.slots || []) if (sl && sl.user && sl.item_requirement && sl.item_requirement.id != null) out.push(c.id + ":" + Number(sl.user.id)); }
+  return out.sort(); };
+function loanRowsOf(d, members) {
+  const v = d && d.utilities, arr = Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : null;
+  if (!arr) return null;
+  const out = [];
+  for (const it of arr) { if (!it || it.loaned_to == null || it.loaned_to === 0 || it.loaned_to === "0" || it.loaned_to === "") continue;
+    const iid = Number(it.ID != null ? it.ID : it.id != null ? it.id : it.item_id) || 0; if (!iid) continue;
+    for (const tok of String(it.loaned_to).split(",")) { const pid = parseInt(String(tok).trim(), 10);
+      if (!pid || (members && !members.has(pid))) continue;                 // ex-members ignored
+      out.push({pid, iid, item: String(it.name || "#" + iid).slice(0, 60)}); } }
+  return out;
+}
+async function armoryPull(env, now, ops, crimes) {
+  const [cur, lr] = await Promise.all([ocSnapGet(env, "hub", "armory").catch(() => null), ocSnapGet(env, "hub", "loans:util").catch(() => null)]);
+  const L = (lr && lr.data) || {};
+  const seats = Array.isArray(crimes) ? loanSeats(crimes) : (L.seats || []), have = new Set(seats);
+  const dropped = Array.isArray(crimes) && Array.isArray(L.seats) && L.seats.some(x => !have.has(x));
+  const kick = !!(L.kick || dropped), age = cur ? now - cur.as_of : Infinity;
+  const putLoans = o => ops.push(ocSnapPut(env, "hub", "loans:util", now, JSON.stringify(o), "hub"));
+  if (age < ARMORY_EVERY_MS - 60000 && !(kick && age >= LOANS_KICK_GAP_MS)) {
+    if (kick !== !!L.kick || JSON.stringify(seats) !== JSON.stringify(L.seats || [])) putLoans({rows: L.rows || [], at: L.at || null, seats, kick});
+    return;
+  }
   const D = (cur && cur.data) || {};
-  // API: Heart Breakers Hub - armory stock (faction medical + drugs + boosters, one call every 15 minutes)
+  // API: Heart Breakers Hub - armory stock + loaned utilities (faction medical + drugs + boosters + utilities, ONE call
+  // every 15 minutes; sooner when an item seat was vacated)
   let d = null;
-  if (now - ARMORY_V2_BAD > 6 * 3600e3) { try { d = await ocTorn(env, "faction?selections=medical,drugs,boosters"); if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer"); }
+  if (now - ARMORY_V2_BAD > 6 * 3600e3) { try { d = await ocTorn(env, "faction?selections=medical,drugs,boosters,utilities"); if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer"); }
                                           catch (e) { ARMORY_V2_BAD = now; d = null; } }
-  if (!d) d = await tornV1(env, "faction/?selections=medical,drugs,boosters");
+  if (!d) d = await tornV1(env, "faction/?selections=medical,drugs,boosters,utilities");
+  { const mem = await currentMembers(env).catch(() => null), rows = loanRowsOf(d, mem && mem.size >= 5 ? mem : null);
+    if (rows) { putLoans({rows, at: now, seats, kick: false}); delete LIVE_MEMO["loans:util"]; }
+    else putLoans({rows: L.rows || [], at: L.at || null, seats, kick}); }    // no utilities in the answer: keep the list, try again
   const rows = [].concat(...["medical", "drugs", "boosters"].map(k => { const v = d[k]; return Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []; }));
   if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer");
   const byName = new Map(rows.filter(x => x && x.name).map(x => [armNorm(x.name), x]));
@@ -2589,6 +2631,36 @@ async function armoryPull(env, now, ops) {
     if (now - pat > ARMORY_PRICE_MS) pat = now;
   } catch (e) { /* stock is still stored; prices next run */ }
   ops.push(ocSnapPut(env, "hub", "armory", now, JSON.stringify({stock, ids, prices, prices_at: pat}), "hub"));
+}
+// what loan staff get: {loaned: [{pid, iid, item}], loaned_at}
+async function loansUtil(env) {
+  const r = await ocSnapGet(env, "hub", "loans:util").catch(() => null), L = (r && r.data) || {};
+  return L.at ? {loaned: L.rows || [], loaned_at: Number(L.at), loaned_v: Number(r.as_of) || 0} : {};   // loaned_v: changes with every write
+}
+// 3. FROM THE ARMOURY PAGE (sx op "loans_seen", loan staff): the Suite, while the member has Armoury -> Utilities open
+// and focused, reports {seen: [{iid, pid}], gone: [{iid, pid}]} - rows the page shows on loan, and rows it showed on
+// loan a moment ago that are now back (a Retrieve). Applied to the stored list at once so every loan staff member
+// sees a Loan / Retrieve within seconds; the Hub's own 15-minute read stays the full truth and replaces it.
+// Only current members, whole-number ids, at most 200 rows. Item names come from the stored list / the OC catalog.
+async function loansSeen(env, who, b) {
+  const pair = x => x && Number.isInteger(Number(x.iid)) && Number(x.iid) > 0 && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0;
+  const seen = Array.isArray(b.seen) ? b.seen : [], gone = Array.isArray(b.gone) ? b.gone : [];
+  if (seen.length > 200 || gone.length > 200 || !seen.every(pair) || !gone.every(pair)) return {ok: false, error: "bad rows"};
+  const [r, mem, cat] = await Promise.all([ocSnapGet(env, "hub", "loans:util").catch(() => null), currentMembers(env).catch(() => null), ocSnapGet(env, "prod", "catalog").catch(() => null)]);
+  const L = (r && r.data) || {};
+  if (!L.at) return {ok: true};                              // the Hub hasn't read the armory yet - nothing to lay this over
+  const rows = (L.rows || []).slice(), key = x => Number(x.pid) + ":" + Number(x.iid), names = {};
+  rows.forEach(x => { names[x.iid] = x.item; });
+  for (const c of ((cat && cat.data && cat.data.organizedcrimes) || [])) for (const sl of c.slots || [])
+    if (sl.required_item && sl.required_item.id && !names[sl.required_item.id]) names[sl.required_item.id] = String(sl.required_item.name || "").slice(0, 60);
+  let n = 0;
+  const drop = new Set(gone.map(key)), out = rows.filter(x => { if (drop.has(key(x))) { n++; return false; } return true; }), haveK = new Set(out.map(key));
+  for (const x of seen) { const k = key(x); if (haveK.has(k) || drop.has(k) || (mem && mem.size >= 5 && !mem.has(Number(x.pid)))) continue;
+    haveK.add(k); out.push({pid: Number(x.pid), iid: Number(x.iid), item: names[Number(x.iid)] || "#" + Number(x.iid)}); n++; }
+  let v = Number(r.as_of) || 0;
+  if (n) { v = Date.now(); await ocSnapPut(env, "hub", "loans:util", v, JSON.stringify(Object.assign({}, L, {rows: out})), `${String(who.name || "").slice(0, 40)} [${Number(who.id)}]`).run();
+           delete LIVE_MEMO["loans:util"]; }
+  return {ok: true, changed: n, loaned: out, loaned_at: Number(L.at), loaned_v: v};
 }
 const armoryMins = async env => { const c = await ocSnapGet(env, "hub", "armory:cfg").catch(() => null); const m = (c && c.data && c.data.min) || {};
   const out = {}; ARMORY_ITEMS.forEach(it => { const v = Number(m[it.key]); out[it.key] = Number.isFinite(v) && m[it.key] != null ? Math.max(0, Math.round(v)) : it.min; }); return out; };
@@ -2691,7 +2763,7 @@ async function ocFeedPull(env) {
   // DELAY CHECK - with the members just read above (no call of its own; it reads them itself only if that failed)
   if (crimesNow) try { await ocDelayCheck(env, crimesNow, now, ops, liveMembers); } catch (e) { fail("delays", e); }
   // 🧰 ARMORY STOCK - every 15 minutes (armoryPull)
-  try { await armoryPull(env, now, ops); } catch (e) { fail("armory", e); }
+  try { await armoryPull(env, now, ops, crimesNow); } catch (e) { fail("armory", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
   try { await ocShareAllOn(env, now); } catch (e) { fail("oc-share-all-on", e); }
