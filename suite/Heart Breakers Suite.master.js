@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.76
+// @version      0.2.77
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,8 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.77 (Nov 17 2026) - 🏷 Leaders: 📡 Sharing CPR rates now shows each member's Suite version (amber when it is
+ *          older than yours). Your Suite reports its version to the Hub with its regular check-in.
  *  v0.2.76 (Nov 17 2026) - 📈 Your OC pass rates are now sent when something can have changed them (a new crime
  *          appears, you join or leave a crime, your crime completes) plus once an hour, instead of every 5 minutes -
  *          about 10 fewer Torn calls an hour on your key.
@@ -462,7 +464,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.76';
+    const VERSION = '0.2.77';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -5562,11 +5564,14 @@
         const NT = (ocDep.d && ocDep.d.cpr_notified) || {};
         const noScr = x => !x.sharing && !x.off && !x.script;
         const noteOf = x => { const n = NT[String(x.pid)]; return n && n.ts ? `<small class="nt">notified ${ago(Math.floor(num(n.ts) / 1000))}${n.by ? ' by ' + esc(n.by) : ''}</small>` : ''; };
-        const row = (x, ok) => `<div class="hbs-depm"><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>${!ok && noScr(x) ? `<button type="button" class="hbs-btn hbs-cprn" data-cprnote="${num(x.pid)}" data-name="${esc(x.name)}" title="Open a Torn mail to ${esc(x.name)} with the Suite's install link filled in - you press Send">✉ Notify</button>` : ''}
+        // (0.2.77) the Suite version that member's script last reported - amber when older than this Suite
+        const verCmp = (a, b) => { const A = String(a).split('.').map(Number), B = String(b).split('.').map(Number); return (A[0] - B[0]) || (A[1] - B[1]) || (A[2] - B[2]); };
+        const verTag = x => x.ver ? ` <small style="color:${verCmp(x.ver, VERSION) < 0 ? '#FFB454' : '#8a93a3'};font-weight:normal" title="Suite version${x.pda ? ' · Torn PDA' : ''}">v${esc(x.ver)}${x.pda ? ' 📱' : ''}</small>` : '';
+        const row = (x, ok) => `<div class="hbs-depm"><a href="#" data-prof="${num(x.pid)}">${esc(x.name)}</a>${verTag(x)}${!ok && noScr(x) ? `<button type="button" class="hbs-btn hbs-cprn" data-cprnote="${num(x.pid)}" data-name="${esc(x.name)}" title="Open a Torn mail to ${esc(x.name)} with the Suite's install link filled in - you press Send">✉ Notify</button>` : ''}
             <span class="s ${ok ? 'ok' : 'no'}">${ok ? (x.last ? '✓ ' + ago(Math.floor(num(x.last) / (num(x.last) > 1e12 ? 1000 : 1))) : '✓ sharing')
                 // (0.2.55, user's fix 2) why not: they switched OC pass rates off / their script runs but hasn't sent a rate yet / no script seen
                 : x.off ? '✕ script running · sharing off' : x.script ? '… script running · no rates yet' : '✕ no script'}</span>${!ok && noScr(x) ? noteOf(x) : ''}</div>`;
-        return out + `<div class="hbs-foldb"><div class="hbs-hint">Members whose script (or opt-in key) sends their checkpoint pass rates to the Hub, so the planner can seat them in roles they pass. Rates themselves aren't shown. The time is when their script last checked (every few minutes while it runs).</div>
+        return out + `<div class="hbs-foldb"><div class="hbs-hint">Members whose script (or opt-in key) sends their checkpoint pass rates to the Hub, so the planner can seat them in roles they pass. Rates themselves aren't shown. The time is when their script last sent them (when their crime changes, a new crime appears, or once an hour while it runs). The small number is their Suite version.</div>
             <div class="hbs-sec">Sharing · ${yes.length}</div>${yes.length ? yes.map(x => row(x, true)).join('') : '<div class="hbs-hint">Nobody yet.</div>'}
             <div class="hbs-sec">Not sharing · ${no.length}</div>${no.length ? no.map(x => row(x, false)).join('') : '<div class="hbs-hint">✅ Everyone shares.</div>'}</div>`;
     }
@@ -6929,7 +6934,8 @@
                     store.set(K.sharePingAt, Date.now());
                     // [HB Suite] Hub API — op "share_ping": is a leader watching War Readiness? a new crime? (also refreshes the
                     // settings)
-                    const p = await hub('share_ping');
+                    // [HB Suite] Hub API — op "share_ping": the regular check-in; (0.2.77) + this Suite's version / PDA flag
+                    const p = await hub('share_ping', { v: VERSION, pda: isPDA() });
                     const ps = p.settings || st;
                     if (p.settings) store.set(K.share, p.settings);
                     if (p.feed_free) feedAsk();        // (0.2.69) nobody is feeding the crime list - offer this script

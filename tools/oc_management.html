@@ -1037,6 +1037,14 @@ async function drawShadow() {
     <details class="panel"><summary><b>Planned the same · ${same.length}</b></summary>${same.map(row).join("")}</details>
     <details class="panel"><summary><b>Recruiting, nobody placed by either · ${idle.length}</b></summary>${idle.map(r => `<div class="hn">${esc(r.crime)} #${esc(r.id)} · ${r.seats - r.open_now}/${r.seats}</div>`).join("")}</details>`;
 }
+// SUITE VERSION per member (Nov 17 2026, user: 'Members who are "Sharing CPR Rates" should show their version number of
+// the script.') - config.vers {pid: {ver, pda, at}} (gate/worker.js sx_ver), config.suite_latest
+function suiteVer(pid) {
+  const v = (D.config.vers || {})[String(pid)]; if (!v || !v.ver) return '<span class="tag">-</span>';
+  const n = t => String(t || "").split(".").map(Number), a = n(v.ver), b = n(D.config.suite_latest);
+  const old = D.config.suite_latest && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0;
+  return `<span class="${old ? "mid" : "ok"}" title="Last reported ${ago(v.at)}">${esc(v.ver)}</span>${v.pda ? ' <span class="tag">PDA</span>' : ""}`;
+}
 function drawSharing() {
   const ids = Object.keys(CFG.members);
   const rows = ids.map(pid => { const r = D.rates[pid]; const n = r && r.roles ? Object.keys(r.roles).length : 0;
@@ -1045,9 +1053,10 @@ function drawSharing() {
   const on = rows.filter(x => x.on).length;
   $("view").innerHTML = `<div class="panel"><div class="hn">📡 Members who share their CPR rates (through the Heart Breakers Suite or the opt-in key on their Settings page) can be placed in any crime. Members who don't can only be placed in crimes they've completed before, from those old rates.</div>
     <div class="stat"><div><b class="ok">${on}</b><span>Sharing</span></div><div><b class="${on < ids.length ? "bad" : ""}">${ids.length - on}</b><span>Not sharing</span></div><div><b>${ids.length}</b><span>Members</span></div></div>
-    <table><tr><th>Member</th><th>Status</th><th>Last shared</th><th>Roles</th></tr>${rows.map(x =>
+    <table><tr><th>Member</th><th>Status</th><th>Suite</th><th>Last shared</th><th>Roles</th></tr>${rows.map(x =>
       `<tr><td><b>${esc(x.name)}</b> <span class="tag">[${esc(x.pid)}]</span></td><td>${x.on ? '<span class="ok">✅ sharing</span>' : '<span class="bad">❌ not sharing</span>'}</td>
-       <td>${x.on ? ago(x.ts) : "-"}</td><td>${x.on ? x.n : "-"}</td></tr>`).join("")}</table></div>`;
+       <td>${suiteVer(x.pid)}</td><td>${x.on ? ago(x.ts) : "-"}</td><td>${x.on ? x.n : "-"}</td></tr>`).join("")}</table>
+    <div class="hn">Suite = the Heart Breakers Suite version that member's script last reported (0.2.77 and newer report it; "-" = an older Suite, the old OC Optimizer, or the opt-in key only). Amber = older than the newest release.</div></div>`;
 }
 
 // AUTOMATIC (Nov 2026): the Hub keeps the live plan up to date every 3 minutes - new teams as crimes finish, slots

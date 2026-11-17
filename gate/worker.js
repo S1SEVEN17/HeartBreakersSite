@@ -46,6 +46,7 @@
 // =====================================================================================================
 
 import {ocPlan} from "./oc_planner.js";   // shared OC team planner (also inlined into the OC Management page)
+import {SUITE_LATEST} from "./suite_version.js";   // the published Suite version (OC Management Sharing tab: who is behind)
 import {cwRoute, cwStub, CW_DEFAULT_CONFIG, CW_ROLES, CW_MAX_HOURS, CW_MAX_SHIFTS, CW_AHEAD_S, cwShiftRows, cwStatsFor, cwShiftAdd, cwShiftDelete} from "./chainroom.js";   // Faction Chain Watch room (Durable Object)
 export {ChainRoom} from "./chainroom.js";   // the Durable Object class (wrangler.toml CHAINROOM binding)
 
@@ -822,7 +823,21 @@ async function sxShareTable(env) {
   // oc / cw columns (added after the table first existed) - "duplicate column" errors are fine
   await env.OC_DB.prepare("ALTER TABLE sx_share ADD COLUMN oc INTEGER NOT NULL DEFAULT 0").run().catch(() => {});
   await env.OC_DB.prepare("ALTER TABLE sx_share ADD COLUMN cw INTEGER NOT NULL DEFAULT 0").run().catch(() => {});
+  // SUITE VERSIONS (Nov 17 2026, user: 'Members who are "Sharing CPR Rates" should show their version number of the
+  // script.'): sx_ver (pid, ver, pda, at) - the version each member's Suite reported with its 2-minute share_ping
+  // (HB Suite 0.2.77+ sends {v, pda}). Its own table so a version never creates a sharing-settings row. Written only
+  // when the version changed or the row is over a day old. Read by the leaders' sharing lists (ocPlanObj `sharing[].ver`,
+  // /l/oc/config.json `vers`).
+  await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS sx_ver (pid INTEGER PRIMARY KEY, ver TEXT, pda INTEGER NOT NULL DEFAULT 0, at INTEGER)").run();
   SX_SHARE_READY = true;
+}
+// {pid: {ver, pda, at}} - the Suite version each member last reported (sx_ver); {} when there's none / no table yet
+async function sxVers(env) {
+  try { await sxShareTable(env);
+    const out = {};
+    ((await env.OC_DB.prepare("SELECT pid, ver, pda, at FROM sx_ver").all()).results || []).forEach(r => { out[String(r.pid)] = {ver: r.ver, pda: !!r.pda, at: Number(r.at) || 0}; });
+    return out;
+  } catch (e) { return {}; }
 }
 async function sxShareRow(env, pid) {
   await sxShareTable(env);
@@ -870,6 +885,9 @@ async function sxShareOp(env, who, op, b) {
   }
   if (op === "share_ping") {
     const out = {ok: true, settings: settings(row), want_ready: false, want_chain: false, oc_tag: null};
+    if (typeof b.v === "string" && /^\d{1,3}\.\d{1,3}\.\d{1,4}$/.test(b.v))            // the Suite's version (see sx_ver)
+      await env.OC_DB.prepare("INSERT INTO sx_ver (pid, ver, pda, at) VALUES (?, ?, ?, ?) ON CONFLICT (pid) DO UPDATE SET ver = excluded.ver, pda = excluded.pda, at = excluded.at " +
+        "WHERE sx_ver.ver IS NOT excluded.ver OR sx_ver.pda IS NOT excluded.pda OR sx_ver.at < excluded.at - 86400000").bind(pid, b.v, b.pda ? 1 : 0, now).run().catch(() => {});
     if (row && row.ready) {
       const w = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'sx_ready_watch'").first().catch(() => null);
       out.want_ready = !!(w && now - Number(w.ts) < SX_WATCH_MS);
@@ -1894,8 +1912,9 @@ async function ocPlanObj(env, envName, id) {
     // off = their saved choice is OC pass rates off
     const seen = await ocScriptSeen(env, envName).catch(() => ({}));
     const sx = new Map(((await env.OC_DB.prepare("SELECT pid, oc FROM sx_share").all().catch(() => ({results: []}))).results || []).map(r => [Number(r.pid), Number(r.oc)]));
+    const vers = await sxVers(env);
     sharing = [...members.entries()].map(([pid, m]) => ({pid: Number(pid), name: (m && m.name) || ("#" + pid),
-      sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null,
+      sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null, ver: (vers[String(pid)] || {}).ver || null, pda: !!(vers[String(pid)] || {}).pda,
       script: seen[String(pid)] != null || sx.has(Number(pid)), off: sx.get(Number(pid)) === 0}))
       .sort((a, b) => (a.sharing - b.sharing) || a.name.localeCompare(b.name));
   }
@@ -1973,6 +1992,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       // 📡 DATA SOURCES: how old each shared reading is and who supplied it (a member's Suite, or the Hub's own check)
       c.sources = ((await env.OC_DB.prepare("SELECT env, ds, as_of, by FROM oc_snap WHERE (env = 'prod' AND ds IN ('crimes','roster')) OR (env = 'hub' AND ds IN ('recent','now','war:feed'))")
         .all().catch(() => ({results: []}))).results || []).map(r => ({ds: r.ds, at: Number(r.as_of) || 0, by: r.by === "hub" ? "" : String(r.by || "").replace(/\s*\[\d+\].*$/, "")}));
+      c.vers = await sxVers(env);                                    // Suite version per member (Sharing tab)
+      c.suite_latest = SUITE_LATEST;
       { const ls = await ocSnapGet(env, "hub", "feed:lease").catch(() => null);          // 🛰 who feeds the crime list (ocFeedSx)
         c.feed = ls && ls.data ? {name: ls.data.name || "", at: ls.as_of || Number(ls.data.last) || null, live: Date.now() - ls.as_of < OC_FEED_LEASE_MS} : null; }
       c.auto_every = ((pst && pst.data) || {}).every || null;                              // scheduled interval (ms)
