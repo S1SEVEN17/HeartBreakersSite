@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.75
+// @version      0.2.76
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.75';
+    const VERSION = '0.2.76';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -33,7 +33,7 @@
     const CACHE_MS = 5 * 60 * 1000;
     const MIN_HITS = 5;
     const READY_POLL_MS = 60000;
-    const OC_SHARE_MS = 300000;
+    const OC_SHARE_MS = 3600000;
     const SHARE_PING_MS = 120000;
     const SHARE_READY_MS = 60000;
 
@@ -54,6 +54,7 @@
         ocShareAt: 'hbs_share_ocat',
         sharePingAt: 'hbs_share_pingat',
         shareDay: 'hbs_share_day',
+        ocCurSig: 'hbs_oc_cur_sig',
         ocMeSig: 'hbs_oc_me_sig',
         feedDoneAt: 'hbs_feed_done_at',
         feedOn: 'hbs_feed_on',
@@ -3034,7 +3035,10 @@
     let myOc = null, myOcAt = 0;
     async function loadMyOc(force) {
         if (!force && myOc && Date.now() - myOcAt < 60000) return myOc;
-        try { myOc = await live('myoc'); myOcAt = Date.now(); } catch (e) {   }   // [HB Suite] Hub API — op live "myoc"
+        try { myOc = await live('myoc'); myOcAt = Date.now();
+            const cs = String((myOc && myOc.current && (myOc.current.crime_id || myOc.current.id)) || 0), was = store.get(K.ocCurSig, null);
+            if (cs !== was) { store.set(K.ocCurSig, cs); if (was !== null) { store.set(K.ocShareAt, 0); store.set(K.sharePingAt, 0); } }
+        } catch (e) {   }   // [HB Suite] Hub API — op live "myoc"
         return myOc;
     }
     const payDay = p => !p || !p.pay_day ? '' : shortMoney(p.pay_day);

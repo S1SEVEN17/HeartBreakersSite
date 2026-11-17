@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.75
+// @version      0.2.76
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,9 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.76 (Nov 17 2026) - 📈 Your OC pass rates are now sent when something can have changed them (a new crime
+ *          appears, you join or leave a crime, your crime completes) plus once an hour, instead of every 5 minutes -
+ *          about 10 fewer Torn calls an hour on your key.
  *  v0.2.75 (Nov 16 2026) - 📜 Your chain summary and your OC summary + latest crimes are now only on the History tab
  *          (they were shown twice); the Chain and OC tabs end with a line pointing there.
  *  v0.2.74 (Nov 16 2026) - 🕵 Torn's crimes page: crimes leadership has disabled are hatched red and their Join buttons
@@ -459,7 +462,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.75';
+    const VERSION = '0.2.76';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -469,7 +472,7 @@
     const CACHE_MS = 5 * 60 * 1000;            // Hub files kept in memory this long
     const MIN_HITS = 5;                        // "took part" = 5+ hits (Hub reliability rule)
     const READY_POLL_MS = 60000;               // war readiness - once a minute while the tab is open (user's rule)
-    const OC_SHARE_MS = 300000;                // (0.2.55) OC pass rates: re-read + send every 5 min while the script runs
+    const OC_SHARE_MS = 3600000;               // (0.2.76) OC pass rates: the hourly safety net - events send them at once (was every 5 min, 0.2.55)
     const SHARE_PING_MS = 120000;              // sharing: ask the Hub if a leader watches War Readiness (user's choice)
     const SHARE_READY_MS = 60000;              // sharing: readiness every minute while a leader watches
 
@@ -490,6 +493,7 @@
         ocShareAt: 'hbs_share_ocat',           // ms the OC pass rates were last read + sent (any tab) (0.2.55)
         sharePingAt: 'hbs_share_pingat',       // ms the Hub was last asked (any tab) (0.2.55)
         shareDay: 'hbs_share_day',             // TCT day (YYYY-MM-DD) the stats were last sent
+        ocCurSig: 'hbs_oc_cur_sig',            // (0.2.76) the crime the Hub last showed this member in ("<crime id>" or "0") - a change sends the pass rates
         ocMeSig: 'hbs_oc_me_sig',              // (0.2.70) the own crime last reported to the Hub ("<crime id>:<role>" or "0")
         feedDoneAt: 'hbs_feed_done_at',        // (0.2.71) ms the completed crimes were last read for the feed (any tab)
         feedOn: 'hbs_feed_on',                 // (0.2.69) ms until which THIS member's script is the crime feeder (any tab)
@@ -3854,7 +3858,12 @@
     let myOc = null, myOcAt = 0;
     async function loadMyOc(force) {
         if (!force && myOc && Date.now() - myOcAt < 60000) return myOc;
-        try { myOc = await live('myoc'); myOcAt = Date.now(); } catch (e) { /* keep the last */ }   // [HB Suite] Hub API — op live "myoc"
+        try { myOc = await live('myoc'); myOcAt = Date.now();
+            // (0.2.76) OWN CRIME CHANGED (joined, left, completed, gone) -> the pass rates go out on the next share round
+            // (within 2 minutes) instead of waiting for the hourly one. The first reading on a device only records it.
+            const cs = String((myOc && myOc.current && (myOc.current.crime_id || myOc.current.id)) || 0), was = store.get(K.ocCurSig, null);
+            if (cs !== was) { store.set(K.ocCurSig, cs); if (was !== null) { store.set(K.ocShareAt, 0); store.set(K.sharePingAt, 0); } }
+        } catch (e) { /* keep the last */ }   // [HB Suite] Hub API — op live "myoc"
         return myOc;
     }
     // 0.2.3 (user: "OC Page should show more crime details about the crime you're in. 'Join Now' Pay per day is the most
