@@ -1970,10 +1970,13 @@ async function ocLeaderRoute(env, req, url, who, sub) {
   if (req.method === "GET" && sub === "summaries.json") {
     const envName = url.searchParams.get("env");
     if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
-    const {results} = await env.OC_DB.prepare("SELECT ds, data FROM oc_snap WHERE env = ? AND ds IN ('summaries', 'prices')").bind(envName).all();
-    const by = {};
-    (results || []).forEach(r => { by[r.ds] = r.data; });
-    return new Response(`{"summaries":${by.summaries || "null"},"prices":${by.prices || "null"}}`,
+    // + roster (Nov 17 2026, user: "share the database with the hubs roster"): OC Management takes its member list
+    // from the Hub's roster (every 3 minutes) and its history pass rates from summaries.memberRates, instead of the
+    // copy built into the page every 3 hours / the Refresh button's GitHub run
+    const {results} = await env.OC_DB.prepare("SELECT ds, data, as_of FROM oc_snap WHERE env = ? AND ds IN ('summaries', 'prices', 'roster')").bind(envName).all();
+    const by = {}, at = {};
+    (results || []).forEach(r => { by[r.ds] = r.data; at[r.ds] = Number(r.as_of) || 0; });
+    return new Response(`{"summaries":${by.summaries || "null"},"prices":${by.prices || "null"},"roster":${by.roster || "null"},"roster_at":${at.roster || 0}}`,
                         {headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
   }
   if (req.method === "POST" && sub === "refresh") {

@@ -129,7 +129,7 @@ tr.nt-ok td{background:rgba(120,200,120,.06)}tr.nt-old td{background:rgba(232,19
 __MENU__
 <h1>OC Management</h1>
 <div class="sub">Choose which crimes the Heart Breakers Suite suggests, build teams and deploy them to members using the script</div>
-<div class="bar"><button id="refresh" style="margin-left:auto" title="Re-check Torn now: members, active crimes, newly completed crimes, shared rates and the deployed plan (once a minute)">🔄 Refresh</button></div>
+<div class="bar"><button id="refresh" style="margin-left:auto" title="Reload everything from the Hub now: members, active crimes, history and shared pass rates, the deployed plan">🔄 Refresh</button></div>
 <div class="status" id="st">Loading…</div>
 <div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button></div>
 <div id="view"></div>
@@ -199,7 +199,22 @@ async function load() {
     D.active = (act && act.crimes) || []; D.activeT = (act && act.t) || null;
     applyLive(cfg, rates, feed);
     LIVE_SIG = liveSig(cfg, rates, feed);
-    if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
+    // MEMBERS + HISTORY RATES FROM THE HUB (Nov 17 2026, user: "share the database with the hubs roster"): the Hub's
+    // roster (re-read every 3 minutes, stored when it changes) and the history pass rates the Hub's own planner uses
+    // (summaries.memberRates - each current member's latest rate per crime + role, refilled as crimes complete) replace
+    // the copy built into this page every 3 hours. Same shape as before: CFG.hist {"Crime|Role": {pid: [rate, when s]}}.
+    // The old sources (the page's built-in copy, data/oc_pool.json from a Refresh run) are only the fallback when the
+    // Hub has no roster.
+    const hubRoster = sums && sums.roster && Object.keys(sums.roster).length >= 5 ? sums.roster : null;
+    if (hubRoster) {
+      CFG.members = hubRoster;
+      const hist = {};
+      Object.entries((D.sums && D.sums.memberRates) || {}).forEach(([crime, byRole]) => Object.entries(byRole || {}).forEach(([role, list]) => {
+        const b = hist[crime + "|" + role] = {};
+        (list || []).forEach(m => { if (m && m.pid != null && hubRoster[String(m.pid)] != null) b[String(m.pid)] = [Math.round(m.rate), Math.floor((Number(m.t) || 0) / 1000)]; }); }));
+      if (Object.keys(hist).length) CFG.hist = hist;
+      CFG.built = Math.floor(Date.now() / 1000); D.hubPool = true;
+    } else if (pool && pool.t > (CFG.built || 0) && pool.members && Object.keys(pool.members).length) {
       CFG.members = pool.members; CFG.hist = pool.hist || {}; CFG.built = pool.t;
     }
     const shared = Object.keys(D.rates).length;
@@ -1495,6 +1510,10 @@ function refreshBtn() {
 setInterval(refreshBtn, 1000);
 $("refresh").onclick = async () => {
   if ($("refresh").disabled) return;
+  // (Nov 17 2026) members + history rates come from the Hub now, so a Refresh is just a reload of the Hub's data - no
+  // GitHub crime check to start and wait for. The old flow below only runs if the Hub had no roster.
+  if (D.hubPool) { LS.set("hb_oc_refresh_at", Date.now() - REFRESH_GAP + 5000); polling = true; refreshBtn(); await load(); polling = false; refreshBtn();
+    st($("st").textContent + " · refreshed from the Hub just now"); return; }
   const startT = Math.floor(Date.now() / 1000);
   LS.set("hb_oc_refresh_at", Date.now()); polling = true; refreshBtn();
   try {
