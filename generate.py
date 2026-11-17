@@ -9551,8 +9551,23 @@ def oc_item_prices(key: str, ids: set) -> dict:
     except (OSError, ValueError):
         c = {"fetched": 0, "prices": {}}
     have = c.setdefault("prices", {})
+    # HUB FIRST (Nov 17 2026, one price source): the Hub re-reads item prices every day, so its prices are laid over
+    # the saved ones on every run - the site and the Suite then show the same payout values. Torn is only asked for
+    # an item the Hub doesn't have a price for (and the weekly re-read no longer happens while the Hub answers).
+    hubp = (hub_export("prices") or {}).get("prices") if ids else None
+    got_hub = 0
+    if isinstance(hubp, dict):
+        for i in ids:
+            e = hubp.get(str(i))
+            if isinstance(e, dict) and int(e.get("price") or 0) > 0:
+                if have.get(str(i)) != int(e["price"]):
+                    got_hub += 1
+                have[str(i)] = int(e["price"])
+        if got_hub:
+            OC_PRICES_PATH.write_text(json.dumps(c, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")
+        print(f"OC item prices: {got_hub} updated from the Hub")
     need = sorted(str(i) for i in ids if str(i) not in have)
-    want = sorted(str(i) for i in ids) if due("item_types", c.get("fetched")) else need
+    want = need if isinstance(hubp, dict) else (sorted(str(i) for i in ids) if due("item_types", c.get("fetched")) else need)
     if key and want:
         try:
             for i in range(0, len(want), 100):
@@ -9639,12 +9654,25 @@ def update_crime_history(key: str) -> dict:
     if saved and not refill and not due("crimes", hist.get("fetched")):
         return hist                         # read once per 3-hour clock slot (FIXED CLOCK SCHEDULE)
     hist["fetched"] = now_
-    try:
-        crimes, _ = all_pages("crimes", "crimes", key, "Completed crimes", {"cat": "completed"},
-                              stop_ids=set(saved) if saved and not refill else None)
-    except SystemExit as e:
-        print(f"Crime history skipped: {e}")
-        return hist
+    # HUB FIRST (Nov 17 2026, one history source): the Hub reads the newest 100 completed crimes every 3 minutes. They
+    # are used - with NO Torn call - when that reading is under 15 minutes old AND it reaches back to a crime already
+    # saved here (so nothing between the last save and now can be missing). Otherwise (first run, a refill, the Hub not
+    # reachable, or a gap longer than 100 crimes) Torn is read as before.
+    crimes = None
+    if saved and not refill:
+        hx = hub_export("completed")
+        hl = (hx or {}).get("crimes")
+        if isinstance(hl, list) and hl and now_ * 1000 - int((hx or {}).get("at") or 0) < 15 * 60 * 1000 \
+                and any(str(c.get("id")) in saved for c in hl if isinstance(c, dict)):
+            crimes = [c for c in hl if isinstance(c, dict) and str(c.get("id")) not in saved]
+            print(f"Crime history: from the Hub ({len(crimes)} not saved yet, no Torn call)")
+    if crimes is None:
+        try:
+            crimes, _ = all_pages("crimes", "crimes", key, "Completed crimes", {"cat": "completed"},
+                                  stop_ids=set(saved) if saved and not refill else None)
+        except SystemExit as e:
+            print(f"Crime history skipped: {e}")
+            return hist
     if crimes and not hist.get("_shape_logged"):
         print(f"--- completed crime shape ---\n{describe_shape(crimes[0], max_depth=5)}")
     added = 0
@@ -10990,6 +11018,25 @@ def oc_fetch_active(key: str) -> list:
 
 
 OC_HUB_MAX_AGE = 5 * 60          # seconds: the Hub's crimes / members readings are used when younger than this
+
+
+def hub_export(what: str):
+    """The gatekeeper's private export (GET /sx/export?oc=<what>, same header as the sharing export) -> the parsed
+    answer, or None when it can't be read (gate off, no folder secrets in this run, not reachable). ONE DATA SOURCE
+    (Nov 17 2026): the Hub already holds the newest completed crimes and the item prices from its own key, so the site
+    build asks the Hub first and only calls Torn itself when the Hub's copy can't be used."""
+    import hashlib
+    g_ = gate_cfg()
+    if not g_ or not os.environ.get("LEADER_DIR", "").strip() or not os.environ.get("MEMBER_DIR", "").strip():
+        return None
+    tok = hashlib.sha256(f'{os.environ.get("MEMBER_DIR", "")}|{os.environ.get("LEADER_DIR", "")}|hb-sx-export'.encode()).hexdigest()
+    try:
+        req = urllib.request.Request(g_["url"].rstrip("/") + "/sx/export?oc=" + what, headers={"X-HB-Export": tok, "User-Agent": "HB Hub build"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except Exception as ex:
+        print(f"Hub export '{what}' not read ({type(ex).__name__})")
+        return None
 
 
 def oc_hub_snapshot():

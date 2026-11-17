@@ -88,12 +88,43 @@ const cookie = (v, maxAge) => `${COOKIE}=${v}; Path=/; Max-Age=${maxAge}; HttpOn
 const physDir = async dir => (await sha256hex(`${dir}|gate`)).slice(0, 32);
 
 // current members (db/members.json from the uploaded site - always the latest deploy)
+// + THE HUB'S LIVE ROSTER ON TOP (Nov 17 2026, user: "Optimize the data" - one member list). The site file is rebuilt
+// every 3 hours, so a new member waited up to 3 h to sign in and a member who left kept access as long. The Hub's own
+// key reads the faction's members every 3 minutes (oc_snap hub 'members:live', written ONLY by ocFeedPull - never by a
+// member's script), so that reading is laid over the file: members no longer in it are dropped, new ones are added
+// {id, name, position, current}, and a changed position (leader / staff rights) applies at once.
+// SAFETY: the live list is used only when it is under MEMBERS_LIVE_MAX_AGE old AND at least 5 members AND at least
+// 60% the size of the file's list - a broken or half-read list can never lock the faction out; then the file stands
+// alone, exactly as before. Read from D1 at most once a minute per Worker instance.
+const MEMBERS_LIVE_MAX_AGE = 20 * 60 * 1000;
+let LIVE_ROSTER = {at: 0, list: null, as_of: 0};
+async function liveRoster(env) {
+  const now = Date.now();
+  if (now - LIVE_ROSTER.at < 60000) return LIVE_ROSTER;
+  LIVE_ROSTER = {at: now, list: null, as_of: 0};
+  try {
+    const r = env.OC_DB ? await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'hub' AND ds = 'members:live'").first() : null;
+    const L = r ? JSON.parse(r.data) : null;
+    if (Array.isArray(L)) LIVE_ROSTER = {at: now, list: L.filter(m => m && Number(m.id) > 0), as_of: Number(r.as_of) || 0};
+  } catch (e) { /* the file stands alone */ }
+  return LIVE_ROSTER;
+}
 async function currentMembers(env, ctx) {
   const r = await env.ASSETS.fetch(new Request(`https://assets.local/${await physDir(env.MEMBER_DIR)}/db/members.json`));
   if (!r.ok) return null;
   const d = await r.json();
   const map = new Map();
   for (const m of d.members || []) if (m.current) map.set(m.id, m);
+  const live = await liveRoster(env);
+  if (live.list && Date.now() - live.as_of < MEMBERS_LIVE_MAX_AGE && live.list.length >= 5 && live.list.length >= 0.6 * map.size) {
+    const ids = new Set(live.list.map(m => Number(m.id)));
+    for (const id of [...map.keys()]) if (!ids.has(Number(id))) map.delete(id);            // left the faction
+    for (const m of live.list) {
+      const id = Number(m.id), cur = map.get(id), pos = typeof m.position === "string" && m.position ? m.position : null;
+      if (!cur) map.set(id, {id, name: String(m.name || "#" + id), position: pos || "", current: true});   // joined since the last site build
+      else if (pos && pos !== cur.position) map.set(id, Object.assign({}, cur, {position: pos}));           // promoted / demoted
+    }
+  }
   return map;
 }
 function isLeader(env, position) {
@@ -926,6 +957,15 @@ async function sxExport(env, req) {
   // ?oc=1 (Nov 16 2026, API usage review): the site's 15-minute crime check takes the open crimes + members' live
   // status from here (the Hub's / feeder's newest reading) instead of asking Torn again - {crimes, crimes_at, members,
   // members_at} (ms). The site falls back to its own calls when either is older than a few minutes.
+  // ?oc=completed -> {crimes: the newest 100 completed crimes as Torn gave them (the Hub's own key, every 3 min), at}
+  // ?oc=prices    -> {prices: {item id: {name, price}} (the Hub's daily item prices), at}
+  // Both for the site build (generate.py hub_export), which falls back to its own Torn calls when they're stale.
+  { const what = new URL(req.url).searchParams.get("oc");
+    if (what === "completed" || what === "prices") {
+      const r = env.OC_DB ? await (what === "completed" ? ocSnapGet(env, "hub", "completed:raw") : ocSnapGet(env, "prod", "prices")).catch(() => null) : null;
+      return Response.json(what === "completed" ? {crimes: (r && r.data) || null, at: (r && r.as_of) || 0} : {prices: (r && r.data) || null, at: (r && r.as_of) || 0},
+                           {headers: {"Cache-Control": "no-store"}});
+    } }
   if (new URL(req.url).searchParams.get("oc") === "1") {
     const [c, m] = env.OC_DB ? await Promise.all([ocSnapGet(env, "prod", "crimes").catch(() => null), ocSnapGet(env, "hub", "members:live").catch(() => null)]) : [null, null];
     return Response.json({crimes: (c && c.data) || null, crimes_at: (c && c.as_of) || 0, members: (m && m.data) || null, members_at: (m && m.as_of) || 0},
@@ -2486,6 +2526,9 @@ async function ocFeedPull(env) {
   try {
     const d = await ocTorn(env, "faction/crimes?cat=completed&limit=100&sort=DESC");
     ops.push(ocSnapPut(env, "hub", "recent", now, JSON.stringify({rows: ocRecentRows(d.crimes)}), "hub"));
+    // the same list, whole, for the SITE's crime history (GET /sx/export?oc=completed) - it then needs no Torn call
+    // of its own every 3 hours (Nov 17 2026, one history source)
+    ops.push(ocSnapPut(env, "hub", "completed:raw", now, JSON.stringify(d.crimes || []), "hub"));
     const done = (d.crimes || []).filter(c => c && c.id && c.executed_at && c.status === "Successful");
     if (done.length) {
       const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 300").all()).results || []).map(r => Number(r.id)));
