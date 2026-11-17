@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.78
+// @version      0.2.79
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.78';
+    const VERSION = '0.2.79';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -4385,6 +4385,15 @@
     const loanRead = () => store.get(K.loanCache, null) || {};
     function loanWrite(p) { const c = Object.assign(loanRead(), p); store.set(K.loanCache, c); return c; }
     let loanView = 'toloan', loanBusy = false, loanErr = '';
+    function loanFromHub(S, N, force) {
+        const C = loanRead(), at = num(S.loaned_at), v = num(S.loaned_v);
+        if (!at || !Array.isArray(S.loaned)) return false;
+        if (!force && C.usrc === 'hub' && v <= num(C.uv)) return false;
+        if (!force && C.usrc === 'me' && num(C.uts) > at) return false;
+        loanWrite({ unused: S.loaned.filter(e => e && (N.byId[e.pid] || {}).current !== false).map(e => ({ pid: num(e.pid), name: nameOf(N, e.pid), iid: num(e.iid), item: e.item || '#' + e.iid })),
+            uts: at, usrc: 'hub', uv: v });
+        return true;
+    }
     async function ocLeadersHtml() {
         // [HB Suite] Hub API — op "live" what "spawn" (leaders): Notify list, delayed / paused crimes, missing items
         // just the two loan lists (missing / needs) - [HB Suite] Hub API — op "live" what "loans"
@@ -4416,6 +4425,7 @@
                 : '<div class="hbs-hint">✅ No crime is waiting on an empty seat.</div>') + '</div>');
         const missing = Array.isArray(S.missing) ? S.missing : (loanRead().missing || []);
         if (ocLead && Array.isArray(S.needs)) loanWrite({ missing, needs: S.needs, mts: Date.now() });
+        if (ocLead && Array.isArray(S.loaned)) loanFromHub(S, N);
         loanHighlight();
         const C = loanRead(), ig = loanIgnored(), unused = (C.unused || []).filter(e => !ig.has(e.pid + ':' + e.iid) && !(C.needs || []).includes(e.pid + ':' + e.iid));
         const onArm = onArmoury();
@@ -4431,7 +4441,7 @@
         else {
             out += `<div class="hbs-actions"><button type="button" class="hbs-btn hbs-ghost" data-loanref${loanBusy ? ' disabled' : ''}>${loanBusy ? 'Reading…' : '↻ Refresh'}</button>
                 ${ig.size ? `<button type="button" class="hbs-btn hbs-ghost" data-loanreset>Reset ignored (${ig.size})</button>` : ''}</div>
-                ${C.uts ? `<div class="hbs-hint">Checked ${ago(Math.floor(C.uts / 1000))} · utilities only (temporary items ignored)</div>` : '<div class="hbs-hint">Refresh reads your faction\'s utilities once with your key (needs faction API access).</div>'}
+                ${C.uts ? `<div class="hbs-hint">Checked ${ago(Math.floor(C.uts / 1000))}${C.usrc === 'hub' ? ' by the Hub - it reads every 15 minutes, and right away when an item seat empties' : C.usrc === 'me' ? ' with your key' : ''} · utilities only (temporary items ignored)</div>` : '<div class="hbs-hint">The Hub reads the loaned utilities every 15 minutes. Refresh reads them once with your key (needs faction API access).</div>'}
                 ${loanErr ? `<div class="hbs-msg">${esc(loanErr)}</div>` : ''}`;
             out += C.unused ? (unused.length ? unused.map(e => `<div class="hbs-li"><span><b>${esc(e.item)}</b> · loaned to ${pl(e.pid, e.name)}<br><span style="opacity:.75">not needed for any OC</span></span>
                 <span style="white-space:nowrap"><button type="button" class="hbs-btn" data-loan="retrieve" data-iid="${e.iid}" data-pid="${e.pid}" data-name="${esc(e.name)}">Retrieve</button>
@@ -4556,7 +4566,7 @@
                         if (!pid || !(N.byId[pid] || {}).current) return;
                         out.push({ pid, name: nameOf(N, pid), iid, item: it.name || '#' + iid }); });
                 }); });
-            loanWrite({ unused: out, uts: Date.now() });
+            loanWrite({ unused: out, uts: Date.now(), usrc: 'me' });
         } catch (e) { loanErr = 'Couldn\'t read the armoury: ' + e.message; }
         loanBusy = false; loanHighlight(); render(true);
     }
@@ -4579,7 +4589,35 @@
             armRows().forEach(r => { const pid = rowPid(r);
                 if (pid != null) { if (retr[r.iid] && retr[r.iid].has(pid)) r.el.classList.add('hbs-arm-retr'); }
                 else if (rowAvail(r) && need.has(r.iid)) r.el.classList.add('hbs-arm-loan'); });
+            loanSeenScan();
         } catch (e) {   }
+    }
+    // Sent at most every 3 s and each pair once per page visit. [HB Suite] Hub API — op "loans_seen"
+    let loanSeenPrev = null, loanSeenPage = '', loanSeenAt = 0, loanSeenBusy = false;
+    const loanSeenSent = new Set();
+    function loanSeenScan() {
+        if (!me || !(me.leader || me.loans)) return;
+        const li = document.querySelector('#faction-armoury-tabs li.utilities, ul.armory-main-tab li.utilities');
+        if (li ? !li.classList.contains('ui-tabs-active') : !/sub=utilities/.test(location.hash)) { loanSeenPrev = null; return; }
+        const rows = armRows(); if (!rows.length) return;
+        const C = loanRead(); if (C.usrc !== 'hub' && !C.uv) return;
+        const now = new Set(), ids = new Set();
+        rows.forEach(r => { ids.add(r.iid); const pid = rowPid(r); if (pid) now.add(pid + ':' + r.iid); });
+        const page = (location.hash.match(/start=\d+/) || [''])[0];
+        const known = new Set((C.unused || []).map(e => e.pid + ':' + e.iid));
+        const seen = [...now].filter(k => !known.has(k) && !loanSeenSent.has('s' + k));
+        const gone = (loanSeenPrev && loanSeenPage === page) ? [...loanSeenPrev].filter(k => !now.has(k) && ids.has(+k.split(':')[1]) && !loanSeenSent.has('g' + k)) : [];
+        loanSeenPrev = now; loanSeenPage = page;
+        if ((!seen.length && !gone.length) || loanSeenBusy || Date.now() - loanSeenAt < 3000) { if (gone.length) gone.forEach(k => loanSeenPrev.add(k)); return; }
+        loanSeenBusy = true; loanSeenAt = Date.now();
+        seen.forEach(k => loanSeenSent.add('s' + k)); gone.forEach(k => { loanSeenSent.add('g' + k); loanSeenSent.delete('s' + k); });
+        seen.forEach(k => loanSeenSent.delete('g' + k));
+        const pair = k => ({ pid: +k.split(':')[0], iid: +k.split(':')[1] });
+        hub('loans_seen', { seen: seen.slice(0, 200).map(pair), gone: gone.slice(0, 200).map(pair) })
+            .then(async d => { if (d && Array.isArray(d.loaned)) { const N = await names().catch(() => ({ byId: {} }));
+                if (loanFromHub(d, N, true) && !collapsed && tab === 'oc') render(true); } })
+            .catch(() => {   })
+            .then(() => { loanSeenBusy = false; });
     }
     function setNative(input, v) {
         try { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, v); } catch (e) { input.value = v; }
