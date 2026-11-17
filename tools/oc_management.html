@@ -104,6 +104,18 @@ details.sets summary b{color:var(--gold)}
 .rr select{min-width:0}
 .rr .pos{color:var(--sub);font-weight:600;overflow:hidden;text-overflow:ellipsis;line-height:1.35}
 .rr .pos .wt{display:block;width:max-content;max-width:100%;margin:2px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}   /* weight under the role name (Nov 12 2026) */
+/* TEAM ROWS, TWO LINES (Nov 17 2026, user: "format the entries so they're not stacked atop eachother as much when the
+   text fields are long"): Deployed + Planning cards. Line 1 = role (+ weight) · member · rate; line 2 = the status on
+   ONE line across the card's full width (ellipsis if it still doesn't fit - the full text is in the tooltip). Replaces
+   the 4-column table whose narrow Status column wrapped every long status into a tall stack. */
+.drh,.dr{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1.25fr) 44px;column-gap:8px;align-items:baseline}
+.drh{padding:6px 2px;border-bottom:1px solid #2a1416;color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px;font-weight:700}
+.dr{padding:6px 2px;border-bottom:1px solid #2a1416;font-size:13px;row-gap:2px}
+.dr>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dr .drp{color:var(--sub);font-weight:600;white-space:normal;line-height:1.35}.dr .drp .wt{margin-left:4px}
+.dr .drr,.drh span:last-child{text-align:right}
+.dr .drs{grid-column:1/-1;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-left:2px}
+.dr .drs .tag{font-size:11px}
 .wt{display:inline-block;margin-left:6px;padding:0 6px;border-radius:8px;background:#20141a;border:1px solid #3a1c1e;color:#c9b27a;font-size:11px;font-weight:600;vertical-align:1px}
 .rr select{width:100%;padding:5px 6px;font-size:13px}
 .rr .rt{min-width:46px;text-align:right;font-weight:700}
@@ -848,7 +860,7 @@ const SCRIPT_MS = 3 * 864e5;
 const scriptKnown = () => Object.keys(D.config.script_seen || {}).length > 0;
 const usesScript = pid => !scriptKnown() || Date.now() - Number((D.config.script_seen || {})[String(pid)] || 0) < SCRIPT_MS;
 const noScrTag = pid => pid == null || usesScript(pid) ? "" : `<span class="tag mid" title="Hasn't used the Heart Breakers Suite in 3 days - they won't see this assignment. Message them in Torn.">📵 no script</span>`;
-const queueTag = (r, b) => r && r.queued ? `<span class="qd" title="Still in ${b ? esc(b.crime) : "another crime"} - joins this one when it pays out">🕒 Queued${b ? ` · finishing ${esc(b.crime)}` : ""} · free in ${freeIn(r.free_at)}</span>` : "";
+const queueTag = (r, b) => r && r.queued ? `<span class="qd" title="Still in ${b ? esc(b.crime) : "another crime"} - joins this one when it pays out">🕒 Queued${b ? ` · after ${esc(b.crime)}` : ""} · free in ${freeIn(r.free_at)}</span>` : "";
 function teamCard(t) {
   const a = teamAvg(t), mn = teamMin(t), busy = busyMap(), others = usedIds(t);
   const rows = t.roles.map((r, i) => {
@@ -1392,9 +1404,9 @@ function drawNotify() {
 // planning progress in the crime they're in (the feed's slot user.progress, 0-100), always as a number:
 //   100 -> ✅ 100% · planned     1-99 -> ⏳ N% planning     0 -> 0% · waiting their turn
 const planTag = p => { p = Math.max(0, Math.min(100, Math.round(Number(p) || 0)));
-  return p >= 100 ? '<span class="ok" title="Their planning is finished">✅ 100% · planned</span>'
+  return p >= 100 ? '<span class="ok" title="Their planning is finished">100% planned</span>'
     : p > 0 ? `<span class="qd" title="Planning now - each role takes 24 hours">⏳ ${p}% planning</span>`
-    : '<span class="tag" title="In the crime - their planning starts when the roles before them finish">0% · waiting</span>'; };
+    : '<span class="tag" title="In the crime - their planning starts when the roles before them finish">0% · waiting to plan</span>'; };
 // the planning progress (0-100) of member pid in crime id, or null when the feed doesn't show them in it
 function planOf(crimeId, pid) {
   const c = (D.feed || []).find(x => String(x.id) === String(crimeId));
@@ -1413,13 +1425,13 @@ function drawPlanning() {
       const rate = u && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null;
       const min = Math.ceil(floorOf(c.name, pos) - 1e-9), out_ = rate != null && rate < min;
       const pg = u ? Math.round(Number(u.progress) || 0) : 0;
-      return `<tr><td>${esc(pos)}${wTag(c.name, pos)}</td><td>${u ? `<b>${esc(nameOf(u.id))}</b>` : '<span class="mid">Unfilled</span>'}</td>`
-        + `<td class="${col(rate)}">${rate == null ? "-" : rate + "%"}${out_ ? ` <span title="Below the ${min}% minimum">⚠️</span>` : ""}</td>`
-        + `<td>${u ? planTag(pg) : ""}</td></tr>`; }).join("");
+      return `<div class="dr"><span class="drp" title="${esc(pos)}">${esc(pos)}${wTag(c.name, pos)}</span><span>${u ? `<b>${esc(nameOf(u.id))}</b>` : '<span class="mid">Unfilled</span>'}</span>`
+        + `<span class="drr ${col(rate)}">${rate == null ? "" : rate + "%"}${out_ ? ` <span title="Below the ${min}% minimum">⚠️</span>` : ""}</span>`
+        + `${u ? `<span class="drs">${planTag(pg)}</span>` : ""}</div>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
       <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${w != null && w < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
-      <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Planning</th></tr>${rows}</table></div>`; }).join("");
+      <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`; }).join("");
   $("view").innerHTML = `<div class="panel">${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
     ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
@@ -1458,7 +1470,7 @@ function drawDeployed() {
   const sm = spawnMap(plan.teams);
   const cards = plan.teams.map(t => {
     const rows = t.roles.map(r => {
-      if (r.pid == null) return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td class="mid">Unfilled</td><td></td><td></td></tr>`;
+      if (r.pid == null) return `<div class="dr"><span class="drp" title="${esc(r.position)}">${esc(r.position)}${wTag(t.crime, r.position)}</span><span class="mid">Unfilled</span><span></span></div>`;
       total++;
       const b = busy[r.pid];
       // JOINED vs QUEUED (Nov 2026): a live team's member has joined only when they're in THAT crime id; a queued
@@ -1479,7 +1491,10 @@ function drawDeployed() {
             ? `<span class="mid" title="Hasn't started planning in ${esc(b.crime)} - leaves it for this seat, which pays more if joined now">↪ Leave ${esc(b.crime)} first</span>`
             : `<span class="mid">⚠️ in ${esc(b.crime)}</span>`) : '<span class="tag">⏳ Not joined yet</span>')
         + (r.replaces && !ok ? ` <span class="bad">🔁 replacing ${esc(r.replaces.name || nameOf(r.replaces.pid))}</span>` : "");
-      return `<tr><td>${esc(r.position)}${wTag(t.crime, r.position)}</td><td><b>${esc(r.name || nameOf(r.pid))}</b>${ok ? "" : " " + noScrTag(r.pid)}</td><td class="${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</td><td>${stt}</td></tr>`;
+      // two lines: role · member · rate, then the whole status on one line (the "no script" tag sits at its end)
+      const plain = stt.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+      return `<div class="dr"><span class="drp" title="${esc(r.position)}">${esc(r.position)}${wTag(t.crime, r.position)}</span><span><b>${esc(r.name || nameOf(r.pid))}</b></span><span class="drr ${col(r.rate)}">${r.rate == null ? "-" : r.rate + "%"}</span>`
+        + `<span class="drs" title="${esc(plain)}">${stt}${ok ? "" : " " + noScrTag(r.pid)}</span></div>`;
     }).join("");
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
@@ -1489,7 +1504,7 @@ function drawDeployed() {
       ${riskLine(t)}
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
-      <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;
+      <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`;
   }).join("");
   $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, existing crimes are always filled first; a crime to spawn (🧪) is only suggested for members whose pass rates are too high (above the ${OPT.cap}% cap) for every open crime. Slots are only reserved for members who haven't joined a crime - members already in a crime stay where they are, and a member who has started planning is never moved. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (members not in a crime) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
