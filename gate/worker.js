@@ -776,6 +776,7 @@ async function sxRoute(env, ctx, req) {
   // {min: {key: n}} - only known keys, whole numbers 0..1,000,000; a key left out keeps its value
   // 🧰 LOANS FROM THE ARMOURY PAGE (HB Suite 0.2.79) - loan staff; see loansSeen
   if (op === "loans_seen") { if (!(who.leader || who.loans)) return leadersOnly(); return sxJson(await loansSeen(env, who, b || {})); }
+  if (op === "armory_now") { if (!who.leader) return leadersOnly(); return sxJson(await armoryNow(env)); }   // 🧰 read the armory now (HB Suite 0.2.80)
   if (op === "armory_cfg") {
     if (!who.leader) return leadersOnly();
     const cur = await armoryMins(env), inb = (b && b.min && typeof b.min === "object") ? b.min : {};
@@ -2536,7 +2537,7 @@ const ocRecentRows = list => (Array.isArray(list) ? list : []).filter(c => c && 
 // 5. thresholds editable by leadership · 6. compact layout).
 //   ITEMS     ARMORY_ITEMS - key, Torn item name, default minimum, fallback item id (used for the price while the item
 //             isn't in the armory at all). The eight filled blood bag types are separate items (group "blood").
-//   STOCK     the Hub's own key, ARMORY_EVERY_MS: faction medical + drugs + boosters in ONE call -> each tracked
+//   STOCK     the Hub's own key, ARMORY_EVERY_MS (every run) + on request (armory_now): faction medical + drugs + boosters in ONE call -> each tracked
 //             item's quantity (matched by name) and its Torn item id -> oc_snap hub 'armory' {stock: {key: qty},
 //             ids: {key: id}, prices: {key: market value}, prices_at}
 //   PRICES    Torn's market value (torn/items?ids=, the tracked ids in one call) once a day, kept in the same row
@@ -2544,7 +2545,12 @@ const ocRecentRows = list => (Array.isArray(list) ? list : []).filter(c => c && 
 //   READ      sx op live "armory" (leaders): rows {key, name, group, qty, min, price, short, cost} + totals;
 //             a short summary rides the leaders' live "now" answer (`armory` {low, cost, names}) for the Home line
 // Nothing is posted to Discord. Members who aren't leaders never get any of it.
-const ARMORY_EVERY_MS = 15 * 60 * 1000, ARMORY_PRICE_MS = 24 * 3600 * 1000;
+// (Nov 17 2026, user: "Armory Stock is not refreshing as often as it should ... When I restock it, I want it to show
+// near-immediately if possible." -> chose 1 2 3): 3. the background read is every Hub run (3 minutes, was 15);
+// 1 + 2. sx op "armory_now" (leaders - the Suite's Stock section on opening, and its "Check now" button) reads at
+// once when the stored reading is older than ARMORY_NOW_GAP_MS (Torn's own answer can be ~30 s old anyway).
+const ARMORY_NOW_GAP_MS = 30 * 1000;
+const ARMORY_EVERY_MS = 3 * 60 * 1000, ARMORY_PRICE_MS = 24 * 3600 * 1000;
 const ARMORY_ITEMS = [
   {key: "xanax", name: "Xanax", min: 50, id: 206},
   {key: "fak", name: "First Aid Kit", min: 1000, id: 68},
@@ -2592,20 +2598,20 @@ function loanRowsOf(d, members) {
       out.push({pid, iid, item: String(it.name || "#" + iid).slice(0, 60)}); } }
   return out;
 }
-async function armoryPull(env, now, ops, crimes) {
+async function armoryPull(env, now, ops, crimes, minAge) {
   const [cur, lr] = await Promise.all([ocSnapGet(env, "hub", "armory").catch(() => null), ocSnapGet(env, "hub", "loans:util").catch(() => null)]);
   const L = (lr && lr.data) || {};
   const seats = Array.isArray(crimes) ? loanSeats(crimes) : (L.seats || []), have = new Set(seats);
   const dropped = Array.isArray(crimes) && Array.isArray(L.seats) && L.seats.some(x => !have.has(x));
   const kick = !!(L.kick || dropped), age = cur ? now - cur.as_of : Infinity;
   const putLoans = o => ops.push(ocSnapPut(env, "hub", "loans:util", now, JSON.stringify(o), "hub"));
-  if (age < ARMORY_EVERY_MS - 60000 && !(kick && age >= LOANS_KICK_GAP_MS)) {
+  if (age < (minAge != null ? minAge : ARMORY_EVERY_MS - 60000) && !(kick && age >= LOANS_KICK_GAP_MS)) {
     if (kick !== !!L.kick || JSON.stringify(seats) !== JSON.stringify(L.seats || [])) putLoans({rows: L.rows || [], at: L.at || null, seats, kick});
     return;
   }
   const D = (cur && cur.data) || {};
   // API: Heart Breakers Hub - armory stock + loaned utilities (faction medical + drugs + boosters + utilities, ONE call
-  // every 15 minutes; sooner when an item seat was vacated)
+  // every Hub run (3 minutes) or on request; sooner when an item seat was vacated)
   let d = null;
   if (now - ARMORY_V2_BAD > 6 * 3600e3) { try { d = await ocTorn(env, "faction?selections=medical,drugs,boosters,utilities"); if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer"); }
                                           catch (e) { ARMORY_V2_BAD = now; d = null; } }
@@ -2661,6 +2667,14 @@ async function loansSeen(env, who, b) {
   if (n) { v = Date.now(); await ocSnapPut(env, "hub", "loans:util", v, JSON.stringify(Object.assign({}, L, {rows: out})), `${String(who.name || "").slice(0, 40)} [${Number(who.id)}]`).run();
            delete LIVE_MEMO["loans:util"]; }
   return {ok: true, changed: n, loaned: out, loaned_at: Number(L.at), loaned_v: v};
+}
+// "armory_now": one read at a time per Worker instance; a failed read still answers with the stored reading
+let ARMORY_NOW_P = null;
+async function armoryNow(env) {
+  if (!ARMORY_NOW_P) ARMORY_NOW_P = (async () => { const ops = []; await armoryPull(env, Date.now(), ops, null, ARMORY_NOW_GAP_MS);
+    if (ops.length) { await env.OC_DB.batch(ops); delete LIVE_MEMO.armory; delete LIVE_MEMO["armory:brief"]; } })().finally(() => { ARMORY_NOW_P = null; });
+  let failed = false; try { await ARMORY_NOW_P; } catch (e) { failed = true; }
+  return Object.assign(await armoryView(env), failed ? {stale: true} : {});
 }
 const armoryMins = async env => { const c = await ocSnapGet(env, "hub", "armory:cfg").catch(() => null); const m = (c && c.data && c.data.min) || {};
   const out = {}; ARMORY_ITEMS.forEach(it => { const v = Number(m[it.key]); out[it.key] = Number.isFinite(v) && m[it.key] != null ? Math.max(0, Math.round(v)) : it.min; }); return out; };
@@ -2762,7 +2776,7 @@ async function ocFeedPull(env) {
   } catch (e) { fail("now", e); }
   // DELAY CHECK - with the members just read above (no call of its own; it reads them itself only if that failed)
   if (crimesNow) try { await ocDelayCheck(env, crimesNow, now, ops, liveMembers); } catch (e) { fail("delays", e); }
-  // 🧰 ARMORY STOCK - every 15 minutes (armoryPull)
+  // 🧰 ARMORY STOCK - every run (3 minutes) (armoryPull)
   try { await armoryPull(env, now, ops, crimesNow); } catch (e) { fail("armory", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
