@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.77
+// @version      0.2.78
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,10 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.78 (Nov 17 2026) - 🧰 Leaders: new Armory tab - stock of the key items (Xanax, first aid kits, morphine, ipecac,
+ *          blood bags, beer) against the minimum leadership sets, with the restock cost at Torn's market value, and a
+ *          line on Home when something runs low (each leader can switch that line off). 🗜 Compact mode is now the
+ *          default layout for everyone; ⚙ → Display still switches it.
  *  v0.2.77 (Nov 17 2026) - 🏷 Leaders: 📡 Sharing CPR rates now shows each member's Suite version (amber when it is
  *          older than yours). Your Suite reports its version to the Hub with its regular check-in.
  *  v0.2.76 (Nov 17 2026) - 📈 Your OC pass rates are now sent when something can have changed them (a new crime
@@ -464,7 +468,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.77';
+    const VERSION = '0.2.78';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -547,6 +551,7 @@
         alertSeen: 'hbs_alert_seen',           // 🔔 alerts already seen (the badge counts only new ones) (0.2.2)
         uiPdaMig: 'hbs_ui_pda_mig272',         // (0.2.72) 1 = compact mode was switched on once on this Torn PDA device
         ui: 'hbs_ui',                          // display: {compact, pin}
+        armAlert: 'hbs_arm_alert',             // (0.2.78) false = this leader switched the Home "Armory low" line off (this device)
         annDismiss: 'hbs_ann_dismiss',         // id of the announcement this device dismissed (0.2.66)
         upd: 'hbs_update',                     // update check {at, ver, url, dismissed}
         layout: 'hbs_layout',                  // ⚙ Layout: {order, bar, hide, home, homeOff} (0.2.0)
@@ -1477,6 +1482,13 @@
             #hbs-panel .hbs-pin{justify-content:center;} #hbs-panel .hbs-pin-l{flex:0 1 auto;justify-content:center;}
             #hbs-panel .hbs-upd{text-align:center;}
             /* (0.2.66) 📢 announcement tile + the leaders' Announce tab */
+            /* (0.2.78) armory: the Home line, the tab's headline, the detail under a low item, the minimums grid */
+            #hbs-panel .hbs-armal{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:0 0 8px;padding:7px 10px;border-radius:8px;background:#2a1719;border:1px solid #7a2f2f;color:#FF9a9a;font-size:12.5px;cursor:pointer;}
+            #hbs-panel .hbs-armal small{display:block;color:#c9a3a3;font-size:11px;font-weight:normal;} #hbs-panel .hbs-armal > b{color:#FFB454;white-space:nowrap;}
+            #hbs-panel .hbs-armhd{font-size:13px;margin:0 0 4px;text-align:left;} #hbs-panel .hbs-armhd small{opacity:.7;font-size:11px;}
+            #hbs-panel .hbs-armtip{display:block;font-size:10.5px;opacity:.6;}
+            #hbs-panel .hbs-armset{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:5px 10px;}
+            #hbs-panel .hbs-armset label{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11.5px;} #hbs-panel .hbs-armset .hbs-input{width:74px;text-align:right;}
             #hbs-panel .hbs-ann{margin:0 12px 6px;padding:7px 10px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:12.5px;line-height:1.4;word-break:break-word;position:relative;}
             #hbs-panel .hbs-ann.urgent{background:#4a1616;border-color:#ff6b6b;color:#ffe0e0;}
             #hbs-panel .hbs-ann small{display:block;opacity:.7;font-size:10.5px;margin-top:2px;}
@@ -2760,11 +2772,12 @@
     // =====================================================================
     const ARM_USE = [['Drugs', ['Xanax', 'Drugs']], ['Medical', ['Medical']], ['Boosters', ['Boosters']], ['Consumables', ['Refills', 'Temporary']]];
     const ARM_LOAN = [['Weapons', '🔫'], ['Armor', '🛡'], ['Temporary', '💣'], ['Utilities', '🧰']];
-    let armSec = 'loans', armPeriod = 'month', armSort = 'total';
+    let armSec = 'stock', armPeriod = 'month', armSort = 'total';   // (0.2.78) opens on 🧰 Stock
     async function armoryHtml() {
         const A = await readFile('l', 'db/armory.json');
         const nm = id => (A.names[id] || ['[' + id + ']'])[0];
-        let out = chips('as', [['loans', '📦 Currently loaned'], ['use', '💊 Armory use']], armSec);
+        let out = chips('as', [['stock', '🧰 Stock'], ['loans', '📦 Currently loaned'], ['use', '💊 Armory use']], armSec);
+        if (armSec === 'stock') return out + await armHtml();      // (0.2.78) the stock tracker
         if (armSec === 'loans') {
             const L = A.loans || {}, tot = {};
             const rows = Object.entries(L).map(([id, cats]) => {
@@ -2906,6 +2919,68 @@
         annEl.className = 'hbs-ann' + (urgent ? ' urgent' : ' dis'); annEl.style.display = '';
         annEl.innerHTML = `${urgent ? '🚨' : '📢'} ${esc(a.text)}<small>${esc(String(a.by || '').replace(/\s*\[\d+\]$/, ''))}${a.at ? ' · ' + ago(Math.floor(a.at / 1000)) : ''}${urgent && a.until ? ` · until ${ocWhen(Math.floor(a.until / 1000))}` : ''}</small>`
             + (urgent ? '' : '<button type="button" data-anndis title="Dismiss">✕</button>');
+    }
+    // ---------------------------------------------------------------------
+    // 🧰 ARMORY (0.2.78) — see build_patch_0278.py. armS = the last op live "armory" answer {at, rows: [{key, name, label,
+    // group, qty, min, price, short, cost}], low, cost, prices_at}, re-read when over a minute old. No Torn call here.
+    // ---------------------------------------------------------------------
+    let armS = null, armAt = 0, armMsg = '';
+    const armMoney = n => { n = num(n); return '$' + (n >= 1e9 ? (n / 1e9).toFixed(2) + 'b' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e5 ? Math.round(n / 1e3) + 'k' : n >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k' : String(Math.round(n))); };
+    const armAlertOn = () => store.get(K.armAlert, true) !== false;
+    // the leaders' Home line (drawn above the Home tab; tap = open the Armory tab)
+    function armHomeLine() {
+        const a = nowData && nowData.armory;
+        if (!me || !me.leader || !a || !(a.low > 0) || !armAlertOn()) return '';
+        return `<div class="hbs-armal" data-armgo title="Open the Armory tab"><span>⚠ <b>Armory: ${int(a.low)} item${a.low === 1 ? '' : 's'} low</b><small>${esc((a.names || []).join(', '))}</small></span><b>${a.cost ? armMoney(a.cost) : ''}</b></div>`;
+    }
+    document.addEventListener('click', e => {
+        if (!(e.target && e.target.closest && e.target.closest('#hbs-panel [data-armgo]'))) return;
+        tab = 'armory'; store.set(K.tab, tab); showSettings = false; render();
+    });
+    async function armHtml() {
+        if (!me.leader) return '<div class="hbs-empty">Leaders only.</div>';
+        // [HB Suite] Hub API — op live "armory" (leaders: the Hub's armory reading; no Torn call from this script)
+        if (!armS || Date.now() - armAt > 60000) { try { delete liveMemo.armory; armS = await live('armory'); armAt = Date.now(); } catch (e) { return `<div class="hbs-empty">${esc(e.message)}</div>`; } }
+        const R = armS.rows || [], armMsgNow = armMsg; armMsg = '';   // a save message shows once
+        if (!armS.at || !R.length) return '<div class="hbs-empty">No armory reading yet - the Hub checks the armory every 15 minutes.</div>';
+        const lowR = R.filter(r => r.short > 0), okR = R.filter(r => !(r.short > 0));
+        const blood = lowR.filter(r => r.group === 'blood'), lines = lowR.filter(r => r.group !== 'blood').map(r => ({ name: r.name, det: `${int(r.qty)} / ${int(r.min)}`, cost: r.cost,
+            tip: `Short ${int(r.short)}${r.price != null ? ' · ' + armMoney(r.price) + ' each' : ' · no market value yet'}` }));
+        if (blood.length) lines.push({ name: 'Blood bags', det: blood.map(r => `${r.label} ${int(r.qty)}`).join(' · '), cost: blood.some(r => r.cost == null) ? null : blood.reduce((a, r) => a + r.cost, 0),
+            tip: `Short ${int(blood.reduce((a, r) => a + r.short, 0))} across ${blood.length} type${blood.length === 1 ? '' : 's'} · minimum ${[...new Set(blood.map(r => int(r.min)))].join(' / ')} each` });
+        lines.sort((a, b) => num(b.cost) - num(a.cost));
+        const head = lines.length
+            ? `<div class="hbs-armhd"><b class="hbs-bad">${lines.length} low</b> · restock about <b style="color:#FFB454">${armMoney(armS.cost)}</b>${armS.unpriced ? ` <small>(+ ${int(armS.unpriced)} without a market value)</small>` : ''}</div>`
+            : '<div class="hbs-armhd"><b class="hbs-good">✓ Every key item is stocked</b></div>';
+        const row = l => `<div class="hbs-li" title="${esc(l.tip)}"><span>${esc(l.name)} <span class="hbs-bad">${esc(l.det)}</span><small class="hbs-armtip">${esc(l.tip)}</small></span><b style="color:#FFB454;white-space:nowrap">${l.cost == null ? '-' : armMoney(l.cost)}</b></div>`;
+        const okList = okR.map(r => `<div class="hbs-li"><span>${esc(r.group === 'blood' ? 'Blood bag ' + r.label : r.name)}</span><span class="hbs-good" style="white-space:nowrap">${int(r.qty)} / ${int(r.min)}</span></div>`).join('');
+        const mins = `<div class="hbs-hint" style="text-align:left;margin:0 0 6px">The stock level each item should stay above. Saved for every leader.</div><div class="hbs-armset">`
+            + R.map(r => `<label><span>${esc(r.group === 'blood' ? 'Blood bag ' + r.label : r.name)}</span><input type="number" class="hbs-input" inputmode="numeric" min="0" max="1000000" step="1" value="${int(r.min).replace(/,/g, '')}" data-armmin="${esc(r.key)}"></label>`).join('')
+            + `</div><div class="hbs-actions"><button type="button" class="hbs-btn" data-armsave>Save minimums</button></div>`;
+        return `<div class="hbs-card">${head}${lines.map(row).join('')}
+                <div class="hbs-hint" style="text-align:left">Checked ${ago(Math.floor(armS.at / 1000))} · the Hub reads the armory every 15 minutes · cost = the shortfall × Torn's market value${armS.prices_at ? ' (prices from ' + ago(Math.floor(armS.prices_at / 1000)) + ')' : ''}.</div>
+                ${armMsgNow ? `<div class="hbs-hint hbs-good" style="text-align:left">${esc(armMsgNow)}</div>` : ''}</div>`
+            + (okR.length ? cFold('armok', '✅', `${okR.length} item${okR.length === 1 ? '' : 's'} stocked`, '', okList, false, false) : '')
+            + cFold('armset', '🎯', 'Minimum stock', 'leaders', mins, false, false)
+            + `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🔔 Low-stock line on Home</span><button type="button" class="hbs-btn ${armAlertOn() ? '' : 'hbs-ghost'}" data-armalert>${armAlertOn() ? 'On' : 'Off'}</button></div>
+                <div class="hbs-hint" style="text-align:left">Your own choice on this device - other leaders set theirs. ${armAlertOn() ? 'Home shows a line when a key item is under its minimum.' : 'Home stays quiet; this tab still shows everything.'}</div></div>`;
+    }
+    function armBind() {
+        const al = bodyEl.querySelector('[data-armalert]');
+        if (al) al.addEventListener('click', () => { store.set(K.armAlert, !armAlertOn()); render(true); });
+        const sv = bodyEl.querySelector('[data-armsave]');
+        if (sv) sv.addEventListener('click', async () => {
+            const min = {}; let bad = false;
+            bodyEl.querySelectorAll('[data-armmin]').forEach(i => { const v = String(i.value).trim(); if (v === '' || !/^\d+$/.test(v) || +v > 1000000) bad = true; else min[i.dataset.armmin] = +v; });
+            if (bad) { armMsg = 'Enter whole numbers from 0 to 1,000,000.'; render(true); return; }
+            sv.disabled = true;
+            try {
+                // [HB Suite] Hub API — op "armory_cfg" (leaders: the minimum stock per item)
+                armS = await hub('armory_cfg', { min }); armAt = Date.now(); delete liveMemo.armory; delete liveMemo.now; nowAt = 0; refreshNow(true);
+                armMsg = 'Minimums saved.';
+            } catch (e) { armMsg = e.message || 'Could not save.'; }
+            render(true);
+        });
     }
     // 📢 LEADERS' ANNOUNCE TAB (0.2.66): what is showing now (+ Delete), a new one (kind, expiry, audience), the history
     let annS = null, annAt = 0, annMsg = '';   // annS = the last op "announce" answer, re-read when over 30 s old
@@ -4676,7 +4751,7 @@
     // DISPLAY OPTIONS (0.2.1): 🗜 compact mode (smaller cards / text - handy on PDA) and the 📌 pinned chain tile.
     // Per device (K.ui).
     // =====================================================================
-    const UI_DEF = { compact: isPDA(), pin: true };          // (0.2.72) Torn PDA: compact by default
+    const UI_DEF = { compact: true, pin: true };             // (0.2.78) compact is the default layout everywhere (0.2.72: Torn PDA only)
     // (0.2.72) Torn PDA, once per device: an already-saved choice is switched to compact too (the member can switch it
     // back off in ⚙ → Display afterwards - that choice then sticks)
     if (isPDA() && !store.get(K.uiPdaMig, 0)) { store.set(K.uiPdaMig, 1); store.set(K.ui, Object.assign({}, store.get(K.ui, {}) || {}, { compact: true })); }
@@ -6787,7 +6862,7 @@
         chain: { html: chainHtml, bind: chainBind }, oc: { html: ocHtml, bind: ocBind }, recruit: { html: recruitHtml, bind: recruitBind },
         more: { html: moreHtml }, alerts: { html: alertsHtml, bind: alertsSeen },
         announce: { html: async () => { const h = await annHtml(); annMsg = ''; return h; }, bind: annBind },   // (0.2.66) leaders
-        home: { html: homeHtml, bind: homeBind }, boards: { html: boardsHtml, bind: boardsBind },
+        home: { html: async () => armHomeLine() + await homeHtml(), bind: homeBind },   // (0.2.78) + the leaders' armory line boards: { html: boardsHtml, bind: boardsBind },
         me: { html: () => profileHtml(me.id, true), bind: profileBind },
         members: { html: membersHtml, bind: membersBind }, wars: { html: warTabHtml, bind: warTabBind },
         history: { html: historyHtml, bind: () => bindChips('hs', v => { histSec = v; }) },   // (0.2.64) past wars + war / chain / OC summaries
@@ -6795,7 +6870,7 @@
         payouts: { html: payoutsHtml }, scripts: { html: scriptsHtml },
 
         stats: { html: statsHtml, bind: () => { bindChips('sk', v => { statsKind = v; }); bindChips('ss', v => { statsSort = v; }); } },
-        armory: { html: armoryHtml, bind: () => { bindChips('as', v => { armSec = v; }); bindChips('ap', v => { armPeriod = v; }); bindChips('ao', v => { armSort = v; }); } },
+        armory: { html: armoryHtml, bind: () => { bindChips('as', v => { armSec = v; }); bindChips('ap', v => { armPeriod = v; }); bindChips('ao', v => { armSort = v; }); armBind(); } },
     };
 
     // ---------------------------------------------------------------------
