@@ -641,6 +641,9 @@ async function sxRoute(env, ctx, req) {
       for (const c of ["data TEXT", "contacted INTEGER", "contacted_by TEXT", "dnc INTEGER"])
         await DB.prepare(`ALTER TABLE rc_pool ADD COLUMN ${c}`).run().catch(() => {});      // already there
       await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_cont ON rc_pool (contacted)").run().catch(() => {});
+      // (Nov 17 2026, D1 ROW READS - see RC_COUNT_MS) the don't-contact list is read through its own small index
+      // instead of scanning the whole pool
+      await DB.prepare("CREATE INDEX IF NOT EXISTS rc_pool_dnc ON rc_pool (dnc) WHERE dnc = 1").run().catch(() => {});
       rcPoolReady = true;
     }
     const n = v => (v == null || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
@@ -652,7 +655,7 @@ async function sxRoute(env, ctx, req) {
     if (b.do === "merge") {
       const list = (Array.isArray(b.players) ? b.players : []).slice(0, 500).filter(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0);
       if (!list.length) return sxJson({ok: true, n: 0});
-      await rcPoolRoom(DB, list.length);
+      await rcPoolRoom(DB, list.length, env);
       const NEW = "COALESCE(excluded.checked, 0) > COALESCE(rc_pool.checked, 0)";
       const pick = c => `${c} = CASE WHEN ${NEW} THEN excluded.${c} ELSE rc_pool.${c} END`;
       const sql = "INSERT INTO rc_pool (pid, name, level, fac, la, state, bs, pct, verdict, checked, by, added, data, contacted, contacted_by) " +
@@ -673,13 +676,14 @@ async function sxRoute(env, ctx, req) {
           chk, who.id, now, data, ct, ct ? String(who.name || "").slice(0, 40) : null);
       });
       for (let i = 0; i < ops.length; i += 100) await DB.batch(ops.slice(i, i + 100));
-      await rcPoolTrimData(DB);
+      await rcPoolTrimData(DB, env);
+      await DB.prepare("DELETE FROM oc_snap WHERE env = 'hub' AND ds = 'rc:stats'").run().catch(() => {});   // the totals changed
       return sxJson({ok: true, n: ops.length});
     }
     // {do:"contact", pid, name}: a leader messaged this player (Suite ✉ Message) - shared with every leader
     if (b.do === "contact") {
       const pid = Number(b.pid); if (!Number.isInteger(pid) || pid <= 0) return sxJson({ok: false, error: "Which player?"}, 400);
-      await rcPoolRoom(DB, 1);
+      await rcPoolRoom(DB, 1, env);
       await DB.prepare("INSERT INTO rc_pool (pid, name, by, added, contacted, contacted_by) VALUES (?,?,?,?,?,?) ON CONFLICT (pid) DO UPDATE SET " +
         "contacted = excluded.contacted, contacted_by = excluded.contacted_by, name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE rc_pool.name END")
         .bind(pid, String(b.name || "").slice(0, 40), who.id, now, now, String(who.name || "").slice(0, 40)).run();
@@ -688,7 +692,7 @@ async function sxRoute(env, ctx, req) {
     if (b.do === "add" || b.do === "update") {
       const list = (Array.isArray(b.players) ? b.players : []).slice(0, 500).filter(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0);
       if (!list.length) return sxJson({ok: true, n: 0});
-      await rcPoolRoom(DB, list.length);
+      await rcPoolRoom(DB, list.length, env);
       const ops = list.map(x => b.do === "add"
         ? DB.prepare("INSERT INTO rc_pool (pid, name, level, by, added) VALUES (?, ?, ?, ?, ?) ON CONFLICT (pid) DO UPDATE SET " +
             "name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE rc_pool.name END, level = COALESCE(excluded.level, rc_pool.level)")
@@ -716,10 +720,15 @@ async function sxRoute(env, ctx, req) {
       return sxJson({ok: true, n: p.length});
     }
     if (b.do === "stats") {
+      // (D1 ROW READS) one scan of the pool per RC_STATS_MS at most - kept in oc_snap hub 'rc:stats'; a merge clears it
+      const memo = await ocSnapGet(env, "hub", "rc:stats").catch(() => null);
+      if (memo && memo.data && memo.data.ok && now - memo.as_of < RC_STATS_MS) return sxJson(memo.data);
       const r = await DB.prepare("SELECT COUNT(*) AS total, SUM(checked IS NOT NULL) AS checked, SUM(verdict = 'fit') AS fits, " +
         "SUM(fac = 0) AS nofac, SUM(contacted IS NOT NULL) AS contacted, SUM(data IS NOT NULL) AS detailed FROM rc_pool").first();
       const N = k => Number(r && r[k]) || 0;
-      return sxJson({ok: true, total: N("total"), checked: N("checked"), fits: N("fits"), nofac: N("nofac"), contacted: N("contacted"), detailed: N("detailed")});
+      const st = {ok: true, total: N("total"), checked: N("checked"), fits: N("fits"), nofac: N("nofac"), contacted: N("contacted"), detailed: N("detailed")};
+      await ocSnapPut(env, "hub", "rc:stats", now, JSON.stringify(st), "hub").run().catch(() => {});
+      return sxJson(st);
     }
     if (b.do === "search") {
       const w = [], v = [];
@@ -1740,6 +1749,11 @@ async function ocConfig(env, envName) {
 // -> {crime: [[pids of the latest run], [pids of the run before]]}
 async function ocLastRuns(env, envName, names) {
   if (!names || !names.length) return {};
+  // (D1 ROW READS, Nov 17 2026) this reads the whole history, and the planner asks on every re-plan (every minute):
+  // the answer is kept in oc_snap hub 'lastruns:<env>' for OC_LASTRUNS_MS and dropped when new history arrives (ocFeedPull)
+  const key = "lastruns:" + envName, want = JSON.stringify(names);
+  const memo = await ocSnapGet(env, "hub", key).catch(() => null);
+  if (memo && memo.data && memo.data.names === want && Date.now() - memo.as_of < OC_LASTRUNS_MS) return memo.data.out || {};
   const {results} = await env.OC_DB.prepare(
     `WITH h AS (SELECT json_extract(data, '$.name') AS crime, data,
                        ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
@@ -1750,8 +1764,10 @@ async function ocLastRuns(env, envName, names) {
   for (const r of results || []) { if (r.pid == null) continue;
     const l = out[r.crime] || (out[r.crime] = []); (l[r.n - 1] || (l[r.n - 1] = [])).push(Number(r.pid)); }
   for (const k of Object.keys(out)) out[k] = Array.from(out[k], x => x || []);
+  await ocSnapPut(env, "hub", key, Date.now(), JSON.stringify({names: want, out}), "hub").run().catch(() => {});
   return out;
 }
+const OC_LASTRUNS_MS = 30 * 60e3;
 
 async function ocPlanRoute(env, ctx, req) {
   if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
@@ -2670,6 +2686,7 @@ async function loansSeen(env, who, b) {
 }
 // "armory_now": one read at a time per Worker instance; a failed read still answers with the stored reading
 let ARMORY_NOW_P = null;
+let PRICE_SCAN_AT = 0;                  // ocFeedPull: last reward-item id scan in this Worker instance (see there)
 async function armoryNow(env) {
   if (!ARMORY_NOW_P) ARMORY_NOW_P = (async () => { const ops = []; await armoryPull(env, Date.now(), ops, null, ARMORY_NOW_GAP_MS);
     if (ops.length) { await env.OC_DB.batch(ops); delete LIVE_MEMO.armory; delete LIVE_MEMO["armory:brief"]; } })().finally(() => { ARMORY_NOW_P = null; });
@@ -2815,6 +2832,7 @@ async function ocFeedPull(env) {
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) newHist = true; } catch (e) { fail("backfill", e); }
+  if (newHist) await env.OC_DB.prepare("DELETE FROM oc_snap WHERE env = 'hub' AND ds IN ('lastruns:prod', 'lastruns:test')").run().catch(() => {});   // ocLastRuns re-reads
   // prices (item-reward pricing addendum, Nov 2026): EVERY reward item id in the FULL stored history (all types -
   // armor, weapons, medical, drugs, temporaries), priced at value.market_price × 0.95 (Torn's 5% market fee - the
   // value a member can actually realise), saved as {"<id>": {name, price}}. Item without a market price -> 0.
@@ -2823,18 +2841,23 @@ async function ocFeedPull(env) {
   // 1 call per 100 ids (normally one call).
   try {
     // the ids come out of the stored JSON inside D1 (no parsing of every crime here - Worker CPU)
-    const rows = (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
-      "json_each(oc_hist.data, '$.rewards.items') AS j WHERE oc_hist.env = 'prod'").all()).results || [];
-    // + every reward item in the tornprobability payouts (oc_snap hub 'tpp:<crime>' ids, Nov 2026)
-    const tpIds = (await env.OC_DB.prepare("SELECT DISTINCT j.value AS i FROM oc_snap, json_each(oc_snap.data, '$.ids') AS j " +
-      "WHERE oc_snap.env = 'hub' AND oc_snap.ds LIKE 'tpp:%'").all().catch(() => ({}))).results || [];
-    const all = [...new Set(rows.concat(tpIds).map(r => Number(r.i)).filter(i => i > 0))];
     const cur = await ocSnapGet(env, "prod", "prices");
     const have = (cur && cur.data && typeof cur.data === "object") ? cur.data : {};
     const dayStart = now - now % 86400e3, slot = dayStart + 10 * 60e3;          // 00:10 TCT today
     // one forced full re-price when the 5% net pricing went live (hub row 'prices-net' marks it done)
     const netDone = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds = 'prices-net'").first();
     const daily = !netDone || (now >= slot && (lastPull.prices || 0) < slot);
+    // (D1 ROW READS, Nov 17 2026) the two id scans read the whole history - they ran on EVERY 3-minute run. Now only
+    // when they can find something: the daily re-price, new history this run, no prices stored yet, or once an hour
+    // (new tornprobability payout items).
+    const scan = daily || newHist || !cur || now - (PRICE_SCAN_AT || 0) > 3600e3;
+    if (scan) PRICE_SCAN_AT = now;
+    const rows = !scan ? [] : (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
+      "json_each(oc_hist.data, '$.rewards.items') AS j WHERE oc_hist.env = 'prod'").all()).results || [];
+    // + every reward item in the tornprobability payouts (oc_snap hub 'tpp:<crime>' ids, Nov 2026)
+    const tpIds = !scan ? [] : (await env.OC_DB.prepare("SELECT DISTINCT j.value AS i FROM oc_snap, json_each(oc_snap.data, '$.ids') AS j " +
+      "WHERE oc_snap.env = 'hub' AND oc_snap.ds LIKE 'tpp:%'").all().catch(() => ({}))).results || [];
+    const all = [...new Set(rows.concat(tpIds).map(r => Number(r.i)).filter(i => i > 0))];
     const list = daily ? all : all.filter(i => !have[String(i)]);
     if (list.length) {
       const out = daily ? {} : Object.assign({}, have);
@@ -4215,9 +4238,24 @@ const RC_POOL_DATA_MAX = 40000;        // rows that also keep the full scouting 
 function rcPoolRow(r) { let d = null; if (r.data) { try { d = JSON.parse(r.data); } catch (e) {} } return Object.assign({}, r, {data: d}); }
 // make room for n new rows: never-checked rows with no level go first, then the oldest never-checked; checked rows,
 // contacted rows and their id + level are only removed when nothing else is left (they never are in practice at 500k)
-async function rcPoolRoom(DB, n) {
-  const cnt = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool").first();
-  let over = Number((cnt && cnt.c) || 0) + n - RC_POOL_MAX;
+// D1 ROW READS (Nov 17 2026 - the free plan's daily allowance ran out and every Hub page answered 500; the day's top
+// readers were these pool counts, run on every merge from a leader's Suite: COUNT(*) reads every row of the pool):
+// the two counts are now taken ONCE per RC_COUNT_MS (one scan, kept in oc_snap hub 'rc:count' = {total, detailed}) and
+// the room / trim work only runs when the pool is within RC_NEAR of a cap - it's nowhere near in practice.
+const RC_COUNT_MS = 6 * 3600e3, RC_STATS_MS = 10 * 60e3, RC_NEAR = 0.8;
+async function rcPoolCounts(DB, env, fresh) {
+  const now = Date.now(), m = env && !fresh ? await ocSnapGet(env, "hub", "rc:count").catch(() => null) : null;
+  if (m && m.data && now - m.as_of < RC_COUNT_MS) return m.data;
+  const r = await DB.prepare("SELECT COUNT(*) AS total, SUM(data IS NOT NULL) AS detailed FROM rc_pool").first();
+  const c = {total: Number((r && r.total) || 0), detailed: Number((r && r.detailed) || 0)};
+  if (env) await ocSnapPut(env, "hub", "rc:count", now, JSON.stringify(c), "hub").run().catch(() => {});
+  return c;
+}
+async function rcPoolRoom(DB, n, env) {
+  let c = await rcPoolCounts(DB, env);
+  if (c.total + n < RC_POOL_MAX * RC_NEAR) return;                 // plenty of room - no exact count needed
+  c = await rcPoolCounts(DB, env, true);
+  let over = c.total + n - RC_POOL_MAX;
   if (over <= 0) return;
   for (const w of ["checked IS NULL AND contacted IS NULL AND level IS NULL", "checked IS NULL AND contacted IS NULL"]) {
     const r = await DB.prepare(`DELETE FROM rc_pool WHERE pid IN (SELECT pid FROM rc_pool WHERE ${w} ORDER BY added LIMIT ?)`).bind(over).run();
@@ -4225,9 +4263,11 @@ async function rcPoolRoom(DB, n) {
   }
 }
 // keep at most RC_POOL_DATA_MAX full snapshots: the oldest-checked non-fits lose theirs first (the row stays)
-async function rcPoolTrimData(DB) {
-  const c = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool WHERE data IS NOT NULL").first();
-  const over = Number((c && c.c) || 0) - RC_POOL_DATA_MAX;
+async function rcPoolTrimData(DB, env) {
+  let c = await rcPoolCounts(DB, env);
+  if (c.detailed + 500 < RC_POOL_DATA_MAX * RC_NEAR) return;       // (+500: the merge that just ran)
+  c = await rcPoolCounts(DB, env, true);
+  const over = c.detailed - RC_POOL_DATA_MAX;
   if (over > 0) await DB.prepare("UPDATE rc_pool SET data = NULL WHERE pid IN (SELECT pid FROM rc_pool WHERE data IS NOT NULL " +
     "ORDER BY (verdict IN ('fit', 'near')), checked LIMIT ?)").bind(over).run();
 }
