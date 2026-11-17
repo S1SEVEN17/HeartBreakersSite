@@ -1388,6 +1388,19 @@ function drawNotify() {
   });
 }
 
+// PLANNING % (Nov 17 2026, user: "Show planning % for members on the Deployed and Planning pages."): a member's own
+// planning progress in the crime they're in (the feed's slot user.progress, 0-100), always as a number:
+//   100 -> ✅ 100% · planned     1-99 -> ⏳ N% planning     0 -> 0% · waiting their turn
+const planTag = p => { p = Math.max(0, Math.min(100, Math.round(Number(p) || 0)));
+  return p >= 100 ? '<span class="ok" title="Their planning is finished">✅ 100% · planned</span>'
+    : p > 0 ? `<span class="qd" title="Planning now - each role takes 24 hours">⏳ ${p}% planning</span>`
+    : '<span class="tag" title="In the crime - their planning starts when the roles before them finish">0% · waiting</span>'; };
+// the planning progress (0-100) of member pid in crime id, or null when the feed doesn't show them in it
+function planOf(crimeId, pid) {
+  const c = (D.feed || []).find(x => String(x.id) === String(crimeId));
+  const sl = c && (c.slots || []).find(x => x.user && String(x.user.id) === String(pid));
+  return sl ? Number(sl.user.progress) || 0 : null;
+}
 function drawPlanning() {
   const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
   const when = s => s ? new Date(s * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "-";
@@ -1402,7 +1415,7 @@ function drawPlanning() {
       const pg = u ? Math.round(Number(u.progress) || 0) : 0;
       return `<tr><td>${esc(pos)}${wTag(c.name, pos)}</td><td>${u ? `<b>${esc(nameOf(u.id))}</b>` : '<span class="mid">Unfilled</span>'}</td>`
         + `<td class="${col(rate)}">${rate == null ? "-" : rate + "%"}${out_ ? ` <span title="Below the ${min}% minimum">⚠️</span>` : ""}</td>`
-        + `<td>${u ? (pg >= 100 ? '<span class="ok">✅ planned</span>' : pg > 0 ? `<span class="qd">⏳ ${pg}%</span>` : '<span class="tag">waiting</span>') : ""}</td></tr>`; }).join("");
+        + `<td>${u ? planTag(pg) : ""}</td></tr>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
       <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${w != null && w < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
@@ -1451,11 +1464,12 @@ function drawDeployed() {
       // JOINED vs QUEUED (Nov 2026): a live team's member has joined only when they're in THAT crime id; a queued
       // member who is still in another crime of the same type is queued, not joined
       const ok = b && (t.crime_id && b.cid != null ? String(b.cid) === String(t.crime_id) : (!r.queued && b.crime === t.crime && baseRole(b.pos) === baseRole(r.position)));
+      const pp = ok && t.crime_id != null ? planOf(t.crime_id, r.pid) : null;   // (Nov 17 2026) their planning % in this crime
       const nq = nextQ[r.pid], nextOn = ok && nq && String(nq.id || "") !== String(t.crime_id || "");   // in this crime + queued for the next
       ALL.add(r.pid);
       if (nextOn || (!ok && r.queued)) QUEUE.add(r.pid); else if (ok) JOIN.add(r.pid);
-      const stt = (nextOn ? `<span class="qd" title="In this crime now - queued for their next crime, joins it when this one pays out">🕒 Queued · next: ${esc(nq.crime)}${nq.id ? " #" + esc(nq.id) : " (to spawn)"} · free in ${freeIn(nq.free_at)}</span>`
-        : ok ? '<span class="ok">✅ Joined</span>'
+      const stt = (nextOn ? `<span class="qd" title="In this crime now - queued for their next crime, joins it when this one pays out">🕒 Queued · next: ${esc(nq.crime)}${nq.id ? " #" + esc(nq.id) : " (to spawn)"} · free in ${freeIn(nq.free_at)}</span>` + (pp != null ? " · " + planTag(pp) : "")
+        : ok ? '<span class="ok">✅ Joined</span>' + (pp != null ? " · " + planTag(pp) : "")
         // LEAVE FIRST before Queued (Nov 16 2026, user): a planned MOVE (r.leave, still sitting in that crime) says so even
         // when an older stored plan still carries queued; "Queued" is only for members who wait for their crime to end
         : r.leave && b && b.cid != null && String(b.cid) === String(r.leave.crime_id)
