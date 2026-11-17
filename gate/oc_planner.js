@@ -84,6 +84,10 @@
 //   it was made). A member who hasn't joined opts.noShowHours (default 6, 0 = off) after since - or after their
 //   current crime is ready, for queued members - loses the slot; it's filled again by the next best member and they
 //   aren't put back into that crime instance (team.noshow {pid: ms}). Locked teams are left alone.
+//   NO-SHOW BAN REMOVED (Nov 17 2026, user - after the rotation mix rule went: members may always rejoin the same crimes,
+//   "Yeah remove that."): the reservation still ends after the no-show limit, but the member is NOT kept out of that
+//   crime afterwards - they can be planned straight back in (a new reservation, a new clock). team.noshow is no longer
+//   written; nsBan below is always empty.
 // SCRIPT USERS (Nov 12 2026, the user): members who don't use the script never see their assignment. RECRUITING
 //   crimes: non-script members are secondary - only placed when no script user can fill the slot (NS_LAST).
 //   Nov 13 2026 (user: "Prioritize member placement for those who have the script enabled"): the same now applies
@@ -466,7 +470,6 @@ export function ocPlan(X) {
         // (RECONFIGURE: dropped - planned again below; locked teams keep theirs)
         // NO-SHOW: reserved too long without joining -> the slot is opened again and they're kept out of this crime
         if (o.pid != null && !o.existing && !t.lock && NS > 0 && o.since && NOW - Math.max(Number(o.since), busy.has(Number(o.pid)) ? (freeAt.get(Number(o.pid)) || NOW) : 0) > NS) {
-          (t.noshow || (t.noshow = {}))[String(o.pid)] = NOW;
           return {position: label, pid: null, name: "", rate: null};
         }
         // a MOVING member (o.leave): kept while they still sit idle (progress 0) in the crime they're leaving, or once
@@ -483,6 +486,7 @@ export function ocPlan(X) {
         return {position: label, pid: null, name: "", rate: null};
       });
       t.kind = "live"; t.crime = c.name; t.difficulty = c.difficulty ?? t.difficulty;
+      delete t.noshow;                                     // (Nov 17 2026) old no-show bans are dropped - see the header
       // FILLED (Nov 11 2026, user: "This should NOT show crimes that are already filled. Once a member joins the last
       // slot, they should no longer appear in the OC Management Deployed area. If a member leaves, it returns to find
       // the next best member."): every slot taken in Torn (and no leader replacement pending) -> the team leaves the
@@ -607,7 +611,6 @@ export function ocPlan(X) {
         if (r.pid == null || r.existing || r.told || r.by_leader || !noScr(r.pid)) return;   // told / a leader's own assignment: locked in
         let b = null;
         for (const p of freeSU()) {
-          if (c && (t.noshow || {})[String(p)]) continue;                 // a no-show isn't put back into this crime
           const rr = rateOf(p, t.crime, r.position);
           if (!rr || rr.rate < floorOf(t.crime, r.position) || capped(p, t.crime, rr.rate)) continue;
           const roles = t.roles.map((x, i) => i === ri ? {position: x.position, pid: p, rate: rr.rate} : x);
@@ -723,7 +726,7 @@ export function ocPlan(X) {
     const fixed = roles.filter(r => r.pid != null);
     if (fixed.some(r => r.rate == null)) { skip(c, "a member in it has no known rate"); continue; }         // someone in it has no known rate - can't judge the success
     const fixedSum = wSum(c.name, fixed);                   // weighted (role weights)
-    const nsBan = new Set(Object.keys((t && t.noshow) || {}).map(Number));   // NO-SHOWS: not back into this crime
+    const nsBan = new Set();   // NO-SHOW BAN REMOVED (Nov 17 2026, see the header) - kept as an empty set for the code below
     // JOIN NOW MOVES (Nov 13 2026, user: "When assigning members, go based on the "Join Now" rate of pay. This should
     // help fill crimes that are already actively planning, and should prioritize pay per day for members." + answer:
     // a reserved member who hasn't joined is MOVED when another recruiting crime pays them more if they join now).
