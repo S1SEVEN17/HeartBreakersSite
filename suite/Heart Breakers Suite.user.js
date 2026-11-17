@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.69
+// @version      0.2.71
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.69';
+    const VERSION = '0.2.71';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -54,6 +54,8 @@
         ocShareAt: 'hbs_share_ocat',
         sharePingAt: 'hbs_share_pingat',
         shareDay: 'hbs_share_day',
+        ocMeSig: 'hbs_oc_me_sig',
+        feedDoneAt: 'hbs_feed_done_at',
         feedOn: 'hbs_feed_on',
         feedAt: 'hbs_feed_at',
         feedNo: 'hbs_feed_no',
@@ -1771,13 +1773,21 @@
         const fid = num(W.opponent_id);
         if (wt.fid !== fid) { wt.fid = fid; wt.mem = null; wt.memAt = 0; }
         if (!ffKey()) { warMine(); return; }
-        if (Date.now() - wt.memAt < 60000) return;
+        if (Date.now() - wt.memAt < 30000) return;
         wt.busy = true; wt.memAt = Date.now();
         try {
-            // [HB Suite] Torn API — War tab: the enemy faction's members + status (your key; at most once a minute, War tab open)
-            const d = await tornGet(`https://api.torn.com/faction/${fid}?selections=basic`);
-            wt.mem = Object.entries((d && d.members) || {}).map(([pid, m]) => ({ pid: num(pid), name: m.name || '#' + pid, level: num(m.level),
-                state: String((m.status || {}).state || ''), until: num((m.status || {}).until), la: String((m.last_action || {}).status || '') }));
+            let r = null;
+            // [HB Suite] Hub API — op "war_feed" get: the enemy faction list other Suites already read (no Torn call)
+            try { r = await hub('war_feed', { do: 'get', fid }); } catch (e) { r = null; }
+            if (r && r.members && !r.read) wt.mem = r.members;
+            else {
+                // [HB Suite] Torn API — War tab: the enemy faction's members + status (your key; only when the Hub's shared
+                const d = await tornGet(`https://api.torn.com/faction/${fid}?selections=basic`);
+                wt.mem = Object.entries((d && d.members) || {}).map(([pid, m]) => ({ pid: num(pid), name: m.name || '#' + pid, level: num(m.level),
+                    state: String((m.status || {}).state || ''), until: num((m.status || {}).until), la: String((m.last_action || {}).status || '') }));
+                // [HB Suite] Hub API — op "war_feed" put: that list, for every other Suite (names, levels, status - no key)
+                if (r && r.read && wt.mem.length) hub('war_feed', { do: 'put', fid, members: wt.mem }).catch(() => {});
+            }
             wt.err = '';
         } catch (e) { wt.err = e.message || 'Could not read the enemy faction.'; }
         wt.busy = false;
@@ -1786,8 +1796,9 @@
     }
     async function warFF() {
         const key = ffKey(); if (!key || !wt.mem || !wt.mem.length || wt.ffBusy) return;
-        let C = store.get(K.warFF, null) || {}; if (num(C.fid) !== wt.fid) C = { fid: wt.fid, at: 0, m: {} };
-        const stale = Date.now() - num(C.at) > 30 * 60000, need = wt.mem.map(x => x.pid).filter(p => stale || !C.m[p]);
+        const wst = num((warNow() || {}).start);
+        let C = store.get(K.warFF, null) || {}; if (num(C.fid) !== wt.fid || num(C.war) !== wst) C = { fid: wt.fid, war: wst, at: 0, m: {} };
+        const need = wt.mem.map(x => x.pid).filter(p => !C.m[p]);
         if (!need.length) return;
         wt.ffBusy = true;
         try {
@@ -3113,9 +3124,42 @@
             } catch (e) { b.disabled = false; if (m) m.textContent = e.message; }
         });
     }
+    let ocMeT = null, ocMeAt = 0;
+    const ocMeAllowed = () => !!me && !!getKey() && (store.get(K.share, null) || { oc: true }).oc !== false;
+    function ocMeSoon() {
+        if (ocMeT || !ocMeAllowed()) return;
+        ocMeT = setTimeout(() => { ocMeT = null; ocMeCheck(false); }, Math.max(3000, 20000 - (Date.now() - ocMeAt)));
+    }
+    async function ocMeCheck(again) {
+        if (!ocMeAllowed()) return;
+        ocMeAt = Date.now();
+        try {
+            // [HB Suite] Torn API — instant join / leave: the member's OWN current crime (v2 user/organizedcrime, 1 call,
+            const d = await tornGet('https://api.torn.com/v2/user/organizedcrime');
+            const has = d && ('organizedCrime' in d || 'organizedcrime' in d); if (!has) return;
+            const c = d.organizedCrime !== undefined ? d.organizedCrime : d.organizedcrime;
+            const crime = c && typeof c === 'object' && num(c.id) > 0 ? c : null;
+            const seat = crime ? (crime.slots || []).find(sl => sl.user && num(sl.user.id) === num(me.id)) : null;
+            const sig = crime && seat ? crime.id + ':' + seat.position : '0';
+            if (sig === store.get(K.ocMeSig, null)) {
+                if (!again && !ocMeT) ocMeT = setTimeout(() => { ocMeT = null; ocMeCheck(true); }, 32000);
+                return;
+            }
+            // [HB Suite] Hub API — op "oc_feed" me: the member's own crime (or null = in no crime); no key
+            const r = await hub('oc_feed', { do: 'me', crime: crime && seat ? crime : null });
+            if (r && r.ok && !r.throttled) { store.set(K.ocMeSig, sig); try { liveClear(); } catch (e) {   } myOcAt = 0; ocPinTick();
+                store.set(K.ocShareAt, 0); store.set(K.sharePingAt, 0); shareTick(true); }
+        } catch (e) {   }
+    }
     let ocPageT = null;
     function ocPageWatch() {
         if (!modOn('ocpage') || !/factions\.php/.test(location.href)) return;
+        document.addEventListener('click', e => {
+            if (!/tab=crimes/.test(location.hash) || !pageScrapeAllowed()) return;
+            const b = e.target && e.target.closest ? e.target.closest('button, [role="button"]') : null;
+            if (!b || b.closest('#hbs-panel, .torn-launcher')) return;
+            ocMeSoon();
+        }, true);
         const run = async () => {
             if (!/tab=crimes/.test(location.hash)) return;
             const MY = await loadMyOc(false), as = MY && MY.assignment;
@@ -5482,9 +5526,24 @@
             // [HB Suite] Torn API — crime feed: the faction's recruiting + planning crimes (v2 faction/crimes, 1 call a
             const d = await tornGet('https://api.torn.com/v2/faction/crimes?cat=available&limit=100&sort=ASC');
             // [HB Suite] Hub API — op "oc_feed" put: the crime list (no key; the Hub blanks this member's own open-slot rates)
-            const r = await hub('oc_feed', { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] });
+            const body = { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] };
+            try {
+                // [HB Suite] Torn API — crime feed extra: the faction's chain + wars (v2 faction, 1 call a minute, feeder only)
+                const n = await tornGet('https://api.torn.com/v2/faction?selections=chain,wars');
+                if (n && (n.chain !== undefined || n.wars !== undefined)) body.now = { chain: n.chain || null, wars: n.wars || null };
+            } catch (e) {   }
+            if (Date.now() - num(store.get(K.feedDoneAt, 0)) > 170000) {
+                try {
+                    // [HB Suite] Torn API — crime feed extra: the newest completed crimes (v2 faction/crimes, 1 call every 3 min, feeder only)
+                    const c = await tornGet('https://api.torn.com/v2/faction/crimes?cat=completed&limit=100&sort=DESC');
+                    if (Array.isArray(c.crimes)) { store.set(K.feedDoneAt, Date.now());
+                        body.completed = c.crimes.map(x => ({ id: x.id, name: x.name, status: x.status, executed_at: x.executed_at,
+                            rewards: x.rewards ? { money: x.rewards.money, items: Array.isArray(x.rewards.items) ? x.rewards.items.map(() => 0) : [], payout: x.rewards.payout || null } : null })); }
+                } catch (e) {   }
+            }
+            const r = await hub('oc_feed', body);
             store.set(K.feedOn, r && r.feed ? Date.now() + FEED_LEASE_MS : 0);
-            if (r && r.changed) { try { liveClear(); } catch (e) {   } }
+            if (r && (r.changed || (r.extra && r.extra.length))) { try { liveClear(); } catch (e) {   } }
         } catch (e) {
             const m = String((e && e.message) || '');
             if (/^Torn: /.test(m)) {

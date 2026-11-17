@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.69
+// @version      0.2.71
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,14 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.71 (Nov 16 2026) - 📡 Fresher data with fewer repeated reads: the Suite feeding the crime list now also passes
+ *          the war + chain state (every minute) and the completed crimes (every 3 minutes) to the Hub; the ⚔ War tab
+ *          shares one enemy-faction reading between everyone who has it open (status updated about every 30 s;
+ *          FFScouter scores are read once per war, as the enemy roster is locked); your pass
+ *          rates are sent straight away when your own crime changes. The Hub's own 3-minute check stays as the backup.
+ *  v0.2.70 (Nov 16 2026) - 🕵 Joining or leaving a crime now reaches the Hub within seconds: after you press a
+ *          button on Torn's crimes page the Suite reads your own crime (own key, 1 call) and tells the Hub if it
+ *          changed, so the plan and other members' views update without waiting for the next crime list.
  *  v0.2.69 (Nov 16 2026) - 🕵 Faster crime updates: one member's Suite at a time now reads the faction's crimes every
  *          minute (own key, 1 call a minute, never sent anywhere) and passes the list to the Hub, which re-plans as soon
  *          as something changes. Another Suite takes over if that one goes quiet; the Hub's own 3-minute check stays
@@ -442,7 +450,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.69';
+    const VERSION = '0.2.71';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -473,6 +481,8 @@
         ocShareAt: 'hbs_share_ocat',           // ms the OC pass rates were last read + sent (any tab) (0.2.55)
         sharePingAt: 'hbs_share_pingat',       // ms the Hub was last asked (any tab) (0.2.55)
         shareDay: 'hbs_share_day',             // TCT day (YYYY-MM-DD) the stats were last sent
+        ocMeSig: 'hbs_oc_me_sig',              // (0.2.70) the own crime last reported to the Hub ("<crime id>:<role>" or "0")
+        feedDoneAt: 'hbs_feed_done_at',        // (0.2.71) ms the completed crimes were last read for the feed (any tab)
         feedOn: 'hbs_feed_on',                 // (0.2.69) ms until which THIS member's script is the crime feeder (any tab)
         feedAt: 'hbs_feed_at',                 // (0.2.69) ms the crimes were last read for the feed (any tab)
         feedNo: 'hbs_feed_no',                 // (0.2.69) ms until which this key isn't offered as feeder (no Faction API access)
@@ -2294,7 +2304,8 @@
     //     - the war itself (opponent, opponent_id, scores, target, start) from the Hub's op live "now" (nowData.war)
     //     - enemy members: ONE Torn call (faction/<id>?selections=basic) at most every 60 s -> wt.mem
     //     - fair fight: FFScouter get-stats in batches of 200 with the member's own FFScouter key, kept per war in
-    //       K.warFF and refreshed every 30 min (FF is relative to the key's owner - which is the point)
+    //       K.warFF and read ONCE PER WAR since 0.2.71 (the enemy roster is locked for the war; FF is relative to the
+    //       key's owner - which is the point)
     //     - Your war so far: your own attack log (user/?selections=attacks), read incrementally from the war's start
     //       at most every 60 s, at most 6 calls a pass; kept in K.warMine. A "hit" = an attack on the enemy faction
     //       with respect gained.
@@ -2319,13 +2330,24 @@
         const fid = num(W.opponent_id);
         if (wt.fid !== fid) { wt.fid = fid; wt.mem = null; wt.memAt = 0; }
         if (!ffKey()) { warMine(); return; }                       // no FFScouter key = no target list: the enemy faction isn't read at all
-        if (Date.now() - wt.memAt < 60000) return;
+        if (Date.now() - wt.memAt < 30000) return;
         wt.busy = true; wt.memAt = Date.now();
         try {
-            // [HB Suite] Torn API — War tab: the enemy faction's members + status (your key; at most once a minute, War tab open)
-            const d = await tornGet(`https://api.torn.com/faction/${fid}?selections=basic`);
-            wt.mem = Object.entries((d && d.members) || {}).map(([pid, m]) => ({ pid: num(pid), name: m.name || '#' + pid, level: num(m.level),
-                state: String((m.status || {}).state || ''), until: num((m.status || {}).until), la: String((m.last_action || {}).status || '') }));
+            // (0.2.71) ONE SHARED READING: ask the Hub first - a list under 30 s old is used as is; `read` = this Suite
+            // is the one to read Torn now and upload it for everyone; no usable answer = read Torn as before
+            let r = null;
+            // [HB Suite] Hub API — op "war_feed" get: the enemy faction list other Suites already read (no Torn call)
+            try { r = await hub('war_feed', { do: 'get', fid }); } catch (e) { r = null; }
+            if (r && r.members && !r.read) wt.mem = r.members;
+            else {
+                // [HB Suite] Torn API — War tab: the enemy faction's members + status (your key; only when the Hub's shared
+                // list is over 30 s old and no other Suite is already reading it - at most twice a minute, War tab open)
+                const d = await tornGet(`https://api.torn.com/faction/${fid}?selections=basic`);
+                wt.mem = Object.entries((d && d.members) || {}).map(([pid, m]) => ({ pid: num(pid), name: m.name || '#' + pid, level: num(m.level),
+                    state: String((m.status || {}).state || ''), until: num((m.status || {}).until), la: String((m.last_action || {}).status || '') }));
+                // [HB Suite] Hub API — op "war_feed" put: that list, for every other Suite (names, levels, status - no key)
+                if (r && r.read && wt.mem.length) hub('war_feed', { do: 'put', fid, members: wt.mem }).catch(() => {});
+            }
             wt.err = '';
         } catch (e) { wt.err = e.message || 'Could not read the enemy faction.'; }
         wt.busy = false;
@@ -2334,8 +2356,9 @@
     }
     async function warFF() {
         const key = ffKey(); if (!key || !wt.mem || !wt.mem.length || wt.ffBusy) return;
-        let C = store.get(K.warFF, null) || {}; if (num(C.fid) !== wt.fid) C = { fid: wt.fid, at: 0, m: {} };
-        const stale = Date.now() - num(C.at) > 30 * 60000, need = wt.mem.map(x => x.pid).filter(p => stale || !C.m[p]);
+        const wst = num((warNow() || {}).start);                    // (0.2.71) once per war: this enemy + this war's start
+        let C = store.get(K.warFF, null) || {}; if (num(C.fid) !== wt.fid || num(C.war) !== wst) C = { fid: wt.fid, war: wst, at: 0, m: {} };
+        const need = wt.mem.map(x => x.pid).filter(p => !C.m[p]);
         if (!need.length) return;
         wt.ffBusy = true;
         try {
@@ -3942,10 +3965,47 @@
             } catch (e) { b.disabled = false; if (m) m.textContent = e.message; }
         });
     }
+    // ⚡ INSTANT JOIN / LEAVE (0.2.70) — see build_patch_0270.py. ocMeSoon() is called when a button is pressed on the
+    // crimes page; ocMeCheck reads the member's own crime and reports a change.
+    let ocMeT = null, ocMeAt = 0;
+    const ocMeAllowed = () => !!me && !!getKey() && (store.get(K.share, null) || { oc: true }).oc !== false;
+    function ocMeSoon() {
+        if (ocMeT || !ocMeAllowed()) return;
+        ocMeT = setTimeout(() => { ocMeT = null; ocMeCheck(false); }, Math.max(3000, 20000 - (Date.now() - ocMeAt)));
+    }
+    async function ocMeCheck(again) {
+        if (!ocMeAllowed()) return;
+        ocMeAt = Date.now();
+        try {
+            // [HB Suite] Torn API — instant join / leave: the member's OWN current crime (v2 user/organizedcrime, 1 call,
+            // only after a button press on the crimes page; once more 32 s later if Torn's answer hadn't changed)
+            const d = await tornGet('https://api.torn.com/v2/user/organizedcrime');
+            const has = d && ('organizedCrime' in d || 'organizedcrime' in d); if (!has) return;   // an answer we don't understand is never reported
+            const c = d.organizedCrime !== undefined ? d.organizedCrime : d.organizedcrime;
+            const crime = c && typeof c === 'object' && num(c.id) > 0 ? c : null;
+            const seat = crime ? (crime.slots || []).find(sl => sl.user && num(sl.user.id) === num(me.id)) : null;
+            const sig = crime && seat ? crime.id + ':' + seat.position : '0';
+            if (sig === store.get(K.ocMeSig, null)) {                 // nothing new (or Torn's cached answer): look once more
+                if (!again && !ocMeT) ocMeT = setTimeout(() => { ocMeT = null; ocMeCheck(true); }, 32000);
+                return;
+            }
+            // [HB Suite] Hub API — op "oc_feed" me: the member's own crime (or null = in no crime); no key
+            const r = await hub('oc_feed', { do: 'me', crime: crime && seat ? crime : null });
+            if (r && r.ok && !r.throttled) { store.set(K.ocMeSig, sig); try { liveClear(); } catch (e) { /* not set up yet */ } myOcAt = 0; ocPinTick();
+                store.set(K.ocShareAt, 0); store.set(K.sharePingAt, 0); shareTick(true); }   // (0.2.71) + your pass rates now, not at the next 5-minute round
+        } catch (e) { /* Torn / the Hub didn't answer - the crime list catches up within a minute anyway */ }
+    }
     // the crimes page: outline YOUR assigned crime + seat (pure class toggling - nothing is clicked for you)
     let ocPageT = null;
     function ocPageWatch() {
         if (!modOn('ocpage') || !/factions\.php/.test(location.href)) return;
+        // (0.2.70) a button pressed on the crimes page (not in this panel), tab focused + visible -> check the own crime
+        document.addEventListener('click', e => {
+            if (!/tab=crimes/.test(location.hash) || !pageScrapeAllowed()) return;
+            const b = e.target && e.target.closest ? e.target.closest('button, [role="button"]') : null;
+            if (!b || b.closest('#hbs-panel, .torn-launcher')) return;
+            ocMeSoon();
+        }, true);
         const run = async () => {
             if (!/tab=crimes/.test(location.hash)) return;
             const MY = await loadMyOc(false), as = MY && MY.assignment;
@@ -6806,9 +6866,25 @@
             // minute, ONLY while the Hub has picked this script as the feeder)
             const d = await tornGet('https://api.torn.com/v2/faction/crimes?cat=available&limit=100&sort=ASC');
             // [HB Suite] Hub API — op "oc_feed" put: the crime list (no key; the Hub blanks this member's own open-slot rates)
-            const r = await hub('oc_feed', { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] });
+            const body = { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] };
+            // (0.2.71) FEEDER EXTRAS - each in its own try: a failed extra never holds the crime list back
+            try {
+                // [HB Suite] Torn API — crime feed extra: the faction's chain + wars (v2 faction, 1 call a minute, feeder only)
+                const n = await tornGet('https://api.torn.com/v2/faction?selections=chain,wars');
+                if (n && (n.chain !== undefined || n.wars !== undefined)) body.now = { chain: n.chain || null, wars: n.wars || null };
+            } catch (e) { /* the Hub's own read covers it */ }
+            if (Date.now() - num(store.get(K.feedDoneAt, 0)) > 170000) {
+                try {
+                    // [HB Suite] Torn API — crime feed extra: the newest completed crimes (v2 faction/crimes, 1 call every 3 min, feeder only)
+                    const c = await tornGet('https://api.torn.com/v2/faction/crimes?cat=completed&limit=100&sort=DESC');
+                    if (Array.isArray(c.crimes)) { store.set(K.feedDoneAt, Date.now());
+                        body.completed = c.crimes.map(x => ({ id: x.id, name: x.name, status: x.status, executed_at: x.executed_at,   // only what the payout list needs
+                            rewards: x.rewards ? { money: x.rewards.money, items: Array.isArray(x.rewards.items) ? x.rewards.items.map(() => 0) : [], payout: x.rewards.payout || null } : null })); }
+                } catch (e) { /* next time */ }
+            }
+            const r = await hub('oc_feed', body);
             store.set(K.feedOn, r && r.feed ? Date.now() + FEED_LEASE_MS : 0);
-            if (r && r.changed) { try { liveClear(); } catch (e) { /* not set up yet */ } }   // this panel's OC reads are re-asked
+            if (r && (r.changed || (r.extra && r.extra.length))) { try { liveClear(); } catch (e) { /* not set up yet */ } }   // this panel's reads are re-asked
         } catch (e) {
             const m = String((e && e.message) || '');
             if (/^Torn: /.test(m)) {                           // Torn refused the read: give the job back so another script takes it
