@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.79
+// @version      0.2.80
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.79';
+    const VERSION = '0.2.80';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -2286,9 +2286,12 @@
     async function armHtml() {
         if (!me.leader) return '<div class="hbs-empty">Leaders only.</div>';
         // [HB Suite] Hub API — op live "armory" (leaders: the Hub's armory reading; no Torn call from this script)
-        if (!armS || Date.now() - armAt > 60000) { try { delete liveMemo.armory; armS = await live('armory'); armAt = Date.now(); } catch (e) { return `<div class="hbs-empty">${esc(e.message)}</div>`; } }
+        // (0.2.80) [HB Suite] Hub API — op "armory_now" (leaders): the Hub reads the armory now if its reading is over
+        if (!armS || Date.now() - armAt > 60000) { try { delete liveMemo.armory;
+            let d = await hub('armory_now').catch(() => null); if (!d || !Array.isArray(d.rows)) d = await live('armory');
+            armS = d; armAt = Date.now(); } catch (e) { return `<div class="hbs-empty">${esc(e.message)}</div>`; } }
         const R = armS.rows || [], armMsgNow = armMsg; armMsg = '';
-        if (!armS.at || !R.length) return '<div class="hbs-empty">No armory reading yet - the Hub checks the armory every 15 minutes.</div>';
+        if (!armS.at || !R.length) return '<div class="hbs-empty">No armory reading yet - the Hub checks the armory every few minutes.</div>';
         const lowR = R.filter(r => r.short > 0), okR = R.filter(r => !(r.short > 0));
         const blood = lowR.filter(r => r.group === 'blood'), lines = lowR.filter(r => r.group !== 'blood').map(r => ({ name: r.name, det: `${int(r.qty)} / ${int(r.min)}`, cost: r.cost,
             tip: `Short ${int(r.short)}${r.price != null ? ' · ' + armMoney(r.price) + ' each' : ' · no market value yet'}` }));
@@ -2304,7 +2307,8 @@
             + R.map(r => `<label><span>${esc(r.group === 'blood' ? 'Blood bag ' + r.label : r.name)}</span><input type="number" class="hbs-input" inputmode="numeric" min="0" max="1000000" step="1" value="${int(r.min).replace(/,/g, '')}" data-armmin="${esc(r.key)}"></label>`).join('')
             + `</div><div class="hbs-actions"><button type="button" class="hbs-btn" data-armsave>Save minimums</button></div>`;
         return `<div class="hbs-card">${head}${lines.map(row).join('')}
-                <div class="hbs-hint" style="text-align:left">Checked ${ago(Math.floor(armS.at / 1000))} · the Hub reads the armory every 15 minutes · cost = the shortfall × Torn's market value${armS.prices_at ? ' (prices from ' + ago(Math.floor(armS.prices_at / 1000)) + ')' : ''}.</div>
+                <div class="hbs-actions"><button type="button" class="hbs-btn hbs-ghost" data-armnow>↻ Check now</button></div>
+                <div class="hbs-hint" style="text-align:left">Checked ${ago(Math.floor(armS.at / 1000))}${armS.stale ? ' (the Hub couldn\'t read the armory just now)' : ''} · read when you open this, on Check now, and every 3 minutes in the background · cost = the shortfall × Torn's market value${armS.prices_at ? ' (prices from ' + ago(Math.floor(armS.prices_at / 1000)) + ')' : ''}.</div>
                 ${armMsgNow ? `<div class="hbs-hint hbs-good" style="text-align:left">${esc(armMsgNow)}</div>` : ''}</div>`
             + (okR.length ? cFold('armok', '✅', `${okR.length} item${okR.length === 1 ? '' : 's'} stocked`, '', okList, false, false) : '')
             + cFold('armset', '🎯', 'Minimum stock', 'leaders', mins, false, false)
@@ -2312,6 +2316,8 @@
                 <div class="hbs-hint" style="text-align:left">Your own choice on this device - other leaders set theirs. ${armAlertOn() ? 'Home shows a line when a key item is under its minimum.' : 'Home stays quiet; this tab still shows everything.'}</div></div>`;
     }
     function armBind() {
+        const nw = bodyEl.querySelector('[data-armnow]');
+        if (nw) nw.addEventListener('click', () => { nw.disabled = true; nw.textContent = 'Reading…'; armAt = 0; render(true); });
         const al = bodyEl.querySelector('[data-armalert]');
         if (al) al.addEventListener('click', () => { store.set(K.armAlert, !armAlertOn()); render(true); });
         const sv = bodyEl.querySelector('[data-armsave]');
