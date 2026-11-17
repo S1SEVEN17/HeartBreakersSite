@@ -156,6 +156,7 @@ let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: nul
 const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
   safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
   shAlert: 75, shMin: 50, shPause: 12, lineUp: 2}, LS.get("hb_oc_opts", {}));   // lineUp: members lined up per crime (Nov 16 2026)   // sh* = 🔬 Shadow settings (Shadow plan only)
+OPT.minZero = null;   // WEIGHT-SCALED MINIMUM REMOVED (Nov 17 2026, user, on the "Lowest rate for 0%-weight roles" setting: "Remove this option.") - every role uses "Lowest individual role"; an old saved value is ignored
 OPT.queueHours = 0; OPT.holdHours = 0;   // QUEUE + SPAWN HOLDS REMOVED (Nov 13 2026, user) - old saved values ignored
 OPT.includeBusy = false;          // option removed (Nov 11 2026) - a saved "on" from before is ignored
 delete OPT.chains;                // "Chain finals" option removed (Nov 12 2026) - prerequisite crimes are planned like any other
@@ -228,6 +229,7 @@ function applyLive(cfg, rates, feed) {
     D.config = cfg; D.rates = rates || {};
     if (cfg.opts && typeof cfg.opts === "object") Object.assign(OPT, cfg.opts);       // the live plan's settings
     OPT.queueHours = 0; OPT.holdHours = 0;   // removed Nov 13 2026 (user)
+    OPT.minZero = null;                      // removed Nov 17 2026 (user) - an old saved value is ignored
     D.feed = (feed && feed.crimes) || null; D.feedT = (feed && feed.as_of) || null;
     // Active crimes (who's in what) come from the OC DATA FEED when it has them (Nov 2026): the Hub's own Torn pull
     // every 3 minutes PLUS members' OC Optimizer refreshes written back - so a script refresh shows up here at once.
@@ -813,7 +815,7 @@ function drawBuilder() {
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100);
   // 0%-weight minimum: empty = off; never above the lowest individual role
-  $("o_mz").onchange = () => { const v = $("o_mz").value.trim(); OPT.minZero = v === "" ? null : Math.max(0, Math.min(OPT.minRole, +v || 0)); saveOpts(); draw(); }; num("o_cap", "cap", 50, 100);
+  num("o_cap", "cap", 50, 100);   // (the "Lowest rate for 0%-weight roles" input was removed Nov 17 2026, user)
   num("o_ns", "noShowHours", 0, 72);   // no-shows (Nov 12 2026; spawn holds + queue removed Nov 13 2026)
   // 🛡 Safeguards (Nov 16 2026): the numbers allow 0 (= no limit), so they don't use num() (which turns 0 into the minimum)
   const num0 = (id, k, hi) => $(id).onchange = () => { const v = Math.round(+$(id).value); OPT[k] = Number.isFinite(v) ? Math.max(0, Math.min(hi, v)) : 0; saveOpts(); draw(); };
@@ -1132,10 +1134,7 @@ function settingsHtml() {
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
         ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "Members are only added to a crime while the members in it plus the new ones reach this (their weighted success). For a full team the Hub has checked, it is tornprobability's calculated success chance (🎲).")}
-        ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), OPT.minZero == null ? "Nobody is put in a role they pass below this." : "The minimum for roles at or above the crime's average weight.")}
-        ${row("Lowest rate for 0%-weight roles", `<input type="number" id="o_mz" min="0" max="100" value="${OPT.minZero ?? ""}" placeholder="off"> %`,
-              OPT.minZero == null ? "Off - every role uses the lowest individual role. Set a value to let lighter roles (below the crime's average weight) go lower, in proportion to their weight; the team still has to reach the overall success."
-              : `Roles lighter than the crime's average go down toward ${OPT.minZero}% in proportion to their weight (a 0% role: ${OPT.minZero}%); heavier roles stay at ${OPT.minRole}%. The team still has to reach ${OPT.target}%. Each role's minimum shows next to its weight. Empty = off.`)}
+        ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), "Nobody is put in a role they pass below this.")}
         ${row("Individual role cap", numIn("o_cap", OPT.cap, 50, 100, "%"), "Someone who passes a role above this is moved up to a harder crime they can pass. 100 = off.")}
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>

@@ -248,8 +248,9 @@ export function ocPlan(X) {
   let curSlack = 0;                                        // V2: points under the target / role minimums for the crime being filled
   const TGT = () => O.target - curSlack;
   const floorOf = (crime, label) => {
-    if (O.minZero == null || !(O.minZero < O.minRole)) return O.minRole - curSlack;
-    return O.minZero + (O.minRole - O.minZero) * Math.min(1, wOf(crime, label)) - curSlack;
+    // WEIGHT-SCALED MINIMUM REMOVED (Nov 17 2026, user, on the "Lowest rate for 0%-weight roles" setting: "Remove this option."): every role uses opts.minRole.
+    // A minZero still stored in old settings is ignored (the Hub no longer saves one).
+    return O.minRole - curSlack;
   };
   const clock = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
   const t0 = clock();

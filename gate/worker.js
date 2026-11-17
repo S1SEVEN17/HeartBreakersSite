@@ -2118,7 +2118,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       v = v && typeof v === "object" ? v : {};
       v = {target: n(v.target, 0, 100, 75), minRole: n(v.minRole, 0, 100, 65),
            // WEIGHT-SCALED MINIMUM (Nov 12 2026): lowest rate for a 0%-weight role, null = off (oc_planner.js floorOf)
-           minZero: v.minZero == null || v.minZero === "" ? null : Math.min(n(v.minRole, 0, 100, 65), n(v.minZero, 0, 100, null)),
+           minZero: null,   // WEIGHT-SCALED MINIMUM REMOVED (Nov 17 2026, user, on the "Lowest rate for 0%-weight roles" setting: "Remove this option."): never saved again
            cap: n(v.cap, 50, 100, 85), includeBusy: !!v.includeBusy,   // "chains" option removed Nov 12 2026
            // members' share of the payout: null = each crime's recorded payout % (default), or a fixed % for every crime
            share: v.share == null || v.share === "" ? null : n(v.share, 0, 100, null),
@@ -3481,8 +3481,7 @@ async function ocOcAlerts(env, cfg, crimes) {
     const vals = Object.values(m), mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0; if (!mean) return 1;
     const k = K(label), v = m[k] ?? (/\d+$/.test(k) ? m[k.replace(/\d+$/, "")] : undefined);
     return v == null ? 1 : v / mean; };
-  const floorOf = (crime, label) => O.minZero == null || !(O.minZero < O.minRole) ? O.minRole
-    : O.minZero + (O.minRole - O.minZero) * Math.min(1, wOf(crime, label));
+  const floorOf = (crime, label) => O.minRole;   // WEIGHT-SCALED MINIMUM REMOVED (Nov 17 2026, user, on the "Lowest rate for 0%-weight roles" setting: "Remove this option."): one minimum for every role
   const roles = [], crimesOut = [];
   const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null, tpNames = (tpw && tpw.data && tpw.data.names) || null;
   for (const c of crimes || []) {
