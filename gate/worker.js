@@ -497,6 +497,10 @@ async function sxRoute(env, ctx, req) {
     // from the leaders' spawn read (notify list, delays, paused crimes) is included.
     // ✅ "recent" (HB Suite 0.2.68): the OC tab's Recently completed tile - everyone; see ocRecentFor
     if (what === "recent") return sxJson(await ocRecentFor(env, who));
+    if (what === "armory") {                                   // 🧰 armory tracker - leaders only (see ARMORY_ITEMS)
+      if (!who.leader) return leadersOnly();
+      return sxJson(await liveMemo("armory", () => armoryView(env)));
+    }
     if (what === "loans") {
       if (!(who.leader || who.loans)) return leadersOnly();
       const A = await ocSpawnAlerts(env);
@@ -522,7 +526,8 @@ async function sxRoute(env, ctx, req) {
     // HB SUITE (Nov 14 2026): the header's live status chips - ranked war + chain now (same as the site's now.json)
     // + 📢 the member's ANNOUNCEMENT tile (HB Suite 0.2.66): the shared "now" answer with this member's own view of the
     // current announcement added (annFor - audience checked here, per member; no extra request from the Suite)
-    if (what === "now") return sxJson(Object.assign({}, await liveMemo("now", () => hubNowData(env)), {announce: await annFor(env, who).catch(() => null)}));
+    if (what === "now") return sxJson(Object.assign({}, await liveMemo("now", () => hubNowData(env)), {announce: await annFor(env, who).catch(() => null)},
+      who.leader ? {armory: await liveMemo("armory:brief", () => armoryBrief(env)).catch(() => null)} : {}));
     return sxJson({ok: false, error: "unknown"}, 400);
   }
   // 🤝 RECRUITMENT from the HB Suite script (Nov 14 2026) - leaders; the same list / actions as the Leaders' Recruitment
@@ -767,6 +772,17 @@ async function sxRoute(env, ctx, req) {
   if (op === "oc_feed") return sxJson(await ocFeedSx(env, ctx, who, b || {}));
   // ⚔ WAR ENEMY FEED (HB Suite 0.2.71) - see warFeedSx
   if (op === "war_feed") return sxJson(await warFeedSx(env, who, b || {}));
+  // 🧰 ARMORY MINIMUMS (HB Suite 0.2.78): leaders set the stock level each tracked item should stay above.
+  // {min: {key: n}} - only known keys, whole numbers 0..1,000,000; a key left out keeps its value
+  if (op === "armory_cfg") {
+    if (!who.leader) return leadersOnly();
+    const cur = await armoryMins(env), inb = (b && b.min && typeof b.min === "object") ? b.min : {};
+    ARMORY_ITEMS.forEach(it => { if (inb[it.key] != null && Number.isFinite(Number(inb[it.key]))) cur[it.key] = Math.max(0, Math.min(1000000, Math.round(Number(inb[it.key])))); });
+    await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'armory:cfg', ?, ?, ?) ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
+      .bind(Date.now(), JSON.stringify({min: cur}), `${String(who.name || "").slice(0, 40)} [${Number(who.id)}]`).run();
+    delete LIVE_MEMO.armory; delete LIVE_MEMO["armory:brief"];
+    return sxJson(await armoryView(env));
+  }
   // 📣 NOTIFY CONTACT LOG from the Hub script (Nov 14 2026) - leaders; same shared log as OC Management's Notify tab
   if (op === "oc_contacted") {
     if (!who.leader) return leadersOnly();
@@ -2509,6 +2525,90 @@ const ocRecentRows = list => (Array.isArray(list) ? list : []).filter(c => c && 
   return {id: Number(c.id), name: String(c.name || "").slice(0, 60), ok: /^success/i.test(String(c.status || "")), at: Number(c.executed_at) || 0, money: Number(rw.money) || 0,
           items: Array.isArray(rw.items) ? rw.items.length : 0, paid: !!(po && (po.paid_at || po.percentage != null || po.type)), paid_at: po ? Number(po.paid_at) || null : null,
           pct: po && po.percentage != null ? Number(po.percentage) : null}; }).sort((a, b) => b.at - a.at).slice(0, 100);
+// =====================================================================================================
+// 🧰 ARMORY TRACKER (Nov 17 2026, user: "Armory Tab. I want to create a current armory tracker, with alerts when certain
+// items are understocked ... With an estimated 'Restock' cost for each pulled from the item market." Answers:
+// 1. leadership only · 2. Torn's market value · 3. every 15 minutes · 4. a Home line too, Suite only (no Discord) ·
+// 5. thresholds editable by leadership · 6. compact layout).
+//   ITEMS     ARMORY_ITEMS - key, Torn item name, default minimum, fallback item id (used for the price while the item
+//             isn't in the armory at all). The eight filled blood bag types are separate items (group "blood").
+//   STOCK     the Hub's own key, ARMORY_EVERY_MS: faction medical + drugs + boosters in ONE call -> each tracked
+//             item's quantity (matched by name) and its Torn item id -> oc_snap hub 'armory' {stock: {key: qty},
+//             ids: {key: id}, prices: {key: market value}, prices_at}
+//   PRICES    Torn's market value (torn/items?ids=, the tracked ids in one call) once a day, kept in the same row
+//   MINIMUMS  oc_snap hub 'armory:cfg' {min: {key: n}} - leaders change them from the Suite (sx op "armory_cfg")
+//   READ      sx op live "armory" (leaders): rows {key, name, group, qty, min, price, short, cost} + totals;
+//             a short summary rides the leaders' live "now" answer (`armory` {low, cost, names}) for the Home line
+// Nothing is posted to Discord. Members who aren't leaders never get any of it.
+const ARMORY_EVERY_MS = 15 * 60 * 1000, ARMORY_PRICE_MS = 24 * 3600 * 1000;
+const ARMORY_ITEMS = [
+  {key: "xanax", name: "Xanax", min: 50, id: 206},
+  {key: "fak", name: "First Aid Kit", min: 1000, id: 68},
+  {key: "sfak", name: "Small First Aid Kit", min: 1000, id: 67},
+  {key: "morphine", name: "Morphine", min: 500, id: 66},
+  {key: "ipecac", name: "Ipecac Syrup", min: 250, id: 0},
+  {key: "ebb", name: "Empty Blood Bag", min: 250, id: 731},
+  ...["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"].map((t, i) => ({key: "bb" + t, name: "Blood Bag : " + t, short: t, min: 250, id: 732 + i, group: "blood"})),
+  {key: "beer", name: "Bottle of Beer", min: 500, id: 180},
+];
+const armNorm = t => String(t || "").toLowerCase().replace(/\s+/g, " ").replace(/\s*:\s*/g, " : ").trim();
+let ARMORY_V2_BAD = 0;
+// Torn V1 (the armory selections live there) with the key in the Authorization header - never in the address
+async function tornV1(env, path) {
+  // API: Heart Breakers Hub - armory stock (Torn V1 fallback)
+  const base = env.TORN_API_BASE || "https://api.torn.com", sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(`${base}/${path}${sep}comment=${encodeURIComponent(API_COMMENT)}`, {headers: {Authorization: "ApiKey " + String(env.HUB_TORN_KEY).trim(), Accept: "application/json"}});
+  const d = await r.json();
+  if (d && d.error) throw new Error("torn " + d.error.code);
+  return d;
+}
+async function armoryPull(env, now, ops) {
+  const cur = await ocSnapGet(env, "hub", "armory").catch(() => null);
+  if (cur && now - cur.as_of < ARMORY_EVERY_MS - 60000) return;
+  const D = (cur && cur.data) || {};
+  // API: Heart Breakers Hub - armory stock (faction medical + drugs + boosters, one call every 15 minutes)
+  let d = null;
+  if (now - ARMORY_V2_BAD > 6 * 3600e3) { try { d = await ocTorn(env, "faction?selections=medical,drugs,boosters"); if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer"); }
+                                          catch (e) { ARMORY_V2_BAD = now; d = null; } }
+  if (!d) d = await tornV1(env, "faction/?selections=medical,drugs,boosters");
+  const rows = [].concat(...["medical", "drugs", "boosters"].map(k => { const v = d[k]; return Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []; }));
+  if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer");
+  const byName = new Map(rows.filter(x => x && x.name).map(x => [armNorm(x.name), x]));
+  const stock = {}, ids = Object.assign({}, D.ids || {});
+  ARMORY_ITEMS.forEach(it => { const x = byName.get(armNorm(it.name));
+    stock[it.key] = x ? Math.max(0, Number(x.quantity != null ? x.quantity : x.available) || 0) : 0;
+    const id = x ? Number(x.ID != null ? x.ID : x.id) || 0 : 0; if (id) ids[it.key] = id; else if (!ids[it.key] && it.id) ids[it.key] = it.id; });
+  // market values - once a day, or at once for an item that has no price yet
+  let prices = Object.assign({}, D.prices || {}), pat = Number(D.prices_at) || 0;
+  const want = ARMORY_ITEMS.filter(it => ids[it.key] && (now - pat > ARMORY_PRICE_MS || prices[it.key] == null));
+  if (want.length) try {
+    // API: Heart Breakers Hub - armory restock prices (torn/items market value, the tracked items in one call, daily)
+    const t = await ocTorn(env, "torn/items?ids=" + [...new Set(want.map(it => ids[it.key]))].join(","));
+    const got = {}; (Array.isArray(t.items) ? t.items : Object.values(t.items || {})).forEach(x => { if (x && x.id) got[String(x.id)] = x; });
+    want.forEach(it => { const x = got[String(ids[it.key])]; if (x) prices[it.key] = Math.round(Number((x.value || {}).market_price) || 0); });
+    if (now - pat > ARMORY_PRICE_MS) pat = now;
+  } catch (e) { /* stock is still stored; prices next run */ }
+  ops.push(ocSnapPut(env, "hub", "armory", now, JSON.stringify({stock, ids, prices, prices_at: pat}), "hub"));
+}
+const armoryMins = async env => { const c = await ocSnapGet(env, "hub", "armory:cfg").catch(() => null); const m = (c && c.data && c.data.min) || {};
+  const out = {}; ARMORY_ITEMS.forEach(it => { const v = Number(m[it.key]); out[it.key] = Number.isFinite(v) && m[it.key] != null ? Math.max(0, Math.round(v)) : it.min; }); return out; };
+async function armoryView(env) {
+  const [cur, min] = await Promise.all([ocSnapGet(env, "hub", "armory").catch(() => null), armoryMins(env)]);
+  if (!cur || !cur.data || !cur.data.stock) return {ok: true, at: null, rows: [], low: 0, cost: 0};
+  const D = cur.data;
+  const rows = ARMORY_ITEMS.map(it => { const qty = Number(D.stock[it.key]) || 0, price = D.prices && D.prices[it.key] != null ? Number(D.prices[it.key]) : null, short = Math.max(0, min[it.key] - qty);
+    return {key: it.key, name: it.name, label: it.short || null, group: it.group || null, qty, min: min[it.key], def: it.min, price, short, cost: price != null ? short * price : null}; });
+  const lowRows = rows.filter(r => r.short > 0);
+  return {ok: true, at: Number(cur.as_of) || null, rows, low: lowRows.length, cost: lowRows.reduce((a, r) => a + (r.cost || 0), 0), unpriced: lowRows.filter(r => r.cost == null).length,
+          prices_at: Number(D.prices_at) || null, every: ARMORY_EVERY_MS};
+}
+// the leaders' Home line: {low, cost, names} - blood bags count as one name
+async function armoryBrief(env) {
+  const v = await armoryView(env); if (!v.at) return null;
+  const low = v.rows.filter(r => r.short > 0), names = [];
+  low.forEach(r => { const n = r.group === "blood" ? "Blood bags" : r.name; if (!names.includes(n)) names.push(n); });
+  return {low: names.length, cost: v.cost, names, at: v.at};
+}
 let NOW_MEMBERS_BAD = 0;
 async function ocFeedPull(env) {
   if (!env.OC_DB || !env.HUB_TORN_KEY) return;
@@ -2590,6 +2690,8 @@ async function ocFeedPull(env) {
   } catch (e) { fail("now", e); }
   // DELAY CHECK - with the members just read above (no call of its own; it reads them itself only if that failed)
   if (crimesNow) try { await ocDelayCheck(env, crimesNow, now, ops, liveMembers); } catch (e) { fail("delays", e); }
+  // 🧰 ARMORY STOCK - every 15 minutes (armoryPull)
+  try { await armoryPull(env, now, ops); } catch (e) { fail("armory", e); }
   // OC pass rates of members who opted in with their stored key - only when a NEW crime was found (Nov 2026)
   try { await ocOptinPull(env, now, crimesNow); } catch (e) { fail("oc-optin", e); }
   try { await ocShareAllOn(env, now); } catch (e) { fail("oc-share-all-on", e); }
