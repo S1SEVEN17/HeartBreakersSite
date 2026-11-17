@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.74
+// @version      0.2.75
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.74';
+    const VERSION = '0.2.75';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -2747,10 +2747,7 @@
         out += cFold('cwset', '⚙', 'Alerts & settings', `<small>${[cfg.topAlertSeconds, cfg.restAlertSeconds, cfg.thirdAlertSeconds].filter(x => num(x) > 0).map(mSec).join(' / ')} · min ${int(cfg.minChain)}</small>`,
             `<div class="hbs-actions"><button type="button" class="hbs-btn${alOpen ? '' : ' hbs-ghost'}" data-alopen>⚙ Configure alerts</button>${alOpen ? '' : '<button type="button" class="hbs-btn hbs-ghost" data-cw="test">🔔 Test my alerts</button>'}
                 ${lead ? `<button type="button" class="hbs-btn${cwCfg.open ? '' : ' hbs-ghost'}" data-cwcfgopen>🛠 Chain settings ${cwCfg.open ? '▾' : '▸'}</button>` : ''}</div>` + cwCfgHtml(cfg, cfgUrl) + alertsCfgHtml(), false);
-        { let meta = '';
-          try { const C = await readOpt('m', 'db/chains.json'), L = ((C && C.chains) || []).map(x => (x.m || []).find(r => num(r[0]) === me.id)).filter(Boolean);
-                meta = L.length ? `<small>${L.length} chain${L.length === 1 ? '' : 's'} · ${int(L.reduce((a, r) => a + num(r[1]), 0))} hits</small>` : '<small>none yet</small>'; } catch (e) {   }
-          out += cFold('cwsum', '⛓', 'Your chain summary', meta, cfOpen('cwsum') ? (await chainSummaryHtml()).replace(/^<div class="hbs-sec">[^<]*<\/div>/, '') : '', false); }
+        out += `<div class="hbs-hint" style="margin-top:8px">📜 Your chain summary is on the <b>History</b> tab (••• More).</div>`;
         return out;
     }
     function ocCmHero(cur) {
@@ -2855,7 +2852,7 @@
             ${(S.me || {}).is_leader ? `<button type="button" class="hbs-btn${cwCfg.open ? '' : ' hbs-ghost'}" data-cwcfgopen>🛠 Chain settings ${cwCfg.open ? '▾' : '▸'}</button>` : ''}</div>`
             + cwCfgHtml(cfg, cfgUrl)
             + alertsCfgHtml();
-        out += await chainSummaryHtml();
+        out += `<div class="hbs-hint" style="margin-top:8px">📜 Your chain summary is on the <b>History</b> tab (••• More).</div>`;
         out += `<div class="hbs-hint">Alerts: ${[cfg.topAlertSeconds, cfg.restAlertSeconds, cfg.thirdAlertSeconds].filter(x => num(x) > 0).map(mSec).join(' / ')} left · min chain ${int(cfg.minChain)}</div>`;
         return out;
     }
@@ -3098,24 +3095,7 @@
         const leadHtml = (me.leader || me.loans) ? await ocLeadersHtml() : '';
         if (me.leader || me.loans) out += ocLoansOut;
         out += await ocRecentHtml();
-        const cmMark = out.length;
-        {
-            const best = mine.reduce((a, c) => num(c.share) > num(a && a.share) ? c : a, null), cnt = {};
-            mine.forEach(c => { cnt[c.name] = (cnt[c.name] || 0) + 1; });
-            const fav = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
-            const m30 = mine.filter(c => num(c.t) > Date.now() / 1000 - 30 * 86400);
-            out += `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">🕵 Your OC summary</span></div>
-                ${mine.length ? `<div class="hbs-ctiles">${tiles([[int(mine.length), 'Crimes'], [`${okN}/${mine.length}`, 'Passed'], [Math.round(100 * okN / mine.length) + '%', 'Success rate'],
-                    [earned ? shortMoney(earned) : '-', 'OC earnings'], [okN ? shortMoney(earned / okN) : '-', 'Avg payout'], [best && num(best.share) ? shortMoney(best.share) : '-', 'Best payout', best && num(best.share) ? esc(best.name || '') : ''],
-                    [int(m30.length), 'Last 30 days']])}</div>
-                ${fav ? `<div class="hbs-hint">Most played: <b>${esc(fav[0])}</b> × ${fav[1]}</div>` : ''}` : '<div class="hbs-hint">No organized crimes on record for you yet.</div>'}</div>`;
-        }
-        if (mine.length) out += sec('Latest crimes');
-        out += mine.slice(-6).reverse().map(c => `<div class="hbs-li"><span>${fmtD(c.t)} · ${esc(c.name || '?')}</span>
-            <b class="${String(c.status).toLowerCase() === 'successful' ? 'hbs-good' : 'hbs-bad'}">${esc(c.status || '')}${c.share ? ' · ' + shortMoney(c.share) : ''}</b></div>`).join('');
-        if (CMP()) out = out.slice(0, cmMark) + cFold('ocsum', '🕵', 'Your OC summary',
-            mine.length ? `<small>${mine.length} crime${mine.length === 1 ? '' : 's'} · ${Math.round(100 * okN / mine.length)}%${earned ? ' · ' + shortMoney(earned) : ''}</small>` : '<small>none yet</small>',
-            out.slice(cmMark).replace(/^\s*<div class="hbs-card"><div class="hbs-r1">[\s\S]*?<\/div>/, '<div>'), false);
+        out += `<div class="hbs-hint" style="margin-top:8px">📜 Your OC summary and latest crimes are on the <b>History</b> tab (••• More).</div>`;
         if (me.leader) out += leadHtml;
         return out;
     }
