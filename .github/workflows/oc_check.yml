@@ -20,6 +20,18 @@ jobs:
         run: |
           mkdir w && cd w && npm init -y >/dev/null && npm install --silent wrangler@4 >/dev/null 2>&1
           printf 'name = "oc-check"\ncompatibility_date = "2025-06-01"\n' > wrangler.toml
+          # which queries read the most rows today (D1's daily row-read allowance) - query text + counts only
+          npx wrangler d1 insights hb-oc --timePeriod 1d --sort-type sum --sort-by reads --limit 14 --json > ins.json 2> ins.err || true
+          python3 - <<'PY' || true
+          import json
+          try:
+              d = json.load(open("ins.json"))
+              print("Top queries by rows read (last 24 h):")
+              for r in d:
+                  print(f"  reads={int(r.get('rowsRead', r.get('totalRowsRead', 0)) or 0):>10}  runs={int(r.get('numberOfTimesRun', r.get('count', 0)) or 0):>7}  {' '.join(str(r.get('query', '')).split())[:170]}")
+          except Exception as e:
+              print("no insights:", str(e)[:120]); print(open("ins.err").read()[:300])
+          PY
           if ! npx wrangler d1 execute hb-oc --remote --json --command \
               "SELECT env, COUNT(*) AS members, MAX(ts) AS newest, MIN(ts) AS oldest FROM oc_cpr GROUP BY env" > out.json 2> err.log; then
             echo "::error::couldn't query the database"; grep -iE "error|auth|not found" err.log | head -5; grep -oiE '"(text|message)": *"[^"]{0,300}' out.json | head -5; exit 1
