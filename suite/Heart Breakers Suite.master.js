@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.72
+// @version      0.2.73
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,9 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.73 (Nov 16 2026) - 🤝 Recruit (Torn PDA): the pool and scout list are now kept in the device's larger
+ *          database instead of the small page storage that filled up and silently stopped saving. Unsaved changes
+ *          are written when you leave a page, and the Recruit tab says so if a save ever fails.
  *  v0.2.72 (Nov 16 2026) - 📱 Torn PDA: Compact mode is now on by default, and is switched on once for Suites that
  *          were already installed. You can still turn it off in ⚙ → Display.
  *  v0.2.71 (Nov 16 2026) - 📡 Fresher data with fewer repeated reads: the Suite feeding the crime list now also passes
@@ -452,7 +455,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.72';
+    const VERSION = '0.2.73';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -5828,10 +5831,69 @@
     // member. Now they start empty and rsLeaderLoad() reads them once - when the Suite knows you're a leader (setMe) or
     // the Recruit tab opens. Nothing is written back before that (rsLoaded), so a member's device can't blank them.
     let rsDb = { v: 1, candidates: {} }, rsLoaded = false;
+    // BIG STORAGE (0.2.73) - see build_patch_0273.py. RS_BIG = the script's storage is the page's localStorage (Torn
+    // PDA / no GM storage), so the pool + scout list go to IndexedDB. rsBigReady = IndexedDB has been read and merged
+    // (always true where RS_BIG is off). rsStoreErr = the last failed save, shown on the Recruit tab.
+    const RS_BIG = (typeof PDA_httpGet === 'function' || typeof GM_setValue !== 'function') && typeof indexedDB !== 'undefined';
+    let rsBigReady = !RS_BIG, rsBigWant = false, rsStoreErr = '';
+    let rsIdbP = null;
+    const rsIdb = () => rsIdbP || (rsIdbP = new Promise((res, rej) => {
+        const q = indexedDB.open('hbs', 1);
+        q.onupgradeneeded = () => { try { q.result.createObjectStore('kv'); } catch (e) { /* already there */ } };
+        q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error || new Error('database not available')); q.onblocked = () => rej(new Error('database blocked'));
+    }));
+    const rsIdbGetAll = keys => rsIdb().then(db => new Promise((res, rej) => {
+        const out = {}, tx = db.transaction('kv', 'readonly'), st = tx.objectStore('kv');
+        keys.forEach(k => { const g = st.get(k); g.onsuccess = () => { out[k] = g.result; }; });
+        tx.oncomplete = () => res(out); tx.onerror = tx.onabort = () => rej(tx.error || new Error('read failed'));
+    }));
+    const rsIdbPut = pairs => rsIdb().then(db => new Promise((res, rej) => {   // {key: value}; value undefined = delete
+        const tx = db.transaction('kv', 'readwrite'), st = tx.objectStore('kv');
+        Object.keys(pairs).forEach(k => { if (pairs[k] === undefined) st.delete(k); else st.put(pairs[k], k); });
+        tx.oncomplete = () => res(true); tx.onerror = tx.onabort = () => rej(tx.error || new Error('save failed'));
+    }));
+    const rsStoreFail = e => { rsStoreErr = String((e && (e.name === 'QuotaExceededError' ? 'this device is out of storage space' : e.message || e.name)) || 'save failed'); console.warn(LOG, 'recruit storage:', rsStoreErr); };
+    // small-storage write that REPORTS a failure (store.set swallows it) - the non-IndexedDB path
+    const rsSmallSet = (k, v) => { try { if (typeof GM_setValue === 'function') { GM_setValue(k, v); return true; } localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { rsStoreFail(e); return false; } };
     function rsLeaderLoad() {
         if (rsLoaded) return; rsLoaded = true;
         const d = store.get(K.rsDb, null); if (d && d.candidates) rsDb = d;
         rsPoolLoad();
+        if (RS_BIG) rsBigLoad();
+    }
+    // (0.2.73) IndexedDB over the old localStorage copies, then everything into IndexedDB and the old copies removed
+    async function rsBigLoad() {
+        try {
+            const keys = [K.rsDb].concat(Array.from({ length: RS_SHARDS }, (_, i) => rsShardKey(i)));
+            const got = await rsIdbGetAll(keys);
+            const legacyDb = Object.keys(rsDb.candidates || {}).length, legacyPool = Object.keys(rsPool).length;
+            // what's in memory now = the old page-storage copy (first run only - it is removed below) + anything added
+            // on this page while IndexedDB was being read: both are laid OVER the IndexedDB copy
+            const bd = got[K.rsDb];
+            if (bd && bd.candidates) rsDb = Object.assign({}, bd, rsDb, { candidates: Object.assign({}, bd.candidates, rsDb.candidates || {}) });
+            const merged = {};
+            for (let i = 0; i < RS_SHARDS; i++) { const sh = got[rsShardKey(i)]; if (sh && typeof sh === 'object') Object.assign(merged, sh); }
+            rsPool = Object.assign(merged, rsPool);
+            rsShardSaved.fill('');                                  // every shard is written to IndexedDB once
+            rsBigReady = true;
+            await rsBigWrite(true);
+            // the old page-storage copies: removed only after IndexedDB holds everything
+            if (legacyDb || legacyPool) { try { localStorage.removeItem(K.rsDb); localStorage.removeItem(K.rsPool); for (let i = 0; i < RS_SHARDS; i++) localStorage.removeItem(rsShardKey(i)); } catch (e) { /* stays */ } }
+            rsStoreErr = '';
+        } catch (e) { rsBigReady = true; rsStoreFail(e); }          // IndexedDB unusable: carry on with what page storage had
+        if (!collapsed && tab === 'recruit' && rsView !== 'set') render(true);
+    }
+    let rsBigBusy = null;
+    function rsBigWrite(withDb) {                                   // changed pool shards (+ the scout list) -> IndexedDB
+        if (!rsBigReady) { rsBigWant = true; return Promise.resolve(false); }
+        const pairs = {}, parts = Array.from({ length: RS_SHARDS }, () => ({})), js = [];
+        for (const id in rsPool) parts[rsShardOf(id)][id] = rsPool[id];
+        parts.forEach((p, i) => { const j = JSON.stringify(p); js[i] = j; if (j !== rsShardSaved[i]) pairs[rsShardKey(i)] = p; });
+        if (withDb) pairs[K.rsDb] = rsDb;
+        if (!Object.keys(pairs).length) return Promise.resolve(true);
+        const run = () => rsIdbPut(pairs).then(() => { parts.forEach((p, i) => { if (rsShardKey(i) in pairs) rsShardSaved[i] = js[i]; }); rsStoreErr = ''; return true; }, e => { rsStoreFail(e); return false; });
+        rsBigBusy = (rsBigBusy || Promise.resolve()).then(run, run);
+        return rsBigBusy;
     }
     // POOL STORAGE IN SHARDS (0.2.27, user approved "Shrink the device pool's storage"): the pool used to be ONE value
     // (up to 25,000 rows, ~1-2 MB) rewritten on every scan / check. Now it's 16 values by player id (K.rsPool + '_0'..15);
@@ -5846,13 +5908,21 @@
     }
     function rsPoolWrite() {
         if (!rsLoaded) return;                                  // (0.2.31) never write a pool that wasn't read
+        if (RS_BIG) { rsBigWrite(false); return; }              // (0.2.73) Torn PDA: IndexedDB
         const parts = Array.from({ length: RS_SHARDS }, () => ({}));
         for (const id in rsPool) parts[rsShardOf(id)][id] = rsPool[id];
-        parts.forEach((p, i) => { const j = JSON.stringify(p); if (j !== rsShardSaved[i]) { store.set(rsShardKey(i), p); rsShardSaved[i] = j; } });
+        let ok = true;
+        parts.forEach((p, i) => { const j = JSON.stringify(p); if (j !== rsShardSaved[i]) { if (rsSmallSet(rsShardKey(i), p)) rsShardSaved[i] = j; else ok = false; } });
+        if (ok) rsStoreErr = '';
     }
     let rsSaveT = null, rsPoolT = null;
-    const rsSave = () => { if (!rsLoaded) return; clearTimeout(rsSaveT); rsSaveT = setTimeout(() => store.set(K.rsDb, rsDb), 500); };
-    const rsPoolSave = () => { clearTimeout(rsPoolT); rsPoolT = setTimeout(rsPoolWrite, 800); };   // (0.2.27) changed shards only
+    const rsDbWrite = () => { if (!rsLoaded) return; if (RS_BIG) { rsBigWrite(true); return; } if (rsSmallSet(K.rsDb, rsDb)) rsStoreErr = ''; };   // (0.2.73) the scout list, now
+    const rsSave = () => { if (!rsLoaded) return; clearTimeout(rsSaveT); rsSaveT = setTimeout(() => { rsSaveT = null; rsDbWrite(); }, RS_BIG ? 200 : 500); };
+    const rsPoolSave = () => { clearTimeout(rsPoolT); rsPoolT = setTimeout(() => { rsPoolT = null; rsPoolWrite(); }, RS_BIG ? 200 : 800); };   // (0.2.27) changed shards only
+    // (0.2.73) leaving / hiding the page: anything still waiting for its delayed save is written now
+    const rsFlush = () => { if (!rsLoaded) return; if (rsPoolT) { clearTimeout(rsPoolT); rsPoolT = null; rsPoolWrite(); } if (rsSaveT) { clearTimeout(rsSaveT); rsSaveT = null; rsDbWrite(); } };
+    window.addEventListener('pagehide', rsFlush);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') rsFlush(); });
     const VCODE = { fit: 'f', near: 'n', fail: 'x', excl: 'e', '': '' }, VNAME = { f: 'fit', n: 'near', x: 'fail', e: 'excl', '': '' };
     const poolN = () => Object.keys(rsPool).length;
     function poolPut(pid, name, level) {          // a scanned player -> pool (true = new)
@@ -6286,7 +6356,7 @@
         // the contacted stamp was saved a moment AFTER the compose tab opened (debounced saves), so the Suite in the new
         // tab loaded the old lists. Now it's marked and written to storage straight away, BEFORE the tab opens.
         c.contacted = true; c.contactedAt = Date.now();
-        clearTimeout(rsPoolT); clearTimeout(rsSaveT); rsPoolWrite(); store.set(K.rsDb, rsDb);
+        clearTimeout(rsPoolT); clearTimeout(rsSaveT); rsPoolT = rsSaveT = null; rsPoolWrite(); rsDbWrite();
         rsHub({ do: 'contact', pid: Number(c.id), name: c.name || '' }).catch(() => {});
         // (0.2.12) the compose page fills itself in (subject + message) - see rsMailFill; the clipboard copy stays as the fallback
         store.set(K.mailFill, { pid: Number(c.id), subject, html, text, at: Date.now() });
@@ -6424,7 +6494,9 @@
         const head = chips('rsv', [['pool', `🗃 Pool · ${int(poolN())}`], ['scout', `🔎 Scout · ${int(rsN())}`], ['hub', '📋 Hub list'], ['set', '⚙ Criteria']], rsView)
             + `<div class="hbs-actions"><button type="button" class="hbs-btn" data-rs="scan">Scan page</button>
                 ${rsRunning ? `<button type="button" class="hbs-btn hbs-ghost" data-rs="stop">■ Stop</button>` : ''}</div>
-            <div class="hbs-hint${rsErr ? ' hbs-bad' : ''}" data-rsstatus>${esc(rsStatus)}</div>${rsFfNote ? `<div class="hbs-hint">${esc(rsFfNote)}</div>` : ''}`;
+            <div class="hbs-hint${rsErr ? ' hbs-bad' : ''}" data-rsstatus>${esc(rsStatus)}</div>${rsFfNote ? `<div class="hbs-hint">${esc(rsFfNote)}</div>` : ''}
+            ${rsStoreErr ? `<div class="hbs-hint hbs-bad">⚠ The pool / scout list couldn't be saved on this device (${esc(rsStoreErr)}) - what you see may be gone after leaving this page.</div>` : ''}
+            ${RS_BIG && !rsBigReady ? '<div class="hbs-hint">Loading your saved pool and scout list…</div>' : ''}`;
         if (rsView === 'hub') return head + await rcHubHtml();
         if (rsView === 'set') return head + rsSetHtml();
         if (rsView === 'scout') return head + rsScoutHtml();

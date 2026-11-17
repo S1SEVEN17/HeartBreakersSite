@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.72
+// @version      0.2.73
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.72';
+    const VERSION = '0.2.73';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -4613,10 +4613,61 @@
     const rsFf = () => String(store.get(K.ffKey, '') || '').trim();
 
     let rsDb = { v: 1, candidates: {} }, rsLoaded = false;
+    const RS_BIG = (typeof PDA_httpGet === 'function' || typeof GM_setValue !== 'function') && typeof indexedDB !== 'undefined';
+    let rsBigReady = !RS_BIG, rsBigWant = false, rsStoreErr = '';
+    let rsIdbP = null;
+    const rsIdb = () => rsIdbP || (rsIdbP = new Promise((res, rej) => {
+        const q = indexedDB.open('hbs', 1);
+        q.onupgradeneeded = () => { try { q.result.createObjectStore('kv'); } catch (e) {   } };
+        q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error || new Error('database not available')); q.onblocked = () => rej(new Error('database blocked'));
+    }));
+    const rsIdbGetAll = keys => rsIdb().then(db => new Promise((res, rej) => {
+        const out = {}, tx = db.transaction('kv', 'readonly'), st = tx.objectStore('kv');
+        keys.forEach(k => { const g = st.get(k); g.onsuccess = () => { out[k] = g.result; }; });
+        tx.oncomplete = () => res(out); tx.onerror = tx.onabort = () => rej(tx.error || new Error('read failed'));
+    }));
+    const rsIdbPut = pairs => rsIdb().then(db => new Promise((res, rej) => {
+        const tx = db.transaction('kv', 'readwrite'), st = tx.objectStore('kv');
+        Object.keys(pairs).forEach(k => { if (pairs[k] === undefined) st.delete(k); else st.put(pairs[k], k); });
+        tx.oncomplete = () => res(true); tx.onerror = tx.onabort = () => rej(tx.error || new Error('save failed'));
+    }));
+    const rsStoreFail = e => { rsStoreErr = String((e && (e.name === 'QuotaExceededError' ? 'this device is out of storage space' : e.message || e.name)) || 'save failed'); console.warn(LOG, 'recruit storage:', rsStoreErr); };
+    const rsSmallSet = (k, v) => { try { if (typeof GM_setValue === 'function') { GM_setValue(k, v); return true; } localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { rsStoreFail(e); return false; } };
     function rsLeaderLoad() {
         if (rsLoaded) return; rsLoaded = true;
         const d = store.get(K.rsDb, null); if (d && d.candidates) rsDb = d;
         rsPoolLoad();
+        if (RS_BIG) rsBigLoad();
+    }
+    async function rsBigLoad() {
+        try {
+            const keys = [K.rsDb].concat(Array.from({ length: RS_SHARDS }, (_, i) => rsShardKey(i)));
+            const got = await rsIdbGetAll(keys);
+            const legacyDb = Object.keys(rsDb.candidates || {}).length, legacyPool = Object.keys(rsPool).length;
+            const bd = got[K.rsDb];
+            if (bd && bd.candidates) rsDb = Object.assign({}, bd, rsDb, { candidates: Object.assign({}, bd.candidates, rsDb.candidates || {}) });
+            const merged = {};
+            for (let i = 0; i < RS_SHARDS; i++) { const sh = got[rsShardKey(i)]; if (sh && typeof sh === 'object') Object.assign(merged, sh); }
+            rsPool = Object.assign(merged, rsPool);
+            rsShardSaved.fill('');
+            rsBigReady = true;
+            await rsBigWrite(true);
+            if (legacyDb || legacyPool) { try { localStorage.removeItem(K.rsDb); localStorage.removeItem(K.rsPool); for (let i = 0; i < RS_SHARDS; i++) localStorage.removeItem(rsShardKey(i)); } catch (e) {   } }
+            rsStoreErr = '';
+        } catch (e) { rsBigReady = true; rsStoreFail(e); }
+        if (!collapsed && tab === 'recruit' && rsView !== 'set') render(true);
+    }
+    let rsBigBusy = null;
+    function rsBigWrite(withDb) {
+        if (!rsBigReady) { rsBigWant = true; return Promise.resolve(false); }
+        const pairs = {}, parts = Array.from({ length: RS_SHARDS }, () => ({})), js = [];
+        for (const id in rsPool) parts[rsShardOf(id)][id] = rsPool[id];
+        parts.forEach((p, i) => { const j = JSON.stringify(p); js[i] = j; if (j !== rsShardSaved[i]) pairs[rsShardKey(i)] = p; });
+        if (withDb) pairs[K.rsDb] = rsDb;
+        if (!Object.keys(pairs).length) return Promise.resolve(true);
+        const run = () => rsIdbPut(pairs).then(() => { parts.forEach((p, i) => { if (rsShardKey(i) in pairs) rsShardSaved[i] = js[i]; }); rsStoreErr = ''; return true; }, e => { rsStoreFail(e); return false; });
+        rsBigBusy = (rsBigBusy || Promise.resolve()).then(run, run);
+        return rsBigBusy;
     }
     const RS_SHARDS = 16, rsShardKey = i => K.rsPool + '_' + i, rsShardOf = id => Number(id) % RS_SHARDS;
     const rsShardSaved = new Array(RS_SHARDS).fill('');
@@ -4628,13 +4679,20 @@
     }
     function rsPoolWrite() {
         if (!rsLoaded) return;
+        if (RS_BIG) { rsBigWrite(false); return; }
         const parts = Array.from({ length: RS_SHARDS }, () => ({}));
         for (const id in rsPool) parts[rsShardOf(id)][id] = rsPool[id];
-        parts.forEach((p, i) => { const j = JSON.stringify(p); if (j !== rsShardSaved[i]) { store.set(rsShardKey(i), p); rsShardSaved[i] = j; } });
+        let ok = true;
+        parts.forEach((p, i) => { const j = JSON.stringify(p); if (j !== rsShardSaved[i]) { if (rsSmallSet(rsShardKey(i), p)) rsShardSaved[i] = j; else ok = false; } });
+        if (ok) rsStoreErr = '';
     }
     let rsSaveT = null, rsPoolT = null;
-    const rsSave = () => { if (!rsLoaded) return; clearTimeout(rsSaveT); rsSaveT = setTimeout(() => store.set(K.rsDb, rsDb), 500); };
-    const rsPoolSave = () => { clearTimeout(rsPoolT); rsPoolT = setTimeout(rsPoolWrite, 800); };
+    const rsDbWrite = () => { if (!rsLoaded) return; if (RS_BIG) { rsBigWrite(true); return; } if (rsSmallSet(K.rsDb, rsDb)) rsStoreErr = ''; };
+    const rsSave = () => { if (!rsLoaded) return; clearTimeout(rsSaveT); rsSaveT = setTimeout(() => { rsSaveT = null; rsDbWrite(); }, RS_BIG ? 200 : 500); };
+    const rsPoolSave = () => { clearTimeout(rsPoolT); rsPoolT = setTimeout(() => { rsPoolT = null; rsPoolWrite(); }, RS_BIG ? 200 : 800); };
+    const rsFlush = () => { if (!rsLoaded) return; if (rsPoolT) { clearTimeout(rsPoolT); rsPoolT = null; rsPoolWrite(); } if (rsSaveT) { clearTimeout(rsSaveT); rsSaveT = null; rsDbWrite(); } };
+    window.addEventListener('pagehide', rsFlush);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') rsFlush(); });
     const VCODE = { fit: 'f', near: 'n', fail: 'x', excl: 'e', '': '' }, VNAME = { f: 'fit', n: 'near', x: 'fail', e: 'excl', '': '' };
     const poolN = () => Object.keys(rsPool).length;
     function poolPut(pid, name, level) {
@@ -5016,7 +5074,7 @@
         const html = String(text).replace(/\r\n?/g, '\n').split('\n').map(l => esc(l).replace(/https?:\/\/[^\s<]+/g, u => { const tail = (u.match(/[).,!?;:]+$/) || [''])[0], url = tail ? u.slice(0, -tail.length) : u; return `<a href="${url}">${url}</a>${tail}`; })).join('<br>');
         const p = rsPool[c.id] || (poolPut(c.id, c.name, c.quick && c.quick.level), rsPool[c.id]); if (p) p[8] = Date.now();
         c.contacted = true; c.contactedAt = Date.now();
-        clearTimeout(rsPoolT); clearTimeout(rsSaveT); rsPoolWrite(); store.set(K.rsDb, rsDb);
+        clearTimeout(rsPoolT); clearTimeout(rsSaveT); rsPoolT = rsSaveT = null; rsPoolWrite(); rsDbWrite();
         rsHub({ do: 'contact', pid: Number(c.id), name: c.name || '' }).catch(() => {});
         store.set(K.mailFill, { pid: Number(c.id), subject, html, text, at: Date.now() });
         copyRich(html, text).then(ok => { rsSay(`Opening the mail to ${c.name || c.id} - subject and message are filled in for you; check it and press Send yourself.${ok ? ' (Also copied, in case the page needs a paste.)' : ''}`); });
@@ -5128,7 +5186,9 @@
         const head = chips('rsv', [['pool', `🗃 Pool · ${int(poolN())}`], ['scout', `🔎 Scout · ${int(rsN())}`], ['hub', '📋 Hub list'], ['set', '⚙ Criteria']], rsView)
             + `<div class="hbs-actions"><button type="button" class="hbs-btn" data-rs="scan">Scan page</button>
                 ${rsRunning ? `<button type="button" class="hbs-btn hbs-ghost" data-rs="stop">■ Stop</button>` : ''}</div>
-            <div class="hbs-hint${rsErr ? ' hbs-bad' : ''}" data-rsstatus>${esc(rsStatus)}</div>${rsFfNote ? `<div class="hbs-hint">${esc(rsFfNote)}</div>` : ''}`;
+            <div class="hbs-hint${rsErr ? ' hbs-bad' : ''}" data-rsstatus>${esc(rsStatus)}</div>${rsFfNote ? `<div class="hbs-hint">${esc(rsFfNote)}</div>` : ''}
+            ${rsStoreErr ? `<div class="hbs-hint hbs-bad">⚠ The pool / scout list couldn't be saved on this device (${esc(rsStoreErr)}) - what you see may be gone after leaving this page.</div>` : ''}
+            ${RS_BIG && !rsBigReady ? '<div class="hbs-hint">Loading your saved pool and scout list…</div>' : ''}`;
         if (rsView === 'hub') return head + await rcHubHtml();
         if (rsView === 'set') return head + rsSetHtml();
         if (rsView === 'scout') return head + rsScoutHtml();
