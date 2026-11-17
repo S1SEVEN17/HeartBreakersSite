@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.71
+// @version      0.2.72
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.71';
+    const VERSION = '0.2.72';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -103,6 +103,7 @@
         rsView: 'hbs_rs_view', rsSort: 'hbs_rs_sort', rsPf: 'hbs_rs_pf',
         alerts: 'hbs_alerts',
         alertSeen: 'hbs_alert_seen',
+        uiPdaMig: 'hbs_ui_pda_mig272',
         ui: 'hbs_ui',
         annDismiss: 'hbs_ann_dismiss',
         upd: 'hbs_update',
@@ -3672,7 +3673,8 @@
     }
     setInterval(() => refreshBadges(false), 30000);
 
-    const UI_DEF = { compact: false, pin: true };
+    const UI_DEF = { compact: isPDA(), pin: true };
+    if (isPDA() && !store.get(K.uiPdaMig, 0)) { store.set(K.uiPdaMig, 1); store.set(K.ui, Object.assign({}, store.get(K.ui, {}) || {}, { compact: true })); }
     const uiOpt = k => Object.assign({}, UI_DEF, store.get(K.ui, {}) || {})[k];
     function applyUi() { if (panel) panel.classList.toggle('hbs-compact', !!uiOpt('compact')); drawPin(); }
 

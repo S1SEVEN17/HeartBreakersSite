@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.71
+// @version      0.2.72
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,8 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.72 (Nov 16 2026) - 📱 Torn PDA: Compact mode is now on by default, and is switched on once for Suites that
+ *          were already installed. You can still turn it off in ⚙ → Display.
  *  v0.2.71 (Nov 16 2026) - 📡 Fresher data with fewer repeated reads: the Suite feeding the crime list now also passes
  *          the war + chain state (every minute) and the completed crimes (every 3 minutes) to the Hub; the ⚔ War tab
  *          shares one enemy-faction reading between everyone who has it open (status updated about every 30 s;
@@ -450,7 +452,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.71';
+    const VERSION = '0.2.72';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -530,6 +532,7 @@
         rsView: 'hbs_rs_view', rsSort: 'hbs_rs_sort', rsPf: 'hbs_rs_pf',   // Recruit tab view / sort / pool filters
         alerts: 'hbs_alerts',                  // 🔔 alert settings {vol, desktop, pdaNotif, pdaAlarm, wake, panicMode, k:{a1..retal}} (0.2.3)
         alertSeen: 'hbs_alert_seen',           // 🔔 alerts already seen (the badge counts only new ones) (0.2.2)
+        uiPdaMig: 'hbs_ui_pda_mig272',         // (0.2.72) 1 = compact mode was switched on once on this Torn PDA device
         ui: 'hbs_ui',                          // display: {compact, pin}
         annDismiss: 'hbs_ann_dismiss',         // id of the announcement this device dismissed (0.2.66)
         upd: 'hbs_update',                     // update check {at, ver, url, dismissed}
@@ -4629,7 +4632,10 @@
     // DISPLAY OPTIONS (0.2.1): 🗜 compact mode (smaller cards / text - handy on PDA) and the 📌 pinned chain tile.
     // Per device (K.ui).
     // =====================================================================
-    const UI_DEF = { compact: false, pin: true };
+    const UI_DEF = { compact: isPDA(), pin: true };          // (0.2.72) Torn PDA: compact by default
+    // (0.2.72) Torn PDA, once per device: an already-saved choice is switched to compact too (the member can switch it
+    // back off in ⚙ → Display afterwards - that choice then sticks)
+    if (isPDA() && !store.get(K.uiPdaMig, 0)) { store.set(K.uiPdaMig, 1); store.set(K.ui, Object.assign({}, store.get(K.ui, {}) || {}, { compact: true })); }
     const uiOpt = k => Object.assign({}, UI_DEF, store.get(K.ui, {}) || {})[k];
     function applyUi() { if (panel) panel.classList.toggle('hbs-compact', !!uiOpt('compact')); drawPin(); }
 
