@@ -63,7 +63,8 @@
 //   budgetMs  time for the spawn optimizer's extra passes (page ~900, gatekeeper 0 = one pass)
 //   now       ms (default Date.now()) - for the queue window
 //   rotate    Set of crime names leaders ROTATE (oc_config 'rotate'; prerequisites are added by the page)
-//   lastRuns  {crime: [[pids of the latest completed run], [the run before], ...]} - for the rotation's mix rule
+//   lastRuns  (REMOVED Nov 17 2026, user: "Remove the 'rotation mix' rule. Users should be allowed to rejoin the same
+//             crimes always.") - ignored if passed; nothing looks at who ran a crime last.
 //   delays    {pid: {n, long, hrs, runs}} - members' crime delays in the last 30 days (placement cost, see delayCost)
 //   holdLog   {crime: ms} SPAWN HOLD cooldowns from the last run (stats.hold_log) - see SPAWN HOLDS below
 //   scriptUsers  Set of pids who use the OC Optimizer script (asked for their assignment in the last few days), or
@@ -94,8 +95,7 @@
 //   they free up before their turn: the i-th new joiner (soonest free first) must be free by
 //   now + (planning left for the members already in it) + 24 h x i. Rotated crimes go first,
 //   and at most floor(pool / seats) recruiting instances get rotation at once (pool = members with a rate >= lowest role in one of its roles).
-//   MIX: best rates win, but a pool member who sat out the latest completed run gets priority, so nobody who
-//   qualifies sits out two runs in a row. While no instance is recruiting, pool members get normal crimes.
+//   MIX: REMOVED (Nov 17 2026, user: members may always rejoin the same crimes) - best rates win, nothing else. While no instance is recruiting, pool members get normal crimes.
 //   fresh     true = ignore prev (except locked teams) - the page's "Auto-build" from scratch
 //   weights   ROLE WEIGHTS (Nov 2026, tornprobability.com GetRoleWeights): {CrimeKey: {RoleKey: weight}} - how much each
 //             role's pass rate moves the crime's success. Team success = the WEIGHTED average of its members' rates
@@ -335,7 +335,6 @@ export function ocPlan(X) {
     mine.filter(c => c.status === "Recruiting").sort((a, b) => (b.slots || []).filter(x => x.user).length - (a.slots || []).filter(x => x.user).length)
       .forEach(c => { if (used < max) { ROT_ON.add(String(c.id)); used++; } });
   }
-  const lastOf = n => ((X.lastRuns || {})[n] || [])[0] || null;    // pids in the latest completed run of n
 
   // ---- spawn holds / no-shows / script users (see the header) ----
   // SPAWN HOLDS REMOVED (Nov 13 2026, user: "Remove ... spawn alerts ... always fill existing crimes"): HOLD is always 0
@@ -660,13 +659,11 @@ export function ocPlan(X) {
   const skip = (c, reason, x) => skipped.push(Object.assign({crime: c.name, crime_id: c.id,
     filled: (c.slots || []).filter(sl => sl.user).length + "/" + (c.slots || []).length, reason}, x || {}));
   // ROTATION fill: free + spawn-team members + pool members still in a Planning crime who free up before their
-  // join-order turn. Score = pay per day there - half their best elsewhere, + a large MIX bonus for pool members who
-  // sat out the latest run, - a little per day of waiting (free members first when it's otherwise equal). The
+  // join-order turn. Score = pay per day there - half their best elsewhere (MIX bonus removed Nov 17 2026),
+  // - a little per day of waiting (free members first when it's otherwise equal). The
   // picked members are then checked in join order (soonest free first): the i-th must be free by
   // now + planning left + 24 h x i; a member who isn't is left out and the fill retried.
   function rotFill(c, roles, open, fixedSum, pool, k, nsBan, leafOk) {
-    const last = lastOf(c.name), pl = poolOf[c.name] || new Set(), inNow = new Set();
-    [...inst.values()].forEach(x => { if (x.name === c.name && String(x.id) !== String(c.id)) (x.slots || []).forEach(sl => { if (sl.user) inNow.add(Number(sl.user.id)); }); });
     const base = planLeft(c), ban = new Set();
     const fOf = pid => busy.has(Number(pid)) ? freeAt.get(Number(pid)) : NOW;
     for (let tries = 0; tries < 6; tries++) {

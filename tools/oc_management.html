@@ -647,7 +647,7 @@ const planScore = teams => teams.reduce((s, t) => s + (teamExp(t) || 0) + 1 + (t
 // crime can't reach the target), then "needs spawn" teams for members left over (pay-per-day optimizer, ~1 s).
 function autoBuild() {
   const keep = BOARD.teams.filter(t => t.lock);
-  const lastRuns = {}; Object.entries(D.config.last_runs || {}).forEach(([k, v]) => { lastRuns[k] = (v || []).map(l => new Set(l)); });
+  // (lastRuns / the rotation mix rule removed Nov 17 2026 - members may always rejoin the same crimes)
   const r = ocPlan({crimes: D.feed || [], prev: keep, fresh: true, catalog: CFG.catalog, members: CFG.members,
     rotate: new Set(),   // rotation removed Nov 13 2026 lastRuns, delays: D.config.delays || {},
     opts: OPT, disabled: new Set(D.config.disabled || []), rateOf: (pid, crime, label) => rateOf(pid, crime, label),

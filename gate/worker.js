@@ -1759,29 +1759,8 @@ async function ocConfig(env, envName) {
   out.rotate = [];   // ROTATION REMOVED (Nov 13 2026, user) - any saved rotated crimes are ignored
   return out;
 }
-// ROTATION mix rule (Nov 2026): who was in the latest completed runs of each rotated crime (oc_hist, newest first)
-// -> {crime: [[pids of the latest run], [pids of the run before]]}
-async function ocLastRuns(env, envName, names) {
-  if (!names || !names.length) return {};
-  // (D1 ROW READS, Nov 17 2026) this reads the whole history, and the planner asks on every re-plan (every minute):
-  // the answer is kept in oc_snap hub 'lastruns:<env>' for OC_LASTRUNS_MS and dropped when new history arrives (ocFeedPull)
-  const key = "lastruns:" + envName, want = JSON.stringify(names);
-  const memo = await ocSnapGet(env, "hub", key).catch(() => null);
-  if (memo && memo.data && memo.data.names === want && Date.now() - memo.as_of < OC_LASTRUNS_MS) return memo.data.out || {};
-  const {results} = await env.OC_DB.prepare(
-    `WITH h AS (SELECT json_extract(data, '$.name') AS crime, data,
-                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
-                FROM oc_hist WHERE env = ? AND json_extract(data, '$.name') IN (SELECT value FROM json_each(?)))
-     SELECT crime, n, json_extract(j.value, '$.user.id') AS pid FROM h, json_each(h.data, '$.slots') AS j WHERE n <= 2`)
-    .bind(envName, JSON.stringify(names)).all();
-  const out = {};
-  for (const r of results || []) { if (r.pid == null) continue;
-    const l = out[r.crime] || (out[r.crime] = []); (l[r.n - 1] || (l[r.n - 1] = [])).push(Number(r.pid)); }
-  for (const k of Object.keys(out)) out[k] = Array.from(out[k], x => x || []);
-  await ocSnapPut(env, "hub", key, Date.now(), JSON.stringify({names: want, out}), "hub").run().catch(() => {});
-  return out;
-}
-const OC_LASTRUNS_MS = 30 * 60e3;
+// (ocLastRuns - who ran each rotated crime last - removed Nov 17 2026 with the rotation mix rule; user: "Users should
+// be allowed to rejoin the same crimes always.")
 
 async function ocPlanRoute(env, ctx, req) {
   if (req.method === "OPTIONS") return new Response(null, {status: 204, headers: OC_CORS});
@@ -2032,7 +2011,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     const envName = url.searchParams.get("env");
     if (!OC_ENVS.has(envName)) return Response.json({ok: false, error: "env must be test or prod"}, {status: 400});
     if (sub === "config.json") { const c = await ocConfig(env, envName);
-      c.last_runs = await ocLastRuns(env, envName, c.rotate).catch(() => ({}));   // for the page's Auto-build (rotation mix rule)
+      // (c.last_runs removed Nov 17 2026 - the rotation mix rule is gone: members may always rejoin the same crimes)
       c.delays = ((await ocSnapGet(env, "hub", "delay-stats").catch(() => null)) || {}).data || {};   // members' delay record
       c.reconfigured = ((await ocSnapGet(env, "hub", "plan:reconfigured").catch(() => null)) || {}).data || null;   // last reconfigure
       const pst = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
@@ -2848,7 +2827,6 @@ async function ocFeedPull(env) {
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) newHist = true; } catch (e) { fail("backfill", e); }
-  if (newHist) await env.OC_DB.prepare("DELETE FROM oc_snap WHERE env = 'hub' AND ds IN ('lastruns:prod', 'lastruns:test')").run().catch(() => {});   // ocLastRuns re-reads
   // prices (item-reward pricing addendum, Nov 2026): EVERY reward item id in the FULL stored history (all types -
   // armor, weapons, medical, drugs, temporaries), priced at value.market_price × 0.95 (Torn's 5% market fee - the
   // value a member can actually realise), saved as {"<id>": {name, price}}. Item without a market price -> 0.
@@ -3913,8 +3891,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     return {pot: gross(ch[ch.length - 1], low) * s / all, days};
   };
   const delays = await ocDelayStats(env, now).catch(() => ({}));
-  const lastRuns = {};
-  for (const [k, v] of Object.entries(await ocLastRuns(env, "prod", cfg.rotate || []).catch(() => ({})))) lastRuns[k] = v.map(l => new Set(l));
+  const lastRuns = {};   // ROTATION MIX RULE REMOVED (Nov 17 2026, user: "Users should be allowed to rejoin the same crimes always.")
   // RECONFIGURE (Nov 2026, the user's rule): a slot reserved for one member was taken by SOMEONE ELSE -> every
   // reservation is planned again (ocPlan reshuffle), so the bumped member gets a new spot and everyone queued is in
   // the most efficient place. (A leader's replacement - the old member still sitting in the slot - doesn't count.)
