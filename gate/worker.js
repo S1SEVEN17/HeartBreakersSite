@@ -3307,7 +3307,9 @@ async function ocMine(env, pid) {
                   succ: (() => { const o = succOf(t.crime, (t.roles || []).map(x => ({position: x.position, pid: x.pid, rate: x.rate})), t.succ); return o.success; })(),
                   difficulty: t.difficulty ?? null, pay: payOf(c, t.crime), detail: c ? detail(c) : null};
   }
-  return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment};
+  // disabled (HB Suite 0.2.74): the crime NAMES leaders switched off in OC Management - the Suite blocks their Join
+  // buttons on Torn's crimes page
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment, disabled: Array.isArray(cfg.disabled) ? cfg.disabled : []};
 }
 async function ocSpawnAlerts(env) {
   const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
