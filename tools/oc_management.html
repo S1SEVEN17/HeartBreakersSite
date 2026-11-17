@@ -858,8 +858,17 @@ function teamCard(t) {
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
     <div class="tag">${t.roles.filter(r => r.pid != null).length}/${t.roles.length} filled${mn != null ? ` · lowest role ${mn}%` : ""}${a != null && a < OPT.target ? ` · below the ${OPT.target}% target` : ""}</div>
     <div class="tag">${teamAvg(t) == null ? "" : payLine(t, true)}</div>
+    ${riskLine(t)}
     ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(SPAWN && SPAWN.get(t.id))}
     ${rows}</div>`;
+}
+// ⚠ FEASIBILITY (Nov 16 2026): the planner's warning on a part-filled crime that can't be finished with the current
+// roster (gate/oc_planner.js t.risk). A warning only - the plan is unchanged.
+function riskLine(t) {
+  const k = t && t.risk; if (!k) return "";
+  const txt = k.why === "role" ? `nobody in the faction qualifies for ${(k.roles || []).map(esc).join(", ")}`
+    : `the best possible team only reaches ${k.best}% (target ${OPT.target}%)`;
+  return `<div class="tag bad" title="Checked against every member's known pass rates, the role minimum and the role cap - whoever they are with now.">⚠ May not be finishable: ${txt}. Members placed here could wait a long time.</div>`;
 }
 // planning progress of the member holding this slot in Torn (the feed's slot user.progress), e.g. "40%", or ""
 function planPct(t, r) {
@@ -1440,6 +1449,7 @@ function drawDeployed() {
       ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${!t.unplanned ? ` <button class="s" data-pdel="${esc(t.id)}" title="Delete this team from the deployed list">🗑</button>` : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       <div class="tag">${payLine(t, false)}</div>
+      ${riskLine(t)}
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
       <table><tr><th>Role</th><th>Member</th><th>Rate</th><th>Status</th></tr>${rows}</table></div>`;

@@ -52,7 +52,7 @@ const TORN_COMMENT = "Heart Breakers Hub"; // on every Torn call the Hub makes (
 const READ_MS = {
   chain:   { live: 30000, queued: 60000, idle: 120000 },
   attacks: { live: 30000, queued: 60000, idle: 0 },      // 0 = don't read in that state
-  members: { live: 60000, queued: 60000, idle: 0 },
+  members: { live: 30000, queued: 60000, idle: 0 },      // live 30 s since Nov 16 2026 (user: every chain read at 30 s for maximum accuracy)
 };
 const MEMBERS_HELLO_MAX_AGE_MS = 10 * 60 * 1000; // a hello re-reads the member list only if it's older than this
 

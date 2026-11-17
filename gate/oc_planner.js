@@ -992,6 +992,31 @@ export function ocPlan(X) {
     const q = r.pid != null && !r.existing && !moving && busy.has(Number(r.pid)) && freeAt.has(Number(r.pid));
     if (q) { r.queued = true; r.free_at = freeAt.get(Number(r.pid)); } else { delete r.queued; delete r.free_at; }
   }));
+  // FEASIBILITY CHECK (Nov 16 2026, user picked it from the suggestions: "With all-or-nothing removed, the planner can
+  // start crimes it can't finish. A warning when the remaining seats have no qualified members would catch that
+  // early."): a WARNING only - nothing is placed or left out because of it. For every recruiting crime that has
+  // members (in it or planned) AND open seats, the open seats are filled on paper with the best-rated members of the
+  // WHOLE roster who aren't in this team (free, busy, anywhere - they could come later), heaviest role first, by the
+  // normal rules (known rate, role minimum, role cap):
+  //   t.risk = {why: "role",   roles: [...]}   nobody in the faction qualifies for these seats
+  //   t.risk = {why: "target", best: N}        even the best possible team only averages N% (under the team target)
+  // Shown on the team in OC Management (Deployed + Team Builder). Cleared when it no longer applies.
+  teams.forEach(t => { delete t.risk;
+    if (t.kind !== "live" || !t.roles.some(r => r.pid == null) || !t.roles.some(r => r.pid != null)) return;
+    const inTeam = new Set(t.roles.filter(r => r.pid != null).map(r => Number(r.pid))), used = new Set(), missing = [];
+    const full = t.roles.map(r => r.pid != null ? r : null);
+    t.roles.map((r, i) => i).filter(i => t.roles[i].pid == null)
+      .sort((x, y) => wOf(t.crime, t.roles[y].position) - wOf(t.crime, t.roles[x].position)).forEach(i => {
+        const pos = t.roles[i].position; let b = null;
+        Object.keys(roster).map(Number).forEach(p => { if (inTeam.has(p) || used.has(p)) return;
+          const r = rateOf(p, t.crime, pos); if (!r || r.rate == null || r.rate < floorOf(t.crime, pos) || capped(p, t.crime, r.rate)) return;
+          if (!b || r.rate > b.rate) b = {pid: p, rate: r.rate}; });
+        if (b) { used.add(b.pid); full[i] = {position: pos, pid: b.pid, rate: b.rate}; } else missing.push(pos); });
+    if (missing.length) { t.risk = {why: "role", roles: missing}; return; }
+    if (full.some(r => !r || r.rate == null)) return;          // a member in it without a known rate: can't judge
+    const a = avgOf(full, t.crime);
+    if (a != null && a < O.target) t.risk = {why: "target", best: Math.round(a * 10) / 10};
+  });
   // NO-SHOW clock: every reservation in a recruiting crime gets since = when it was made (kept while it stays)
   teams.forEach(t => t.roles.forEach(r => {
     if (t.kind === "live" && r.pid != null && !r.existing) { if (!r.since) r.since = NOW; } else delete r.since; }));
