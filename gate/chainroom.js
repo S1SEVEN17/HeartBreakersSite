@@ -99,6 +99,14 @@ const CONFIRM_READ_GAP_MS = 10000;
 // by a member's script - live, no API call. A higher count from a page is taken straight away; for this long after
 // a page reading a LOWER count from a (cached) Torn API read is ignored while the page timer says the chain's alive.
 const PAGE_TRUST_MS = 45000;
+// TORN'S API OVERRULES A BAD PAGE COUNT (Nov 18 2026, user screenshot: Torn showed chain 1 with 2:26 left, the Hub held
+// 10 with the same timer - a page reading had read the wrong number (likely "Next bonus (10)"), and the "a lower API
+// count is a stale cache" rules below then threw away every correct reply while the bad reading kept the timer alive).
+// A LOWER count from Torn's API is only a stale cache for as long as Torn caches (~30 s). When every API reply for
+// API_LOW_ACCEPT_MS is lower than the Hub's count, the API wins. After that, for PAGE_DISTRUST_MS, a page reading HIGHER
+// than the Hub's count no longer moves it on its own - it asks Torn's API to confirm (like a script reading).
+const API_LOW_ACCEPT_MS = 40000;
+const PAGE_DISTRUST_MS = 10 * 60 * 1000;
 // Torn: every attack resets the chain timer to 5 minutes, and 5 minutes is the most it can ever show (user, Nov 11
 // 2026). Every timer the Hub accepts is capped at this; readings past it (+ a little clock slack) are rejected.
 const CHAIN_TIMER_MAX_MS = 300000;
@@ -851,6 +859,8 @@ export class ChainRoom {
     }
     if (c && c.current > 0 && cur < c.current) { this.requestConfirmRead(); return false; }
     if (c && c.current > 0 && cur > c.current + PAGE_MAX_JUMP) { this.requestConfirmRead(); return false; }
+    // (Nov 18 2026) after Torn's API overruled a page count, higher page counts are confirmed by the API first
+    if (c && cur > c.current && now < (this.mem.pageDistrustUntil || 0)) { this.requestConfirmRead(); return false; }
     // PAGE-READING FILTER (see the constants): the same count again - re-time only for a real difference, at most
     // once per PAGE_RETIME_GAP_MS; otherwise just keep the page trust fresh (nothing saved / broadcast)
     if (c && cur === c.current && c.expires_at
@@ -909,14 +919,27 @@ export class ChainRoom {
     // while the page timer still has time left; a SAME count with an exact `end` still refines the timer
     const pg = this.mem.chain;
     this.mem.apiSaid = { cur, left: Number(chain.timeout) || 0, at: now };   // what Torn's API last answered (🔍 Alert check)
-    if (pg && pg.page_at && now - pg.page_at < PAGE_TRUST_MS && pg.expires_at > now && cur < pg.current) return;
+    // (Nov 18 2026) the same LOWER count from the API for longer than Torn's cache lasts -> the API wins (see the constants)
+    let apiWins = false;
+    if (pg && pg.current > 0 && cur < pg.current) {
+      const lo = this.mem.apiLowSeen;
+      // continuously lower since lo.at (new hits may move both counts meanwhile - it's "lower every time" that counts)
+      if (!lo) this.mem.apiLowSeen = { at: now };
+      else if (now - lo.at >= API_LOW_ACCEPT_MS) apiWins = true;
+    } else this.mem.apiLowSeen = null;
+    if (apiWins) {
+      console.log(`chain: Torn's API kept saying ${cur} (Hub held ${pg.current} from ${pg.src}) - the API wins`);
+      this.mem.pageDistrustUntil = now + PAGE_DISTRUST_MS; this.mem.apiLowSeen = null; this.mem.apiLow = 0;
+      pg.page_at = 0;                                     // the held reading loses its page trust
+    }
+    if (!apiWins && pg && pg.page_at && now - pg.page_at < PAGE_TRUST_MS && pg.expires_at > now && cur < pg.current) return;
     // A CHAIN CAN'T END BEFORE ITS TIMER (Nov 15 2026, user: "Chain is showing inactive when not in focus, meanwhile
     // there's an active chain going on. When out of focus, it should rely on HUB updates."): the count only ever goes
     // up while the timer runs, so an API reply with a LOWER count (or 0) than the one the Hub holds - while that
     // reading's timer still has time left - is a stale / cached / not-yet-counted reply, whatever the reading came
     // from. It's ignored (and counted, mem.apiLow) instead of wiping the live chain once the 45 s page trust ran out
     // and nobody had Torn in focus. When the timer does run out, the next API read decides as before.
-    if (pg && pg.current > 0 && pg.expires_at > now && cur < pg.current) { this.mem.apiLow = (this.mem.apiLow || 0) + 1; return; }
+    if (!apiWins && pg && pg.current > 0 && pg.expires_at > now && cur < pg.current) { this.mem.apiLow = (this.mem.apiLow || 0) + 1; return; }
     this.mem.apiLow = 0;
     const exact = Number(chain.end) > 1e9;                // Torn's absolute expiry - right even from a cached reply
     let expires = cur > 0 ? this.chainExpiry(chain, now) : 0;
