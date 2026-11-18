@@ -946,6 +946,8 @@ async function sxShareOp(env, who, op, b) {
       const st = ((await ocSnapGet(env, "hub", "oc-optin").catch(() => null)) || {data: {}}).data || {};
       const seen = (Array.isArray(st.seen) ? st.seen : []).map(Number).filter(Boolean);
       out.oc_tag = seen.length ? Math.max(...seen) + ":" + seen.length : "none";
+      // + SEAT OPENED (see ocOptinPull): a free member's tag also changes when a seat opens anywhere
+      if (Array.isArray(st.seated) && !st.seated.includes(pid)) out.oc_tag += ":o" + (Number(st.opened) || 0);
     }
     if (row ? row.oc : true) {               // 🛰 nobody's script is feeding the crimes right now (see ocFeedSx)
       const ls = await env.OC_DB.prepare("SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'feed:lease'").first().catch(() => null);
@@ -1307,9 +1309,22 @@ async function ocOptinPull(env, now, crimes) {
     await env.OC_DB.prepare(`DELETE FROM oc_cpr_t WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run().catch(() => {});
   }
   const st0 = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
-  const st = {seen: Array.isArray(st0.seen) ? st0.seen : [], pending: Array.isArray(st0.pending) ? st0.pending : []};
+  const st = {seen: Array.isArray(st0.seen) ? st0.seen : [], pending: Array.isArray(st0.pending) ? st0.pending : [],
+              open: st0.open && typeof st0.open === "object" ? st0.open : {}, opened: Number(st0.opened) || 0,
+              seated: Array.isArray(st0.seated) ? st0.seated : []};
   let dirty = false;
   if (Array.isArray(crimes)) {                             // null when the crimes read failed - nothing to compare
+    // SEAT OPENED (Nov 18 2026, user: "2 3" - "a member leaving or losing a seat in any crime prompts free members to
+    // send their rates"): open seats per crime {id: n}; when a crime that was already known has MORE open seats than
+    // last time (someone left / was removed), st.opened goes up. share_ping adds it to the oc_tag of FREE members only
+    // (not seated in any crime - st.seated), so their Suites read their own pass rates once (Suite: tag changed ->
+    // send). New crimes still reach everyone through the seen list below.
+    const open = {}, seated = [];
+    crimes.forEach(c => { if (!c) return; let n = 0; (c.slots || []).forEach(sl => { if (sl.user) seated.push(Number(sl.user.id)); else n++; }); open[String(c.id)] = n; });
+    if (Object.keys(open).some(id => st.open[id] != null && open[id] > Number(st.open[id]))) { st.opened++; dirty = true; }
+    if (JSON.stringify(open) !== JSON.stringify(st.open)) { st.open = open; dirty = true; }
+    seated.sort((a, b) => a - b);
+    if (seated.join(",") !== st.seated.join(",")) { st.seated = seated; dirty = true; }
     const seen = new Set(st.seen.map(String)), ids = crimes.map(c => String(c.id));
     const fresh = ids.filter(id => !seen.has(id));
     if (fresh.length) {                                    // a NEW crime -> everyone with OC rates on is read once
