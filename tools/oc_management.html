@@ -66,7 +66,7 @@ input[type=number]{width:70px;text-align:center}
 .pstat{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:8px 0}
 .pstat div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 6px;text-align:center;display:flex;flex-direction:column;justify-content:center;min-height:78px}
 .pstat b{display:block;color:#fff;font-size:22px;line-height:1.2}.pstat span{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-top:3px}
-.pstat i{font-style:normal;color:var(--sub);font-size:11px;margin-top:1px}
+.pstat b small{display:block;font-size:13px;color:#cfc6c0;font-weight:600}.pstat i{font-style:normal;color:var(--sub);font-size:11px;margin-top:1px}
 .soon{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px 10px;margin:8px 0}.soonh{margin-bottom:4px}
 .soonr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.soonf{color:var(--gold);margin-left:auto}.soonn{color:#9fd8a8}
 @media (max-width:640px){.pstat{grid-template-columns:repeat(2,minmax(0,1fr))}.pstat div:last-child{grid-column:1/-1}}
@@ -1480,18 +1480,22 @@ function drawPlanning() {
   //   success  = the average of tornprobability's 🎲 calculated chance (teamSuccess - cached checks) over those crimes;
   //              crimes not checked yet are left out and the tile says how many were checked
   const fullP = list.filter(c => (c.slots || []).length && (c.slots || []).every(sl => sl.user));
-  let pInc = 0, pTax = 0; const pSucc = [];
+  // RANGE (Nov 18 2026, user: "Potential income/tax. Show the range of highest-lowest possible outcomes."): each crime's
+  // LOWEST recorded reward (valueOf(..., true) - the same low end the pay ranges use) to its HIGHEST, summed
+  let pInc = 0, pTax = 0, pIncLo = 0, pTaxLo = 0; const pSucc = [];
   fullP.forEach(c => { const v = valueOf(c.name); if (!v.pot) return; pInc += v.pot;
-    const ch = chainOf(c.name), sh = shareOf(ch[ch.length - 1]); if (sh > 0 && sh < 100) pTax += v.pot * (100 - sh) / sh;
+    const lo = Math.min(valueOf(c.name, true).pot || 0, v.pot); pIncLo += lo;
+    const ch = chainOf(c.name), sh = shareOf(ch[ch.length - 1]); if (sh > 0 && sh < 100) { pTax += v.pot * (100 - sh) / sh; pTaxLo += lo * (100 - sh) / sh; }
     const sc = teamSuccess({crime: c.name, roles: (c.slots || []).map(sl => ({position: feedRole(sl), pid: sl.user.id,
       rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}))});
     if (sc != null) pSucc.push(sc); });
   const pMem = fullP.reduce((a, c) => a + (c.slots || []).length, 0);
   // LAYOUT (Nov 18 2026, user: "Formatting could be better here."): .pstat = 5 equal tiles in one row on wide screens,
   // 2 per row on phones with the success tile full width; short labels + a small note line under each
+  const rngP = (lo, hi) => Math.round(lo) === Math.round(hi) ? fmt2(hi) : `<small>${fmt2(lo)} to</small>${fmt2(hi)}`;
   const tile = (v, k, n) => `<div><b>${v}</b><span>${k}</span><i>${n}</i></div>`;
   const statsP = `<div class="pstat">${tile(pMem, "Members", "in full crimes")}${tile(fullP.length, "Crimes", "full · planning")}`
-    + tile(fmt2(pInc), "Member income", "potential · highest") + tile(fmt2(pTax), "Faction tax", "potential · highest")
+    + tile(rngP(pIncLo, pInc), "Member income", "potential · lowest – highest") + tile(rngP(pTaxLo, pTax), "Faction tax", "potential · lowest – highest")
     + tile(pSucc.length ? "🎲 " + Math.round(pSucc.reduce((a, b) => a + b, 0) / pSucc.length) + "%" : "-", "Avg success", `${pSucc.length} of ${fullP.length} checked`) + `</div>`;
   $("view").innerHTML = `<div class="panel">${statsP}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
