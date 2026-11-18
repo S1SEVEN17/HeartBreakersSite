@@ -330,7 +330,7 @@ function spawnAlertsHtml(teams, sm) {
     return `<tr><td><span class="dif">D${t.difficulty ?? "?"}</span> <b>${esc(t.crime)}</b>${heldTag(t)}</td><td>${fmt$(eachPay(t.crime))}/day each</td>
       <td>${ready ? `<span class="ok">${ready} ready now</span>` : ""}${ready && q.length ? " · " : ""}${q.length ? `<span class="qd">${q.length} free in ${freeIn(nf)}${q.length > 1 ? "+" : ""}</span>` : ""}</td>
       <td class="tag">${t.roles.map(r => esc(r.name || nameOf(r.pid))).join(", ")}</td></tr>`; }).join("");
-  return `<div class="hn" style="color:var(--gold);margin-top:8px">🧪 <b>Spawn alerts</b> - these members' pass rates are too high (above the ${OPT.cap}% cap) for every open crime, so they need a harder crime. Spawn it in Torn (best pay first); the plan moves the team in on its next run.</div>
+  return `<div class="hn" style="color:var(--gold);margin-top:8px">🧪 <b>Spawn alerts</b> - these members have no open crime to go to, so a new one is needed. Spawn it in Torn (best pay first); the plan moves the team in on its next run.</div>
     <table class="spawnal"><tr><th>Crime</th><th>Pay</th><th>Members</th><th>Team</th></tr>${rows}</table>`;
 }
 const spawnHtml = sp => sp && !sp.ok ? `<div class="hn" style="color:var(--gold)">⚠️ Not available: ${esc(sp.why)}.</div>` : "";
@@ -586,7 +586,9 @@ const crimeOk = crime => { const off = new Set(D.config.disabled || []);
 // if no higher team can use them they're placed anyway at the end (nobody sits idle because of the cap).
 // CAP_UP = {member id: highest difficulty they pass a role in} - set by autoBuild; null = cap not applied.
 let CAP_UP = null;
-const capped = (pid, crime, rate) => !!CAP_UP && OPT.cap < 100 && rate > OPT.cap && (CAP_UP[pid] || 0) > (diffOf(crime) || 0);
+// REMOVED Nov 18 2026 (user: "Individual Role Cap: Remove this. Members should just prioritize pay per day, while
+// staying above the requirements.") - nobody is held back any more; kept as a no-op so the callers stay simple.
+const capped = (pid, crime, rate) => false;
 
 // Best team for one crime from a pool (Add-team suggestions + the old swap step): every role at or above minRole, the
 // team at or above the target, members chosen by MEMBER CHOICE (Nov 13 2026): script users, then free, then the
@@ -829,7 +831,7 @@ function drawBuilder() {
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100);
   // 0%-weight minimum: empty = off; never above the lowest individual role
-  num("o_cap", "cap", 50, 100);   // (the "Lowest rate for 0%-weight roles" input was removed Nov 17 2026, user)
+  // (o_cap - the role cap - removed Nov 18 2026; the "Lowest rate for 0%-weight roles" input was removed Nov 17 2026)
   num("o_ns", "noShowHours", 0, 72);   // no-shows (Nov 12 2026; spawn holds + queue removed Nov 13 2026)
   // 🛡 Safeguards (Nov 16 2026): the numbers allow 0 (= no limit), so they don't use num() (which turns 0 into the minimum)
   const num0 = (id, k, hi) => $(id).onchange = () => { const v = Math.round(+$(id).value); OPT[k] = Number.isFinite(v) ? Math.max(0, Math.min(hi, v)) : 0; saveOpts(); draw(); };
@@ -1056,9 +1058,7 @@ async function drawShadow() {
 // SUITE VERSION per member (Nov 17 2026, user: 'Members who are "Sharing CPR Rates" should show their version number of
 // the script.') - config.vers {pid: {ver, pda, at}} (gate/worker.js sx_ver), config.suite_latest
 function suiteVer(pid) {
-  // (Nov 18 2026) "🔑 no key" = the member's Suite signed in from the page, without an API key - identified only, never
-  // placed automatically, pass rates read from Torn's crimes page
-  const nk = (D.config.keyless || []).map(String).includes(String(pid)) ? ' <span class="tag" title="Suite signed in without an API key - not placed automatically">🔑 no key</span>' : "";
+  const nk = "";   // ("🔑 no key" tag removed with keyless sign-in, Nov 18 2026)
   const v = (D.config.vers || {})[String(pid)]; if (!v || !v.ver) return '<span class="tag">-</span>' + nk;
   const n = t => String(t || "").split(".").map(Number), a = n(v.ver), b = n(D.config.suite_latest);
   const old = D.config.suite_latest && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0;
@@ -1139,7 +1139,7 @@ let SET_OPEN = LS.get("hb_oc_set_open", true);
 function settingsHtml() {
   const row = (label, ctl, note) => `<div class="srow"><label>${label}</label><div class="sctl">${ctl}</div><div class="snote">${note}</div></div>`;
   const numIn = (id, v, lo, hi, unit, w) => `<input type="number" id="${id}" min="${lo}" max="${hi}" value="${v ?? ""}"${w ? ` style="width:${w}px"` : ""}${v == null ? ' placeholder="recorded"' : ""}> ${unit}`;
-  return `<details class="sets"${SET_OPEN ? " open" : ""}><summary><b>⚙️ Settings</b> <span class="tag">automatic ${OPT.auto !== false ? "on" : "off"} · team ${OPT.target}% · lowest role ${OPT.minRole}% · cap ${OPT.cap}% - used by the Team Builder and the automatic assignment</span></summary>
+  return `<details class="sets"${SET_OPEN ? " open" : ""}><summary><b>⚙️ Settings</b> <span class="tag">automatic ${OPT.auto !== false ? "on" : "off"} · team ${OPT.target}% · lowest role ${OPT.minRole}% - used by the Team Builder and the automatic assignment</span></summary>
     <div class="sgrid">
       <div class="sgrp"><h4>🤖 Automatic assignment</h4>
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
@@ -1152,7 +1152,7 @@ function settingsHtml() {
       <div class="sgrp"><h4>🎯 Success rates</h4>
         ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "Members are only added to a crime while the members in it plus the new ones reach this (their weighted success). For a full team the Hub has checked, it is tornprobability's calculated success chance (🎲).")}
         ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), "Nobody is put in a role they pass below this.")}
-        ${row("Individual role cap", numIn("o_cap", OPT.cap, 50, 100, "%"), "Someone who passes a role above this is moved up to a harder crime they can pass. 100 = off.")}
+        <!-- "Individual role cap" (opts.cap) removed Nov 18 2026 - user: "Members should just prioritize pay per day, while staying above the requirements." -->
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>
         ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the seat is planned again, and the best member for it may be them again. 0 = never.")}
@@ -1167,7 +1167,7 @@ function settingsHtml() {
         ${row("Move a member at most once every", numIn("o_sfc", OPT.safeCooldown, 0, 168, "hours"), "After being moved, a member isn't moved anywhere else for this long. 0 = no limit.")}
         <!-- "Never back to the crime they left for" (safeBack) removed Nov 18 2026 - user: "Remove the rule." -->
         ${row("Protect crimes that need them", `<label><input type="checkbox" id="o_sfp"${OPT.safeProtect !== false ? " checked" : ""}> on</label>`,
-              "Nobody is moved out of a paused crime or a crime that will pause within 12 hours.")}
+              "Nobody is moved out of a crime that is paused or will pause within 24 hours (one planning stage) - unless another member who runs the Suite, isn't in a crime and passes that role can take their seat.")}
       </div>
       <!-- (Nov 18 2026) the empty "🧪 Spawn alerts" group removed - its settings were removed earlier -->
       <div class="sgrp"><h4>💰 Pay</h4>

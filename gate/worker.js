@@ -442,31 +442,20 @@ async function sxMember(env, ctx, pid) {
   if (!mm) return {error: "Not a current Heart Breakers member."};
   return {who: {id: Number(pid), name: mm.name, position: mm.position || "", leader: isLeader(env, mm.position), loans: isLoanStaff(env, mm.position)}};
 }
-// KEYLESS SIGN-IN (Nov 18 2026, user: "For members who install the script but do not enter an API Key, scrape their page
-// for their username ... Identify for now; do not place keyless members until instructed."): a Suite without a key
-// reads its own name + ID from Torn's page and signs in with op hello {keyless: 1}. The name AND the ID must both match
-// one current member on the Hub's list. Its session code is "hbsx2k.<pid>.<exp>.<sig>" (signed "sx2k|pid|exp") and
-// gives MEMBER access only - never leader / loan-staff, whatever their position. Keyless members are listed in
-// oc_snap hub 'sx:keyless' {pid: last seen ms} (a normal key sign-in removes them) - the automatic planner leaves them
-// out (they're treated like members without the script), OC Management's Rate sharing list marks them.
-const sxSignK = async (env, pid, exp) => b64u(await crypto.subtle.sign("HMAC", await hmacKey(env), enc.encode(`sx2k|${pid}|${exp}`)));
-async function sxKeylessMark(env, pid, on) {
-  const r = await ocSnapGet(env, "hub", "sx:keyless").catch(() => null), K = Object.assign({}, (r && r.data) || {}), k = String(pid);
-  if (on) { if (K[k] && Date.now() - Number(K[k]) < 3600e3) return; K[k] = Date.now(); }
-  else { if (!(k in K)) return; delete K[k]; }
-  await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'sx:keyless', ?, ?, 'hub') " +
-    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(Date.now(), JSON.stringify(K)).run().catch(() => {});
-}
-async function sxKeyless(env) { const r = await ocSnapGet(env, "hub", "sx:keyless").catch(() => null); return new Set(Object.keys((r && r.data) || {}).map(Number)); }
+// KEYLESS SIGN-IN - REMOVED Nov 18 2026 (user: "Keyless Suite users identification isnt working. Remove this until a
+// later time." / "These never worked, names weren't being detected by the script automatically."). It was: a Suite
+// without a key read its own name + ID from Torn's page (ID from #websocketConnectionData "userID" / the
+// topBannerInitData script, name from the sidebar's "Name:" link a.menu-value___), signed in with hello {keyless},
+// got a member-only "hbsx2k." session, and shared pass rates read from the crimes page's open seats (op cpr_page,
+// checked against the Hub's crime list). See git history (commits "keyless") to rebuild it.
 async function sxWho(env, ctx, code) {
-  const m = /^(hbsx2k?)\.(\d+)\.(\d+)\.([\w-]+)$/.exec(String(code || "").trim());
+  const m = /^hbsx2\.(\d+)\.(\d+)\.([\w-]+)$/.exec(String(code || "").trim());
   if (!m) return {error: "Signing in again..."};
-  const [, kind, pid, exp, sig] = m, keyless = kind === "hbsx2k";
+  const [, pid, exp, sig] = m;
   let ok = false;
-  try { ok = await crypto.subtle.verify("HMAC", await hmacKey(env), unb64u(sig), enc.encode(`${keyless ? "sx2k" : "sx2"}|${pid}|${exp}`)); } catch (e) { ok = false; }
+  try { ok = await crypto.subtle.verify("HMAC", await hmacKey(env), unb64u(sig), enc.encode(`sx2|${pid}|${exp}`)); } catch (e) { ok = false; }
   if (!ok || Number(exp) < Date.now()) return {error: "Signing in again..."};
   const a = await sxMember(env, ctx, pid);
-  if (a.who && keyless) Object.assign(a.who, {leader: false, loans: false, keyless: true});   // member access only
   return a.who ? {who: a.who, exp: Number(exp)} : a;
 }
 const sxMe = (who) => ({id: who.id, name: who.name, position: who.position, leader: !!who.leader, loans: !!(who.leader || who.loans)});   // loans: may see the OC item-loan list (isLoanStaff)
@@ -475,21 +464,12 @@ async function sxRoute(env, ctx, req) {
   if (req.method !== "POST") return sxJson({ok: false, error: "POST only"}, 405);
   let b; try { b = await req.json(); } catch (e) { return sxJson({ok: false, error: "bad request"}, 400); }
   // sign in: client-reported identity (the script read it from Torn with its own key; no key comes here)
-  if (b && b.op === "hello" && b.keyless) {
-    // KEYLESS (see sxWho): ID + name read from Torn's page; both must match the same current member
-    const l = await sxMember(env, ctx, b.pid);
-    const norm = x => String(x || "").trim().toLowerCase();
-    if (!l.who || !norm(b.name) || norm(b.name) !== norm(l.who.name)) return sxJson({ok: false, error: "Couldn't confirm who you are from the page - add your API key in ⚙."}, 403);
-    const exp = Date.now() + SX_HOURS * 36e5;
-    await sxKeylessMark(env, l.who.id, true);
-    Object.assign(l.who, {leader: false, loans: false, keyless: true});
-    return sxJson({ok: true, code: `hbsx2k.${l.who.id}.${exp}.${await sxSignK(env, l.who.id, exp)}`, exp, me: Object.assign(sxMe(l.who), {keyless: true})});
-  }
+  if (b && b.op === "hello" && b.keyless)                    // keyless sign-in removed (Nov 18 2026, see above)
+    return sxJson({ok: false, error: "Add your API key first: ⚙ → API key."}, 403);
   if (b && b.op === "hello") {
     if (String(b.faction) !== String(env.FACTION_ID)) return sxJson({ok: false, error: "Heart Breakers members only."}, 403);
     const l = await sxMember(env, ctx, b.pid);
     if (!l.who) return sxJson({ok: false, error: l.error}, 403);
-    await sxKeylessMark(env, l.who.id, false);                   // signed in with a key again
     const exp = Date.now() + SX_HOURS * 36e5;
     return sxJson({ok: true, code: `hbsx2.${l.who.id}.${exp}.${await sxSign(env, l.who.id, exp)}`, exp, me: sxMe(l.who)});
   }
@@ -497,9 +477,7 @@ async function sxRoute(env, ctx, req) {
   if (!a.who) return sxJson({ok: false, error: a.error, relink: true}, 401);
   const who = a.who, op = String(b.op || "");
   const leadersOnly = () => sxJson({ok: false, error: "Leaders only."}, 403);
-  if (op === "whoami") return sxJson({ok: true, me: Object.assign(sxMe(who), who.keyless ? {keyless: true} : {}), exp: a.exp});
-  // 📄 PASS RATES FROM THE CRIMES PAGE (keyless members only - see sxWho / ocPageRates)
-  if (op === "cpr_page") { if (!who.keyless) return sxJson({ok: false, error: "Members with a key share through the API."}, 403); return sxJson(await ocPageRates(env, who, b)); }
+  if (op === "whoami") return sxJson({ok: true, me: sxMe(who), exp: a.exp});
   if (op === "read") {
     const area = b.area === "l" ? "l" : "m", path = String(b.path || "");
     if (area === "l" && !who.leader) return leadersOnly();
@@ -1298,37 +1276,6 @@ async function ocShareAllOn(env, now) {
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'sx_oc_all_on', '1', ?, 'hub') ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts").bind(now).run();
   console.log("oc share all-on: script rows " + ((r.meta && r.meta.changes) || 0) + ", stored keys " + keys);
 }
-// 📄 PASS RATES READ FROM TORN'S CRIMES PAGE (Nov 18 2026, keyless members - user: "When they open the crimes/recruiting
-// tabs, scrape their pass rates (empty roles) for the CPR Rates ... The last thing I want to do is scrape the wrong
-// information"). b.crimes = [{id, n, slots: [{i, labels: [...], rate}]}] - n = seats the card shows, i = the slot's place, labels =
-// short texts seen in it, rate = the one number shown in an OPEN seat. Every reading is checked against the Hub's own
-// crime list before it's kept: the crime must be recruiting right now, slot i must exist and be open, the role's name
-// (without "#n") must be one of the labels, rate 0-100. Stored under the crime's and role's names from Torn's API (not
-// the page's), source "page". Anything that fails is dropped and counted (answer: kept / dropped).
-async function ocPageRates(env, who, b) {
-  const list = Array.isArray(b.crimes) ? b.crimes.slice(0, 60) : [];
-  const snap = await ocSnapGet(env, "prod", "crimes").catch(() => null);
-  const byId = new Map(((snap && snap.data) || []).filter(c => c && c.id != null).map(c => [String(c.id), c]));
-  const base = t => String(t || "").replace(/#\s*\d+/g, "").replace(/\s+\d+(\.\d+)?\s*%?$/, "").replace(/\s+/g, " ").trim().toLowerCase();
-  const roles = {}; let kept = 0, dropped = 0;
-  for (const x of list) {
-    const c = byId.get(String(x && x.id));
-    const slots = Array.isArray(x && x.slots) ? x.slots.slice(0, 12) : [];
-    // the page must show as many seats as Torn's API lists (x.n) - otherwise its seat order can't be trusted
-    if (!c || c.status !== "Recruiting" || Number(x.n) !== (c.slots || []).length) { dropped += slots.length; continue; }
-    for (const y of slots) {
-      const i = Number(y && y.i), rate = Number(y && y.rate), sl = Number.isInteger(i) ? (c.slots || [])[i] : null;
-      const want = sl ? base((sl.position_info && sl.position_info.label) || sl.position) : "";
-      const labels = (Array.isArray(y && y.labels) ? y.labels : []).slice(0, 6).map(base);
-      if (!sl || sl.user || !want || !labels.includes(want) || !Number.isFinite(rate) || rate < 0 || rate > 100) { dropped++; continue; }
-      roles[ocFb(c.name) + "|" + ocFb(ocBaseRole((sl.position_info && sl.position_info.label) || sl.position))] = Math.round(rate);
-      kept++;
-    }
-  }
-  if (kept) await ocStoreRates(env, who.id, who.name, roles, "page");
-  if (kept) await env.OC_DB.prepare("UPDATE oc_cpr SET ts = ? WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Date.now(), Number(env.FACTION_ID), Number(who.id)).run().catch(() => {});
-  return {ok: true, kept, dropped};
-}
 async function ocStoreRates(env, id, name, roles, src) {
   const n = Object.keys(roles).length;
   if (n && src) await shareSrcMark(env, id, "oc", src);
@@ -2001,8 +1948,8 @@ async function ocPlanObj(env, envName, id) {
     // off = their saved choice is OC pass rates off
     const seen = await ocScriptSeen(env, envName).catch(() => ({}));
     const sx = new Map(((await env.OC_DB.prepare("SELECT pid, oc FROM sx_share").all().catch(() => ({results: []}))).results || []).map(r => [Number(r.pid), Number(r.oc)]));
-    const vers = await sxVers(env), keyless = await sxKeyless(env).catch(() => new Set());
-    sharing = [...members.entries()].map(([pid, m]) => ({pid: Number(pid), name: (m && m.name) || ("#" + pid), keyless: keyless.has(Number(pid)),
+    const vers = await sxVers(env);
+    sharing = [...members.entries()].map(([pid, m]) => ({pid: Number(pid), name: (m && m.name) || ("#" + pid),
       sharing: by.has(Number(pid)), last: by.get(Number(pid)) || null, ver: (vers[String(pid)] || {}).ver || null, pda: !!(vers[String(pid)] || {}).pda,
       script: seen[String(pid)] != null || sx.has(Number(pid)), off: sx.get(Number(pid)) === 0}))
       .sort((a, b) => (a.sharing - b.sharing) || a.name.localeCompare(b.name));
@@ -2082,7 +2029,6 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.sources = ((await env.OC_DB.prepare("SELECT env, ds, as_of, by FROM oc_snap WHERE (env = 'prod' AND ds IN ('crimes','roster')) OR (env = 'hub' AND ds IN ('recent','now','war:feed'))")
         .all().catch(() => ({results: []}))).results || []).map(r => ({ds: r.ds, at: Number(r.as_of) || 0, by: r.by === "hub" ? "" : String(r.by || "").replace(/\s*\[\d+\].*$/, "")}));
       c.vers = await sxVers(env);                                    // Suite version per member (Sharing tab)
-      c.keyless = [...await sxKeyless(env).catch(() => new Set())];  // (Nov 18 2026) Suites signed in WITHOUT a key (sxWho)
       c.suite_latest = SUITE_LATEST;
       { const ls = await ocSnapGet(env, "hub", "feed:lease").catch(() => null);          // 🛰 who feeds the crime list (ocFeedSx)
         c.feed = ls && ls.data ? {name: ls.data.name || "", at: ls.as_of || Number(ls.data.last) || null, live: Date.now() - ls.as_of < OC_FEED_LEASE_MS} : null; }
@@ -2891,6 +2837,19 @@ async function ocFeedPull(env) {
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) newHist = true; } catch (e) { fail("backfill", e); }
+  // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
+  // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
+  try {
+    if (!(await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds = 'cleanup:keyless'").first())) {
+      await shareSrcTable(env);
+      await env.OC_DB.batch([
+        env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND player_id IN (SELECT pid FROM share_src WHERE kind = 'oc' AND src = 'page' " +
+          "AND pid NOT IN (SELECT pid FROM share_src WHERE kind = 'oc' AND src <> 'page'))"),
+        env.OC_DB.prepare("DELETE FROM share_src WHERE kind = 'oc' AND src = 'page'"),
+        env.OC_DB.prepare("DELETE FROM oc_snap WHERE env = 'hub' AND ds = 'sx:keyless'"),
+        env.OC_DB.prepare("INSERT OR REPLACE INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'cleanup:keyless', ?, '1', 'hub')").bind(now)]);
+    }
+  } catch (e) { console.log("keyless cleanup: " + String(e.message || e).slice(0, 80)); }
   // prices (item-reward pricing addendum, Nov 2026): EVERY reward item id in the FULL stored history (all types -
   // armor, weapons, medical, drugs, temporaries), priced at value.market_price × 0.95 (Torn's 5% market fee - the
   // value a member can actually realise), saved as {"<id>": {name, price}}. Item without a market price -> 0.
@@ -3991,8 +3950,6 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
       else delete r0.told; } }
   const lastStats = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);   // SPAWN HOLD cooldowns (hold_log)
   const seen = await ocScriptSeen(env, "prod");
-  // KEYLESS members (sxWho) are NOT script users for placement (user: "do not place keyless members until instructed")
-  try { for (const k of await sxKeyless(env)) delete seen[String(k)]; } catch (e) { /* the full list */ }
   // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability.com's success chance for a full team,
   // from the cache (oc_snap hub 'tp:success', filled by tpSuccessForTeams after each run) - null when not checked yet
   const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;

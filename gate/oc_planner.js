@@ -248,7 +248,7 @@ export function ocPlan(X) {
   // Under V2 (shadow) the V2 numbers are used. stats.safe_blocked = members each check held back.
   const SAFE = V2 ? {minGain: V2.minGain, cooldownHours: V2.cooldownHours, backHours: V2.backHours, protect: true, pauseHours: V2.pauseHours}
     : (X.moveLog && O.safeOn !== false ? {minGain: Number(O.safeGain ?? 10) || 0, cooldownHours: Number(O.safeCooldown ?? 24) || 0, backHours: 0,
-                                          protect: O.safeProtect !== false, pauseHours: 12} : null);
+                                          protect: O.safeProtect !== false, pauseHours: 24} : null);   // 24 h + replacement check (Nov 18 2026, see safeBlock)
   const moveLog = X.moveLog || {}, v2Blocked = {gain: new Set(), source: new Set(), cooldown: new Set()};   // members a safeguard held back (at least once)
   let curSlack = 0;                                        // V2: points under the target / role minimums for the crime being filled
   const TGT = () => O.target - curSlack;
@@ -327,7 +327,10 @@ export function ocPlan(X) {
   const paused = c => !!c && c.status === "Recruiting" && (c.slots || []).some(sl => sl.user) && (c.slots || []).some(sl => !sl.user)
     && (c.slots || []).every(sl => !sl.user || (Number(sl.user.progress) || 0) >= 100);
   let curPaused = false;
-  const capped = (pid, crime, rate) => v3Low(pid) || (capOn && !curPaused && O.cap < 100 && rate > O.cap && (capUp[pid] || 0) > (diffOf(crime) || 0));   // v3Low: the V3 pay floor (below)
+  // INDIVIDUAL ROLE CAP REMOVED (Nov 18 2026, user: "Individual Role Cap: Remove this. Members should just prioritize pay
+  // per day, while staying above the requirements."): opts.cap is ignored - a strong member is no longer held back from
+  // an easier crime; pay per day decides (above the role minimum + team target). Only the V3 pay floor is left here.
+  const capped = (pid, crime, rate) => v3Low(pid);   // v3Low: the V3 pay floor (below)
   // rotation pools + how many RECRUITING instances of each rotated crime get rotation queueing at once:
   // floor(pool / seats), at least 1, most-filled first. (The join-order deadlines decide who can actually make it.)
   const poolOf = {};
@@ -651,13 +654,30 @@ export function ocPlan(X) {
     if (paused(c) || (c.ready_at && c.ready_at * 1000 <= NOW)) return 2;
     return c.ready_at && c.ready_at * 1000 - NOW <= hours * 3600e3 ? 1 : 0; };
   const urgency = c => V2 ? urgRaw(c, V2.pauseHours) : 0;
+  // the role member `pid` holds in crime instance xc (sitting in it, or reserved for it this plan)
+  const roleIn = (pid, xc) => {
+    const sl = (xc.slots || []).find(x => x.user && Number(x.user.id) === Number(pid)); if (sl) return slotLabel(sl);
+    for (const t of teams) if (t.kind === "live" && String(t.crime_id) === String(xc.id)) { const r = (t.roles || []).find(x => Number(x.pid) === Number(pid)); if (r) return r.position; }
+    return null;
+  };
+  // is there someone else who could take `pid`'s seat in xc right now? (see PROTECT in safeBlock)
+  const hasReplacement = (pid, xc) => {
+    const role = roleIn(pid, xc); if (!role) return false;
+    const min = floorOf(xc.name, role);
+    return Object.keys(roster).map(Number).some(p => p !== Number(pid) && autoOk(p) && !busy.has(p) && !assigned.has(p)
+      && (() => { const q = rateOf(p, xc.name, role); return !!q && q.rate >= min; })());
+  };
   // SAFEGUARDS: may member `pid` be moved out of crime xc into crime c? true = held back (and counted)
   const safeBlock = (pid, xc, c) => {
     if (!SAFE) return false;
     if (SAFE.minGain > 0 && !(each(xc) * (1 + SAFE.minGain / 100) < each(c))) { v2Blocked.gain.add(pid); return true; }
     // (Nov 16 2026, user: "Remove the highlighted portion of this rule" = "or a crime that is fuller than the one being
     //  filled") - only paused / about-to-pause crimes are protected now; a fuller crime can lose a not-yet-planning member
-    if (SAFE.protect && urgRaw(xc, SAFE.pauseHours) > 0) { v2Blocked.source.add(pid); return true; }
+    // PROTECT, 24 h + REPLACEMENT CHECK (Nov 18 2026, user chose: "increase the timer to 24h" + only block when nobody
+    // else can take the seat): a member isn't moved out of a crime that is paused or will pause within 24 h (one
+    // planning stage - the planner in it finishes within 24 h) UNLESS someone else can take their seat: a member who
+    // runs the script, isn't in a crime, isn't reserved this run and passes that role at least the role minimum.
+    if (SAFE.protect && urgRaw(xc, SAFE.pauseHours) > 0 && !hasReplacement(pid, xc)) { v2Blocked.source.add(pid); return true; }
     const L = moveLog[String(pid)];
     if (L && ((SAFE.cooldownHours > 0 && NOW - Number(L.at) < SAFE.cooldownHours * 3600e3 && String(L.to) !== String(c.id))
            || (SAFE.backHours > 0 && NOW - Number(L.at) < SAFE.backHours * 3600e3 && String(L.from) === String(c.id)))) { v2Blocked.cooldown.add(pid); return true; }
@@ -1078,7 +1098,7 @@ export function ocPlan(X) {
         if (!any) return Object.assign(o, {r: "norate"});
         if (bestR < bestMin) return Object.assign(o, {r: "lowrate", rate: bestR, min: bestMin});
         if (each(c) + 1e-9 < need) return Object.assign(o, {r: "pay", pct: Math.round(100 * each(c) / L[0].pay)});
-        if (!paused(c) && O.cap < 100 && bestR > O.cap && (capUp[pid] || 0) > (diffOf(c.name) || 0)) return Object.assign(o, {r: "cap", rate: bestR});
+        // (the "cap" reason went with the role cap, Nov 18 2026)
         return Object.assign(o, {r: "team", rate: bestR});
       }).sort((a, b) => b.pay - a.pay);
       waiting.push({pid, name: nameOf(pid), since, why, best: L[0].crime, best_pay: Math.round(L[0].pay), rung: r.crime, rung_pay: Math.round(r.pay),
