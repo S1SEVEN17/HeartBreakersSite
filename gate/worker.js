@@ -1905,8 +1905,7 @@ async function ocPlanObj(env, envName, id) {
             rotation: rotSet.has(t.crime),                    // a crime leaders rotate
             // ROLE WEIGHTS (Nov 2026): the team's weighted success (role-weighted average of its members' rates) and,
             // when the Hub has a tornprobability.com key, the calculated success chance (null = not available)
-            // CALCULATED ONLY (Nov 18 2026, user: "Only show calculated."): the weighted figure is no longer sent (null)
-            success_weighted: null,
+            success_weighted: tpWeighted(tpWts, t.crime, (t.roles || []).filter(r => r.pid != null && r.rate != null)),
             success: tpSucc ? tpSuccessOf(tpSucc, tpNames, t.crime, t.roles || []) : null,
             status: crimes == null ? null : !inst.length ? "needs_spawn" : open ? "recruiting" : "spawned",
             // UNFILLED ROLES (HB Suite 0.2.30, Nov 15 2026, user: "Show unfilled roles in the Deployed Crimes list."):
@@ -1999,7 +1998,7 @@ function ocCleanTeams(teams) {
     // SPAWN HOLD (spawn teams) {since, until} ms; NO-SHOWS {pid: ms} kept out of this crime instance (oc_planner.js)
     hold: t.kind !== "live" && t.hold && Number(t.hold.until) ? {since: Number(t.hold.since) || 0, until: Number(t.hold.until)} : null,
     // TEAM SUCCESS for display (planner, Nov 13 2026): % and whether it's tornprobability's calculated chance
-    succ: t.succ != null && isFinite(Number(t.succ)) ? Number(t.succ) : null, succ_calc: !!t.succ_calc, succ_est: !!t.succ_est,   // (Nov 18 2026) projected chance of a part-filled team (calcOnly)
+    succ: t.succ != null && isFinite(Number(t.succ)) ? Number(t.succ) : null, succ_calc: !!t.succ_calc,
     noshow: t.noshow && typeof t.noshow === "object" ? Object.fromEntries(Object.entries(t.noshow).slice(0, 20).filter(([k, v]) => Number(k) && Number(v)).map(([k, v]) => [String(Number(k)), Number(v)])) : null,
     roles: (Array.isArray(t.roles) ? t.roles : []).slice(0, 10).map(r => ({position: String(r.position || "").slice(0, 40),
       pid: r.pid == null ? null : Number(r.pid) || null, name: String(r.name || "").slice(0, 40),
@@ -3563,12 +3562,13 @@ async function ocMine(env, pid) {
   // same tpWeighted the planner and OC Management use), else the plan's own figure. success_kind says which.
   const tpW = ((await ocSnapGet(env, "hub", "tp:weights").catch(() => null)) || {}).data || null;
   const tpS = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
-  // CALCULATED ONLY (Nov 18 2026, user: "Only show calculated."): the exact chance, else the plan's calculated figure
-  // (t.succ - calculated only now, projected for a part-filled crime), else nothing. No weighted fallback.
   const succOf = (crimeName, roles, planSucc) => {
     const ex = tpS && tpW && tpW.names ? tpSuccessOf(tpS, tpW.names, crimeName, roles) : null;
     if (ex && ex.chance != null) return {success: ex.chance, success_kind: "exact"};
-    return {success: planSucc ?? null, success_kind: planSucc != null ? "calc" : null};
+    const filled = roles.filter(r => r.pid != null && r.rate != null);
+    const w = filled.length ? tpWeighted(tpW, crimeName, filled) : null;
+    if (w != null) return {success: w, success_kind: "weighted"};
+    return {success: planSucc ?? null, success_kind: planSucc != null ? "plan" : null};
   };
   const slotRoles = c => (c.slots || []).map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position || "",
     pid: sl.user ? Number(sl.user.id) : null, rate: typeof sl.checkpoint_pass_rate === "number" ? sl.checkpoint_pass_rate : null}));
@@ -3579,7 +3579,7 @@ async function ocMine(env, pid) {
       name: sl.user ? nameOf(sl.user.id) : null, progress: sl.user ? Number(sl.user.progress) || 0 : null,
       rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null, you: !!(sl.user && Number(sl.user.id) === pid),
       weight: sharesOf(c)[(sl.position_info && sl.position_info.label) || sl.position || ""] ?? null}))},   // (0.2.25) role weight, % of the crime
-    succOf(c.name, slotRoles(c), (teamOf(c) || {}).succ_calc ? teamOf(c).succ : null));
+    succOf(c.name, slotRoles(c), (teamOf(c) || {}).succ));
   let current = null;
   for (const c of crimes) for (const sl of c.slots || []) if (sl.user && Number(sl.user.id) === pid)
     current = Object.assign({crime: c.name, crime_id: c.id, status: c.status, position: (sl.position_info && sl.position_info.label) || sl.position || "",
@@ -3599,7 +3599,7 @@ async function ocMine(env, pid) {
                   changed: movedTo && t.crime_id != null && String(movedTo.to) === String(t.crime_id) && !(r.existing || r.joined)
                     ? {from: (crimes.find(x => String(x.id) === String(movedTo.from)) || {}).name || null, at: Number(movedTo.at) || null} : null,
                   // (0.2.24) the planned team's success: exact (tornprobability) or role-weighted from the team's rates
-                  succ: (() => { const o = succOf(t.crime, (t.roles || []).map(x => ({position: x.position, pid: x.pid, rate: x.rate})), t.succ_calc ? t.succ : null); return o.success; })(),
+                  succ: (() => { const o = succOf(t.crime, (t.roles || []).map(x => ({position: x.position, pid: x.pid, rate: x.rate})), t.succ); return o.success; })(),
                   difficulty: t.difficulty ?? null, pay: payOf(c, t.crime), detail: c ? detail(c) : null};
   }
   // disabled (HB Suite 0.2.74): the crime NAMES leaders switched off in OC Management - the Suite blocks their Join
@@ -3725,7 +3725,7 @@ async function ocOcAlerts(env, cfg, crimes) {
     // CALCULATED SUCCESS (Nov 12 2026): the target applies to tornprobability's chance when it's known, else the weighted average
     const calc = (c.slots || []).length && (c.slots || []).every(sl => sl.user) && tpSucc && tpNames
       ? tpSuccessOf(tpSucc, tpNames, c.name, c.slots.map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position, pid: Number(sl.user.id), rate: sl.checkpoint_pass_rate}))) : null;
-    const sc = calc ? calc.chance : null;   // CALCULATED ONLY (Nov 18 2026): no weighted fallback - unchecked crimes are checked after the run
+    const sc = calc ? calc.chance : (w ? a / w : null);
     if ((c.slots || []).length && (c.slots || []).every(sl => sl.user) && sc != null && sc < O.target)
       crimesOut.push({crime: c.name, crime_id: c.id, success: Math.round(sc), calc: !!calc, target: O.target, status: c.status});
   }
@@ -3952,36 +3952,17 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   const seen = await ocScriptSeen(env, "prod");
   // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability.com's success chance for a full team,
   // from the cache (oc_snap hub 'tp:success', filled by tpSuccessForTeams after each run) - null when not checked yet
-  // CALCULATED SUCCESS ONLY (Nov 18 2026, user - gate/oc_planner.js calcOnly): a line-up not in the cache is noted in
-  // tpMiss (the planner WAITS on it); after each pass the Hub checks the noted line-ups and plans again (max 3 passes).
-  const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || {};
+  const tpSucc = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;
   const tpNames = (tpW && tpW.data && tpW.data.names) || null;
-  const tpMiss = new Map();
-  const succOf = (crime, roles) => { if (!tpNames) return null; const o = tpOrder(tpNames, crime, roles); if (!o) return null;
-    const k = o.scenario + "|" + o.params.join(","), h = tpSucc[k];
-    if (h && typeof h.s === "number") return Math.round(h.s * 1000) / 10;
-    if (!tpMiss.has(k)) tpMiss.set(k, o); return null; };
-  // crimes tornprobability doesn't know (or no role names yet) keep the old weighted rule
-  const tpHas = crime => !!(tpNames && Object.keys(tpNames).some(k => tpKey(k) === tpKey(crime)));
+  const succOf = (crime, roles) => { if (!tpSucc || !tpNames) return null; const h = tpSuccessOf(tpSucc, tpNames, crime, roles); return h ? h.chance : null; };
   // 🛡 SAFEGUARDS: the live MOVE LOG (oc_snap hub 'plan:moves' {pid: {at, to, from}}) - the last time each member was
   // moved by the plan (asked to leave a crime, or their reserved crime switched). Passing it turns the safeguards on.
   const moveLog = ((await ocSnapGet(env, "hub", "plan:moves").catch(() => null)) || {}).data || {};
-  // each pass plans from a fresh copy of the previous plan (the planner edits the teams it's given)
-  const planPass = () => ocPlan({moveLog, succOf, tpHas, calcOnly: true, crimes, prev: structuredClone(prevTeams), catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
+  const r = ocPlan({moveLog, succOf, crimes, prev: prevTeams, catalog, members, opts, disabled: new Set(cfg.disabled || []), weights: (tpW && tpW.data && tpW.data.weights) || null,
                     rotate: new Set(cfg.rotate || []), lastRuns, delays, rateOf, payOf: n => payOf(n), budgetMs: 0, now,
                     reshuffle: moves.length > 0, holdLog: ((lastStats && lastStats.data) || {}).hold_log || {},
                     // SCRIPT USERS: null until anyone has been seen (the table is new) - no preference until then
                     scriptUsers: Object.keys(seen).length ? new Set(Object.keys(seen).map(Number)) : null});
-  let r, tpLeft = TP_RUN_MAX, tpPasses = 0, tpDirty = false;
-  for (;;) {
-    tpMiss.clear(); r = planPass(); tpPasses++;
-    if (!tpMiss.size || tpLeft <= 0 || tpPasses >= 3 || tpPaused(tpSucc)) break;
-    const res = await tpCheck(env, tpSucc, [...tpMiss.values()], tpLeft);
-    tpLeft -= res.calls; if (res.added) tpDirty = true;
-    if (!res.added || res.paused) break;
-  }
-  // read by the oc_check workflow: passes run, checks used, line-ups still waiting for a check, paused (429)
-  r.stats.tp = {passes: tpPasses, checks: TP_RUN_MAX - tpLeft, waiting: tpMiss.size, paused: tpPaused(tpSucc)};
   try {                                                    // record this run's moves for the next runs' once-a-day check
     const was = new Map();                                 // pid -> the live crime they were reserved in before
     (prevTeams || []).forEach(t => { if (t.kind === "live" && t.crime_id != null) (t.roles || []).forEach(x => { if (x.pid != null && !x.existing) was.set(Number(x.pid), String(t.crime_id)); }); });
@@ -4106,7 +4087,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   // full in Torn (the leadership "below the target" alert uses it)
   const fullInTorn = (crimes || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning") && (c.slots || []).length && c.slots.every(sl => sl.user && typeof sl.checkpoint_pass_rate === "number"))
     .map(c => ({crime: c.name, roles: c.slots.map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position, pid: Number(sl.user.id), rate: sl.checkpoint_pass_rate}))}));
-  await tpSuccessForTeams(env, r.teams.concat(fullInTorn), {cur: tpSucc, max: tpLeft, dirty: tpDirty}).catch(() => {});
+  await tpSuccessForTeams(env, r.teams.concat(fullInTorn)).catch(() => {});
   if (!r.changed) return;
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
@@ -4830,22 +4811,17 @@ function tpSuccessOf(succ, names, crime, roles) {
   const h = succ[o.scenario + "|" + o.params.join(",")];
   return h ? {chance: Math.round(h.s * 1000) / 10, fail: h.f != null ? Math.round(h.f * 1000) / 10 : null} : null;
 }
-// TP CHECK BUDGET (Nov 18 2026, user: "Search to see if there's a limit. Go based off best judgement."): tornprobability
-// publishes no request limit (searched Nov 18 2026; its site gives none). Best judgement: at most TP_RUN_MAX new checks per
-// planner run (shared by the calcOnly passes + the post-run full teams), sent one at a time TP_GAP_MS apart. A 429 (too
-// many requests) pauses ALL checks for TP_PAUSE_MS - kept in the tp:success blob as "__pause" {at, until}; teams waiting
-// for a check stay unplaced meanwhile (reservations already planned are kept). Answers are cached per exact
-// crime + rates combination (newest 2000), so most runs re-use earlier checks.
-const TP_RUN_MAX = 40, TP_GAP_MS = 250, TP_PAUSE_MS = 30 * 60e3;
-const tpPaused = cur => !!(cur && cur.__pause && Date.now() < Number(cur.__pause.until));
-// check line-ups [{scenario, params}] not in `cur` (mutated), at most `max` calls -> {calls, added, paused}
-async function tpCheck(env, cur, list, max) {
+// exact success for every FULL team in the plan (one call per new crime + rates combination, at most 20 a run)
+async function tpSuccessForTeams(env, teams) {
+  if (!env.OC_DB) return;
+  const tp = ((await ocSnapGet(env, "hub", "tp:weights").catch(() => null)) || {}).data;
+  if (!tp || !tp.names) return;
+  const cur = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || {};
   let calls = 0, added = 0;
-  for (const o of list || []) {
-    if (tpPaused(cur) || calls >= max) break;
+  for (const t of teams || []) {
+    const o = tpOrder(tp.names, t.crime, t.roles || []); if (!o) continue;
     const k = o.scenario + "|" + o.params.join(",");
-    if (cur[k]) continue;
-    if (calls) await new Promise(res => setTimeout(res, TP_GAP_MS));
+    if (cur[k] || calls >= 20) continue;
     calls++;
     try {
       // tornprobability.com CalculateSuccess - the Hub's key in the header (never in the address)
@@ -4854,33 +4830,16 @@ async function tpCheck(env, cur, list, max) {
       // API: Heart Breakers Hub - OC team success (tornprobability.com CalculateSuccess)
       const r = await fetch(TP_BASE + "/CalculateSuccess", {method: "POST", headers: h,
         body: JSON.stringify({scenario: o.scenario, parameters: o.params})});
-      if (r.status === 429) { cur.__pause = {at: Date.now(), until: Date.now() + TP_PAUSE_MS}; added++; console.log("tp check: 429 - paused 30 min"); break; }
       if (!r.ok) continue;
       const d = await r.json();
       if (typeof d.successChance === "number") { cur[k] = {s: d.successChance, f: d.failureChance ?? null, at: Date.now()}; added++; }
     } catch (e) { /* next run */ }
   }
-  return {calls, added, paused: tpPaused(cur)};
-}
-async function tpSave(env, cur) {
-  // keep the newest 2000 combinations (+ the pause marker while it runs)
-  const keys = Object.keys(cur).filter(k => k !== "__pause").sort((a, b) => cur[b].at - cur[a].at).slice(0, 2000), keep = {};
+  if (!added) return;
+  // keep the newest 2000 combinations
+  const keys = Object.keys(cur).sort((a, b) => cur[b].at - cur[a].at).slice(0, 2000), keep = {};
   keys.forEach(k => { keep[k] = cur[k]; });
-  if (tpPaused(cur)) keep.__pause = cur.__pause;
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'tp:success', ?, ?, 'hub') " +
     "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by")
     .bind(Date.now(), JSON.stringify(keep)).run();
-}
-// exact success for every FULL team in the plan + crimes full in Torn (one call per new crime + rates combination,
-// within what's left of the run's TP_RUN_MAX). o.cur = the run's tp:success (already updated by the calcOnly passes),
-// o.max = checks left, o.dirty = cur changed earlier in the run (saved here either way)
-async function tpSuccessForTeams(env, teams, o) {
-  if (!env.OC_DB) return;
-  o = o || {};
-  const tp = ((await ocSnapGet(env, "hub", "tp:weights").catch(() => null)) || {}).data;
-  if (!tp || !tp.names) return;
-  const cur = o.cur || ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || {};
-  const list = (teams || []).map(t => tpOrder(tp.names, t.crime, t.roles || [])).filter(Boolean);
-  const res = await tpCheck(env, cur, list, o.max ?? 20);
-  if (res.added || o.dirty) await tpSave(env, cur);
 }
