@@ -38,6 +38,7 @@
 -->
 <style>
 :root{--bg:#100a0b;--card:#170d0e;--edge:#5c1c1a;--gold:#e8be5a;--red:#e4382e;--sub:#9a9a9c;--green:#78c878}
+.pl1{font-size:15px;color:#ddd}.pl1 b{font-weight:700}.plp{font-size:12px;font-weight:700}.pl2{color:var(--sub);font-size:12px}
 *{box-sizing:border-box}body{background:var(--bg);color:#ddd;font:15px system-ui,sans-serif;margin:0 auto;padding:14px;max-width:1150px}
 h1{color:var(--red);font-size:26px;letter-spacing:2px;text-transform:uppercase;margin:4px 0 2px;text-align:center}
 .sub{color:var(--sub);text-align:center;font-size:13px;margin-bottom:10px}
@@ -563,7 +564,29 @@ const teamDays = t => liveDays(t) ?? valueOf(t.crime).days;
 // PAY LINE (Team Builder + Deployed cards, Nov 12 2026): pay per member per day (worst-best recorded). A live recruiting
 // crime shows the rate for whoever joins NOW (TIME IN THE CRIME - liveDays) and the crime's normal rate beside it when
 // joining now pays more; spawn teams show the normal rate over the crime's full days.
+// PAY LINE - SHORT (Nov 18 2026, user: "Shorten these. Provide the "Join Now" Pay per day. (Highest, not a range/avg)
+// Provide the "Normal" Pay per day. (highest, not range/avg) Roles filled/total" -> layout C, "Keep the Days till Payout
+// as a short tag. Green highlight for "now" pay per day increases over +25%. Yellow for 0-24.9%" -> "Round the cutoff so
+// it displays as 25%+", "This should never go below normal. Delayed/paused crimes should not count against the normal
+// pay per day."). Two lines:
+//   1. the JOIN NOW pay per member per day (highest recorded x the time-in-crime multiplier, never below normal) +
+//      "▲N% now" - green when the shown % is 25+, yellow 1-24, no colour/arrow when it equals normal. Spawn teams
+//      (no live crime) show the normal pay here, uncoloured.
+//   2. Normal $X/day (highest recorded, over the crime type's planning days - delays never lower it) · Payout Nd
+//      (days for whoever joins now; the crime's days for a spawn) · filled/total seats (in Torn for a live crime,
+//      planned for a spawn team).
+// The old long line (range, avg, data source, runs, team pay) is kept below as payLineLong (unused).
 function payLine(t, team) {
+  const v = valueOf(t.crime); if (!v.pot) return "💰 no pay data yet";
+  const ld = liveDays(t), m = Math.max(1, ld ? v.days / ld : 1), normal = eachPay(t.crime), now = normal * m;
+  const pct = Math.round((m - 1) * 100), cls = !ld || pct < 1 ? "" : pct >= 25 ? "ok" : "mid";
+  const c = t.kind === "live" ? (D.feed || []).find(x => String(x.id) === String(t.crime_id)) : null;
+  const seats = c ? (c.slots || []).length : t.roles.length, filled = c ? (c.slots || []).filter(sl => sl.user).length : t.roles.filter(r => r.pid != null).length;
+  const days = Math.round((ld || v.days) * 10) / 10;
+  return `<div class="pl1"><b class="${cls}">${fmt2(now)}/day</b>${cls ? ` <span class="${cls} plp">▲${pct}% now</span>` : ""}</div>`
+    + `<div class="pl2">Normal ${fmt2(normal)}/day · Payout ${days}d · ${filled}/${seats} ${c ? "filled" : "planned"}</div>`;
+}
+function payLineLong(t, team) {
   const v = valueOf(t.crime); if (!v.pot) return "💰 no pay data yet";
   const ld = liveDays(t), m = ld ? v.days / ld : 1;
   const rng = k => { const hi = eachPay(t.crime) * k, lo = Math.min(eachLow(t.crime), eachPay(t.crime)) * k;
