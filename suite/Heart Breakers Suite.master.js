@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.86
+// @version      0.2.87
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.87 (Nov 18 2026) - 📡 Your OC check also runs while the Suite is minimized, so your pass rates are shared soon after your crime changes.
  *  v0.2.86 (Nov 18 2026) - 🔑 Signing in without an API key (0.2.83-0.2.84) removed for now - add your key in ⚙.
  *  v0.2.85 (Nov 18 2026) - ⛓ 🎯 Target during a war: one of the 5 easiest enemies who can be hit right now (fair fight
  *          2.0 or lower, from your FFScouter key); otherwise the random target as before.
@@ -484,7 +485,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.86';
+    const VERSION = '0.2.87';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -4711,7 +4712,11 @@
             <span class="hbs-pin-s">${esc(as.position)}${as.weight != null ? ` · ${as.weight}% weight` : ''}${p.pay_day ? ` · ${p.join_now ? '⚡ ' : ''}${payDay(p)}/day (est)` : ''}</span></div>
             <div class="hbs-pin-b">${live ? `<a class="hbs-btn" href="${OC_LINK(as.crime_id)}">Join</a>` : '<span class="hbs-hint">waiting to be spawned</span>'}</div>`;
     }
-    const ocPinTick = () => { if (me && !document.hidden && !collapsed && modOn('oc')) loadMyOc(false).then(() => { drawOcPin(); drawTabDots(); }, () => {}); };
+    // (0.2.87) minimized too: every minute open, every 3 minutes minimized (see build_patch_0287.py)
+    let ocPinMinAt = 0;
+    const ocPinTick = () => { if (!me || document.hidden || !modOn('oc')) return;
+        if (collapsed) { if (Date.now() - ocPinMinAt < 175000) return; ocPinMinAt = Date.now(); }
+        loadMyOc(false).then(() => { drawOcPin(); drawTabDots(); }, () => {}); };
     setInterval(ocPinTick, 60000); setTimeout(ocPinTick, 2500);   // + once soon after load, so the tile shows without visiting 🕵 OC
     // 🔴 TAB DOTS (0.2.31, user approved: "small dots on Chain / OC tabs when something needs you (you're up, assignment
     // waiting), so you see it from any tab"): ⛓ Chain - you're up in a live chain at / above the minimum chain;

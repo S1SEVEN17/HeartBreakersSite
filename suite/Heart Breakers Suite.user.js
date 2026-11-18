@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.86
+// @version      0.2.87
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.86';
+    const VERSION = '0.2.87';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -3723,7 +3723,10 @@
             <span class="hbs-pin-s">${esc(as.position)}${as.weight != null ? ` · ${as.weight}% weight` : ''}${p.pay_day ? ` · ${p.join_now ? '⚡ ' : ''}${payDay(p)}/day (est)` : ''}</span></div>
             <div class="hbs-pin-b">${live ? `<a class="hbs-btn" href="${OC_LINK(as.crime_id)}">Join</a>` : '<span class="hbs-hint">waiting to be spawned</span>'}</div>`;
     }
-    const ocPinTick = () => { if (me && !document.hidden && !collapsed && modOn('oc')) loadMyOc(false).then(() => { drawOcPin(); drawTabDots(); }, () => {}); };
+    let ocPinMinAt = 0;
+    const ocPinTick = () => { if (!me || document.hidden || !modOn('oc')) return;
+        if (collapsed) { if (Date.now() - ocPinMinAt < 175000) return; ocPinMinAt = Date.now(); }
+        loadMyOc(false).then(() => { drawOcPin(); drawTabDots(); }, () => {}); };
     setInterval(ocPinTick, 60000); setTimeout(ocPinTick, 2500);
     function drawTabDots() {
         if (!tabsEl || !me) return;
