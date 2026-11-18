@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.84
+// @version      0.2.86
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.84';
+    const VERSION = '0.2.86';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -326,41 +326,11 @@
     }
 
     const keyOk = () => /^[A-Za-z0-9]{16}$/.test(getKey());
-    function pageUid() {
-        try { const w = document.getElementById('websocketConnectionData'); if (w) { const j = JSON.parse(w.textContent || '{}'); if (/^\d+$/.test(String(j.userID))) return String(j.userID); } } catch (e) {   }
-        for (const sc of document.querySelectorAll('script:not([src])')) {
-            const t = sc.textContent || ''; if (t.indexOf('topBannerInitData') < 0) continue;
-            const m = /"userID"\s*:\s*"?(\d+)/.exec(t); if (m) return m[1];
-        }
-        return null;
-    }
-    function pageIdentity() {
-        const uid = pageUid(), ids = new Map();
-        document.querySelectorAll('#sidebarroot a[href*="profiles.php?XID="], #sidebar a[href*="profiles.php?XID="]').forEach(a => {
-            const m = /XID=(\d+)/.exec(a.getAttribute('href') || ''), t = (a.textContent || '').trim();
-            if (m && /^[A-Za-z0-9_-]{1,32}$/.test(t)) ids.set(m[1], t);
-        });
-        if (uid) return ids.has(uid) ? { pid: Number(uid), name: ids.get(uid) } : null;
-        if (ids.size !== 1) return null;
-        const [pid, name] = [...ids][0];
-        return { pid: Number(pid), name };
-    }
-    // [HB Suite] Hub API — op "hello" {keyless}: the page's own name + ID -> a member-level session (no key anywhere)
-    async function signInKeyless() {
-        let id = pageIdentity();
-        for (let i = 0; i < 30 && !id; i++) { await new Promise(r => setTimeout(r, 1000)); id = pageIdentity(); }
-        if (!id) throw new HubError('Add your API key first: ⚙ → API key.', true);
-        const r = (await rawPost({ op: 'hello', keyless: 1, pid: id.pid, name: id.name })).data;
-        store.set(K.session, { code: r.code, exp: r.exp, keyless: true });
-        setMe(r.me);
-        return r.code;
-    }
-
     let signingIn = null;
     function signIn() {
         if (signingIn) return signingIn;
         signingIn = (async () => {
-            if (!keyOk()) return signInKeyless();
+            if (!keyOk()) throw new HubError('Add your API key first: ⚙ → API key.', true);
             // [HB Suite] Torn API — sign-in: this key's own profile (id, name, faction)
             const p = await tornGet('https://api.torn.com/user/?selections=profile');
             const id = { pid: p.player_id, faction: p.faction && p.faction.faction_id, name: p.name };
@@ -3105,7 +3075,14 @@
             if (G && G.last && !confirm(`The next hit is bonus ${G.next} - assigned to ${G.name}. Find a target anyway?`)) return;
             if (G && !G.last) toast(`⚠ Bonus ${G.next} (${G.name}'s) is ${G.left} hits away.`, false);
             if (b) { b.disabled = true; setTimeout(() => { b.disabled = false; }, 4000); }
-            toast('🎯 Finding a weak target…'); openPanicTarget(); return; }
+            const W = warNow();
+            if (W && W.kind === 'ongoing') {
+                toast('🎯 Finding an easy war target…');
+                const t = await warTarget().catch(e => ({ why: e.message || 'the enemy list could not be read' }));
+                if (t && t.pid) { toast(`🎯 War target: ${t.name} · FF ${t.ff.toFixed(2)}`, true); openAttack(t.pid); return; }
+                toast(`🎯 No war target (${(t && t.why) || 'none available'}) - opening a random target.`, false);
+            } else toast('🎯 Finding a weak target…');
+            openPanicTarget(); return; }
         if (a === 'statsretry') { store.set(K.cwStats, null); const st = await cwStats(true); toast(st ? '✓ Energy and cooldowns sent to the queue.' : '⚠ Still not readable: ' + (cw.statsErr || 'no answer'), !!st); render(true); return; }
         if (a === 'retry') { cwDisconnect(); cw.fails = 0; cw.err = ''; cw.token = null; store.set(K.cwTok, null); cw.connecting = false; cwConnect(); return; }
         if (a === 'open') { tab = 'chain'; store.set(K.tab, tab); if (collapsed) setCollapsed(false); else render(); return; }
@@ -3265,8 +3242,7 @@
     }
     let ocPageT = null;
     function ocPageWatch() {
-        if (!/factions\.php/.test(location.href)) return;
-        if (!modOn('ocpage') && !(me && me.keyless)) return;
+        if (!modOn('ocpage') || !/factions\.php/.test(location.href)) return;
         document.addEventListener('click', e => {
             if (!/tab=crimes/.test(location.hash) || !pageScrapeAllowed()) return;
             const b = e.target && e.target.closest ? e.target.closest('button, [role="button"]') : null;
@@ -3302,37 +3278,7 @@
             if (!/flex|grid/.test(disp)) { box.style.display = 'flex'; box.style.flexDirection = 'column'; box.setAttribute('data-hbs-ocflex', '1'); }
             if (keep.getAttribute('data-hbs-octop') !== '1') { keep.style.order = '-1'; keep.setAttribute('data-hbs-octop', '1'); }
         } catch (e) {   } };
-        let prSig = '', prAt = 0, prBusy = false;
-        const pageRatesScan = () => {
-            if (!(me && me.keyless) || prBusy || !pageScrapeAllowed() || Date.now() - prAt < 20000) return;
-            const out = [];
-            document.querySelectorAll('[id^="crime-history-root-"]').forEach(root => {
-                const id = num(String(root.id).replace('crime-history-root-', '')), card = id ? cardOf(root) : null; if (!card) return;
-                const slots = [...new Set([...card.querySelectorAll('[class*="slotBody___"]')].map(b => b.closest('[class*="slot___"]') || b.parentElement).filter(Boolean))];
-                const rows = [];
-                slots.forEach((sl, i) => {
-                    if (!sl.querySelector('[class*="joinButton"]')) return;
-                    const leaves = [...sl.querySelectorAll('*')].filter(e => !e.children.length && !e.closest('[class*="joinButton"]'));
-                    const texts = leaves.map(e => (e.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
-                    const sc = sl.querySelectorAll('[class*="successChance"]');
-                    let rt = sc.length === 1 ? (sc[0].textContent || '').trim() : null;
-                    if (rt == null) { const n = texts.filter(t => /^\d{1,3}(\.\d+)?\s*%?$/.test(t)); if (n.length === 1) rt = n[0]; }
-                    const rate = rt != null && /^\d{1,3}(\.\d+)?\s*%?$/.test(rt) ? parseFloat(rt) : NaN;
-                    if (!(rate >= 0 && rate <= 100)) return;
-                    rows.push({ i, labels: texts.filter(t => t.length <= 40 && !/^\d/.test(t)).slice(0, 6), rate: Math.round(rate) });
-                });
-                if (rows.length) out.push({ id, n: slots.length, slots: rows });
-            });
-            if (!out.length) return;
-            const sig = JSON.stringify(out);
-            if (sig === prSig && Date.now() - prAt < 600000) return;
-            prBusy = true; prAt = Date.now();
-            // [HB Suite] Hub API — op "cpr_page": pass rates read from the crimes page (keyless members; checked by the Hub)
-            hub('cpr_page', { crimes: out.slice(0, 60) }).then(() => { prSig = sig; }).catch(() => {}).then(() => { prBusy = false; });
-        };
         const run = async () => {
-            if (/tab=crimes/.test(location.hash)) pageRatesScan();
-            if (!modOn('ocpage')) return;
             if (!/tab=crimes/.test(location.hash)) { markDisabled([]); pinTop(null); return; }
             const MY = await loadMyOc(false), as = MY && MY.assignment;
             document.querySelectorAll('.hbs-ocseat,.hbs-occard').forEach(n => n.classList.remove('hbs-ocseat', 'hbs-occard'));
@@ -4125,10 +4071,44 @@
                 if (ok && lvl >= 1 && lvl <= 3 && la && Date.now() / 1000 - la > 60 * 86400 && !(d.faction && num(d.faction.faction_id) === FACTION_ID)) id = x;
             } catch (e) {   }
         }
-        const url = `https://www.torn.com/page.php?sid=attack&user2ID=${id || panicId()}`;
+        openAttack(id || panicId());
+    }
+    function openAttack(id) {
+        const url = `https://www.torn.com/page.php?sid=attack&user2ID=${id}`;
         try { if (typeof GM_openInTab === 'function') { GM_openInTab(url, { active: true, insert: true, setParent: true }); return; } } catch (e) {   }
         try { if (window.open(url, '_blank')) return; } catch (e) {   }
         location.assign(url);
+    }
+    const WAR_TARGET_FF_MAX = 2.0, WAR_TARGET_POOL = 5;
+    async function warTarget() {
+        const W = warNow(); if (!W || W.kind !== 'ongoing') return { why: 'no war on' };
+        if (!ffKey()) return { why: 'no FFScouter key in ⚙' };
+        const fid = num(W.opponent_id);
+        if (wt.fid !== fid) { wt.fid = fid; wt.mem = null; wt.memAt = 0; }
+        if (!wt.mem || Date.now() - wt.memAt > 30000) {
+            let r = null;
+            // [HB Suite] Hub API — op "war_feed" get: the enemy faction list other Suites already read (no Torn call)
+            try { r = await hub('war_feed', { do: 'get', fid }); } catch (e) { r = null; }
+            if (r && r.members && !r.read) wt.mem = r.members;
+            else {
+                // [HB Suite] Torn API — Chain Watch 🎯 Target in a war: the enemy faction's members + status (your key; only
+                const d = await tornGet(`https://api.torn.com/faction/${fid}?selections=basic`);
+                wt.mem = Object.entries((d && d.members) || {}).map(([pid, m]) => ({ pid: num(pid), name: m.name || '#' + pid, level: num(m.level),
+                    state: String((m.status || {}).state || ''), until: num((m.status || {}).until), la: String((m.last_action || {}).status || '') }));
+                // [HB Suite] Hub API — op "war_feed" put: that list, for every other Suite (names, levels, status - no key)
+                if (r && r.read && wt.mem.length) hub('war_feed', { do: 'put', fid, members: wt.mem }).catch(() => {});
+            }
+            wt.memAt = Date.now();
+        }
+        if (!wt.mem || !wt.mem.length) return { why: 'the enemy list is empty' };
+        let C = store.get(K.warFF, null) || {};
+        const wst = num(W.start);
+        if (num(C.fid) !== fid || num(C.war) !== wst || wt.mem.some(x => !(C.m || {})[x.pid])) { await warFF(); C = store.get(K.warFF, null) || {}; }
+        const F = (num(C.fid) === fid && C.m) || {};
+        const ok = wt.mem.filter(x => x.state === 'Okay').map(x => Object.assign({}, x, { ff: F[x.pid] && F[x.pid].ff != null ? Number(F[x.pid].ff) : null }))
+            .filter(x => x.ff != null && x.ff <= WAR_TARGET_FF_MAX).sort((a, b) => a.ff - b.ff).slice(0, WAR_TARGET_POOL);
+        if (!ok.length) return { why: wt.ffErr || `nobody available at FF ${WAR_TARGET_FF_MAX.toFixed(1)} or lower` };
+        return ok[Math.floor(Math.random() * ok.length)];
     }
     let alLastCount = null;
     function alWatch() { const c = cwChain().current; if (alLastCount != null && c !== alLastCount) { alStopAll(); panicLap = { chain: -1, s1: false, s2: false }; } alLastCount = c; }
@@ -6098,17 +6078,7 @@
         }).observe(document.body, { childList: true });
         setTimeout(() => shareTick(), 5000);
         (async () => {
-            if (!keyOk()) {
-                try {
-                    const ses = store.get(K.session, null);
-                    if (!(ses && ses.keyless && ses.exp > Date.now() + 60000)) await signInKeyless(); else setMe((await hub('whoami')).me);
-                    if (!me) return;
-                    // [HB Suite] Hub API — op "share_ping": this Suite's version / PDA flag (once per page load)
-                    hub('share_ping', { v: VERSION, pda: isPDA() }).catch(() => {});
-                    if (/factions\.php/.test(location.href)) ocPageWatch();
-                } catch (e) {   }
-                return;
-            }
+            if (!keyOk()) return;
             const mc = store.get(K.meC, null);
             if (!me && mc && mc.me && num(mc.exp) > Date.now() + 60000) setMe(mc.me);
             if (store.get(K.cwq, false)) cw.queued = true;
