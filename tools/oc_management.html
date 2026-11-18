@@ -142,10 +142,11 @@ tr.nt-ok td{background:rgba(120,200,120,.06)}tr.nt-old td{background:rgba(232,19
 __MENU__
 <h1>OC Management</h1>
 <div class="sub">Choose which crimes the Heart Breakers Suite suggests, build teams and deploy them to members using the script</div>
+<!-- TAB RENAMED (Nov 18 2026, user: "Rename \"Deployed\" to Recruiting"): the 🚀 tab is labelled Recruiting; its id stays "deployed". -->
 <!-- (Nov 18 2026, user: "Remove the Refresh Button at the top, tie it into the Update Now button") - the page re-reads
      the Hub every 15 s (liveSync) and the Deployed tab's 🔄 Update now rebuilds the plan and then reloads everything -->
 <div class="status" id="st">Loading…</div>
-<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button></div>
+<div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Recruiting</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button></div>
 <div id="view"></div>
 <script>
 // ---- shared OC team planner (gate/oc_planner.js, inlined by generate.py) ----
@@ -993,7 +994,7 @@ async function deploy() {
   const kept = cur.filter(t => !bIds.has(t.id) && !(t.crime_id && bCids.has(String(t.crime_id))))
     .map(t => Object.assign({}, t, {roles: t.roles.map(r => r.pid != null && !r.existing && bPids.has(Number(r.pid)) ? {position: r.position, pid: null, name: "", rate: null} : r)}));
   const repl = cur.length - kept.length;
-  if (kept.length + BOARD.teams.length > 100) { st("Too many teams deployed (100 at most) - delete some on the Deployed tab first.", true); return; }
+  if (kept.length + BOARD.teams.length > 100) { st("Too many teams deployed (100 at most) - delete some on the Recruiting tab first.", true); return; }
   if (!confirm(`Add ${BOARD.teams.length} team${BOARD.teams.length === 1 ? "" : "s"} (${n} members) to LIVE?\nMembers using the Heart Breakers Suite will be shown their assigned role.\n${kept.length ? `${kept.length} team${kept.length === 1 ? "" : "s"} already deployed stay${kept.length === 1 ? "s" : ""}.` : "Nothing else is deployed."}${repl ? ` ${repl} ${repl === 1 ? "is" : "are"} replaced by the board's version.` : ""}`)) return;
   const plan = {teams: kept.concat(BOARD.teams.map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
     hold: t.hold || null, noshow: t.noshow || null,   // spawn hold / no-shows (Nov 12 2026) kept through a deploy
@@ -1542,7 +1543,12 @@ function drawDeployed() {
   // rebuilds the plan from the crimes in Torn, then reloads everything (it replaces the old top-bar Refresh too).
   $("view").innerHTML = `<div class="panel">
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
-    <div class="bar" style="justify-content:flex-start"><button class="s" id="updNow" title="Read the crimes from Torn, rebuild the plan and reload this page's data (once a minute)">🔄 Update now</button></div>
+    <div class="bar" style="justify-content:flex-start;align-items:center">
+      <!-- AUTOMATIC TOGGLE HERE TOO (Nov 18 2026, user: "Add the Automatic Assignment toggle button on the Deployed tab
+           also, it should sync with the one on Team Builder."): same ids as the Team Builder ⚙️ Settings pair (only one tab
+           is drawn at a time), wired by wireAuto's set() - one shared OPT.auto saved to the Hub as config "opts" -->
+      <b>🤖 Automatic</b><button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>
+      <button class="s" id="updNow" style="margin-left:auto" title="Read the crimes from Torn, rebuild the plan and reload this page's data (once a minute)">🔄 Update now</button></div>
     ${alertsHtml()}
     ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
