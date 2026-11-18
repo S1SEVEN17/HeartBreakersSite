@@ -113,6 +113,25 @@
 //             target is rejected - the search moves on to the next-best team, and a kept team below it is broken up
 //             and refilled). Pay is never multiplied by success (no expected pay). The weighted average still shortlists (the search can't ask
 //             tornprobability about every team) and decides for partial teams.
+//   calcOnly  CALCULATED SUCCESS ONLY (Nov 18 2026, the user: "What would be the best way to only go by the calculated
+//             success rate via tornprobability?" -> "1. Wait. 2. Yes, use the worst-case chance. ... C, with B as the
+//             fallback for earlier seats. 3. ... Go based off best judgement. 4. Only show calculated."). Set by the
+//             Hub's auto plan only (gate/worker.js ocAutoPlan) - OC Management's own Board keeps the old rule. When on, for
+//             every crime tornprobability knows (X.tpHas):
+//             - a team is placed ONLY on tornprobability's calculated chance >= the target. The weighted average no
+//               longer approves anything - it only shortlists (B&B prune at SHORT_MARGIN points under the target).
+//             - WAIT: a team whose chance hasn't been checked yet is NOT placed. X.succOf returns null and the Hub
+//               records it; the Hub checks those line-ups with tornprobability and plans again in the same run (up to
+//               3 passes). A search that meets an unchecked line-up stops accepting worse ones (it waits for the
+//               answer) and notes at most 3 unchecked line-ups (the best + 2 runners-up) - fillSlots / v3Partial.
+//               Reservations already planned are KEPT while their chance is unknown (calcBad keep) - only a known chance
+//               below the target drops them.
+//             - PART-FILLED teams (line-up rule: crimes fill a couple of seats at a time) are checked as a full team
+//               with the empty seats filled in (calcOf): when the seats still empty after this placement are the
+//               FINAL ones (<= LAST_SEATS = the line-up size, default 2) each counts at the role's lowest allowed rate
+//               (WORST CASE - option C); earlier on each counts at the best free member who could take it (LIKELY FILL
+//               - option B), or the lowest allowed rate when nobody free can.
+//             - display: t.succ = the calculated chance only (t.succ_est = projected for a part-filled team).
 //   reshuffle true = RECONFIGURE (Nov 2026, the user's rule): someone took a slot that was reserved for another member,
 //             so every RESERVATION is planned again from scratch for the most efficient placement - members already
 //             in crimes, leaders' replacements and 🔒 locked teams stay; open-slot reservations, queued members and
@@ -427,18 +446,48 @@ export function ocPlan(X) {
   // team success = the WEIGHTED average of the members' rates (role weights above)
   const avgOf = (roles, crime) => { const r = roles.filter(x => x.pid != null && x.rate != null); if (!r.length) return null;
     const ws = r.reduce((a, x) => a + wOf(crime, x.position), 0); return ws > 0 ? wSum(crime, r) / ws : null; };
-  // CALCULATED SUCCESS (see succOf in the header): only for a FULL team (every role of the crime has a member + rate)
-  let calcChecked = 0, calcRejected = 0;
+  // CALCULATED SUCCESS (see succOf / calcOnly in the header)
+  let calcChecked = 0, calcRejected = 0, calcWait = 0;
+  const CALC_ONLY = !!X.calcOnly && typeof X.succOf === "function";
+  const tpHas = crime => typeof X.tpHas === "function" ? !!X.tpHas(crime) : true;   // tornprobability knows this crime
+  const calcRule = crime => CALC_ONLY && tpHas(crime);    // this crime is judged on the calculated chance only
+  const LAST_SEATS = Math.max(1, Math.round(Number(O.lineUp ?? 2)) || 2);   // option C: the final seats count at worst case
+  const SHORT_MARGIN = 10;                                 // calcOnly: the weighted shortlist reaches this far under the target
+  // an empty seat in a part-filled team: worst case = the role's lowest allowed rate; else the best free member who
+  // could take it (not in the team, not planned / in a crime), or the lowest allowed rate when nobody free can
+  const fillSeat = (crime, pos, not, worst) => { const min = floorOf(crime, pos); if (worst) return {pid: -1, rate: min}; let b = null;
+    Object.keys(roster).map(Number).forEach(p => { if (not.has(p) || !autoOk(p) || busy.has(p) || assigned.has(p)) return;
+      const r = rateOf(p, crime, pos); if (r && r.rate != null && r.rate >= min && (!b || r.rate > b.rate)) b = {pid: p, rate: r.rate}; });
+    return b || {pid: -1, rate: min}; };
+  // the calculated chance: a FULL team (every role has a member + rate) as it is; in calcOnly mode a PART-FILLED team
+  // with its empty seats filled in (fillSeat - heaviest role first, a member fills one seat at most). null = unknown.
   const calcOf = (roles, crime) => {
-    if (typeof X.succOf !== "function" || !roles.length || roles.some(x => x.pid == null || x.rate == null)) return null;
+    if (typeof X.succOf !== "function" || !roles.length || roles.some(x => x.pid != null && x.rate == null)) return null;
     if (roles.length !== (rolesOf(crime).length || roles.length)) return null;
+    const empty = roles.filter(x => x.pid == null).length;
+    if (empty) {
+      if (!calcRule(crime) || empty === roles.length) return null;
+      const not = new Set(roles.filter(x => x.pid != null).map(x => Number(x.pid))), worst = empty <= LAST_SEATS, full = roles.slice();
+      roles.map((x, i) => i).filter(i => roles[i].pid == null).sort((a, b) => wOf(crime, roles[b].position) - wOf(crime, roles[a].position))
+        .forEach(i => { const f = fillSeat(crime, roles[i].position, not, worst); if (f.pid > 0) not.add(f.pid); full[i] = {position: roles[i].position, pid: -1, rate: f.rate}; });
+      roles = full;
+    }
     const v = X.succOf(crime, roles); return typeof v === "number" ? v : null; };
-  const succ = (roles, crime) => { const c = calcOf(roles, crime); return c != null ? c : avgOf(roles, crime); };
-  // does this team reach the target? the calculated chance when known, else the weighted average
-  const meets = (roles, crime) => { const c = calcOf(roles, crime); if (c != null) { calcChecked++; return c >= TGT(); }
+  const succ = (roles, crime) => { const c = calcOf(roles, crime); return c != null ? c : calcRule(crime) ? null : avgOf(roles, crime); };
+  // does this team reach the target? calcOnly: the calculated chance only (unknown = not yet -> WAIT); else the
+  // calculated chance when known, else the weighted average
+  const meets = (roles, crime) => { const c = calcOf(roles, crime);
+    if (calcRule(crime) && c == null) { calcWait++; return false; }
+    if (c != null) { calcChecked++; return c >= TGT(); }
     const a = avgOf(roles, crime); return a != null && a >= TGT(); };
-  // a full team the search found: rejected only when its calculated chance is KNOWN and below the target
+  // a team already planned: dropped only when its calculated chance is KNOWN and below the target (keep = an unknown
+  // chance keeps it - calcOnly waits for the check rather than breaking up reservations)
   const calcBad = (roles, crime) => { const c = calcOf(roles, crime); if (c != null && c < TGT()) { calcRejected++; return true; } return false; };
+  // a line-up a search found (fillSlots leafOk): true = place it, false = rejected, null = calcOnly and not checked yet
+  // (WAIT - fillSlots stops accepting worse line-ups and notes up to 3 for the Hub to check)
+  const okLeaf = (roles, crime) => { if (!calcRule(crime)) return !calcBad(roles, crime);
+    const c = calcOf(roles, crime); if (c == null) { calcWait++; return null; }
+    calcChecked++; if (c < TGT()) { calcRejected++; return false; } return true; };
   // NO EXPECTED PAY (Nov 12 2026, the user: "Remove expected pay per day. This isn't needed."): a team's value is its
   // crime's MAX pay per day - success is NOT multiplied in; it only decides whether a team may be formed (the target,
   // calculated chance when known). The tiny success term only breaks exact ties (stable picks), never outweighs pay.
@@ -508,7 +557,7 @@ export function ocPlan(X) {
       // the next best member."): every slot taken in Torn (and no leader replacement pending) -> the team leaves the
       // plan. A member leaving opens a slot -> the crime is Recruiting with an open slot again and step 3 fills it.
       if (t.roles.length && t.roles.every(r => r.existing) && !t.roles.some(r => r.replaces)) continue;
-      // CALCULATED SUCCESS: the planned full team is known to be below the target -> its reservations are dropped and
+      // (calcOnly: an unknown chance keeps it - see the header) CALCULATED SUCCESS: the planned team is known to be below the target -> its reservations are dropped and
       // step 3 refills the slots with the next-best team (members already in the crime stay; locked teams are kept)
       if (!t.lock && t.roles.some(r => r.pid != null && !r.existing) && calcBad(t.roles, c.name))
         t.roles = t.roles.map(r => r.pid != null && !r.existing ? {position: r.position, pid: null, name: "", rate: null} : r);
@@ -574,8 +623,11 @@ export function ocPlan(X) {
   //   the team's success, so a strong member counts for more in a heavy role)
   // leafOk(pick) (optional): false = this combination is rejected (CALCULATED SUCCESS below the target) - the search
   // carries on to the next-best one
+  // calcOnly (see the header): leafOk null = not checked yet -> no worse line-up is accepted after it (WAIT), and the
+  // search stops after 3 unchecked ones; the weighted prune only shortlists, SHORT_MARGIN points under the target
   function fillSlots(crime, slots, fixedSum, n, pool, scoreOf, nodeCap, leafOk) {
-    const need = TGT() * n - fixedSum - 1e-9;
+    const need = (TGT() - (calcRule(crime) ? SHORT_MARGIN : 0)) * n - fixedSum - 1e-9;
+    let waits = 0, stop = false;
     const cands = slots.map(s => {
       const all = [], w = wOf(crime, s.label);
       pool.forEach(p => { const r = rateOf(p.pid, crime, s.label); if (r && r.rate >= floorOf(crime, s.label) && !capped(p.pid, crime, r.rate))
@@ -592,9 +644,11 @@ export function ocPlan(X) {
     let best = null, bestSc = -Infinity, nodes = 0;
     const pick = new Array(slots.length), used = new Set();
     (function dfs(j, sc, rt) {
-      if (++nodes > nodeCap) return;
+      if (stop || ++nodes > nodeCap) return;
       if (sc + (maxSc[j] || 0) <= bestSc || rt + (maxRt[j] || 0) < need) return;
-      if (j === order.length) { if (leafOk && !leafOk(pick)) return; bestSc = sc; best = pick.slice(); return; }
+      if (j === order.length) {
+        if (leafOk) { const ok = leafOk(pick); if (ok == null) { if (++waits >= 3) stop = true; return; } if (!ok || waits) return; }
+        bestSc = sc; best = pick.slice(); return; }
       const i = order[j];
       for (const c of cands[i]) { if (used.has(c.pid)) continue; used.add(c.pid); pick[i] = c; dfs(j + 1, sc + c.sc, rt + c.wr); used.delete(c.pid); }
     })(0, 0, 0);
@@ -728,6 +782,7 @@ export function ocPlan(X) {
         if (!r || r.rate < floorOf(c.name, pos) || capped(p.pid, c.name, r.rate)) return;
         const sc = tier(p.pid, r.rate, false); if (!b || sc > b.sc) b = {pid: p.pid, rate: r.rate, src: r.src, sc}; });
       if (b) { pick[k] = b; used.add(b.pid); } }
+    let pWaits = 0;                                        // calcOnly: unchecked line-ups met (see below)
     while (limit != null && pick.filter(Boolean).length > limit) { let w = -1; pick.forEach((b, k) => { if (b && (w < 0 || b.sc < pick[w].sc)) w = k; }); pick[w] = null; }
     for (;;) {
       if (!pick.some(Boolean)) return null;
@@ -735,8 +790,17 @@ export function ocPlan(X) {
       // REVERTED the same day, Nov 16 2026. User: "Revert that 'Fix.' It was actually working correctly. Alastik and
       // Lando were both placed correctly." - a 71% member belongs in an empty copy of the crime, not beside a 66% member
       // where the two average 68.6%, under the 70% target. Do not relax this check for part-filled crimes.)
+      if (calcRule(c.name)) {
+        // calcOnly: the whole crime with the new members + its other seats filled in (calcOf: worst case for the final
+        // seats, likely fill before). Unknown -> WAIT (noted for the Hub; nothing placed this pass, up to 3 noted).
+        const v = calcOf(roles.map((r, i) => { const j = open.indexOf(i); if (j < 0) return r; const b = pick[j];
+          return b ? {position: r.position, pid: b.pid, rate: b.rate} : {position: r.position, pid: null, rate: null}; }), c.name);
+        if (v == null) { calcWait++; if (++pWaits >= 3) return null; }
+        else { calcChecked++; if (v >= TGT()) return pWaits ? null : pick; calcRejected++; }
+      } else {
       const a = avgOf(fixed.concat(pick.map((b, k) => b ? {position: roles[open[k]].position, pid: b.pid, rate: b.rate} : null).filter(Boolean)), c.name);
       if (a != null && a >= TGT()) return pick;
+      }
       let w = -1; pick.forEach((b, k) => { if (b && (w < 0 || b.rate < pick[w].rate)) w = k; }); pick[w] = null;   // drop the weakest new member
     }
   };
@@ -744,6 +808,7 @@ export function ocPlan(X) {
   const fillRecruiting = () => { for (const c of recruiting) {
     curPaused = paused(c);                                 // PAUSED CRIMES: cap maxed for this crime (reset below)
     curInst = c;                                           // V3 floor: what joining THIS crime now pays
+    const cw0 = calcWait;                                  // calcOnly: line-ups waiting for a check met in this crime
     let t = teams.find(x => x.kind === "live" && String(x.crime_id) === String(c.id));
     if (t && t.lock) { skip(c, "locked"); continue; }
     if (!t && X.disabled.has(c.name)) { skip(c, "switched off"); continue; }   // switched off (an existing team is kept)
@@ -805,7 +870,7 @@ export function ocPlan(X) {
     const seatBySeat = room < open.length && !ROT_ON.has(String(c.id));
     const k = payDayInst(c) / roles.length / 100;      // (unused for choice - pass rates never enter pay per day, Nov 13 2026)
     // CALCULATED SUCCESS: the whole crime with these new members (always full - every open slot is filled)
-    const leafOk = pick => !calcBad(roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), c.name);
+    const leafOk = pick => okLeaf(roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), c.name);
     let best = null;
     if (ROT_ON.has(String(c.id))) best = rotFill(c, roles, open, fixedSum, pool, k, nsBan, leafOk);
     if (seatBySeat) best = v3Partial(c, roles, open, fixed, pool, room);   // fewer seats than are open: the best `room` members
@@ -837,7 +902,7 @@ export function ocPlan(X) {
       const per = open.map(i => { let b = null;
         cand.forEach(p => { const r = rateOf(p, c.name, roles[i].position); if (r && r.rate >= floorOf(c.name, roles[i].position) && !capped(p, c.name, r.rate) && (b == null || r.rate > b)) b = r.rate; });
         return {role: roles[i].position, best: b}; });
-      skip(c, per.some(x => x.best == null) ? "no available member can take a role" : "can't reach the target", {
+      skip(c, calcWait > cw0 ? "waiting for a 🎲 success check" : per.some(x => x.best == null) ? "no available member can take a role" : "can't reach the target", {
         need: Math.round((O.target * roles.length - fixedSum) / open.length), inCrime: fixed.map(r => r.rate),
         best: per.map(x => x.role + ":" + (x.best ?? "-")).join(" "), candidates: cand.length});
       continue;
@@ -880,7 +945,7 @@ export function ocPlan(X) {
       if (pool.length < n) continue;
       const best = fillSlots(C, roles.map(l => ({label: l})), 0, n, pool.map(pid => ({pid})),
         (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 40000,   // MEMBER CHOICE: script, free, best rate
-        pick => !calcBad(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), C));
+        pick => okLeaf(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), C));
       if (!best || !best.some(b => resv.has(b.pid))) continue;          // nobody to pull: step 4 handles free members
       const nt = {id: uid(), crime: C, difficulty: diffOf(C), kind: "spawn", crime_id: null, lock: false, hold: {since: NOW, until: NOW + HOLD},
                   roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: nameOf(best[i].pid), rate: best[i].rate, src: best[i].src}))};
@@ -920,7 +985,7 @@ export function ocPlan(X) {
     const fixed = t.roles.filter(r => r.pid != null), fixedSum = wSum(t.crime, fixed);
     const pool = Object.keys(roster).map(Number).filter(p => autoOk(p) && (O.includeBusy || usable(p)) && !assigned.has(p) && overQ(p)).map(pid => ({pid, soft: false}));
     const best = fillSlots(t.crime, open.map(i => ({label: t.roles[i].position})), fixedSum, t.roles.length, pool, (p, rate) => tier(p.pid, rate, busy.has(p.pid)), 20000,   // MEMBER CHOICE: script, free, best rate
-      pick => !calcBad(t.roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), t.crime));
+      pick => okLeaf(t.roles.map((r, i) => { const j = open.indexOf(i); return j < 0 ? r : {position: r.position, pid: pick[j].pid, rate: pick[j].rate}; }), t.crime));
     if (best) best.forEach((b, k) => { const i = open[k]; t.roles[i] = {position: t.roles[i].position, pid: b.pid, name: nameOf(b.pid), rate: b.rate, src: b.src}; take(b.pid); });
   }
   // spawn teams that are now short of members or below the target are dissolved (members back to the pool)
@@ -942,7 +1007,7 @@ export function ocPlan(X) {
     const best = fillSlots(crime, roles.map(l => ({label: l})), 0, roles.length, [...pool].map(pid => ({pid: Number(pid)})),
       // MEMBER CHOICE: script, free, best rate. cost (the steal step): Infinity = can't be taken from their team
       (p, rate) => tier(p.pid, rate, busy.has(p.pid)) - (cost && !isFinite(cost(p.pid)) ? 1e15 : 0), 40000,
-      pick => !calcBad(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), crime));
+      pick => okLeaf(roles.map((pos, i) => ({position: pos, pid: pick[i].pid, rate: pick[i].rate})), crime));
     if (!best) return null;
     return {id: uid(), crime, difficulty: diffOf(crime), kind: "spawn", crime_id: null, lock: false,
             roles: roles.map((pos, i) => ({position: pos, pid: best[i].pid, name: nameOf(best[i].pid), rate: best[i].rate, src: best[i].src}))};
@@ -1059,7 +1124,7 @@ export function ocPlan(X) {
         if (b) { used.add(b.pid); full[i] = {position: pos, pid: b.pid, rate: b.rate}; } else missing.push(pos); });
     if (missing.length) { t.risk = {why: "role", roles: missing}; return; }
     if (full.some(r => !r || r.rate == null)) return;          // a member in it without a known rate: can't judge
-    const a = avgOf(full, t.crime);
+    const a = calcRule(t.crime) ? calcOf(full, t.crime) : avgOf(full, t.crime);   // calcOnly: the calculated chance only
     if (a != null && a < O.target) t.risk = {why: "target", best: Math.round(a * 10) / 10};
   });
   // NO-SHOW clock: every reservation in a recruiting crime gets since = when it was made (kept while it stays)
@@ -1072,8 +1137,11 @@ export function ocPlan(X) {
   const changed = sig(teams) !== sig(X.prev || []);
   // TEAM SUCCESS for display (Nov 13 2026 - the Discord recruiting post / assignment pings): the calculated chance
   // (succ_calc) when the team is full and it's known, else the weighted average of the members placed so far
-  teams.forEach(t => { const c = calcOf(t.roles, t.crime), a = c != null ? c : avgOf(t.roles.filter(r => r.pid != null), t.crime);
-    t.succ = a == null ? null : Math.round(a * 10) / 10; t.succ_calc = c != null; });
+  // calcOnly (Nov 18 2026, user: "Only show calculated."): the calculated chance only - projected for a part-filled
+  // team (t.succ_est), null when it hasn't been checked
+  teams.forEach(t => { const c = calcOf(t.roles, t.crime), a = c != null ? c : calcRule(t.crime) ? null : avgOf(t.roles.filter(r => r.pid != null), t.crime);
+    t.succ = a == null ? null : Math.round(a * 10) / 10; t.succ_calc = c != null;
+    if (c != null && t.roles.some(r => r.pid == null)) t.succ_est = true; else delete t.succ_est; });
   // ---- V3: who is waiting for a spawn, the tier requests for leaders, and the wait clock for the next run ----
   let v3 = undefined;
   if (V3) {
@@ -1121,7 +1189,7 @@ export function ocPlan(X) {
     pay: teams.reduce((s, t) => s + (avgOf(t.roles, t.crime) == null ? 0 : payDay(t.crime)), 0), ms: Math.round(clock() - t0), skipped,
     holds: teams.filter(t => t.hold).length, hold_log: holdLog,
     // CALCULATED SUCCESS: how many team checks used a known calculated chance / full teams rejected for being below the target
-    calc_checked: calcChecked, calc_rejected: calcRejected,
+    calc_checked: calcChecked, calc_rejected: calcRejected, calc_wait: calcWait, calc_only: CALC_ONLY,
     // TIME IN THE CRIME: {crime_id: crime type's days / days for whoever joins now} - scales a live team's pay per day
     inst_mult: Object.fromEntries([...inst.values()].filter(c => c.status === "Recruiting").map(c => {
       const v = X.payOf(c.name); return [String(c.id), v && v.days ? +(v.days / instDays(c)).toFixed(3) : 1]; })),

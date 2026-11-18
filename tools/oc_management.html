@@ -402,6 +402,14 @@ function teamSuccess(t) {
   if (vals.some(v => v == null)) return null;
   const h = S[e[0] + "|" + vals.join(",")]; return h ? Math.round(h.s * 1000) / 10 : null;
 }
+// CALCULATED ONLY (Nov 18 2026, user: "Only show calculated."): the success shown everywhere is tornprobability's 🎲
+// calculated chance - the exact one for a full team, else the Hub plan's calculated figure (t.succ when t.succ_calc;
+// projected for a part-filled crime = t.succ_est, shown with "~"). Not checked yet -> "🎲 -". No weighted figure.
+const calcSucc = t => { const x = teamSuccess(t); if (x != null) return {v: x, est: false};
+  return t && t.succ_calc && t.succ != null ? {v: Number(t.succ), est: !!t.succ_est} : null; };
+const calcTag = t => { const c = calcSucc(t);
+  return c == null ? `<span class="sr" title="Calculated success chance (tornprobability.com) - not checked yet">🎲 -</span>`
+    : `<span class="sr ${col(c.v)}" title="${c.est ? "Calculated success chance with the open seats filled in (tornprobability.com)" : "Calculated success chance (tornprobability.com)"}">🎲 ${c.est ? "~" : ""}${Math.round(c.v)}%</span>`; };
 const teamMin = t => { const r = t.roles.filter(x => x.pid != null && x.rate != null); return r.length ? Math.min(...r.map(x => x.rate)) : null; };
 const usedIds = (except) => { const s = new Set(); BOARD.teams.forEach(t => { if (t === except) return; t.roles.forEach(r => { if (r.pid != null) s.add(+r.pid); }); }); return s; };
 const uid = () => "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
@@ -797,7 +805,8 @@ function drawBuilder() {
   const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length && !suggBy.has(n)).sort((a, b) => eachPay(b) - eachPay(a) || (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));   // max pay/day first (Nov 12 2026)
   const used = usedIds();
   const placed = used.size, free = Object.keys(CFG.members).filter(p => !busy[p]).length;
-  const avgAll = BOARD.teams.length ? BOARD.teams.reduce((a, t) => a + (teamAvg(t) || 0), 0) / BOARD.teams.length : null;
+  // CALCULATED ONLY (Nov 18 2026): average of the teams' 🎲 calculated chances that are known
+  const calcs = BOARD.teams.map(calcSucc).filter(Boolean), avgAll = calcs.length ? calcs.reduce((a, c) => a + c.v, 0) / calcs.length : null;
   // free members not on the board who have at least one rate
   const benched = Object.keys(CFG.members).filter(p => !used.has(+p) && (OPT.includeBusy || !busy[p]))
     .filter(p => Object.keys(CFG.hist).some(k => CFG.hist[k][p]) || D.rates[p]);
@@ -815,13 +824,13 @@ function drawBuilder() {
       <button class="gold" id="auto">⚡ Auto-build teams</button>
       <select id="addc">
         ${sugg.length ? `<optgroup label="⭐ Full team ready at ${OPT.target}%+ - best pay first">${sugg.map(x =>
-          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${payRange(x.crime)}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
+          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${payRange(x.crime)}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)}${teamSuccess(x.team) != null ? ` · 🎲 ${Math.round(teamSuccess(x.team))}%` : ""}</option>`).join("")}</optgroup>` : ""}
         <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${payRange(n)}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
       <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
       <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"} title="Adds the board's teams to the deployed list - teams already deployed stay">🚀 Add to Live</button>
     </div>
     <div class="stat"><div><b>${BOARD.teams.length}</b><span>Teams</span></div><div><b>${placed}</b><span>Members placed</span></div>
-      <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average weighted success</span></div>
+      <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average 🎲 calculated success</span></div>
       <div><b>${fmt$(BOARD.teams.reduce((x, t) => x + (teamPay(t) || 0), 0))}</b><span>Members' pay / day</span></div>
       <div><b>${free}</b><span>Not in a crime now</span></div></div>
     ${spawnSummary(BOARD.teams, SPAWN = spawnMap(BOARD.teams))}
@@ -845,7 +854,7 @@ function drawBuilder() {
   $("auto").onclick = () => { autoBuild(); draw(); };
   // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
   $("add").onclick = () => { const x = suggBy.get($("addc").value);
-    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${payRange(x.crime)}/day each at ${Math.round(teamAvg(x.team))}%.`); }
+    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${payRange(x.crime)}/day each${teamSuccess(x.team) != null ? ` at 🎲 ${Math.round(teamSuccess(x.team))}%` : ""}.`); }
     else addTeam($("addc").value);
     draw(); };
   $("clr").onclick = () => { if (!confirm("Remove every unlocked team from the board?")) return; BOARD.teams = BOARD.teams.filter(t => t.lock); saveBoard(); draw(); };
@@ -885,7 +894,7 @@ function teamCard(t) {
   }).join("");
   return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live" title="A crime recruiting in Torn now">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn" title="Planned - the crime needs to be spawned">🧪 spawn</span>`}
-      <span class="sr ${col(a)}">${a == null ? "-" : Math.round(a) + "%"}</span>
+      ${calcTag(t)}
       <button class="s" data-lock="${t.id}" title="Locked teams are kept by Auto-build">${t.lock ? "🔒" : "🔓"}</button>
       ${t.kind === "live" ? "" : `<button class="s" data-fill="${t.id}" title="Refill with the best members for each role - including members already in a crime; only members on another locked team are left out">↻</button>`}
       <button class="s" data-del="${t.id}" title="Remove">✕</button></div>
@@ -1150,7 +1159,7 @@ function settingsHtml() {
         ${nextHtml()}
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
-        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A crime's team must reach this weighted success (tornprobability's 🎲 chance once a full team is checked).")}
+        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "Teams are placed only when tornprobability's 🎲 calculated chance reaches this. Unchecked teams wait for their check.")}
         ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), "Nobody is placed in a role they pass below this.")}
         <!-- "Individual role cap" (opts.cap) removed Nov 18 2026 - user: "Members should just prioritize pay per day, while staying above the requirements." -->
       </div>
@@ -1200,7 +1209,8 @@ function wireAuto() {
 //   role   a member IN a recruiting / planning crime whose pass rate is below that role's minimum (the lowest
 //          individual role, weight-scaled when "Lowest rate for 0%-weight roles" is set - floorOf). (The "above the
 //          role cap" alert was removed Nov 12 2026, user.)
-//   crime  a crime with every slot filled whose weighted team success (role weights) is below the overall team target
+//   crime  a crime with every slot filled whose 🎲 calculated success (tornprobability) is below the overall team target
+//          (CALCULATED ONLY, Nov 18 2026 - an unchecked crime isn't flagged until the Hub has checked it)
 // Shown on the Deployed and Planning tabs; the Hub script's leaders' Home shows the same (gate/worker.js ocOcAlerts).
 const feedRole = sl => (sl.position_info && sl.position_info.label) || sl.position;
 const weightedOf = (crime, slots) => { let a = 0, w = 0;
@@ -1215,7 +1225,7 @@ function ocAlerts() {
     if ((c.slots || []).length && (c.slots || []).every(sl => sl.user)) {
       // CALCULATED SUCCESS (Nov 12 2026): the target applies to tornprobability's chance when the Hub has it
       const calc = teamSuccess({crime: c.name, roles: c.slots.map(sl => ({position: feedRole(sl), pid: sl.user.id, rate: sl.checkpoint_pass_rate}))});
-      const w = calc ?? weightedOf(c.name, c.slots || []);
+      const w = calc;   // CALCULATED ONLY (Nov 18 2026): no weighted fallback
       if (w != null && w < OPT.target) out.crimes.push({c, w, calc: calc != null}); }
   });
   return out;
@@ -1422,7 +1432,7 @@ function drawPlanning() {
   const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
   const when = s => s ? new Date(s * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "-";
   const cards = list.map(c => {
-    const w = weightedOf(c.name, c.slots || []), v = valueOf(c.name), cut = v.pot ? v.pot / (rolesOf(c.name).length || (c.slots || []).length || 1) : 0;
+    const v = valueOf(c.name), cut = v.pot ? v.pot / (rolesOf(c.name).length || (c.slots || []).length || 1) : 0;
     // calculated full-team chance (tornprobability.com) when the Hub has it for this exact set of rates
     const sc = teamSuccess({crime: c.name, roles: (c.slots || []).map(sl => ({position: feedRole(sl), pid: sl.user ? sl.user.id : null,
       rate: sl.user && typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}))});
@@ -1434,8 +1444,8 @@ function drawPlanning() {
         + `<span class="drr ${col(rate)}">${rate == null ? "" : rate + "%"}${out_ ? ` <span title="Below the ${min}% minimum">⚠️</span>` : ""}</span>`
         + `${u ? `<span class="drs">${planTag(pg)}</span>` : ""}</div>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
-        <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
-      <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${w != null && w < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
+        <span class="kind live">#${esc(c.id)}</span>${sc == null ? `<span class="sr" title="Calculated success chance (tornprobability.com) - not checked yet">🎲 -</span>` : `<span class="sr ${col(sc)}" title="Calculated success chance (tornprobability.com)">🎲 ${Math.round(sc)}%</span>`}</div>
+      <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${sc != null && sc < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
       <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`; }).join("");
   $("view").innerHTML = `<div class="panel">${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
@@ -1504,7 +1514,7 @@ function drawDeployed() {
     const av = teamAvg(t);
     return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${!t.unplanned ? ` <button class="s" data-pdel="${esc(t.id)}" title="Delete this team from the deployed list">🗑</button>` : ""}
-      <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
+      ${calcTag(t)}</div>
       <div class="tag">${payLine(t, false)}</div>
       ${riskLine(t)}
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
