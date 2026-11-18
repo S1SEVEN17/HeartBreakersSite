@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.82
+// @version      0.2.83
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.82';
+    const VERSION = '0.2.83';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -325,11 +325,34 @@
         });
     }
 
+    const keyOk = () => /^[A-Za-z0-9]{16}$/.test(getKey());
+    function pageIdentity() {
+        const ids = new Map();
+        document.querySelectorAll('#sidebarroot a[href*="profiles.php?XID="], #sidebar a[href*="profiles.php?XID="]').forEach(a => {
+            const m = /XID=(\d+)/.exec(a.getAttribute('href') || ''), t = (a.textContent || '').trim();
+            if (m && /^[A-Za-z0-9_-]{1,32}$/.test(t)) ids.set(m[1], t);
+        });
+        if (ids.size !== 1) return null;
+        const [pid, name] = [...ids][0];
+        const ck = /(?:^|;\s*)uid=(\d+)/.exec(document.cookie || '');
+        if (ck && ck[1] !== pid) return null;
+        return { pid: Number(pid), name };
+    }
+    // [HB Suite] Hub API — op "hello" {keyless}: the page's own name + ID -> a member-level session (no key anywhere)
+    async function signInKeyless() {
+        const id = pageIdentity();
+        if (!id) throw new HubError('Add your API key first: ⚙ → API key.', true);
+        const r = (await rawPost({ op: 'hello', keyless: 1, pid: id.pid, name: id.name })).data;
+        store.set(K.session, { code: r.code, exp: r.exp, keyless: true });
+        setMe(r.me);
+        return r.code;
+    }
+
     let signingIn = null;
     function signIn() {
         if (signingIn) return signingIn;
         signingIn = (async () => {
-            if (!getKey()) throw new HubError('Add your API key first: ⚙ → API key.', true);
+            if (!keyOk()) return signInKeyless();
             // [HB Suite] Torn API — sign-in: this key's own profile (id, name, faction)
             const p = await tornGet('https://api.torn.com/user/?selections=profile');
             const id = { pid: p.player_id, faction: p.faction && p.faction.faction_id, name: p.name };
@@ -349,7 +372,7 @@
         if (op === 'whoami') {
             if (whoMemo && Date.now() - whoMemo.at < 30000) return whoMemo.p;
             const p = (async () => { const ses = store.get(K.session, null);
-                if (!(ses && ses.code && ses.exp > Date.now() + 60000)) { await signIn(); if (me) return { ok: true, me }; }
+                if (!(ses && ses.code && ses.exp > Date.now() + 60000) || (ses.keyless && keyOk())) { await signIn(); if (me) return { ok: true, me }; }
                 return hubCall(op, extra); })();
             whoMemo = { at: Date.now(), p }; p.catch(() => { whoMemo = null; }); return p;
         }
@@ -361,7 +384,7 @@
     async function hubCall(op, extra) {
         if ((/^(rc|rcset|cwcfg|oc_contacted|share_set)$/.test(op) && !/^(get|list|page)$/.test(String((extra || {}).do || ''))) || (op === 'gh' && (extra || {}).method === 'PUT')) { try { liveClear(); } catch (e) {   } }
         const ses = store.get(K.session, null);
-        let code = ses && ses.code && ses.exp > Date.now() + 60000 ? ses.code : null;
+        let code = ses && ses.code && ses.exp > Date.now() + 60000 && !(ses.keyless && keyOk()) ? ses.code : null;
         if (!code) code = await signIn();
         try {
             return (await rawPost(Object.assign({ code, op }, extra || {}))).data;
@@ -3234,7 +3257,8 @@
     }
     let ocPageT = null;
     function ocPageWatch() {
-        if (!modOn('ocpage') || !/factions\.php/.test(location.href)) return;
+        if (!/factions\.php/.test(location.href)) return;
+        if (!modOn('ocpage') && !(me && me.keyless)) return;
         document.addEventListener('click', e => {
             if (!/tab=crimes/.test(location.hash) || !pageScrapeAllowed()) return;
             const b = e.target && e.target.closest ? e.target.closest('button, [role="button"]') : null;
@@ -3270,7 +3294,37 @@
             if (!/flex|grid/.test(disp)) { box.style.display = 'flex'; box.style.flexDirection = 'column'; box.setAttribute('data-hbs-ocflex', '1'); }
             if (keep.getAttribute('data-hbs-octop') !== '1') { keep.style.order = '-1'; keep.setAttribute('data-hbs-octop', '1'); }
         } catch (e) {   } };
+        let prSig = '', prAt = 0, prBusy = false;
+        const pageRatesScan = () => {
+            if (!(me && me.keyless) || prBusy || !pageScrapeAllowed() || Date.now() - prAt < 20000) return;
+            const out = [];
+            document.querySelectorAll('[id^="crime-history-root-"]').forEach(root => {
+                const id = num(String(root.id).replace('crime-history-root-', '')), card = id ? cardOf(root) : null; if (!card) return;
+                const slots = [...new Set([...card.querySelectorAll('[class*="slotBody___"]')].map(b => b.closest('[class*="slot___"]') || b.parentElement).filter(Boolean))];
+                const rows = [];
+                slots.forEach((sl, i) => {
+                    if (!sl.querySelector('[class*="joinButton"]')) return;
+                    const leaves = [...sl.querySelectorAll('*')].filter(e => !e.children.length && !e.closest('[class*="joinButton"]'));
+                    const texts = leaves.map(e => (e.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+                    const sc = sl.querySelectorAll('[class*="successChance"]');
+                    let rt = sc.length === 1 ? (sc[0].textContent || '').trim() : null;
+                    if (rt == null) { const n = texts.filter(t => /^\d{1,3}(\.\d+)?\s*%?$/.test(t)); if (n.length === 1) rt = n[0]; }
+                    const rate = rt != null && /^\d{1,3}(\.\d+)?\s*%?$/.test(rt) ? parseFloat(rt) : NaN;
+                    if (!(rate >= 0 && rate <= 100)) return;
+                    rows.push({ i, labels: texts.filter(t => t.length <= 40 && !/^\d/.test(t)).slice(0, 6), rate: Math.round(rate) });
+                });
+                if (rows.length) out.push({ id, n: slots.length, slots: rows });
+            });
+            if (!out.length) return;
+            const sig = JSON.stringify(out);
+            if (sig === prSig && Date.now() - prAt < 600000) return;
+            prBusy = true; prAt = Date.now();
+            // [HB Suite] Hub API — op "cpr_page": pass rates read from the crimes page (keyless members; checked by the Hub)
+            hub('cpr_page', { crimes: out.slice(0, 60) }).then(() => { prSig = sig; }).catch(() => {}).then(() => { prBusy = false; });
+        };
         const run = async () => {
+            if (/tab=crimes/.test(location.hash)) pageRatesScan();
+            if (!modOn('ocpage')) return;
             if (!/tab=crimes/.test(location.hash)) { markDisabled([]); pinTop(null); return; }
             const MY = await loadMyOc(false), as = MY && MY.assignment;
             document.querySelectorAll('.hbs-ocseat,.hbs-occard').forEach(n => n.classList.remove('hbs-ocseat', 'hbs-occard'));
@@ -6036,7 +6090,17 @@
         }).observe(document.body, { childList: true });
         setTimeout(() => shareTick(), 5000);
         (async () => {
-            if (!getKey()) return;
+            if (!keyOk()) {
+                try {
+                    const ses = store.get(K.session, null);
+                    if (!(ses && ses.keyless && ses.exp > Date.now() + 60000)) await signInKeyless(); else setMe((await hub('whoami')).me);
+                    if (!me) return;
+                    // [HB Suite] Hub API — op "share_ping": this Suite's version / PDA flag (once per page load)
+                    hub('share_ping', { v: VERSION, pda: isPDA() }).catch(() => {});
+                    if (/factions\.php/.test(location.href)) ocPageWatch();
+                } catch (e) {   }
+                return;
+            }
             const mc = store.get(K.meC, null);
             if (!me && mc && mc.me && num(mc.exp) > Date.now() + 60000) setMe(mc.me);
             if (store.get(K.cwq, false)) cw.queued = true;
