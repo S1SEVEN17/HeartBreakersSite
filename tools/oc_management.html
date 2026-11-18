@@ -63,6 +63,11 @@ input[type=number]{width:70px;text-align:center}
 .stat{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:8px 0}
 .stat div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px 10px;text-align:center}
 .stat b{display:block;color:#fff;font-size:20px}.stat span{color:var(--sub);font-size:11px;text-transform:uppercase;letter-spacing:.8px}
+.pstat{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:8px 0}
+.pstat div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 6px;text-align:center;display:flex;flex-direction:column;justify-content:center;min-height:78px}
+.pstat b{display:block;color:#fff;font-size:22px;line-height:1.2}.pstat span{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-top:3px}
+.pstat i{font-style:normal;color:var(--sub);font-size:11px;margin-top:1px}
+@media (max-width:640px){.pstat{grid-template-columns:repeat(2,minmax(0,1fr))}.pstat div:last-child{grid-column:1/-1}}
 /* crimes list */
 .crl{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
 .cr{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:9px 11px}
@@ -1480,9 +1485,12 @@ function drawPlanning() {
       rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}))});
     if (sc != null) pSucc.push(sc); });
   const pMem = fullP.reduce((a, c) => a + (c.slots || []).length, 0);
-  const statsP = `<div class="stat"><div><b>${pMem}</b><span>Total members</span></div><div><b>${fullP.length}</b><span>Crimes in progress</span></div>`
-    + `<div><b class="ok">${fmt2(pInc)}</b><span>Potential member income</span></div><div><b class="mid">${fmt2(pTax)}</b><span>Potential faction tax</span></div>`
-    + `<div style="grid-column:1/-1"><b>${pSucc.length ? "🎲 " + Math.round(pSucc.reduce((a, b) => a + b, 0) / pSucc.length) + "%" : "-"}</b><span>Average success · tornprobability · ${pSucc.length} of ${fullP.length} crimes checked</span></div></div>`;
+  // LAYOUT (Nov 18 2026, user: "Formatting could be better here."): .pstat = 5 equal tiles in one row on wide screens,
+  // 2 per row on phones with the success tile full width; short labels + a small note line under each
+  const tile = (v, k, n) => `<div><b>${v}</b><span>${k}</span><i>${n}</i></div>`;
+  const statsP = `<div class="pstat">${tile(pMem, "Members", "in full crimes")}${tile(fullP.length, "Crimes", "full · planning")}`
+    + tile(fmt2(pInc), "Member income", "potential · highest") + tile(fmt2(pTax), "Faction tax", "potential · highest")
+    + tile(pSucc.length ? "🎲 " + Math.round(pSucc.reduce((a, b) => a + b, 0) / pSucc.length) + "%" : "-", "Avg success", `${pSucc.length} of ${fullP.length} checked`) + `</div>`;
   $("view").innerHTML = `<div class="panel">${statsP}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
     ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
