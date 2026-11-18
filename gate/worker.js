@@ -3520,14 +3520,19 @@ async function ocMine(env, pid) {
   //   crime type's days = mult x days (plan:stats); downtime = type days - seats;
   //   your days = max(1, time from joining to ready + downtime);  pay = type's pay per day x type days / your days.
   // Falls back to the from-now figure when the join time or the planner's figures aren't known.
-  // (Nov 17 2026, user: "A delayed crime should not lower its pay per day. It should only ever go higher based on the
-  // amount of planning completed. It should never drop below its starting amount.") - the old "joined at" maths counted
-  // the clock time since you joined, so every hour of delay lowered it. YOUR pay per day is now the crime's own figure
-  // (planning left, never under the crime's starting figure - see 'pay:start' in ocAutoPlan): it rises as planning is
-  // completed and stays put while the crime waits. Still flagged yours: true for the Suite's "Joined at" label.
+  // YOUR "JOINED" PAY PER DAY (Nov 17 2026, user: "Each individual person would have their own 'Joined' pay per day
+  // that's based on the time they joined." - after "A delayed crime should not lower its pay per day ... never drop
+  // below its starting amount."): the crime's join-now multiplier stored the first time the Hub saw you in the seat
+  // ('pay:joined', ocAutoPlan) x the crime type's pay - fixed, so delays can't lower it. Not stored yet (just joined,
+  // before the next plan run) -> the crime's current figure, which is the same number.
+  const PJ = ((await ocSnapGet(env, "hub", "pay:joined").catch(() => null)) || {}).data || {};
   const payMine = (c, sl) => {
     const base = payOf(c); if (!base) return base;
-    return Object.assign({}, base, {join_now: false, yours: true, your_days: base.days != null ? Math.round(base.days * 10) / 10 : null});
+    const id = String(c.id), pidS = String((sl && sl.user && sl.user.id) || ""), k = Number((PJ[id] || {})[pidS]) || 0, cur = Number(mult[id]) || 0;
+    if (!(k > 0)) return Object.assign({}, base, {join_now: false, yours: true, your_days: base.days != null ? Math.round(base.days * 10) / 10 : null});
+    const yd = base.days != null && cur > 0 ? base.days * cur / k : null;
+    return {pay_day: Math.round(base.normal * k), pay_day_min: pmin[c.name] != null ? Math.round(pmin[c.name] * k) : null, normal: base.normal,
+            join_now: false, est: true, yours: true, days: base.days, your_days: yd != null ? Math.round(yd * 10) / 10 : null};
   };
   const teamOf = c => (plan.teams || []).find(t => t.crime_id != null && String(t.crime_id) === String(c.id));
   // TEAM SUCCESS (HB Suite 0.2.24, Nov 15 2026, user: "Team success is empty. This should be the weighted success rate
@@ -4029,6 +4034,29 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
       await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pay:start', ?, ?, 'hub') " +
         "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(keep)).run().catch(() => {});
   } catch (e) { console.log("oc plan: pay floor skipped"); }
+  // YOUR "JOINED" PAY PER DAY (Nov 17 2026, user: "Each individual person would have their own 'Joined' pay per day
+  // that's based on the time they joined."): the first time the Hub sees a member in a crime's seat it stores that
+  // crime's join-now multiplier at that moment (oc_snap hub 'pay:joined' {crime_id: {pid: mult}}) - joining doesn't
+  // change it (their seat's 24 h moves from "open" to "planning left"). Their Joined pay = the type's pay x that,
+  // fixed: a day-2 joiner keeps their lower figure, a final-day joiner their higher one, and delays never lower it.
+  // Members already in a crime when this started get today's figure. Crimes no longer recruiting/planning are dropped.
+  try {
+    const jr = await ocSnapGet(env, "hub", "pay:joined").catch(() => null), J = (jr && jr.data) || {}, out = {};
+    const M = Object.assign({}, r.stats.plan_mult || {}, r.stats.inst_mult || {});
+    let changed = false;
+    for (const c of crimes || []) {
+      if (!c || !["Recruiting", "Planning"].includes(c.status)) continue;
+      const id = String(c.id), m = Number(M[id]) || 0, old = J[id] || {}, row = {};
+      for (const sl of c.slots || []) { const pid = sl && sl.user && sl.user.id; if (!pid) continue;
+        if (old[String(pid)] != null) row[String(pid)] = old[String(pid)];
+        else if (m > 0) { row[String(pid)] = m; changed = true; } }
+      if (Object.keys(row).length) out[id] = row;
+      if (Object.keys(old).length !== Object.keys(row).length) changed = true;
+    }
+    if (changed || Object.keys(J).length !== Object.keys(out).length)
+      await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pay:joined', ?, ?, 'hub') " +
+        "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(out)).run().catch(() => {});
+  } catch (e) { console.log("oc plan: joined pay skipped"); }
   r.stats.trig = trig; r.stats.reason = reason; r.stats.every = every;
   // the planner's stats every run (incl. why recruiting crimes were left open) - read by the oc_check workflow
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +
