@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.83
+// @version      0.2.84
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,8 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.84 (Nov 18 2026) - 🔑 Without an API key: fixed the Suite not recognising you (it looked before Torn had drawn
+ *          your name).
  *  v0.2.83 (Nov 18 2026) - 🔑 Without an API key the Suite now recognises you from Torn's page and shares your OC pass
  *          rates when you open the faction crimes page.
  *  v0.2.82 (Nov 18 2026) - ⛓ Chain: fixed the count sometimes being read as the next bonus (e.g. 10 / 10 while the
@@ -479,7 +481,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.83';
+    const VERSION = '0.2.84';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -808,21 +810,32 @@
     // YOUR OWN name + profile ID from Torn's sidebar (the logged-in player's block). Exactly one distinct profile link
     // with a plain player name must be found - none or several = don't guess. If Torn's "uid" cookie is readable it must
     // agree. The Hub then checks the name + ID pair against its member list.
+    // (0.2.84) YOUR ID from what Torn writes into the page itself (there from the first moment). Only "userID" is read -
+    // #websocketConnectionData also carries a chat token, which is never read, kept or sent.
+    function pageUid() {
+        try { const w = document.getElementById('websocketConnectionData'); if (w) { const j = JSON.parse(w.textContent || '{}'); if (/^\d+$/.test(String(j.userID))) return String(j.userID); } } catch (e) { /* not JSON */ }
+        for (const sc of document.querySelectorAll('script:not([src])')) {
+            const t = sc.textContent || ''; if (t.indexOf('topBannerInitData') < 0) continue;
+            const m = /"userID"\s*:\s*"?(\d+)/.exec(t); if (m) return m[1];
+        }
+        return null;
+    }
+    // YOUR NAME from Torn's sidebar - the profile link to your own ID (Torn's "Name:" row). null = not drawn yet / unsure.
     function pageIdentity() {
-        const ids = new Map();
+        const uid = pageUid(), ids = new Map();
         document.querySelectorAll('#sidebarroot a[href*="profiles.php?XID="], #sidebar a[href*="profiles.php?XID="]').forEach(a => {
             const m = /XID=(\d+)/.exec(a.getAttribute('href') || ''), t = (a.textContent || '').trim();
             if (m && /^[A-Za-z0-9_-]{1,32}$/.test(t)) ids.set(m[1], t);
         });
-        if (ids.size !== 1) return null;
+        if (uid) return ids.has(uid) ? { pid: Number(uid), name: ids.get(uid) } : null;
+        if (ids.size !== 1) return null;                         // no page ID: exactly one sidebar link, as in 0.2.83
         const [pid, name] = [...ids][0];
-        const ck = /(?:^|;\s*)uid=(\d+)/.exec(document.cookie || '');
-        if (ck && ck[1] !== pid) return null;
         return { pid: Number(pid), name };
     }
     // [HB Suite] Hub API — op "hello" {keyless}: the page's own name + ID -> a member-level session (no key anywhere)
     async function signInKeyless() {
-        const id = pageIdentity();
+        let id = pageIdentity();                                 // (0.2.84) Torn draws the sidebar late: wait up to 30 s
+        for (let i = 0; i < 30 && !id; i++) { await new Promise(r => setTimeout(r, 1000)); id = pageIdentity(); }
         if (!id) throw new HubError('Add your API key first: ⚙ → API key.', true);
         const r = (await rawPost({ op: 'hello', keyless: 1, pid: id.pid, name: id.name })).data;
         store.set(K.session, { code: r.code, exp: r.exp, keyless: true });

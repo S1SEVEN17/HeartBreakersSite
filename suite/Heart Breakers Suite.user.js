@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.83
+// @version      0.2.84
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.83';
+    const VERSION = '0.2.84';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -326,21 +326,29 @@
     }
 
     const keyOk = () => /^[A-Za-z0-9]{16}$/.test(getKey());
+    function pageUid() {
+        try { const w = document.getElementById('websocketConnectionData'); if (w) { const j = JSON.parse(w.textContent || '{}'); if (/^\d+$/.test(String(j.userID))) return String(j.userID); } } catch (e) {   }
+        for (const sc of document.querySelectorAll('script:not([src])')) {
+            const t = sc.textContent || ''; if (t.indexOf('topBannerInitData') < 0) continue;
+            const m = /"userID"\s*:\s*"?(\d+)/.exec(t); if (m) return m[1];
+        }
+        return null;
+    }
     function pageIdentity() {
-        const ids = new Map();
+        const uid = pageUid(), ids = new Map();
         document.querySelectorAll('#sidebarroot a[href*="profiles.php?XID="], #sidebar a[href*="profiles.php?XID="]').forEach(a => {
             const m = /XID=(\d+)/.exec(a.getAttribute('href') || ''), t = (a.textContent || '').trim();
             if (m && /^[A-Za-z0-9_-]{1,32}$/.test(t)) ids.set(m[1], t);
         });
+        if (uid) return ids.has(uid) ? { pid: Number(uid), name: ids.get(uid) } : null;
         if (ids.size !== 1) return null;
         const [pid, name] = [...ids][0];
-        const ck = /(?:^|;\s*)uid=(\d+)/.exec(document.cookie || '');
-        if (ck && ck[1] !== pid) return null;
         return { pid: Number(pid), name };
     }
     // [HB Suite] Hub API — op "hello" {keyless}: the page's own name + ID -> a member-level session (no key anywhere)
     async function signInKeyless() {
-        const id = pageIdentity();
+        let id = pageIdentity();
+        for (let i = 0; i < 30 && !id; i++) { await new Promise(r => setTimeout(r, 1000)); id = pageIdentity(); }
         if (!id) throw new HubError('Add your API key first: ⚙ → API key.', true);
         const r = (await rawPost({ op: 'hello', keyless: 1, pid: id.pid, name: id.name })).data;
         store.set(K.session, { code: r.code, exp: r.exp, keyless: true });
