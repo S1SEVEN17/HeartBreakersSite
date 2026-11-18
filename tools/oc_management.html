@@ -1462,7 +1462,28 @@ function drawPlanning() {
         <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
       <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${w != null && w < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
       <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`; }).join("");
-  $("view").innerHTML = `<div class="panel">${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
+  // PLANNING STATS (Nov 18 2026, user: "Add some stats to the Planning section" -> "This should only account for crimes
+  // that are full and in their planning phase." + "1. Highest Potential 2. No." (no colour on the success tile)):
+  //   members  = everyone seated in a FULL crime with status Planning
+  //   crimes   = those full planning crimes
+  //   income   = the members' share of each one's HIGHEST recorded reward (valueOf(...).pot - same max the pay lines use;
+  //              a chained crime counts its own seats' share of the chain's payout)
+  //   tax      = the faction's cut of the same reward: income x (100 - share) / share, share = the payout crime's
+  //              members' % (shareOf of the chain's final crime)
+  //   success  = the average of tornprobability's 🎲 calculated chance (teamSuccess - cached checks) over those crimes;
+  //              crimes not checked yet are left out and the tile says how many were checked
+  const fullP = list.filter(c => (c.slots || []).length && (c.slots || []).every(sl => sl.user));
+  let pInc = 0, pTax = 0; const pSucc = [];
+  fullP.forEach(c => { const v = valueOf(c.name); if (!v.pot) return; pInc += v.pot;
+    const ch = chainOf(c.name), sh = shareOf(ch[ch.length - 1]); if (sh > 0 && sh < 100) pTax += v.pot * (100 - sh) / sh;
+    const sc = teamSuccess({crime: c.name, roles: (c.slots || []).map(sl => ({position: feedRole(sl), pid: sl.user.id,
+      rate: typeof sl.checkpoint_pass_rate === "number" ? Math.round(sl.checkpoint_pass_rate) : null}))});
+    if (sc != null) pSucc.push(sc); });
+  const pMem = fullP.reduce((a, c) => a + (c.slots || []).length, 0);
+  const statsP = `<div class="stat"><div><b>${pMem}</b><span>Total members</span></div><div><b>${fullP.length}</b><span>Crimes in progress</span></div>`
+    + `<div><b class="ok">${fmt2(pInc)}</b><span>Potential member income</span></div><div><b class="mid">${fmt2(pTax)}</b><span>Potential faction tax</span></div>`
+    + `<div style="grid-column:1/-1"><b>${pSucc.length ? "🎲 " + Math.round(pSucc.reduce((a, b) => a + b, 0) / pSucc.length) + "%" : "-"}</b><span>Average success · tornprobability · ${pSucc.length} of ${fullP.length} crimes checked</span></div></div>`;
+  $("view").innerHTML = `<div class="panel">${statsP}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
     ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
 }
