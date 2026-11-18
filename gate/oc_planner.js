@@ -175,8 +175,9 @@ export function ocPlan(X) {
   //        - NOT FROM A CRIME THAT NEEDS THEM: never out of a paused / about-to-pause crime, and never out of a crime
   //          that is fuller than the one being filled (that would only move the hole);
   //        - ONCE A DAY: X.moveLog {pid: {at, to, from}} = the last move each member was asked to make. Within
-  //          cooldownHours of it they aren't asked to go anywhere else, and they're never sent back to the crime
-  //          they left within backHours. (The same pending move may keep being proposed - it's one ask.)
+  //          cooldownHours of it they aren't asked to go anywhere else. (The same pending move may keep being proposed
+  //          - it's one ask.) "Never back to the crime they left for" (backHours) was REMOVED Nov 18 2026 (user: "Remove
+  //          the rule.") - backHours is always 0 now, so that check below never holds anyone back.
   //      stats.v2_blocked counts the moves each safeguard held back.
   // =====================================================================================================
   // V3 "LADDER" RULES - SHADOW MODE ONLY (Nov 16 2026). They REPLACE the V2 rules in the shadow comparison (user: "3.
@@ -234,9 +235,9 @@ export function ocPlan(X) {
   const V3 = X.v3 && typeof X.v3 === "object" ? {minFloor: (X.v3.minFloor != null ? Math.max(0, Number(X.v3.minFloor) || 0) : 50) / 100, floor: (Number(X.v3.floor) || 0) / 100,
     alert: (X.v3.alert != null ? Math.max(0, Number(X.v3.alert) || 0) : 75) / 100, waitHours: Number(X.v3.waitHours) || 24, pauseHours: Number(X.v3.pauseHours) || 12} : null;
   const V2 = V3 ? {pauseHours: V3.pauseHours, slack: 0, moveHours: 0, minGain: O.safeOn === false ? 0 : Number(O.safeGain ?? 10) || 0,
-                   cooldownHours: O.safeOn === false ? 0 : Number(O.safeCooldown ?? 24) || 0, backHours: O.safeOn === false ? 0 : Number(O.safeBack ?? 72) || 0}
+                   cooldownHours: O.safeOn === false ? 0 : Number(O.safeCooldown ?? 24) || 0, backHours: 0}   // backHours: removed Nov 18 2026 (see SAFEGUARDS)
     : X.v2 && typeof X.v2 === "object" ? {pauseHours: Number(X.v2.pauseHours) || 12, slack: Number(X.v2.slack) || 0, moveHours: Number(X.v2.moveHours) || 0,
-    minGain: Number(X.v2.minGain) || 0, cooldownHours: Number(X.v2.cooldownHours) || 0, backHours: Number(X.v2.backHours) || 0} : null;
+    minGain: Number(X.v2.minGain) || 0, cooldownHours: Number(X.v2.cooldownHours) || 0, backHours: 0} : null;
   // SAFEGUARDS ON THE LIVE PLAN TOO (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings
   // to the Team Builder page under their own category to adjust where feasible."): the same four checks now also guard
   // today's rules - both kinds of move the live planner makes: a member asked to LEAVE a crime they sit in (planning
@@ -246,7 +247,7 @@ export function ocPlan(X) {
   // Active only when the caller passes X.moveLog (the Hub's live run does; drafts and tests without it are unchanged).
   // Under V2 (shadow) the V2 numbers are used. stats.safe_blocked = members each check held back.
   const SAFE = V2 ? {minGain: V2.minGain, cooldownHours: V2.cooldownHours, backHours: V2.backHours, protect: true, pauseHours: V2.pauseHours}
-    : (X.moveLog && O.safeOn !== false ? {minGain: Number(O.safeGain ?? 10) || 0, cooldownHours: Number(O.safeCooldown ?? 24) || 0, backHours: Number(O.safeBack ?? 72) || 0,
+    : (X.moveLog && O.safeOn !== false ? {minGain: Number(O.safeGain ?? 10) || 0, cooldownHours: Number(O.safeCooldown ?? 24) || 0, backHours: 0,
                                           protect: O.safeProtect !== false, pauseHours: 12} : null);
   const moveLog = X.moveLog || {}, v2Blocked = {gain: new Set(), source: new Set(), cooldown: new Set()};   // members a safeguard held back (at least once)
   let curSlack = 0;                                        // V2: points under the target / role minimums for the crime being filled

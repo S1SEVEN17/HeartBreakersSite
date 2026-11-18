@@ -3756,7 +3756,7 @@ const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or lef
 // + SAFEGUARDS (Nov 16 2026, user: "Enable safeguards so users don't get switched around too much."): a move must pay
 // the member at least 10 % more per day; a member is asked to move at most once in 24 h and never back, within 72 h,
 // to the crime they left; never out of a paused / about-to-pause / fuller crime (gate/oc_planner.js V2 SAFEGUARDS).
-const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHours: 24, backHours: 72};
+const OC_V2 = {pauseHours: 12, slack: 5, moveHours: 12, minGain: 10, cooldownHours: 24, backHours: 0};   // backHours: "Never back to the crime they left for" removed Nov 18 2026
 // V3 LADDER RULES for the shadow plan (user's answers, Nov 16 2026): never placed under 75% of their best crime's pay
 // per day; 24 h of waiting for a spawn drops them one rung; paused / pausing-within-12-h crimes are filled first.
 // minFloor (user: "Cap how low someone can drop to 50%"): never under 50% of their best crime's pay, however long they wait.
@@ -3971,7 +3971,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     // proposed for each member - what the once-a-day safeguard checks. A move still proposed keeps its first time.
     const ml0 = ((await ocSnapGet(env, "hub", "plan:shadow-moves").catch(() => null)) || {}).data || {};
     const v2 = Object.assign({}, OC_V2, opts.safeOn === false ? {minGain: 0, cooldownHours: 0, backHours: 0}
-      : {minGain: Number(opts.safeGain ?? 10), cooldownHours: Number(opts.safeCooldown ?? 24), backHours: Number(opts.safeBack ?? 72)},   // the Team Builder's 🛡 Safeguards numbers
+      : {minGain: Number(opts.safeGain ?? 10), cooldownHours: Number(opts.safeCooldown ?? 24), backHours: 0},   // backHours: rule removed Nov 18 2026   // the Team Builder's 🛡 Safeguards numbers
       {v3: true, floor: OC_V3.floor, waitHours: OC_V3.waitHours, pauseHours: OC_V3.pauseHours, slack: 0, moveHours: 0});
     // V3 LADDER RULES (Nov 16 2026, user: "I want to completely rework the way OCs are assigned" -> "7. Shadow Mode",
     // "3. Replace them."): the shadow plan B now runs gate/oc_planner.js V3 instead of V2. Its WAIT CLOCK (oc_snap hub
