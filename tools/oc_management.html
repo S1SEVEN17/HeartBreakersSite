@@ -1145,7 +1145,7 @@ function settingsHtml() {
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
               "On: the Hub builds teams, reserves slots and keeps the live plan up to date by itself. Off: the live plan only changes when a leader deploys one.")}
         ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${autoMin() === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
-              `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated. <b>1 and 2 minutes</b> only apply while a member's Suite is feeding the crime list (below) - with none online the Hub's own check runs every 3 minutes.`)}
+              `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated. Those changes are noticed within about a minute while a member's Suite is feeding the crime list (below), within 3 minutes from the Hub's own check otherwise.`)}
         ${feedHtml(row)}
         ${nextHtml()}
       </div>
@@ -1155,7 +1155,7 @@ function settingsHtml() {
         ${row("Individual role cap", numIn("o_cap", OPT.cap, 50, 100, "%"), "Someone who passes a role above this is moved up to a harder crime they can pass. 100 = off.")}
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>
-        ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the next best member gets it and they aren't put back into that crime. 0 = never.")}
+        ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the seat is planned again, and the best member for it may be them again. 0 = never.")}
       </div>
       <div class="sgrp"><h4>⏱ Filling crimes seat by seat</h4>
         ${row("Members lined up per crime", numIn("o_line", OPT.lineUp ?? 2, 0, 10, "members"), "Planning runs one member at a time, 24 hours each. A crime only gets new members while fewer than this many are lined up (still to plan, or assigned and not joined yet). 2 = the one planning plus one ready behind them. 1 = strictly one at a time (the crime pauses until the next member joins). 0 = no limit: every open seat is filled at once.")}
@@ -1169,8 +1169,7 @@ function settingsHtml() {
         ${row("Protect crimes that need them", `<label><input type="checkbox" id="o_sfp"${OPT.safeProtect !== false ? " checked" : ""}> on</label>`,
               "Nobody is moved out of a paused crime or a crime that will pause within 12 hours.")}
       </div>
-      <div class="sgrp"><h4>🧪 Spawn alerts</h4>
-      </div>
+      <!-- (Nov 18 2026) the empty "🧪 Spawn alerts" group removed - its settings were removed earlier -->
       <div class="sgrp"><h4>💰 Pay</h4>
         ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
       </div>
