@@ -3744,7 +3744,18 @@ async function ocScriptSeen(env, envName) {
   await ocSeenTable(env).catch(() => {});
   const {results} = await env.OC_DB.prepare("SELECT pid, ts FROM oc_seen WHERE env = ? AND ts > ?")
     .bind(envName, Date.now() - OC_SCRIPT_DAYS * 864e5).all().catch(() => ({results: []}));
-  const out = {}; (results || []).forEach(r => { out[String(r.pid)] = Number(r.ts); }); return out;
+  const out = {}; (results || []).forEach(r => { out[String(r.pid)] = Number(r.ts); });
+  // + SUITE PINGS (Nov 18 2026, user: "This is only showing one of the many members who will be available within 24h."):
+  // oc_seen is only written when a member's Suite asks for its OC assignment, so it missed most Suite users (live check:
+  // 12 by oc_seen vs 29 with either). Every running Suite pings the Hub (share_ping -> sx_ver.at, refreshed at least
+  // once a day), so a ping in the last OC_SCRIPT_DAYS also counts as a script user. Used by OC Management (script_seen:
+  // "Available in under 24h", no-script tags, Notify) AND the planner (scriptUsers - non-script members aren't placed
+  // automatically), so those members are now treated as Suite users everywhere.
+  try { await sxShareTable(env);
+    const v = await env.OC_DB.prepare("SELECT pid, at FROM sx_ver WHERE at > ?").bind(Date.now() - OC_SCRIPT_DAYS * 864e5).all();
+    ((v && v.results) || []).forEach(r => { const k = String(r.pid), t = Number(r.at) || 0; if (!(out[k] >= t)) out[k] = t; });
+  } catch (e) { /* oc_seen alone */ }
+  return out;
 }
 // TRIGGERS (Nov 12 2026, user: "The planner should update on certain triggers. New crimes detected, crimes
 // completing, crimes gaining/losing members and anything else that would effect member placement"): on every 3-minute
