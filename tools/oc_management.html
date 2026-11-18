@@ -165,7 +165,9 @@ const ago = ms => { const m = Math.round((Date.now() - ms) / 60000); return m < 
 const ENV = "prod";
 let TAB = LS.get("hb_oc_tab", "builder");
 let D = {config: {disabled: [], plan: null}, rates: {}, active: [], activeT: null};
-const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
+// scheduled re-plan minutes as the Hub uses them: 10-60 (a stored 1-5 from before Nov 17 2026 counts as 10)
+const autoMin = () => Math.max(10, Math.min(60, Number(OPT.autoMinutes) || 10));
+const OPT = Object.assign({target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 10,
   safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
   shAlert: 75, shMin: 50, shPause: 12, lineUp: 2}, LS.get("hb_oc_opts", {}));   // lineUp: members lined up per crime (Nov 16 2026)   // sh* = 🔬 Shadow settings (Shadow plan only)
 OPT.minZero = null;   // WEIGHT-SCALED MINIMUM REMOVED (Nov 17 2026, user, on the "Lowest rate for 0%-weight roles" setting: "Remove this option.") - every role uses "Lowest individual role"; an old saved value is ignored
@@ -1097,7 +1099,7 @@ function feedHtml(row) {
 // crimes, members, settings or pass rates change (gate/worker.js TRIGGERS). "Update now" = POST oc/update (once a
 // minute): reads the crimes and rebuilds the plan at once, then the page reloads.
 function nextRun() {
-  const last = D.config.auto_run, every = D.config.auto_every || (OPT.autoMinutes || 3) * 60000;
+  const last = D.config.auto_run, every = D.config.auto_every || (autoMin()) * 60000;
   if (!last) return null;
   return Math.max(Math.ceil((last + every - 30000) / 180000) * 180000, Math.ceil(Date.now() / 180000) * 180000);
 }
@@ -1123,7 +1125,7 @@ function autoHtml() {
   // timer and every assignment setting are in the Team Builder's ⚙️ Settings (one shared set: config "opts")
   const rc = D.config.reconfigured, moves = (rc && rc.moves) || [];
   return `<div class="hn"><b>🤖 Automatic assignment: ${OPT.auto !== false ? '<span class="ok">On</span>' : '<span class="mid">Off</span>'}</b>
-    <span class="tag">${OPT.auto !== false ? `re-plans every ${OPT.autoMinutes || 3} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""} · team ${OPT.target}% · lowest role ${OPT.minRole}%` : "the live plan only changes when a leader deploys one"} · change it in the <b>Team Builder ⚙️ Settings</b></span></div>`
+    <span class="tag">${OPT.auto !== false ? `re-plans every ${autoMin()} minutes${D.config.auto_run ? ` (last run ${ago(D.config.auto_run)})` : ""} · team ${OPT.target}% · lowest role ${OPT.minRole}%` : "the live plan only changes when a leader deploys one"} · change it in the <b>Team Builder ⚙️ Settings</b></span></div>`
     + nextHtml()
     + (moves.length ? `<div class="hn">🔀 <b>Reconfigured ${ago(rc.at)}</b> - ${moves.slice(0, 4).map(m => `${esc(m.took.name || "[" + m.took.pid + "]")} took the ${esc(m.position)} slot in ${esc(m.crime)} reserved for ${esc(m.planned.name || "[" + m.planned.pid + "]")}`).join("; ")}${moves.length > 4 ? ` and ${moves.length - 4} more` : ""}. Every reserved and queued member was placed again.</div>` : "");
 }
@@ -1139,7 +1141,7 @@ function settingsHtml() {
       <div class="sgrp"><h4>🤖 Automatic assignment</h4>
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
               "On: the Hub builds teams, reserves slots and keeps the live plan up to date by itself. Off: the live plan only changes when a leader deploys one.")}
-        ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[1, 2, 3, 5, 10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${(OPT.autoMinutes || 3) === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
+        ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${autoMin() === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
               `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated. <b>1 and 2 minutes</b> only apply while a member's Suite is feeding the crime list (below) - with none online the Hub's own check runs every 3 minutes.`)}
         ${feedHtml(row)}
         ${nextHtml()}
@@ -1180,13 +1182,14 @@ function wireAuto() {
   const set = on => { if ((OPT.auto !== false) === on) return;
     if (!on && !confirm("Turn off automatic team building? The live plan will stay exactly as it is until a leader deploys a new one.")) return;
     OPT.auto = on; LS.set("hb_oc_opts", OPT);
-    saveConfig("opts", OPT).then(() => st(on ? `Automatic team building on - the Hub re-plans within ${OPT.autoMinutes || 3} minutes.` : "Automatic team building off - the live plan only changes when a leader deploys one."))
+    saveConfig("opts", OPT).then(() => st(on ? `Automatic team building on - the Hub re-plans within ${autoMin()} minutes.` : "Automatic team building off - the live plan only changes when a leader deploys one."))
       .catch(e => st("Not saved: " + e.message, true));
     draw(); };
   if ($("autoOn")) { $("autoOn").onclick = () => set(true); $("autoOff").onclick = () => set(false); }
-  // AUTOMATIC TIMER (Nov 2026): minutes between the Hub's automatic re-plans (opts.autoMinutes, 3-60)
+  // AUTOMATIC TIMER (Nov 2026): minutes between the Hub's automatic re-plans (opts.autoMinutes, 10-60 since Nov 17 2026 -
+  // user: "Remove the options under 10 minutes."; changes still re-plan at once)
   if ($("autoMin")) $("autoMin").onchange = () => {
-    OPT.autoMinutes = Math.max(1, Math.min(60, +$("autoMin").value || 3)); LS.set("hb_oc_opts", OPT);
+    OPT.autoMinutes = Math.max(10, Math.min(60, +$("autoMin").value || 10)); LS.set("hb_oc_opts", OPT);
     saveConfig("opts", OPT).then(() => st(`The Hub now re-plans every ${OPT.autoMinutes} minute${OPT.autoMinutes === 1 ? "" : "s"}.`)).catch(e => st("Not saved: " + e.message, true));
     draw(); };
 }
@@ -1506,7 +1509,7 @@ function drawDeployed() {
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
       <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`;
   }).join("");
-  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${OPT.autoMinutes || 3} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, existing crimes are always filled first; a crime to spawn (🧪) is only suggested for members whose pass rates are too high (above the ${OPT.cap}% cap) for every open crime. Slots are only reserved for members who haven't joined a crime - members already in a crime stay where they are, and a member who has started planning is never moved. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (members not in a crime) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
+  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${autoMin()} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, existing crimes are always filled first; a crime to spawn (🧪) is only suggested for members whose pass rates are too high (above the ${OPT.cap}% cap) for every open crime. Slots are only reserved for members who haven't joined a crime - members already in a crime stay where they are, and a member who has started planning is never moved. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (members not in a crime) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
     <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = finishing a crime and already lined up for the next one (shown in both) · ⏳ <b>Not joined yet</b> = free, hasn't joined. Counted once per member.</div>
     <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy" title="Removes every unlocked team. Locked teams (🔒) stay until a leader deletes them with 🗑 on their card.">Clear deployed list</button></div>

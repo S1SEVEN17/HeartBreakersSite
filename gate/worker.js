@@ -2160,7 +2160,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
            // only changes when a leader deploys one
            auto: v.auto !== false,
            // AUTOMATIC TIMER (Nov 2026): how often the Hub re-plans, in minutes - 3 (the Worker timer's own beat) to 60
-           autoMinutes: Math.round(n(v.autoMinutes, 1, 60, 3)),
+           // (Nov 17 2026, user: "Remove the options under 10 minutes.") the scheduled re-plan is 10-60 minutes; changes
+           // (crimes, members, settings, rates) still rebuild the plan at once (ocTriggers)
+           autoMinutes: Math.round(n(v.autoMinutes, OC_AUTO_MIN, 60, OC_AUTO_MIN)),
            // 🛡 SAFEGUARDS on moves (Nov 16 2026): on/off, % more pay per day a move must give, hours between moves for
            // one member, hours before they may be sent back to the crime they left, never out of a crime that needs them
            safeOn: v.safeOn !== false, safeGain: Math.round(n(v.safeGain, 0, 100, 10)), safeCooldown: Math.round(n(v.safeCooldown, 0, 168, 24)),
@@ -2445,7 +2447,7 @@ async function ocFeedSx(env, ctx, who, b) {
   await env.OC_DB.batch(fops);
   // the planner (+ the Discord seat pings that follow a plan) - after the answer, never holding the script up
   const cfg = await ocConfig(env, "prod").catch(() => ({}));
-  const fast = Number(((cfg && cfg.opts) || {}).autoMinutes) > 0 && Number(cfg.opts.autoMinutes) < 3;
+  const fast = false;   // (Nov 17 2026) the 1-2 minute timers are gone (OC_AUTO_MIN) - only a change runs the planner here
   if (changed || fast) ctx.waitUntil((async () => {
     try { await ocAutoPlan(env, cl, now); } catch (e) { console.log("oc feed: plan failed"); }
     if (changed) try { await ocAssignPings(env, cl); } catch (e) { console.log("oc feed: pings failed"); }
@@ -3429,7 +3431,8 @@ async function ocBackfill(env, now, ENVS) {
 // (by "auto (Hub)"). Inputs, all from D1: feed crimes / roster / catalog / summaries / prices, shared rates
 // (oc_cpr), the leaders' settings (oc_config: opts, disabled) - no Torn calls.
 // =====================================================================================================
-const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: 3,
+const OC_AUTO_MIN = 10;   // shortest scheduled re-plan, minutes (Nov 17 2026, user: "Remove the options under 10 minutes.")
+const OC_OPTS_DEFAULT = {target: 75, minRole: 65, minZero: null, cap: 85, holdHours: 0, noShowHours: 6, includeBusy: false, share: null, queueHours: 0, auto: true, autoMinutes: OC_AUTO_MIN,
   // 🛡 SAFEGUARDS (Nov 16 2026, user: "Enable safeguards for the primary team builder. Add settings to the Team Builder
   // page under their own category"): on by default - see gate/oc_planner.js SAFEGUARDS ON THE LIVE PLAN TOO
   safeOn: true, safeGain: 10, safeCooldown: 24, safeBack: 72, safeProtect: true,
@@ -3822,7 +3825,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   // opts.autoMinutes have passed since the last run (plan:stats is written every run)
   // (Nov 16 2026: the timer may be 1 or 2 minutes - those only beat while a script is feeding the crimes, see ocFeedSx;
   // with no feeder online the Hub's own 3-minute timer is the fastest there is)
-  const every = Math.max(1, Math.min(60, Number(opts.autoMinutes) || 3)) * 60000;
+  const every = Math.max(OC_AUTO_MIN, Math.min(60, Number(opts.autoMinutes) || OC_AUTO_MIN)) * 60000;   // a stored 1-5 counts as 10
   const trig = await ocTriggers(env, cfg, crimes).catch(() => null);
   const last = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);
   const lastTrig = (last && last.data && last.data.trig) || null;
