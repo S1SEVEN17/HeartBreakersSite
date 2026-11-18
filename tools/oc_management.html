@@ -1111,7 +1111,7 @@ function nextHtml() {
   if (OPT.auto === false) return "";
   const n = nextRun();
   return `<div class="hn nextu">⏱️ Next scheduled update <b id="nextIn">${n ? "in " + mmss(n - Date.now()) : "on the next run"}</b>`
-    + ` <span class="tag">- sooner if crimes, members, settings or pass rates change${D.config.auto_run ? ` · last update ${ago(D.config.auto_run)}${D.config.auto_reason ? ` (${esc(D.config.auto_reason)})` : ""}` : ""}</span>`
+    + `${D.config.auto_run ? ` <span class="tag">· last ${ago(D.config.auto_run)}</span>` : ""}`
     + ` <button class="s" id="updNow" title="Read the crimes from Torn and rebuild the plan now (once a minute)">🔄 Update now</button></div>`;
 }
 setInterval(() => { const el = $("nextIn"), n = nextRun(); if (el && n) el.textContent = n - Date.now() > 0 ? "in " + mmss(n - Date.now()) : "now (within a minute)"; }, 1000);
@@ -1143,35 +1143,35 @@ function settingsHtml() {
     <div class="sgrid">
       <div class="sgrp"><h4>🤖 Automatic assignment</h4>
         ${row("Automatic", `<button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>`,
-              "On: the Hub builds teams, reserves slots and keeps the live plan up to date by itself. Off: the live plan only changes when a leader deploys one.")}
+              "On: the Hub builds and updates the plan itself. Off: only leaders' deploys change it.")}
         ${row("Re-plan every", `<select id="autoMin"${OPT.auto === false ? " disabled" : ""}>${[10, 15, 20, 30, 45, 60].map(m => `<option value="${m}"${autoMin() === m ? " selected" : ""}>${m} min</option>`).join("")}</select>`,
-              `How often the Hub rebuilds the plan on a schedule. It also rebuilds at once when crimes are spawned, complete or expire, members join or leave a crime or the faction, settings change or pass rates are updated. Those changes are noticed within about a minute while a member's Suite is feeding the crime list (below), within 3 minutes from the Hub's own check otherwise.`)}
-        ${feedHtml(row)}
+              `Scheduled rebuild. Changes (crimes, members, settings, rates) rebuild it within a minute anyway.`)}
+        <!-- (Nov 18 2026, user) "Crime list source" + "Data sources" rows removed (feedHtml) - "not needed"; the Update button stays -->
         ${nextHtml()}
       </div>
       <div class="sgrp"><h4>🎯 Success rates</h4>
-        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "Members are only added to a crime while the members in it plus the new ones reach this (their weighted success). For a full team the Hub has checked, it is tornprobability's calculated success chance (🎲).")}
-        ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), "Nobody is put in a role they pass below this.")}
+        ${row("Overall team success", numIn("o_t", OPT.target, 1, 100, "%"), "A crime's team must reach this weighted success (tornprobability's 🎲 chance once a full team is checked).")}
+        ${row("Lowest individual role", numIn("o_m", OPT.minRole, 0, 100, "%"), "Nobody is placed in a role they pass below this.")}
         <!-- "Individual role cap" (opts.cap) removed Nov 18 2026 - user: "Members should just prioritize pay per day, while staying above the requirements." -->
       </div>
       <div class="sgrp"><h4>🕒 Queue</h4>
-        ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A member who hasn't joined their reserved slot this long after it was given (or after their current crime is ready, if queued) loses it - the seat is planned again, and the best member for it may be them again. 0 = never.")}
+        ${row("Release a slot not joined after", numIn("o_ns", OPT.noShowHours, 0, 72, "hours"), "A reserved member who hasn't joined by then loses the seat (it's planned again). 0 = never.")}
       </div>
       <div class="sgrp"><h4>⏱ Filling crimes seat by seat</h4>
-        ${row("Members lined up per crime", numIn("o_line", OPT.lineUp ?? 2, 0, 10, "members"), "Planning runs one member at a time, 24 hours each. A crime only gets new members while fewer than this many are lined up (still to plan, or assigned and not joined yet). 2 = the one planning plus one ready behind them. 1 = strictly one at a time (the crime pauses until the next member joins). 0 = no limit: every open seat is filled at once.")}
+        ${row("Members lined up per crime", numIn("o_line", OPT.lineUp ?? 2, 0, 10, "members"), "Members still to plan or not yet joined. 2 = the planner + one ready behind. 0 = fill every seat at once.")}
       </div>
       <div class="sgrp"><h4>🛡 Safeguards (moving members)</h4>
         ${row("Safeguards", `<label><input type="checkbox" id="o_sf"${OPT.safeOn !== false ? " checked" : ""}> on</label>`,
-              "Limits how often the automatic assignment moves a member - asking them to leave a crime they're sitting in, or switching the crime they're reserved for before they've joined. Off = moves happen whenever another crime pays 1% more.")}
-        ${row("A move must pay at least", numIn("o_sfg", OPT.safeGain, 0, 100, "% more"), "The other crime has to pay the member this much more per day (join-now pay) before they're moved.")}
-        ${row("Move a member at most once every", numIn("o_sfc", OPT.safeCooldown, 0, 168, "hours"), "After being moved, a member isn't moved anywhere else for this long. 0 = no limit.")}
+              "Limits moving members who haven't started planning. Off = moved whenever another crime pays 1% more.")}
+        ${row("A move must pay at least", numIn("o_sfg", OPT.safeGain, 0, 100, "% more"), "Extra pay per day the new crime must offer.")}
+        ${row("Move a member at most once every", numIn("o_sfc", OPT.safeCooldown, 0, 168, "hours"), "Cooldown between moves. 0 = no limit.")}
         <!-- "Never back to the crime they left for" (safeBack) removed Nov 18 2026 - user: "Remove the rule." -->
         ${row("Protect crimes that need them", `<label><input type="checkbox" id="o_sfp"${OPT.safeProtect !== false ? " checked" : ""}> on</label>`,
-              "Nobody is moved out of a crime that is paused or will pause within 24 hours (one planning stage) - unless another member who runs the Suite, isn't in a crime and passes that role can take their seat.")}
+              "Don't move someone out of a crime pausing within 24 h unless a free Suite user can take the seat.")}
       </div>
       <!-- (Nov 18 2026) the empty "🧪 Spawn alerts" group removed - its settings were removed earlier -->
       <div class="sgrp"><h4>💰 Pay</h4>
-        ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Members' share of each payout, used to rank crimes by pay. Empty = each crime's recorded payout %.")}
+        ${row("Members' share", numIn("o_sh", OPT.share, 0, 100, "%", 96), "Used for pay per day. Empty = each crime's recorded %.")}
       </div>
     </div></details>`;
 }
