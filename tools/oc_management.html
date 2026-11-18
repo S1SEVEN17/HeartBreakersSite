@@ -823,42 +823,14 @@ function suggestions() {
   return list;
 }
 
+// BOARD REMOVED (Nov 18 2026, user: "9. Remove it." - the ⚡ Auto-build board on Team Builder, redundant now the Hub
+// plans automatically): the board (Auto-build, Add team, Clear unlocked, 🚀 Add to Live, its tiles, team cards and "Not
+// placed") is gone from the tab; Team Builder is now only the ⚙️ Settings the Hub plans with. The board's functions
+// (autoBuild, addTeam, deploy, teamCard, BOARD in localStorage) are left in the file unused, for reference.
 function drawBuilder() {
-  const busy = busyMap(), off = new Set(D.config.disabled || []);
-  const sugg = suggestions(), suggBy = new Map(sugg.map(x => [x.crime, x]));
-  const all = Object.keys(CFG.catalog).filter(n => rolesOf(n).length && !suggBy.has(n)).sort((a, b) => eachPay(b) - eachPay(a) || (diffOf(b) || 0) - (diffOf(a) || 0) || a.localeCompare(b));   // max pay/day first (Nov 12 2026)
-  const used = usedIds();
-  const placed = used.size, free = Object.keys(CFG.members).filter(p => !busy[p]).length;
-  const avgAll = BOARD.teams.length ? BOARD.teams.reduce((a, t) => a + (teamAvg(t) || 0), 0) / BOARD.teams.length : null;
-  // free members not on the board who have at least one rate
-  const benched = Object.keys(CFG.members).filter(p => !used.has(+p) && (OPT.includeBusy || !busy[p]))
-    .filter(p => Object.keys(CFG.hist).some(k => CFG.hist[k][p]) || D.rates[p]);
   $("view").innerHTML = `<div class="panel">
-    <div class="hn">Auto-build plans around the crimes in Torn right now: <b>open slots of recruiting crimes (🎯)</b> are filled first - a crime is
-      skipped if it can't reach the target with the members already in it - then members left over get <b>crimes to spawn (🧪)</b>. The deployed plan
-      is kept up to date the same way every 3 minutes. It aims for the <b>most pay per day for all members together</b>: crimes that pay the most per day come first,
-      every team reaches the target average, and strong members move to easier roles when that lets another crime run.
-      Anyone above the <b>role cap</b> in a crime is moved up to a harder crime they can pass (placed back only if no harder team can use them). Pay =
-      max reward recorded (last 100 completions, items at market price) × payout % ÷ planning days - the same figure members see in the script. Auto-build also weighs team success. Tap a role to swap who's in it. Nothing reaches members until you press <b>Deploy</b>.</div>
-    ${!OPT.includeBusy && Object.keys(CFG.members).length - free > Object.keys(CFG.members).length / 2
-      ? `<div class="hn" style="color:var(--gold)">${Object.keys(CFG.members).length - free} of ${Object.keys(CFG.members).length} members are in a crime right now, so only ${free} can be placed.</div>` : ""}
+    <div class="hn">⚙️ The Hub builds and keeps the live plan up to date by itself, using these settings. See it on 🚀 Recruiting.</div>
     ${settingsHtml()}
-    <div class="bar" style="justify-content:flex-start;margin-top:10px">
-      <button class="gold" id="auto">⚡ Auto-build teams</button>
-      <select id="addc">
-        ${sugg.length ? `<optgroup label="⭐ Full team ready at ${OPT.target}%+ - best pay first">${sugg.map(x =>
-          `<option value="${esc(x.crime)}" style="color:#f5b942;font-weight:700">⭐ ${payRange(x.crime)}/day each · D${diffOf(x.crime) ?? "?"} · ${esc(x.crime)} · ${Math.round(teamAvg(x.team))}%</option>`).join("")}</optgroup>` : ""}
-        <optgroup label="${sugg.length ? "No full team at the target - partial" : "No full team at the target yet"}">${all.map(n => `<option value="${esc(n)}">D${diffOf(n) ?? "?"} · ${esc(n)} · ${payRange(n)}/day each${off.has(n) ? " (off)" : ""}</option>`).join("")}</optgroup></select>
-      <button id="add">+ Add team</button><button id="clr">Clear unlocked</button>
-      <button class="go" id="deploy" style="margin-left:auto"${BOARD.teams.length ? "" : " disabled"} title="Adds the board's teams to the deployed list - teams already deployed stay">🚀 Add to Live</button>
-    </div>
-    <div class="stat"><div><b>${BOARD.teams.length}</b><span>Teams</span></div><div><b>${placed}</b><span>Members placed</span></div>
-      <div><b class="${col(avgAll)}">${avgAll == null ? "-" : Math.round(avgAll) + "%"}</b><span>Average weighted success</span></div>
-      <div><b>${fmt$(BOARD.teams.reduce((x, t) => x + (teamPay(t) || 0), 0))}</b><span>Members' pay / day</span></div>
-      <div><b>${free}</b><span>Not in a crime now</span></div></div>
-    ${spawnSummary(BOARD.teams, SPAWN = spawnMap(BOARD.teams))}
-    <div class="teams">${BOARD.teams.map(teamCard).join("") || '<div class="tag">No teams yet - press Auto-build, or pick a crime and Add team.</div>'}</div>
-    ${benched.length ? `<h2>Not placed (${benched.length})</h2><div class="bench">${benched.map(p => `<span>${esc(nameOf(p))}</span>`).join("")}</div>` : ""}
   </div>`;
   const num = (id, k, lo, hi) => $(id).onchange = () => { OPT[k] = Math.max(lo, Math.min(hi, +$(id).value || lo)); saveOpts(); draw(); };
   num("o_t", "target", 1, 100); num("o_m", "minRole", 0, 100);
@@ -874,15 +846,6 @@ function drawBuilder() {
   $("o_sfp").onchange = () => { OPT.safeProtect = $("o_sfp").checked; saveOpts(); draw(); };
   $("o_sh").onchange = () => { const v = $("o_sh").value.trim(); OPT.share = v === "" ? null : Math.max(0, Math.min(100, +v || 0)); saveOpts(); draw(); };
   wireAuto();                                             // ⚙️ Settings: automatic On / Off + timer
-  $("auto").onclick = () => { autoBuild(); draw(); };
-  // a ⭐ crime adds its suggested full team; any other crime: best available, empty roles where nobody fits
-  $("add").onclick = () => { const x = suggBy.get($("addc").value);
-    if (x) { BOARD.teams.push(Object.assign(JSON.parse(JSON.stringify(x.team)), {id: uid()})); saveBoard(); st(`Added ${x.crime} - ${payRange(x.crime)}/day each at ${Math.round(teamAvg(x.team))}%.`); }
-    else addTeam($("addc").value);
-    draw(); };
-  $("clr").onclick = () => { if (!confirm("Remove every unlocked team from the board?")) return; BOARD.teams = BOARD.teams.filter(t => t.lock); saveBoard(); draw(); };
-  $("deploy").onclick = deploy;
-  wireTeams();
 }
 let SPAWN = null;                                       // spawnMap of the board being drawn
 // QUEUE (Nov 2026): a queued member is still in a Planning crime and joins this one when it pays out (free_at, ms)
@@ -1102,11 +1065,16 @@ function drawSharing() {
     return {pid, name: nameOf(pid), on: !!(r && n), ts: r ? Number(r.ts) || 0 : 0, n}; })
     .sort((a, b) => (a.on - b.on) || (a.on ? a.ts - b.ts : 0) || a.name.localeCompare(b.name));   // not sharing first, then the stalest
   const on = rows.filter(x => x.on).length;
+  // RATE FRESHNESS (Nov 18 2026, user picked "7. Rate freshness on the Rate sharing tab"): how old each member's newest
+  // share is - green < 6 h (Suite 0.2.88 re-reads every 6 h + on events), amber 6-24 h, red 24 h+; "Stale" counts the red ones
+  const fresh = ts => { const h = (Date.now() - ts) / 3600e3; return h < 6 ? "ok" : h < 24 ? "mid" : "bad"; };
+  const stale = rows.filter(x => x.on && fresh(x.ts) === "bad").length;
   $("view").innerHTML = `<div class="panel"><div class="hn">📡 Members who share their CPR rates (through the Heart Breakers Suite or the opt-in key on their Settings page) can be placed in any crime. Members who don't can only be placed in crimes they've completed before, from those old rates.</div>
-    <div class="stat"><div><b class="ok">${on}</b><span>Sharing</span></div><div><b class="${on < ids.length ? "bad" : ""}">${ids.length - on}</b><span>Not sharing</span></div><div><b>${ids.length}</b><span>Members</span></div></div>
+    <div class="stat"><div><b class="ok">${on}</b><span>Sharing</span></div><div><b class="${on < ids.length ? "bad" : ""}">${ids.length - on}</b><span>Not sharing</span></div><div><b class="${stale ? "bad" : ""}">${stale}</b><span>Stale (24h+)</span></div><div><b>${ids.length}</b><span>Members</span></div></div>
     <table><tr><th>Member</th><th>Status</th><th>Suite</th><th>Last shared</th><th>Roles</th></tr>${rows.map(x =>
       `<tr><td><b>${esc(x.name)}</b> <span class="tag">[${esc(x.pid)}]</span></td><td>${x.on ? '<span class="ok">✅ sharing</span>' : '<span class="bad">❌ not sharing</span>'}</td>
-       <td>${suiteVer(x.pid)}</td><td>${x.on ? ago(x.ts) : "-"}</td><td>${x.on ? x.n : "-"}</td></tr>`).join("")}</table>
+       <td>${suiteVer(x.pid)}</td><td>${x.on ? `<span class="${fresh(x.ts)}">${ago(x.ts)}</span>` : "-"}</td><td>${x.on ? x.n : "-"}</td></tr>`).join("")}</table>
+    <div class="hn">Last shared: <span class="ok">green</span> = under 6 h (the Suite's routine re-read) · <span class="mid">amber</span> = 6-24 h · <span class="bad">red</span> = over 24 h - their Suite hasn't run lately, so their rates may be out of date.</div>
     <div class="hn">Suite = the Heart Breakers Suite version that member's script last reported (0.2.77 and newer report it; "-" = an older Suite, the old OC Optimizer, or the opt-in key only). Amber = older than the newest release.</div></div>`;
 }
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.87
+// @version      0.2.88
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.87';
+    const VERSION = '0.2.88';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -33,7 +33,8 @@
     const CACHE_MS = 5 * 60 * 1000;
     const MIN_HITS = 5;
     const READY_POLL_MS = 60000;
-    const OC_SHARE_MS = 3600000;
+    const OC_SHARE_MS = 6 * 3600000;
+    const OC_SHARE_MS_OLD = 3600000;
     const SHARE_PING_MS = 120000;
     const SHARE_READY_MS = 60000;
 

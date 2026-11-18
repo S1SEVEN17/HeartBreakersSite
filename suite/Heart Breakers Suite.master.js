@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.87
+// @version      0.2.88
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.88 (Nov 18 2026) - 📡 Fewer API calls: your OC pass rates are re-read every 6 hours (was hourly), plus at once when a crime spawns, your crime changes or a seat opens while you're free.
  *  v0.2.87 (Nov 18 2026) - 📡 Your OC check also runs while the Suite is minimized, so your pass rates are shared soon after your crime changes.
  *  v0.2.86 (Nov 18 2026) - 🔑 Signing in without an API key (0.2.83-0.2.84) removed for now - add your key in ⚙.
  *  v0.2.85 (Nov 18 2026) - ⛓ 🎯 Target during a war: one of the 5 easiest enemies who can be hit right now (fair fight
@@ -485,7 +486,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.87';
+    const VERSION = '0.2.88';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -495,7 +496,8 @@
     const CACHE_MS = 5 * 60 * 1000;            // Hub files kept in memory this long
     const MIN_HITS = 5;                        // "took part" = 5+ hits (Hub reliability rule)
     const READY_POLL_MS = 60000;               // war readiness - once a minute while the tab is open (user's rule)
-    const OC_SHARE_MS = 3600000;               // (0.2.76) OC pass rates: the hourly safety net - events send them at once (was every 5 min, 0.2.55)
+    const OC_SHARE_MS = 6 * 3600000;            // (0.2.88) every 6 hours - see build_patch_0288.py (was hourly 0.2.76-0.2.87)
+    const OC_SHARE_MS_OLD = 3600000;               // (0.2.76) OC pass rates: the hourly safety net - events send them at once (was every 5 min, 0.2.55)
     const SHARE_PING_MS = 120000;              // sharing: ask the Hub if a leader watches War Readiness (user's choice)
     const SHARE_READY_MS = 60000;              // sharing: readiness every minute while a leader watches
 
