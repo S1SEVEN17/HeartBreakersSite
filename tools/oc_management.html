@@ -142,7 +142,8 @@ tr.nt-ok td{background:rgba(120,200,120,.06)}tr.nt-old td{background:rgba(232,19
 __MENU__
 <h1>OC Management</h1>
 <div class="sub">Choose which crimes the Heart Breakers Suite suggests, build teams and deploy them to members using the script</div>
-<div class="bar"><button id="refresh" style="margin-left:auto" title="Reload everything from the Hub now: members, active crimes, history and shared pass rates, the deployed plan">🔄 Refresh</button></div>
+<!-- (Nov 18 2026, user: "Remove the Refresh Button at the top, tie it into the Update Now button") - the page re-reads
+     the Hub every 15 s (liveSync) and the Deployed tab's 🔄 Update now rebuilds the plan and then reloads everything -->
 <div class="status" id="st">Loading…</div>
 <div class="tabs"><button data-tab="crimes">🕵️ Crimes</button><button data-tab="builder">🧩 Team Builder</button><button data-tab="deployed">🚀 Deployed</button><button data-tab="planning">📋 Planning</button><button data-tab="notify">📣 Notify</button><button data-tab="sharing">📡 Rate sharing</button></div>
 <div id="view"></div>
@@ -1143,7 +1144,7 @@ async function updateNow() {
   b.disabled = true; b.textContent = "Updating…";
   try { const r = await fetch("oc/update", {method: "POST", headers: {"X-HB-Save": "1"}}); const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || "Couldn't update (" + r.status + ")");
-    st("Updated ✓ - the plan was rebuilt from the crimes in Torn just now."); await load(); }
+    await load(); st("Updated ✓ - the plan was rebuilt from the crimes in Torn and everything reloaded just now."); }
   catch (e) { st(e.message); b.disabled = false; b.textContent = "🔄 Update now"; }
 }
 function autoHtml() {
@@ -1534,20 +1535,24 @@ function drawDeployed() {
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
       <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`;
   }).join("");
-  $("view").innerHTML = `<div class="panel">${autoHtml()}${OPT.auto === false ? "" : `<div class="hn">🔄 <b>Kept up to date automatically</b> every ${autoMin()} minutes from the crimes in Torn: open slots in recruiting crimes (🎯) are filled when the crime reaches ${OPT.target}%, existing crimes are always filled first; a crime to spawn (🧪) is only suggested for members whose pass rates are too high (above the ${OPT.cap}% cap) for every open crime. Slots are only reserved for members who haven't joined a crime - members already in a crime stay where they are, and a member who has started planning is never moved. Nothing that's still valid is moved - except when someone takes a slot that was reserved for another member: then every reservation (members not in a crime) is placed again for the best fit. 🔒 locked teams are never changed.</div>`}<div class="hn">Last change ${ago(D.config.plan_ts)}${D.config.plan_by ? " by " + esc(D.config.plan_by) : ""} · status from the active crimes${D.activeT ? " (checked " + ago(D.activeT * 1000) + ")" : ""}.</div>
+  // DEPLOYED HEADER TRIMMED (Nov 18 2026, user: "All of this except for the Teams/Joined/Queued/Not Joined tiles can be
+  // removed. Keep the Update button."): the automatic-assignment status, next-update timer, reconfigured note, "kept up
+  // to date" text, last change, the tiles' legend, "Load into the Team Builder" and "Clear deployed list" are gone
+  // (autoHtml / nextHtml are still used elsewhere; single teams are still deleted with 🗑 on their card). 🔄 Update now
+  // rebuilds the plan from the crimes in Torn, then reloads everything (it replaces the old top-bar Refresh too).
+  $("view").innerHTML = `<div class="panel">
     <div class="stat"><div><b>${plan.teams.length}</b><span>Teams</span></div><div><b class="ok">${[...JOIN].filter(p => !QUEUE.has(p)).length}</b><span>✅ Joined</span></div><div><b class="qd">${QUEUE.size}</b><span>🕒 Queued</span></div><div><b>${[...ALL].filter(p => !QUEUE.has(p) && !JOIN.has(p)).length}</b><span>⏳ Not joined yet</span></div></div>
-    <div class="hn">✅ <b>Joined</b> = in this crime now · 🕒 <b>Queued</b> = finishing a crime and already lined up for the next one (shown in both) · ⏳ <b>Not joined yet</b> = free, hasn't joined. Counted once per member.</div>
-    <div class="bar" style="justify-content:flex-start"><button id="toboard">✏️ Load into the Team Builder</button><button id="undeploy" title="Removes every unlocked team. Locked teams (🔒) stay until a leader deletes them with 🗑 on their card.">Clear deployed list</button></div>
+    <div class="bar" style="justify-content:flex-start"><button class="s" id="updNow" title="Read the crimes from Torn, rebuild the plan and reload this page's data (once a minute)">🔄 Update now</button></div>
     ${alertsHtml()}
     ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
   wireAuto();
-  $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
+  if ($("toboard")) $("toboard").onclick = () => { if (BOARD.teams.length && !confirm("Replace the Team Builder board with the deployed plan?")) return;
     BOARD = {teams: plan.teams.filter(t => !t.unplanned).map(t => ({id: t.id, crime: t.crime, difficulty: t.difficulty, kind: t.kind || "spawn", crime_id: t.crime_id || null, lock: !!t.lock,
       roles: t.roles.map(r => r.existing ? Object.assign({}, r) : Object.assign({}, r, rateOf(r.pid, t.crime, r.position) || {}))}))}; saveBoard(); TAB = "builder"; LS.set("hb_oc_tab", TAB); draw(); };
   // LOCKED TEAMS SURVIVE A CLEAR (Nov 15 2026, user: "Clearing the deployed list shouldn't clear these crimes, they
   // should require manual deletion by leaders on the deployed page") - only the 🗑 on a locked team's card removes it
-  $("undeploy").onclick = async () => {
+  if ($("undeploy")) $("undeploy").onclick = async () => {
     const keep = ((D.config.plan && D.config.plan.teams) || []).filter(t => t.lock && !t.unplanned);
     if (!confirm(`Clear the deployed list? Members on the removed teams stop seeing their assigned roles.${keep.length ? `\n${keep.length} locked team${keep.length === 1 ? "" : "s"} (🔒) stay${keep.length === 1 ? "s" : ""} - delete ${keep.length === 1 ? "it" : "them"} with 🗑 on the card.` : ""}`)) return;
     try { await saveConfig("plan", {teams: keep}); D.config.plan = {teams: keep}; st(keep.length ? `Cleared - ${keep.length} locked team${keep.length === 1 ? "" : "s"} kept.` : "Deployed list cleared."); draw(); } catch (e) { st("Failed: " + e.message, true); } };
@@ -1568,12 +1573,12 @@ const REFRESH_GAP = 60 * 1000;
 let polling = false;
 function refreshBtn() {
   const left = Math.ceil((LS.get("hb_oc_refresh_at", 0) + REFRESH_GAP - Date.now()) / 1000);
-  const b = $("refresh");
+  const b = $("refresh"); if (!b) return;                  // (Nov 18 2026) the Refresh button is gone - see the top bar note
   b.disabled = polling || left > 0;
   b.textContent = polling ? "⏳ Checking Torn…" : left > 0 ? `🔄 Refresh (${left}s)` : "🔄 Refresh";
 }
 setInterval(refreshBtn, 1000);
-$("refresh").onclick = async () => {
+if ($("refresh")) $("refresh").onclick = async () => {
   if ($("refresh").disabled) return;
   // (Nov 17 2026) members + history rates come from the Hub now, so a Refresh is just a reload of the Hub's data - no
   // GitHub crime check to start and wait for. The old flow below only runs if the Hub had no roster.
