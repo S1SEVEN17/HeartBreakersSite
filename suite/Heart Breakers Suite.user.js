@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.80
+// @version      0.2.82
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.80';
+    const VERSION = '0.2.82';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -207,17 +207,25 @@
             const ok = document.execCommand('copy'); sel.removeAllRanges(); d.remove(); return ok;
         } catch (e) { return copyText(text); }
     }
+    const ntfSame = x => !!(x.contacted && x.contacted.at && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position);
     function ntfBadge(x) {
-        const c = x.contacted, pill = (bg, bd, col, t) => `<span style="display:inline-block;margin-top:3px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.3px;background:${bg};border:1px solid ${bd};color:${col}">${t}</span>`;
-        if (!c || !c.at) return pill('rgba(228,56,46,.14)', '#e4382e', '#ff7a70', '✖ NOT NOTIFIED');
+        const c = x.contacted, line = (cls, t) => `<span class="hbs-ntfs ${cls}" title="${esc(t)}">${esc(t)}</span>`;
+        if (!c || !c.at) return line('hbs-bad', 'Not notified yet');
         const mins = Math.max(0, Math.round((Date.now() - c.at) / 60000));
         const ago = mins < 60 ? mins + 'm ago' : mins < 2880 ? Math.round(mins / 60) + 'h ago' : Math.round(mins / 1440) + 'd ago';
-        const same = String(c.crime_id) === String(x.crime_id) && c.role === x.position;
-        const how = { chat: '💬 chat', mail: '✉️ mail', sent: '✓ marked' }[c.how] || c.how || '';
-        const by = c.by ? ' · ' + esc(String(c.by).replace(/ \[\d+\]$/, '')) : '';
-        return (same ? pill('rgba(120,200,120,.18)', '#78c878', '#78c878', '✅ NOTIFIED · ' + ago)
-                     : pill('rgba(232,190,90,.16)', '#e8be5a', '#e8be5a', '⚠️ NOTIFIED FOR ANOTHER CRIME · ' + ago))
-            + `<br><span style="opacity:.7;font-size:11px">${how}${by}${same ? '' : ` · was ${esc(c.crime)} · ${esc(c.role)}`}</span>`;
+        const same = ntfSame(x), how = { chat: 'chat', mail: 'mail', sent: 'marked' }[c.how] || c.how || '';
+        const by = c.by ? ' · ' + String(c.by).replace(/ \[\d+\]$/, '') : '';
+        return same ? line('hbs-good', `Notified ${ago}${how ? ' · ' + how : ''}${by}`)
+                    : line('hbs-ntfw', `Other crime ${ago} · was ${c.crime && c.crime !== x.crime ? c.crime + ' · ' : ''}${c.role || '?'}${how ? ' · ' + how : ''}${by}`);
+    }
+    function ntfListHtml(NT, nameHtml, max) {
+        const idx = NT.map((x, i) => i), todo = idx.filter(i => !ntfSame(NT[i])), done = idx.filter(i => ntfSame(NT[i]));
+        const cap = max ? Math.max(0, max - todo.length) : Infinity;
+        const row = i => { const x = NT[i]; return `<div class="hbs-li hbs-ntf" title="${esc(x.name)} - ${esc(x.crime)} #${esc(x.crime_id)} · ${esc(x.position)}"><span class="hbs-ntfl"><b class="hbs-ntfn">${nameHtml(x)}</b>
+                <span class="hbs-ntfc">${esc(x.crime)} · ${esc(x.position)}</span><span data-ntfst="${i}">${ntfBadge(x)}</span></span>
+            <span class="hbs-ntfb"><button class="hbs-btn" data-ntf="chat" data-i="${i}" title="Chat">💬</button><button class="hbs-btn" data-ntf="mail" data-i="${i}" title="Mail">✉️</button><button class="hbs-btn" data-ntf="sent" data-i="${i}" title="Mark as notified">✓</button></span></div>`; };
+        return (todo.length ? `<div class="hbs-ntfh">Needs a message · ${todo.length}</div>` + (max ? todo.slice(0, max) : todo).map(row).join('') : '<div class="hbs-hint hbs-good" style="text-align:left">✓ Everyone has been notified.</div>')
+            + (done.length ? cFold('ntfdone', '✅', 'Already notified', `<b class="hbs-foldn">${done.length}</b>`, done.slice(0, cap).map(row).join('') || '<div class="hbs-hint">Listed in OC Management → Notify.</div>') : '');
     }
     // [HB Suite] Hub API — op "oc_contacted": log the contact in the Hub's shared Notify log (leaders)
     function logContact(x, how) {
@@ -1018,6 +1026,12 @@
             #hbs-panel .hbs-armal small{display:block;color:#c9a3a3;font-size:11px;font-weight:normal;} #hbs-panel .hbs-armal > b{color:#FFB454;white-space:nowrap;}
             #hbs-panel .hbs-armhd{font-size:13px;margin:0 0 4px;text-align:left;} #hbs-panel .hbs-armhd small{opacity:.7;font-size:11px;}
             #hbs-panel .hbs-armtip{display:block;font-size:10.5px;opacity:.6;}
+            /* (0.2.81) 📣 Notify rows: three one-line rows that cut off instead of wrapping; buttons on the right */
+            #hbs-panel .hbs-ntf{align-items:center;gap:8px;} #hbs-panel .hbs-ntfl{flex:1;min-width:0;display:block;}
+            #hbs-panel .hbs-ntfn,#hbs-panel .hbs-ntfc,#hbs-panel .hbs-ntfs{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-ntfn{font-size:12.5px;} #hbs-panel .hbs-ntfc{opacity:.75;} #hbs-panel .hbs-ntfs{font-size:10.5px;} #hbs-panel .hbs-ntfw{color:#FFB454;}
+            #hbs-panel .hbs-ntfb{display:flex;gap:4px;flex:none;} #hbs-panel .hbs-ntfb .hbs-btn{min-width:34px;padding-left:0;padding-right:0;}
+            #hbs-panel .hbs-ntfh{font-size:11px;color:#FFB454;margin:6px 0 1px;text-align:left;}
             #hbs-panel .hbs-armset{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:5px 10px;}
             #hbs-panel .hbs-armset label{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:11.5px;} #hbs-panel .hbs-armset .hbs-input{width:74px;text-align:right;}
             #hbs-panel .hbs-ann{margin:0 12px 6px;padding:7px 10px;border-radius:8px;background:#2a2414;border:1px solid #6b4a18;color:#ffd9a0;font-size:12.5px;line-height:1.4;word-break:break-word;position:relative;}
@@ -1488,8 +1502,7 @@
                 + lines.map(t => `<div class="hbs-li"><span>${t}</span></div>`).join('')
                 + relHtml
                 + (NT.length ? sec(`📣 Notify (no OC script) · ${todo} to do`) + `<div class="hbs-hint">They can't see their OC assignment. Each button copies the message and opens Torn - paste and send. 💬 / ✉️ / ✓ log the contact for every leader (here and on the Hub site).</div>`
-                    + NT.slice(0, 12).map((x, i) => `<div class="hbs-li"><span><b>${esc(x.name)}</b><br><span style="opacity:.75">${esc(x.crime)} #${esc(x.crime_id)} · ${esc(x.position)}</span><br><span data-ntfst="${i}">${ntfBadge(x)}</span></span>
-                        <span style="white-space:nowrap"><button class="hbs-btn" data-ntf="chat" data-i="${i}">💬</button> <button class="hbs-btn" data-ntf="mail" data-i="${i}">✉️</button> <button class="hbs-btn" data-ntf="sent" data-i="${i}">✓</button></span></div>`).join('')
+                    + ntfListHtml(NT, x => esc(x.name), 12)
                     + `<div class="hbs-hint" data-ntfmsg>Full list: OC Management → 📣 Notify on the Hub site.</div>` : '')
                 + (lines.length ? '<div class="hbs-hint">Details: OC Management / War reports on the Hub site.</div>' : '') + '</div>';
         }
@@ -2674,7 +2687,8 @@
         return h;
     }
     function parseChainCount(text) {
-        const cleaned = String(text == null ? '' : text).replace(/\d{1,2}:\d{2}(?::\d{2})?/g, ' ');
+        const cleaned = String(text == null ? '' : text).replace(/\d{1,2}:\d{2}(?::\d{2})?/g, ' ')
+            .replace(/bonus[^\d]{0,20}\d[\d,]*/gi, ' ').replace(/[(\[]\s*\d[\d,]*\s*[)\]]/g, ' ');
         const slash = cleaned.match(/(\d[\d,]*)\s*\/\s*\d[\d,]*/);
         if (slash) return parseInt(slash[1].replace(/,/g, ''), 10);
         const m = cleaned.match(/(?:^|[^\d.,])(\d[\d,]{0,7})(?![\d.])/);
@@ -4413,9 +4427,7 @@
         const lastAt = c => c && c.at ? ` · last contact ${new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '';
         out += cmCard('ocntf', '📣', 'Notify (no OC script)', `<b class="hbs-foldn">${todo}</b><small>to do</small>`, todo > 0, `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">📣 Notify (no OC script)</span><span class="hbs-chip">${todo} to do</span></div>`
             + (NT.length ? `<div class="hbs-hint">They can't see their OC seat. ✉️ opens the mail with the subject and message filled in; 💬 opens their profile - tap Chat and the message is typed in. You press Send. ✓ just logs it. Every leader sees the contact.</div>`
-                + NT.map((x, i) => `<div class="hbs-li"><span>${pl(x.pid, x.name)}<br><span style="opacity:.75">${esc(x.crime)} #${esc(x.crime_id)} · ${esc(x.position)}${lastAt(x.contacted)}</span>
-                    <br><span data-ntfst="${i}">${ntfBadge(x)}</span></span>
-                    <span style="white-space:nowrap"><button class="hbs-btn" data-ntf="chat" data-i="${i}">💬</button> <button class="hbs-btn" data-ntf="mail" data-i="${i}">✉️</button> <button class="hbs-btn" data-ntf="sent" data-i="${i}">✓</button></span></div>`).join('')
+                + ntfListHtml(NT, x => pl(x.pid, x.name), 0)
                 + '<div class="hbs-hint" data-ntfmsg></div>'
             : '<div class="hbs-hint">✅ Nobody to notify.</div>') + '</div>');
         const D = S.delays || [];
