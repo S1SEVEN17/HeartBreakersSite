@@ -68,7 +68,7 @@ input[type=number]{width:70px;text-align:center}
 .pstat b{display:block;color:#fff;font-size:22px;line-height:1.2}.pstat span{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-top:3px}
 .pstat i{font-style:normal;color:var(--sub);font-size:11px;margin-top:1px}
 .soon{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px 10px;margin:8px 0}.soonh{margin-bottom:4px}
-.soonr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.soonf{color:var(--gold);margin-left:auto}
+.soonr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.soonf{color:var(--gold);margin-left:auto}.soonn{color:#9fd8a8}
 @media (max-width:640px){.pstat{grid-template-columns:repeat(2,minmax(0,1fr))}.pstat div:last-child{grid-column:1/-1}}
 /* crimes list */
 .crl{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
@@ -1515,9 +1515,30 @@ function soonHtml(plan) {
   });
   if (!out.length) return `<div class="hn">⏳ <b>Available in under 24h</b> - nobody using the Suite is finishing a crime in the next 24 hours.</div>`;
   out.sort((a, b) => a.at - b.at);
+  // EXPECTED NEXT ASSIGNMENT (Nov 18 2026, user: "next to "Available in 24h" listings show their next expected
+  // assignment. Don't actually assign these users, but just give an idea of what role they will fill once their current
+  // crime ends."): DISPLAY ONLY - nothing is saved or sent. Soonest-free first, each member gets the open seat that pays
+  // them the most per day if joined now (eachPay x the time-in-crime multiplier, as the pay lines) among recruiting
+  // crimes in Torn that are switched on, where their rate (rateOf) is at or above the role's minimum (floorOf). A seat
+  // the deployed plan already reserves for someone, or one an earlier member in this list was given, is skipped. The
+  // team target isn't checked (the crime will have changed by then) - it's a guide. Members already lined up by the
+  // plan (queued) show that instead.
+  const reserved = new Set(), took = new Set();
+  ((plan && plan.teams) || []).forEach(t => { if (t.crime_id != null) (t.roles || []).forEach(r => { if (r.pid != null && !r.existing) reserved.add(t.crime_id + "|" + r.position); }); });
+  const seats = [];
+  (D.feed || []).forEach(c => { if (!c || c.status !== "Recruiting" || !crimeOk(c.name)) return;
+    const v = valueOf(c.name); if (!v.pot) return;
+    const ld = liveDays({kind: "live", crime_id: c.id, crime: c.name}), pay = eachPay(c.name) * Math.max(1, ld ? v.days / ld : 1);
+    (c.slots || []).forEach(sl => { if (sl.user) return; const pos = feedRole(sl), k = c.id + "|" + pos; if (!reserved.has(k)) seats.push({k, crime: c.name, id: c.id, pos, pay}); }); });
+  seats.sort((a, b) => b.pay - a.pay);
+  out.forEach(x => { if (lined.has(String(x.pid))) return;
+    const st = seats.find(z => !took.has(z.k) && (() => { const r = rateOf(x.pid, z.crime, z.pos); return r && r.rate != null && r.rate >= floorOf(z.crime, z.pos); })());
+    if (st) { took.add(st.k); x.next = st; } });
   return `<div class="soon"><div class="soonh">⏳ <b>Available in under 24h</b> <span class="tag">${out.length} Suite user${out.length === 1 ? "" : "s"} · soonest first</span></div>`
     + out.map(x => `<div class="soonr"><b>${esc(nameOf(x.pid))}</b><span class="tag">${esc(x.crime)} <span class="tag">#${esc(x.id)}</span></span>`
-      + `<span class="soonf">free in ${freeIn(x.at)}</span>${lined.has(String(x.pid)) ? `<span class="qd">🕒 lined up: ${esc(lined.get(String(x.pid)))}</span>` : ""}</div>`).join("") + `</div>`;
+      + `<span class="soonf">free in ${freeIn(x.at)}</span>${lined.has(String(x.pid)) ? `<span class="qd">🕒 lined up: ${esc(lined.get(String(x.pid)))}</span>`
+        : x.next ? `<span class="soonn" title="A guide only - nobody is assigned until they're free">➜ likely ${esc(x.next.pos)} · ${esc(x.next.crime)} · ${fmt2(x.next.pay)}/day</span>`
+        : `<span class="tag">➜ no open seat they qualify for yet</span>`}</div>`).join("") + `</div>`;
 }
 function drawDeployed() {
   // FILLED crimes aren't shown (Nov 11 2026, user): every slot taken in Torn and no replacement pending - the planner
