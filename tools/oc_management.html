@@ -67,6 +67,8 @@ input[type=number]{width:70px;text-align:center}
 .pstat div{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:10px 6px;text-align:center;display:flex;flex-direction:column;justify-content:center;min-height:78px}
 .pstat b{display:block;color:#fff;font-size:22px;line-height:1.2}.pstat span{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-top:3px}
 .pstat i{font-style:normal;color:var(--sub);font-size:11px;margin-top:1px}
+.soon{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px 10px;margin:8px 0}.soonh{margin-bottom:4px}
+.soonr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.soonf{color:var(--gold);margin-left:auto}
 @media (max-width:640px){.pstat{grid-template-columns:repeat(2,minmax(0,1fr))}.pstat div:last-child{grid-column:1/-1}}
 /* crimes list */
 .crl{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
@@ -1495,6 +1497,28 @@ function drawPlanning() {
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
     ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
 }
+// AVAILABLE IN UNDER 24H (Nov 18 2026, user: "On Recruiting tab, show a list of "Available in under 24h" members. These
+// will be people who's full crimes will end within 24h and will be available for placement again. (Only show members
+// who use the suite script.)"): members seated in a FULL crime (every slot taken, status Planning, from the crimes in
+// Torn) whose ready_at is within 24 h, Suite users only (script_seen in the last 3 days - nobody is listed before any
+// script use is known). Soonest first: name · their crime · free in Xh, plus "🕒 lined up: <crime>" when the plan has
+// already queued them for their next crime.
+function soonHtml(plan) {
+  if (!scriptKnown()) return "";
+  const now = Date.now(), lined = new Map();
+  ((plan && plan.teams) || []).forEach(t => (t.roles || []).forEach(r => { if (r.pid != null && r.queued) lined.set(String(r.pid), t.crime); }));
+  const out = [];
+  (D.feed || []).forEach(c => {
+    if (!c || c.status !== "Planning" || !(c.slots || []).length || !(c.slots || []).every(sl => sl.user) || !c.ready_at) return;
+    const at = c.ready_at * 1000; if (at - now > 24 * 3600e3) return;
+    c.slots.forEach(sl => { const pid = sl.user.id; if (usesScript(pid)) out.push({pid, at, crime: c.name, id: c.id}); });
+  });
+  if (!out.length) return `<div class="hn">⏳ <b>Available in under 24h</b> - nobody using the Suite is finishing a crime in the next 24 hours.</div>`;
+  out.sort((a, b) => a.at - b.at);
+  return `<div class="soon"><div class="soonh">⏳ <b>Available in under 24h</b> <span class="tag">${out.length} Suite user${out.length === 1 ? "" : "s"} · soonest first</span></div>`
+    + out.map(x => `<div class="soonr"><b>${esc(nameOf(x.pid))}</b><span class="tag">${esc(x.crime)} <span class="tag">#${esc(x.id)}</span></span>`
+      + `<span class="soonf">free in ${freeIn(x.at)}</span>${lined.has(String(x.pid)) ? `<span class="qd">🕒 lined up: ${esc(lined.get(String(x.pid)))}</span>` : ""}</div>`).join("") + `</div>`;
+}
 function drawDeployed() {
   // FILLED crimes aren't shown (Nov 11 2026, user): every slot taken in Torn and no replacement pending - the planner
   // drops them on its next run; hide them now too (a member leaving brings the crime back with an open slot)
@@ -1578,6 +1602,7 @@ function drawDeployed() {
            is drawn at a time), wired by wireAuto's set() - one shared OPT.auto saved to the Hub as config "opts" -->
       <b>🤖 Automatic</b><button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>
       <button class="s" id="updNow" style="margin-left:auto" title="Read the crimes from Torn, rebuild the plan and reload this page's data (once a minute)">🔄 Update now</button></div>
+    ${soonHtml(plan)}
     ${alertsHtml()}
     ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
