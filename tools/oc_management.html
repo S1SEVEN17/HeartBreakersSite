@@ -1473,6 +1473,33 @@ function planPay(c, v) {
   return `<div class="pl1"><b class="${cls}">${fmt2(best)}/day</b>${cls ? ` <span class="${cls} plp">▲${pct}% vs normal</span>` : ""}</div>`
     + `<div class="pl2">Normal ${fmt2(normal)}/day · Ready ${when} · ${filled}/${seats} filled</div>`;
 }
+// UNASSIGNED BY THE AUTOMATIC PLAN (Nov 19 2026, user: "Show members who are unassigned to a crime by the automatic team
+// deploy on the Planning screen."): members (CFG.members - Recruit rank already left out by the Hub) who are in no crime
+// in Torn (busyMap) AND hold no seat in the deployed plan (D.config.plan teams' roles). Each gets the first reason that
+// applies, in the same order the planner works:
+//   📵 no Suite      not seen using the Suite in 3 days - only a leader can place them (since Nov 17 2026)
+//   no pass rates    nothing shared and nothing in the crime history to place them by
+//   below minimum    no open seat in a recruiting crime (switched on) where their rate reaches the role's minimum
+//   waiting          could take a seat - the next automatic run (or the next new crime) should place them
+// Display only; nothing is assigned from here.
+function unassignedHtml() {
+  const busy = busyMap(), planned = new Set();
+  ((D.config.plan && D.config.plan.teams) || []).forEach(t => (t.roles || []).forEach(r => { if (r.pid != null) planned.add(String(r.pid)); }));
+  const open = [];
+  (D.feed || []).forEach(c => { if (c && c.status === "Recruiting" && crimeOk(c.name)) (c.slots || []).forEach(sl => { if (!sl.user) open.push([c.name, feedRole(sl)]); }); });
+  const rows = Object.keys(CFG.members).filter(p => !busy[p] && !planned.has(String(p))).map(p => {
+    let why, cls = "";
+    if (scriptKnown() && !usesScript(p)) { why = "📵 no Suite - leader placement only"; cls = "bad"; }
+    else if (!D.rates[p] && !Object.keys(CFG.hist || {}).some(k => CFG.hist[k][p])) { why = "no pass rates shared yet"; cls = "bad"; }
+    else if (!open.some(([cn, pos]) => { const r = rateOf(p, cn, pos); return r && r.rate != null && r.rate >= floorOf(cn, pos); })) { why = `no open seat at the ${OPT.minRole}% minimum`; cls = "mid"; }
+    else { why = "free - the next run should place them"; cls = "ok"; }
+    return {p, why, cls};
+  }).sort((a, b) => ["bad", "mid", "ok"].indexOf(a.cls) - ["bad", "mid", "ok"].indexOf(b.cls) || nameOf(a.p).localeCompare(nameOf(b.p)));
+  if (!rows.length) return `<div class="hn">👥 <b>Unassigned</b> - every member is in a crime or has a seat in the automatic plan.</div>`;
+  return `<div class="soon"><div class="soonh">👥 <b>Unassigned by the automatic plan</b> <span class="tag">${rows.length} member${rows.length === 1 ? "" : "s"} · not in a crime, no seat planned</span></div>`
+    + rows.map(x => `<div class="soonr"><b>${esc(nameOf(x.p))}</b><span class="${x.cls}" style="margin-left:auto">${esc(x.why)}</span></div>`).join("")
+    + `<div class="tag" style="margin-top:4px">Recruit-rank members aren't listed - they can't join crimes until Heart Beat.</div></div>`;
+}
 function drawPlanning() {
   const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
   const when = s => s ? new Date(s * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "-";
@@ -1520,7 +1547,7 @@ function drawPlanning() {
   const statsP = `<div class="pstat">${tile(pMem, "Members", "in full crimes")}${tile(fullP.length, "Crimes", "full · planning")}`
     + tile(rngP(pIncLo, pInc), "Member income", "potential · lowest – highest") + tile(rngP(pTaxLo, pTax), "Faction tax", "potential · lowest – highest")
     + tile(pSucc.length ? "🎲 " + Math.round(pSucc.reduce((a, b) => a + b, 0) / pSucc.length) + "%" : "-", "Avg success", `${pSucc.length} of ${fullP.length} checked`) + `</div>`;
-  $("view").innerHTML = `<div class="panel">${statsP}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
+  $("view").innerHTML = `<div class="panel">${statsP}${unassignedHtml()}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
     ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
 }
