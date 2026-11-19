@@ -2396,8 +2396,15 @@ function ocSnapPut(env, envName, ds, asOf, data, by) {
 // per crime); a crime already stored is left alone (completed crimes never change)
 // D1 READS FIX 2 (Nov 19 2026, user: "Sure." to the 5 read fixes): which of these crime ids are already stored - looks
 // up just these ids by the (env, id) key (a few rows) instead of reading the newest 200-300 stored ids every time
-async function histKnown(env, ids) {
-  const out = new Set(), list = [...new Set((ids || []).map(Number).filter(i => i > 0))];
+// (Nov 19 2026, live check: looking up every id of a 100-crime page cost ~270 rows a call) - pass the crimes themselves:
+// only those executed within a day of the newest stored completion are looked up (1 indexed row for the newest + a
+// handful); older ones are treated as already stored (Torn lists newest first - they were stored long ago; storing one
+// again is an upsert, so a wrong guess costs nothing).
+async function histKnown(env, crimes) {
+  const top = await env.OC_DB.prepare("SELECT MAX(executed_at) AS t FROM oc_hist WHERE env = 'prod'").first().catch(() => null);
+  const cut = (Number(top && top.t) || 0) - 86400, out = new Set();
+  (crimes || []).forEach(c => { if (c && Number(c.id) > 0 && Number(c.executed_at) > 0 && Number(c.executed_at) < cut) out.add(Number(c.id)); });
+  const list = [...new Set((crimes || []).filter(c => c && Number(c.id) > 0 && !out.has(Number(c.id))).map(c => Number(c.id)))];
   for (let i = 0; i < list.length; i += 100) {
     const {results} = await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' AND id IN (SELECT value FROM json_each(?))")
       .bind(JSON.stringify(list.slice(i, i + 100))).all();
@@ -2932,7 +2939,7 @@ async function ocFeedPull(env) {
     ops.push(ocSnapPut(env, "hub", "completed:raw", now, JSON.stringify(d.crimes || []), "hub"));
     const done = (d.crimes || []).filter(c => c && c.id && c.executed_at && c.status === "Successful");
     if (done.length) {
-      const known = await histKnown(env, done.map(c => c.id));   // (fix 2, Nov 19 2026)
+      const known = await histKnown(env, done);                   // (fix 2, Nov 19 2026)
       const fresh = done.filter(c => !known.has(Number(c.id)));
       if (fresh.length) { const hops = []; ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now))); await env.OC_DB.batch(hops); newHist = true; noteItems(fresh); }
     }
@@ -2994,7 +3001,7 @@ async function ocFeedPull(env) {
     for (let page = 0; page < 6; page++) {
       const d = await ocTorn(env, `faction/crimes?cat=successful&limit=100&offset=${page * 100}&sort=DESC`);
       const list = d.crimes || [];
-      const known = await histKnown(env, list.map(c => c && c.id));   // (fix 2, Nov 19 2026) just this page's ids
+      const known = await histKnown(env, list);                       // (fix 2, Nov 19 2026) just this page's newest crimes
       let hit = false;
       for (const c of list) { if (known.has(Number(c.id))) { hit = true; continue; } if (c && c.id && c.executed_at) fresh.push(c); }
       if (hit || list.length < 100) break;
