@@ -23,6 +23,43 @@ jobs:
           # how many members hold the Recruit position (kept out of OC planning) - a count only
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT COUNT(*) AS n, SUM(lower(json_extract(j.value, '$.position')) = 'recruit') AS recruits FROM oc_snap, json_each(oc_snap.data) AS j WHERE oc_snap.env = 'hub' AND oc_snap.ds = 'members:live'" > rec.json 2>/dev/null \
             && python3 -c "import json; r = json.load(open('rec.json'))[0]['results'][0]; print(f\"Live member list: {r['n']} members, {r['recruits'] or 0} with the Recruit position\")" || true
+          # WHY MEMBERS AREN'T PLACED (Nov 19 2026, counts only - no names in public logs): members not seated in any crime,
+          # each counted once under the first reason that applies
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT 'live' AS k, data AS v FROM oc_snap WHERE env = 'hub' AND ds = 'members:live' UNION ALL SELECT 'crimes', data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes' UNION ALL SELECT 'cfg:' || k, v FROM oc_config WHERE env = 'prod' AND k IN ('plan', 'opts') UNION ALL SELECT 'cpr:' || player_id, roles FROM oc_cpr WHERE env = 'prod' UNION ALL SELECT 'ver:' || pid, at FROM sx_ver WHERE at > (strftime('%s','now') - 259200) * 1000 UNION ALL SELECT 'seen:' || pid, ts FROM oc_seen WHERE env = 'prod' AND ts > (strftime('%s','now') - 259200) * 1000" > why.json 2>/dev/null \
+            && python3 - <<'PY' || true
+          import json
+          R = json.load(open('why.json'))[0]['results']
+          get = lambda k: next((r['v'] for r in R if r['k'] == k), None)
+          J = lambda v: json.loads(v) if isinstance(v, str) else v
+          live = J(get('live')) or []; crimes = J(get('crimes')) or []; plan = J(get('cfg:plan')) or {}; opts = J(get('cfg:opts')) or {}
+          crimes = crimes if isinstance(crimes, list) else crimes.get('crimes', [])
+          suite = {r['k'].split(':')[1] for r in R if r['k'].startswith(('ver:', 'seen:'))}
+          cpr = {r['k'][4:]: J(r['v']) or {} for r in R if r['k'].startswith('cpr:')}
+          seated = {str(s['user']['id']) for c in crimes for s in (c.get('slots') or []) if s.get('user')}
+          planned = {str(x.get('pid')) for t in (plan.get('teams') or []) for x in (t.get('roles') or []) if x.get('pid') is not None}
+          mn = float(opts.get('minRole', 60) or 60)
+          open_roles = [(c.get('name'), ((s.get('position_info') or {}).get('label') or s.get('position') or '')) for c in crimes if c.get('status') == 'Recruiting' for s in (c.get('slots') or []) if not s.get('user')]
+          def fits(pid):
+              roles = cpr.get(pid) or {}
+              for cn, lab in open_roles:
+                  base = lab.split('#')[0].strip()
+                  for k, v in roles.items():
+                      kc, _, kr = k.partition('|')
+                      if kc == cn and (kr == lab or kr.split('#')[0].strip() == base) and (float(v or 0) >= mn): return True
+              return False
+          free = [m for m in live if str(m.get('id')) not in seated]
+          cnt = {'recruit rank': 0, 'already planned (seat reserved)': 0, 'no Suite in 3 days': 0, 'Suite, no shared rates': 0, 'rates below the minimum for every open seat': 0, 'eligible but not placed': 0}
+          for m in free:
+              pid = str(m.get('id'))
+              if str(m.get('position', '')).strip().lower() == 'recruit': cnt['recruit rank'] += 1
+              elif pid in planned: cnt['already planned (seat reserved)'] += 1
+              elif pid not in suite: cnt['no Suite in 3 days'] += 1
+              elif not cpr.get(pid): cnt['Suite, no shared rates'] += 1
+              elif not fits(pid): cnt['rates below the minimum for every open seat'] += 1
+              else: cnt['eligible but not placed'] += 1
+          print(f"Not in a crime: {len(free)} of {len(live)} members · open seats in recruiting crimes: {len(open_roles)} · minimum {mn:g}%")
+          for k, v in cnt.items(): print(f"  {k}: {v}")
+          PY
           # USAGE REPORT (Nov 19 2026): Hub calls per type and Torn reads (counts only) for today (UTC) and yesterday
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT day, k, n FROM hub_usage WHERE day >= date('now', '-1 day') ORDER BY day DESC, n DESC" > us.json 2>/dev/null \
             && python3 - <<'PY' || true
