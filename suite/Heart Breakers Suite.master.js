@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.88
+// @version      0.2.89
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.89 (Nov 19 2026) - 📡 Smarter syncing: the Hub tells your Suite when something changes; shared Torn reads; one check-in for your OC tile + alerts; Loans use the Hub's copy.
  *  v0.2.88 (Nov 18 2026) - 📡 Fewer API calls: your OC pass rates are re-read every 6 hours (was hourly), plus at once when a crime spawns, your crime changes or a seat opens while you're free.
  *  v0.2.87 (Nov 18 2026) - 📡 Your OC check also runs while the Suite is minimized, so your pass rates are shared soon after your crime changes.
  *  v0.2.86 (Nov 18 2026) - 🔑 Signing in without an API key (0.2.83-0.2.84) removed for now - add your key in ⚙.
@@ -486,7 +487,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.88';
+    const VERSION = '0.2.89';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -519,6 +520,9 @@
         sharePingAt: 'hbs_share_pingat',       // ms the Hub was last asked (any tab) (0.2.55)
         shareDay: 'hbs_share_day',             // TCT day (YYYY-MM-DD) the stats were last sent
         ocCurSig: 'hbs_oc_cur_sig',            // (0.2.76) the crime the Hub last showed this member in ("<crime id>" or "0") - a change sends the pass rates
+        myOcSync: 'hbs_myoc_sync',             // (0.2.89) the check-in's myoc {at, d} (shared between tabs)
+        alertsV: 'hbs_alerts_v',               // (0.2.89) leaders: the alert list's signature from the check-in
+        busSeen: 'hbs_bus_seen',               // (0.2.89) 📡 the Hub push notes already acted on {k: v}
         ocMeSig: 'hbs_oc_me_sig',              // (0.2.70) the own crime last reported to the Hub ("<crime id>:<role>" or "0")
         feedDoneAt: 'hbs_feed_done_at',        // (0.2.71) ms the completed crimes were last read for the feed (any tab)
         feedOn: 'hbs_feed_on',                 // (0.2.69) ms until which THIS member's script is the crime feeder (any tab)
@@ -781,7 +785,22 @@
     // SHARED TORN BUDGET (suite): one queue for every module - calls go out >= TORN_GAP ms apart
     const TORN_GAP = 650;
     let tornNext = 0;
+    // (0.2.89) 10. counts of Torn reads by type since the last check-in (numbers only - see build_patch_0289.py)
+    const tornCount = {};
+    const tornKind = url => { const m = String(url).replace(/^https:\/\/api\.torn\.com\//, '').split('?'); const sel = (m[1] || '').match(/selections=([^&]*)/);
+        return (m[0].replace(/\/\d+/g, '/#').replace(/\/$/, '') + (sel ? ':' + sel[1] : '') + (/cat=(\w+)/.test(m[1] || '') ? ':' + RegExp.$1 : '')).slice(0, 30); };
+    // (0.2.89) 1. the same URL asked again within TORN_MEMO_MS gets the kept answer (Torn caches ~30 s anyway)
+    const TORN_MEMO_MS = 30000, tornMemo = new Map();
     async function tornGet(url) {
+        const hit = tornMemo.get(url);
+        if (hit && Date.now() - hit.at < TORN_MEMO_MS) return hit.p;
+        const p = tornGetRaw(url);
+        tornMemo.set(url, { at: Date.now(), p }); if (tornMemo.size > 40) tornMemo.delete(tornMemo.keys().next().value);
+        p.catch(() => tornMemo.delete(url));                   // a failed read is never kept
+        return p;
+    }
+    async function tornGetRaw(url) {
+        const k = tornKind(url); tornCount[k] = (tornCount[k] || 0) + 1;
         const wait = Math.max(0, tornNext - Date.now());
         tornNext = Math.max(Date.now(), tornNext) + TORN_GAP;
         if (wait) await sleep(wait);
@@ -3331,6 +3350,26 @@
         const left = num(b.next) - c.current;
         return left > 0 && left <= 5 ? { left, name: b.name || '#' + b.pid, next: num(b.next), last: left === 1 } : null;
     }
+    // (0.2.89) 📡 9. HUB PUSH - see build_patch_0289.py. {t: "bus", k, v} one change, {t: "bus", all} every k's latest
+    // v on connect. Each changed k fetches just that, 2-17 s later (spread between Suites).
+    function busIn(m) {
+        cw.busOk = true;
+        const seen = store.get(K.busSeen, null) || {}, ch = [];
+        if (m.all && typeof m.all === 'object') Object.keys(m.all).forEach(k => { if (seen[k] !== m.all[k]) { ch.push(k); seen[k] = m.all[k]; } });
+        else if (m.k && seen[m.k] !== m.v) { ch.push(m.k); seen[m.k] = m.v; }
+        store.set(K.busSeen, seen);
+        if (!ch.length || !me) return;
+        const later = fn => setTimeout(() => { try { fn(); } catch (e) { /* next note */ } }, 2000 + Math.random() * 15000);
+        if (ch.includes('crimes') || ch.includes('plan')) later(() => {
+            // the check-in brings my OC tile, the crime tag (pass rates) and the leaders' alert signature in one call
+            const st = store.get(K.share, null) || { oc: true };
+            if (st.oc && getKey()) { store.set(K.sharePingAt, 0); shareTick(true); }
+            else loadMyOc(true).then(() => { drawOcPin(); drawTabDots(); }, () => {});
+            if (tab === 'oc' && !collapsed && !cwBusy()) { liveClear(); render(true); }
+        });
+        if (ch.includes('loans') && (me.leader || me.loans)) later(() => { liveClear(); if (tab === 'oc' && !collapsed && !cwBusy()) render(true); });
+        if (ch.includes('armory') && me.leader) later(() => { liveClear(); if (!collapsed && !cwBusy()) render(true); });
+    }
     // ---- messages from the Hub ----
     function cwIn(m) {
         if (!m || !m.t) return;
@@ -3343,6 +3382,7 @@
             if (m.kind === 'join_refused') { cw.optimistic = null; cw.queued = false; store.set(K.cwq, false); cwShow(); }   // undo the optimistic join
             alertMe(m.text || m.kind, false); return; }
         if (m.t === 'mode') { cw.mode = m.mode; return; }
+        if (m.t === 'bus') { busIn(m); return; }                    // (0.2.89) 📡 9. the Hub says something changed
         if (m.suite) updFromHub(m.suite);                           // (0.2.39) the published Suite version -> update banner at once
         if (m.chain) { cw.hubAt = Date.now();                      // when the Hub last sent a chain (page-read sanity reference)
             try { store.set(K.cwSnap, { chain: m.chain, offset: num(m.now) - Date.now(), at: Date.now() }); } catch (e) { /* */ } }
@@ -3990,7 +4030,17 @@
     // 🕵 OC MODULE — your crime + seat, Join, leaders' OC alerts + Notify; the crimes-page highlight of your seat
     // =====================================================================
     let myOc = null, myOcAt = 0;
+    // (0.2.89) 7. the check-in's myoc - shared between tabs (only one tab does the check-in)
+    function syncMyOc(d) { store.set(K.myOcSync, { at: Date.now(), d }); applyMyOc(d, Date.now()); }
+    function applyMyOc(d, at) {
+        myOc = d; myOcAt = at;
+        const cs = String((myOc && myOc.current && (myOc.current.crime_id || myOc.current.id)) || 0), was = store.get(K.ocCurSig, null);
+        if (cs !== was) { store.set(K.ocCurSig, cs); if (was !== null) { store.set(K.ocShareAt, 0); store.set(K.sharePingAt, 0); } }
+        try { drawOcPin(); drawTabDots(); } catch (e) { /* not drawn yet */ }
+    }
     async function loadMyOc(force) {
+        const S = store.get(K.myOcSync, null);                  // a newer reading from the check-in (this or another tab)
+        if (!force && S && S.d && num(S.at) > myOcAt && Date.now() - num(S.at) < 170000) { myOc = S.d; myOcAt = num(S.at); return myOc; }
         if (!force && myOc && Date.now() - myOcAt < 60000) return myOc;
         try { myOc = await live('myoc'); myOcAt = Date.now();
             // (0.2.76) OWN CRIME CHANGED (joined, left, completed, gone) -> the pass rates go out on the next share round
@@ -4717,6 +4767,8 @@
     // (0.2.87) minimized too: every minute open, every 3 minutes minimized (see build_patch_0287.py)
     let ocPinMinAt = 0;
     const ocPinTick = () => { if (!me || document.hidden || !modOn('oc')) return;
+        // (0.2.89) 7. the check-in brings this every 2-5 minutes: ask separately only when that reading is ~3 min old
+        const S = store.get(K.myOcSync, null); if (S && Date.now() - num(S.at) < 170000) { if (num(S.at) > myOcAt) { applyMyOc(S.d, num(S.at)); } return; }
         if (collapsed) { if (Date.now() - ocPinMinAt < 175000) return; ocPinMinAt = Date.now(); }
         loadMyOc(false).then(() => { drawOcPin(); drawTabDots(); }, () => {}); };
     setInterval(ocPinTick, 60000); setTimeout(ocPinTick, 2500);   // + once soon after load, so the tile shows without visiting 🕵 OC
@@ -4792,7 +4844,8 @@
         return w.from == null ? `new on the list at ${L(w.to)}` : `dropped ${L(w.from)} → ${L(w.to)}`; };
     async function refreshBadges(force) {
         if (!me || !me.leader || document.hidden) return;
-        if (!force && Date.now() - badgeAt < 180000) return;
+        // (0.2.89) 7. with the check-in's alerts_v the list is re-read when it changes (refreshBadges(true)), else every 15 min
+        if (!force && Date.now() - badgeAt < (store.get(K.alertsV, '') ? 900000 : 180000)) return;
         badgeAt = Date.now();
         try { await alertsHtml(); } catch (e) { return; }   // [HB Suite] Hub API — op live "spawn" (via the Alerts tab's own reads)
         drawBadges();
@@ -5824,6 +5877,11 @@
     async function loanRefresh() {
         if (loanBusy) return; loanBusy = true; loanErr = ''; render(true);
         try {
+            // (0.2.89) 4. the Hub's list first: under 3 minutes old = used as is, no Torn call
+            liveClear();
+            // [HB Suite] Hub API — op live "spawn" / "loans": the Hub's loaned-utilities list (+ its age)
+            const S = await live(me.leader ? 'spawn' : 'loans').catch(() => null), N0 = await names().catch(() => ({ byId: {} }));
+            if (S && num(S.loaned_at) && Date.now() - num(S.loaned_at) < 180000) { loanFromHub(S, N0, true); loanBusy = false; loanHighlight(); render(true); return; }
             const [d, N] = await Promise.all([
                 // [HB Suite] Torn API — Loans: faction utilities with loaned_to (leaders, on Refresh only)
                 tornGet('https://api.torn.com/faction/?selections=utilities'), names()]);
@@ -5837,6 +5895,9 @@
                         out.push({ pid, name: nameOf(N, pid), iid, item: it.name || '#' + iid }); });
                 }); });
             loanWrite({ unused: out, uts: Date.now(), usrc: 'me' });   // (0.2.79) usrc: kept until the Hub has a newer reading
+            // (0.2.89) 4. the Hub's copy was outdated: hand it these rows for every loan staff member
+            // [HB Suite] Hub API — op "loans_put": the loaned utilities [{pid, iid, item}] (ids + item names only)
+            hub('loans_put', { rows: out.map(e => ({ pid: e.pid, iid: e.iid, item: e.item })) }).catch(() => {});
         } catch (e) { loanErr = 'Couldn\'t read the armoury: ' + e.message; }
         loanBusy = false; loanHighlight(); render(true);
     }
@@ -7113,6 +7174,8 @@
     // something on (cached in K.share; nothing at all reaches the Hub otherwise). See SHARING in the notes.
     // ---------------------------------------------------------------------
     let shareTimer = null, shareBusy = false;
+    // (0.2.89) 9. while the Hub can push changes (Chain Watch connection open) the routine check-in is every 5 minutes
+    const pingEvery = () => (cw && cw.ws && cw.ws.readyState === 1 && cw.busOk) ? 300000 : SHARE_PING_MS;
     const tctDay = () => new Date().toISOString().slice(0, 10);
     async function shareTick(now) {
         clearTimeout(shareTimer); shareTimer = null;
@@ -7145,12 +7208,17 @@
                     await hub('share_push', body);
                     store.set(K.shareDay, day);
                 }
-                if (st.oc && Date.now() - num(store.get(K.sharePingAt, 0)) > SHARE_PING_MS - 20000) {
+                if (st.oc && Date.now() - num(store.get(K.sharePingAt, 0)) > pingEvery() - 20000) {
                     store.set(K.sharePingAt, Date.now());
                     // [HB Suite] Hub API — op "share_ping": is a leader watching War Readiness? a new crime? (also refreshes the
                     // settings)
                     // [HB Suite] Hub API — op "share_ping": the regular check-in; (0.2.77) + this Suite's version / PDA flag
-                    const p = await hub('share_ping', { v: VERSION, pda: isPDA() });
+                    // (0.2.89) 7. sync: 1 = add my OC tile data + (leaders) the alert list's signature; 10. torn = this
+                    // device's Torn read counts since the last check-in (numbers only)
+                    const tc = Object.assign({}, tornCount); Object.keys(tornCount).forEach(k => delete tornCount[k]);
+                    const p = await hub('share_ping', { v: VERSION, pda: isPDA(), sync: 1, torn: tc });
+                    if (p.myoc) syncMyOc(p.myoc);
+                    if (p.alerts_v != null && me && me.leader && p.alerts_v !== store.get(K.alertsV, '')) { store.set(K.alertsV, p.alerts_v); refreshBadges(true); }
                     const ps = p.settings || st;
                     if (p.settings) store.set(K.share, p.settings);
                     if (p.feed_free) feedAsk();        // (0.2.69) nobody is feeding the crime list - offer this script
@@ -7200,18 +7268,26 @@
         if (Date.now() - num(store.get(K.feedAt, 0)) < FEED_MS - 2000) return;      // this or another tab read it under a minute ago
         feedBusy = true; store.set(K.feedAt, Date.now());
         try {
+            // (0.2.89) 5. FEEDER BACKUP: ask the Hub first (keeps the lease); a reading its own key made under a minute
+            // ago (completed crimes: 3 minutes) isn't read again
+            // [HB Suite] Hub API — op "oc_feed" beat: keep the feeder job + when the Hub last read each list itself
+            const hb = await hub('oc_feed', { do: 'beat' }).catch(() => null);
+            if (hb && hb.feed === false) { store.set(K.feedOn, 0); feedBusy = false; return; }
+            const ha = (hb && hb.hub_at) || {}, fresh = (k, ms) => num(ha[k]) && Date.now() - num(ha[k]) < ms;
+            if (hb) store.set(K.feedOn, Date.now() + FEED_LEASE_MS);
+            if (fresh('crimes', 60000)) { feedBusy = false; return; }
             // [HB Suite] Torn API — crime feed: the faction's recruiting + planning crimes (v2 faction/crimes, 1 call a
             // minute, ONLY while the Hub has picked this script as the feeder)
             const d = await tornGet('https://api.torn.com/v2/faction/crimes?cat=available&limit=100&sort=ASC');
             // [HB Suite] Hub API — op "oc_feed" put: the crime list (no key; the Hub blanks this member's own open-slot rates)
             const body = { do: 'put', crimes: Array.isArray(d.crimes) ? d.crimes : [] };
             // (0.2.71) FEEDER EXTRAS - each in its own try: a failed extra never holds the crime list back
-            try {
+            if (!fresh('now', 60000)) try {
                 // [HB Suite] Torn API — crime feed extra: the faction's chain + wars (v2 faction, 1 call a minute, feeder only)
                 const n = await tornGet('https://api.torn.com/v2/faction?selections=chain,wars');
                 if (n && (n.chain !== undefined || n.wars !== undefined)) body.now = { chain: n.chain || null, wars: n.wars || null };
             } catch (e) { /* the Hub's own read covers it */ }
-            if (Date.now() - num(store.get(K.feedDoneAt, 0)) > 170000) {
+            if (Date.now() - num(store.get(K.feedDoneAt, 0)) > 170000 && !fresh('recent', 170000)) {
                 try {
                     // [HB Suite] Torn API — crime feed extra: the newest completed crimes (v2 faction/crimes, 1 call every 3 min, feeder only)
                     const c = await tornGet('https://api.torn.com/v2/faction/crimes?cat=completed&limit=100&sort=DESC');
