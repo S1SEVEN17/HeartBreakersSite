@@ -1418,6 +1418,25 @@ function planOf(crimeId, pid) {
   const sl = c && (c.slots || []).find(x => x.user && String(x.user.id) === String(pid));
   return sl ? Number(sl.user.progress) || 0 : null;
 }
+// PLANNING PAY LINE (Nov 19 2026, user: "Planning tab should follow the same format as the recruiting tab in regards to
+// pay per day, etc."): the Recruiting tab's two-line layout C (payLine) for a crime that's planning -
+//   1. the HIGHEST pay per member per day in this crime: each member's share (highest recorded reward ÷ seats) over
+//      the days from when THEY joined to when it's ready (Torn's joined_at -> ready_at), never below normal (delays
+//      never count against it) + "▲N% vs normal" - green at 25%+ shown, yellow 1-24, no colour when it's normal
+//   2. Normal $X/day (highest recorded, over the crime type's planning days) · Ready <day time> (in Xh) · filled/total
+// Members' join times missing -> line 1 shows the normal pay. "below the target" stays under it.
+function planPay(c, v) {
+  if (!v || !v.pot) return "💰 no pay data yet";
+  const seats = (c.slots || []).length || rolesOf(c.name).length || 1, cut = v.pot / (rolesOf(c.name).length || seats), normal = eachPay(c.name);
+  let best = normal;
+  if (c.ready_at) (c.slots || []).forEach(sl => { const ja = sl.user && Number(sl.user.joined_at); if (!ja) return;
+    const d = (c.ready_at - ja) / 86400; if (d > 0.05) best = Math.max(best, cut / d); });
+  const pct = Math.round((best / (normal || best) - 1) * 100), cls = pct < 1 ? "" : pct >= 25 ? "ok" : "mid";
+  const filled = (c.slots || []).filter(sl => sl.user).length;
+  const when = c.ready_at ? new Date(c.ready_at * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) + ` (in ${freeIn(c.ready_at * 1000)})` : "-";
+  return `<div class="pl1"><b class="${cls}">${fmt2(best)}/day</b>${cls ? ` <span class="${cls} plp">▲${pct}% vs normal</span>` : ""}</div>`
+    + `<div class="pl2">Normal ${fmt2(normal)}/day · Ready ${when} · ${filled}/${seats} filled</div>`;
+}
 function drawPlanning() {
   const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
   const when = s => s ? new Date(s * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) : "-";
@@ -1435,7 +1454,7 @@ function drawPlanning() {
         + `${u ? `<span class="drs">${planTag(pg)}</span>` : ""}</div>`; }).join("");
     return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
-      <div class="tag">🏁 Ready ${c.ready_at ? `<b>${when(c.ready_at)}</b> · in ${freeIn(c.ready_at * 1000)}` : "-"}${cut ? ` · 💰 up to ${fmt2(cut)} each` : ""}${w != null && w < OPT.target ? ` · <span class="bad">below the ${OPT.target}% target</span>` : ""}</div>
+      <div class="tag">${planPay(c, v)}${w != null && w < OPT.target ? `<div class="bad">below the ${OPT.target}% target</div>` : ""}</div>
       <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`; }).join("");
   // PLANNING STATS (Nov 18 2026, user: "Add some stats to the Planning section" -> "This should only account for crimes
   // that are full and in their planning phase." + "1. Highest Potential 2. No." (no colour on the success tile)):
