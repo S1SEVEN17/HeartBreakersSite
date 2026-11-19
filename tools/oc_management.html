@@ -68,7 +68,9 @@ input[type=number]{width:70px;text-align:center}
 .pstat b{display:block;color:#fff;font-size:22px;line-height:1.2}.pstat span{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-top:3px}
 .pstat b small{display:block;font-size:13px;color:#cfc6c0;font-weight:600}.pstat i{font-style:normal;color:var(--sub);font-size:11px;margin-top:1px}
 .soon{background:var(--card);border:1px solid var(--edge);border-radius:10px;padding:8px 10px;margin:8px 0}.soonh{margin-bottom:4px}
-.soonr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.soonf{color:var(--gold);margin-left:auto}.soonn{color:#9fd8a8}
+.soonr{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;padding:4px 0;border-top:1px solid #2a1416;font-size:13px}.soonf{color:var(--gold);margin-left:auto}summary.soonh,summary.csum{cursor:pointer;list-style:none}summary.soonh::-webkit-details-marker,summary.csum::-webkit-details-marker{display:none}
+summary.soonh::before,summary.csum::before{content:"▸ ";color:var(--gold)}details[open]>summary.soonh::before,details[open]>summary.csum::before{content:"▾ "}
+summary.csum{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}summary.csum .csx{color:var(--sub);font-size:13px}details[open]>summary.csum{margin-bottom:2px}details.team[open]>summary.csum .csx,details.team[open]>.th>.dif,details.team[open]>.th>b:first-of-type{display:none}.soonn{color:#9fd8a8}
 @media (max-width:640px){.pstat{grid-template-columns:repeat(2,minmax(0,1fr))}.pstat div:last-child{grid-column:1/-1}}
 /* crimes list */
 .crl{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px}
@@ -1483,6 +1485,26 @@ function planPay(c, v) {
 //   below minimum    no open seat in a recruiting crime (switched on) where their rate reaches the role's minimum
 //   waiting          could take a seat - the next automatic run (or the next new crime) should place them
 // Display only; nothing is assigned from here.
+// COLLAPSIBLE (Nov 19 2026, user: "Unassigned and Available in under 24h menus should be collapsable. Each crime should
+// be collapsable with important info shown. Name, Pay per days, Filled/Total Slots, Pass %, planning time remaining,
+// etc."): <details data-col="<key>"> boxes on 🚀 Recruiting. Open / closed is remembered per box on this device
+// (localStorage hb_oc_open {key: true/false}) and survives the 15 s live redraws; the lists start open, crimes start
+// closed (their one-line summary shows the key facts - crimeSum).
+const colOpen = (k, dflt) => { const o = LS.get("hb_oc_open", {}); return o[k] == null ? dflt : !!o[k]; };
+document.addEventListener("toggle", e => { const d = e.target; if (!d || !d.dataset || !d.dataset.col) return;
+  const o = LS.get("hb_oc_open", {}); o[d.dataset.col] = d.open; LS.set("hb_oc_open", o); }, true);
+// one-line crime summary: D# name · join-now pay/day (green 25%+ over normal, yellow 1-24) · filled/total · success
+// (🎲 calculated when known, else weighted) · days to payout for whoever joins now (spawn: the crime's planning days)
+function crimeSum(t, av) {
+  const v = valueOf(t.crime), ld = liveDays(t), m = Math.max(1, ld && v.days ? v.days / ld : 1), normal = eachPay(t.crime), now = normal * m;
+  const pct = Math.round((m - 1) * 100), cls = !ld || pct < 1 ? "" : pct >= 25 ? "ok" : "mid";
+  const c = t.kind === "live" ? (D.feed || []).find(x => String(x.id) === String(t.crime_id)) : null;
+  const seats = c ? (c.slots || []).length : t.roles.length, filled = c ? (c.slots || []).filter(sl => sl.user).length : t.roles.filter(r => r.pid != null).length;
+  const sc = teamSuccess(t), sv = sc != null ? sc : av, days = Math.round((ld || v.days || 0) * 10) / 10;
+  return `<summary class="csum"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>${t.lock ? " 🔒" : ""}
+    <span class="csx">${v.pot ? `<b class="${cls}">${fmt2(now)}/day</b>${cls ? ` <span class="${cls}">▲${pct}%</span>` : ""}` : "no pay data"}
+    · 👥 ${filled}/${seats} · <span class="${col(sv)}">${sc != null ? "🎲 " : ""}${sv == null ? "-" : Math.round(sv) + "%"}</span>${days ? ` · ⏱ ${days}d` : ""}${t.kind === "live" ? "" : " · 🧪 spawn"}</span></summary>`;
+}
 function unassignedHtml() {
   const busy = busyMap(), planned = new Set();
   ((D.config.plan && D.config.plan.teams) || []).forEach(t => (t.roles || []).forEach(r => { if (r.pid != null) planned.add(String(r.pid)); }));
@@ -1497,9 +1519,9 @@ function unassignedHtml() {
     return {p, why, cls};
   }).sort((a, b) => ["bad", "mid", "ok"].indexOf(a.cls) - ["bad", "mid", "ok"].indexOf(b.cls) || nameOf(a.p).localeCompare(nameOf(b.p)));
   if (!rows.length) return `<div class="hn">👥 <b>Unassigned</b> - every member is in a crime or has a seat in the automatic plan.</div>`;
-  return `<div class="soon"><div class="soonh">👥 <b>Unassigned by the automatic plan</b> <span class="tag">${rows.length} member${rows.length === 1 ? "" : "s"} · not in a crime, no seat planned</span></div>`
+  return `<details class="soon" data-col="l:unassigned"${colOpen("l:unassigned", true) ? " open" : ""}><summary class="soonh">👥 <b>Unassigned by the automatic plan</b> <span class="tag">${rows.length} member${rows.length === 1 ? "" : "s"} · not in a crime, no seat planned</span></summary>`
     + rows.map(x => `<div class="soonr"><b>${esc(nameOf(x.p))}</b><span class="${x.cls}" style="margin-left:auto">${esc(x.why)}</span></div>`).join("")
-    + `<div class="tag" style="margin-top:4px">Recruit-rank members aren't listed - they can't join crimes until Heart Beat.</div></div>`;
+    + `<div class="tag" style="margin-top:4px">Recruit-rank members aren't listed - they can't join crimes until Heart Beat.</div></details>`;
 }
 function drawPlanning() {
   const list = (D.feed || []).filter(c => c && c.status === "Planning").sort((a, b) => (a.ready_at || 9e9) - (b.ready_at || 9e9));
@@ -1589,11 +1611,11 @@ function soonHtml(plan) {
   out.forEach(x => { if (lined.has(String(x.pid))) return;
     const st = seats.find(z => !took.has(z.k) && (() => { const r = rateOf(x.pid, z.crime, z.pos); return r && r.rate != null && r.rate >= floorOf(z.crime, z.pos); })());
     if (st) { took.add(st.k); x.next = st; } });
-  return `<div class="soon"><div class="soonh">⏳ <b>Available in under 24h</b> <span class="tag">${out.length} Suite user${out.length === 1 ? "" : "s"} · soonest first</span></div>`
+  return `<details class="soon" data-col="l:soon"${colOpen("l:soon", true) ? " open" : ""}><summary class="soonh">⏳ <b>Available in under 24h</b> <span class="tag">${out.length} Suite user${out.length === 1 ? "" : "s"} · soonest first</span></summary>`
     + out.map(x => `<div class="soonr"><b>${esc(nameOf(x.pid))}</b><span class="tag">${esc(x.crime)} <span class="tag">#${esc(x.id)}</span></span>`
       + `<span class="soonf">free in ${freeIn(x.at)}</span>${lined.has(String(x.pid)) ? `<span class="qd">🕒 lined up: ${esc(lined.get(String(x.pid)))}</span>`
         : x.next ? `<span class="soonn" title="A guide only - nobody is assigned until they're free">➜ likely ${esc(x.next.pos)} · ${esc(x.next.crime)} · ${fmt2(x.next.pay)}/day</span>`
-        : `<span class="tag">➜ no open seat they qualify for yet</span>`}</div>`).join("") + `</div>`;
+        : `<span class="tag">➜ no open seat they qualify for yet</span>`}</div>`).join("") + `</details>`;
 }
 function drawDeployed() {
   // FILLED crimes aren't shown (Nov 11 2026, user): every slot taken in Torn and no replacement pending - the planner
@@ -1656,14 +1678,14 @@ function drawDeployed() {
         + `<span class="drs" title="${esc(plain)}">${stt}${ok ? "" : " " + noScrTag(r.pid)}</span></div>`;
     }).join("");
     const av = teamAvg(t);
-    return `<div class="team${t.lock ? " lock" : ""}"><div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
+    return `<details class="team${t.lock ? " lock" : ""}" data-col="c:${esc(t.crime_id != null ? t.crime_id : t.id)}"${colOpen("c:" + (t.crime_id != null ? t.crime_id : t.id), false) ? " open" : ""}>${crimeSum(t, av)}<div class="th"><span class="dif">D${t.difficulty ?? "?"}</span><b>${esc(t.crime)}</b>
       ${t.kind === "live" ? `<span class="kind live">🎯 #${esc(t.crime_id)}</span>` : `<span class="kind spawn">🧪 spawn</span>`}${t.lock ? " 🔒" : ""}${!t.unplanned ? ` <button class="s" data-pdel="${esc(t.id)}" title="Delete this team from the deployed list">🗑</button>` : ""}
       <span class="sr ${col(av)}" title="Weighted team success (role weights)">${av == null ? "-" : Math.round(av) + "%"}</span>${(() => { const sc = teamSuccess(t); return sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`; })()}</div>
       <div class="tag">${payLine(t, false)}</div>
       ${riskLine(t)}
       ${t.kind === "live" ? "" : heldLine(t) + spawnHtml(sm && sm.get(t.id))}
       ${t.unplanned ? `<div class="tag">📋 Recruiting in Torn - no planned members yet: nobody free qualifies for its open roles at the current targets.</div>` : ""}
-      <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`;
+      <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</details>`;
   }).join("");
   // DEPLOYED HEADER TRIMMED (Nov 18 2026, user: "All of this except for the Teams/Joined/Queued/Not Joined tiles can be
   // removed. Keep the Update button."): the automatic-assignment status, next-update timer, reconfigured note, "kept up
