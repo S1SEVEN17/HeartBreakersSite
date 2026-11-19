@@ -2824,7 +2824,7 @@ async function loansSeen(env, who, b) {
 }
 // "armory_now": one read at a time per Worker instance; a failed read still answers with the stored reading
 let ARMORY_NOW_P = null;
-let PRICE_SCAN_AT = 0;                  // ocFeedPull: last reward-item id scan in this Worker instance (see there)
+let PRICE_SCAN_AT = 0;                  // (unused since Nov 19 2026 - the prices step keeps its time in D1, see there)
 async function armoryNow(env) {
   if (!ARMORY_NOW_P) ARMORY_NOW_P = (async () => { const ops = []; await armoryPull(env, Date.now(), ops, null, ARMORY_NOW_GAP_MS);
     if (ops.length) { await env.OC_DB.batch(ops); delete LIVE_MEMO.armory; delete LIVE_MEMO["armory:brief"]; } })().finally(() => { ARMORY_NOW_P = null; });
@@ -2868,6 +2868,10 @@ async function ocFeedPull(env) {
   const put = (ds, data) => { const txt = JSON.stringify(data); ENVS.forEach(e => ops.push(ocSnapPut(env, e, ds, now, txt, "hub"))); mark(ds); };
 
   let newHist = false, crimesNow = null, newPrices = false, rosterNow = false, rosterSeen = false, liveMembers = null;
+  // PRICE SCAN (Nov 19 2026, user: "Correct this."): reward item ids of the crimes stored THIS run - the prices step
+  // prices just these instead of re-reading the whole history; histFull = history came in another way (backfill)
+  const newItemIds = new Set(); let histFull = false;
+  const noteItems = list => (list || []).forEach(c => (((c && c.rewards) || {}).items || []).forEach(it => { const i = Number(it && it.id); if (i > 0) newItemIds.add(i); }));
   // crimes - every run (1 call)
   try {
     const d = await ocTorn(env, "faction/crimes?cat=available&limit=100&sort=ASC");
@@ -2896,7 +2900,7 @@ async function ocFeedPull(env) {
     if (done.length) {
       const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 300").all()).results || []).map(r => Number(r.id)));
       const fresh = done.filter(c => !known.has(Number(c.id)));
-      if (fresh.length) { const hops = []; ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now))); await env.OC_DB.batch(hops); newHist = true; }
+      if (fresh.length) { const hops = []; ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now))); await env.OC_DB.batch(hops); newHist = true; noteItems(fresh); }
     }
   } catch (e) { fail("recent", e); }
   // RIGHT NOW (Nov 12 2026, user: the homepage's live war + chain without asking members for a key): the faction's
@@ -2965,12 +2969,12 @@ async function ocFeedPull(env) {
     // stored now (not with the rest at the end) so the prices step below already sees new reward items
     const hops = [];
     if (fresh.length) ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now)));
-    if (hops.length) { await env.OC_DB.batch(hops); newHist = true; }
+    if (hops.length) { await env.OC_DB.batch(hops); newHist = true; noteItems(fresh); }
     mark("history");
   } catch (e) { fail("history", e); }
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
-  try { if (await ocBackfill(env, now, ENVS)) newHist = true; } catch (e) { fail("backfill", e); }
+  try { if (await ocBackfill(env, now, ENVS)) { newHist = true; histFull = true; } } catch (e) { fail("backfill", e); }
   // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
   // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
   try {
@@ -2998,15 +3002,19 @@ async function ocFeedPull(env) {
     // one forced full re-price when the 5% net pricing went live (hub row 'prices-net' marks it done)
     const netDone = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds = 'prices-net'").first();
     const daily = !netDone || (now >= slot && (lastPull.prices || 0) < slot);
-    // (D1 ROW READS, Nov 17 2026) the two id scans read the whole history - they ran on EVERY 3-minute run. Now only
-    // when they can find something: the daily re-price, new history this run, no prices stored yet, or once an hour
-    // (new tornprobability payout items).
-    const scan = daily || newHist || !cur || now - (PRICE_SCAN_AT || 0) > 3600e3;
-    if (scan) PRICE_SCAN_AT = now;
-    const rows = !scan ? [] : (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
+    // (D1 ROW READS, Nov 17 2026 -> Nov 19 2026, user: "Correct this.") The WHOLE-history id scan (~1,700 crimes, it ran
+    // ~530 times a day = ~916k rows) now runs only for the daily re-price, when no prices are stored yet, or after a
+    // backfill. New crimes stored this run add just their own reward ids (newItemIds - no history read). The
+    // tornprobability payout ids (a few dozen hub 'tpp:' rows) are checked at most once an hour - the time is kept in
+    // D1 (hub 'pull:pricetp', lastPull.pricetp) so it survives new Worker instances (the old in-memory PRICE_SCAN_AT
+    // reset whenever Cloudflare started a fresh copy).
+    const full = daily || !cur || histFull;
+    const rows = !full ? [...newItemIds].map(i => ({i})) : (await env.OC_DB.prepare("SELECT DISTINCT json_extract(j.value, '$.id') AS i FROM oc_hist, " +
       "json_each(oc_hist.data, '$.rewards.items') AS j WHERE oc_hist.env = 'prod'").all()).results || [];
     // + every reward item in the tornprobability payouts (oc_snap hub 'tpp:<crime>' ids, Nov 2026)
-    const tpIds = !scan ? [] : (await env.OC_DB.prepare("SELECT DISTINCT j.value AS i FROM oc_snap, json_each(oc_snap.data, '$.ids') AS j " +
+    const tpScan = full || now - (lastPull.pricetp || 0) > 3600e3;
+    if (tpScan) mark("pricetp");
+    const tpIds = !tpScan ? [] : (await env.OC_DB.prepare("SELECT DISTINCT j.value AS i FROM oc_snap, json_each(oc_snap.data, '$.ids') AS j " +
       "WHERE oc_snap.env = 'hub' AND oc_snap.ds LIKE 'tpp:%'").all().catch(() => ({}))).results || [];
     const all = [...new Set(rows.concat(tpIds).map(r => Number(r.i)).filter(i => i > 0))];
     const list = daily ? all : all.filter(i => !have[String(i)]);
