@@ -23,6 +23,23 @@ jobs:
           # how many members hold the Recruit position (kept out of OC planning) - a count only
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT COUNT(*) AS n, SUM(lower(json_extract(j.value, '$.position')) = 'recruit') AS recruits FROM oc_snap, json_each(oc_snap.data) AS j WHERE oc_snap.env = 'hub' AND oc_snap.ds = 'members:live'" > rec.json 2>/dev/null \
             && python3 -c "import json; r = json.load(open('rec.json'))[0]['results'][0]; print(f\"Live member list: {r['n']} members, {r['recruits'] or 0} with the Recruit position\")" || true
+          # USAGE REPORT (Nov 19 2026): Hub calls per type and Torn reads (counts only) for today (UTC) and yesterday
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT day, k, n FROM hub_usage WHERE day >= date('now', '-1 day') ORDER BY day DESC, n DESC" > us.json 2>/dev/null \
+            && python3 - <<'PY' || true
+          import json, datetime
+          rows = json.load(open('us.json'))[0]['results']
+          days = sorted({r['day'] for r in rows}, reverse=True)
+          for d in days:
+              R = [r for r in rows if r['day'] == d]
+              hrs = max(1.0, (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(d)).total_seconds() / 3600) if d == datetime.datetime.utcnow().strftime('%Y-%m-%d') else 24.0
+              tot = lambda pre: sum(r['n'] for r in R if r['k'].startswith(pre))
+              print(f"Usage {d} ({hrs:.1f} h counted): Hub requests {tot('sx:') + tot('cw:') + tot('p:')} · Suite Torn reads {tot('torn:')} · Hub-key Torn reads {tot('hubtorn:')}")
+              for pre, lab in (("sx:", "Suite → Hub ops"), ("cw:", "Chain Watch"), ("p:", "Pages"), ("torn:", "Suite Torn reads by type"), ("hubtorn:", "Hub-key Torn reads")):
+                  top = [r for r in R if r['k'].startswith(pre)][:12]
+                  if top: print(f"  {lab}: " + " · ".join(f"{r['k'][len(pre):]} {r['n']}" for r in top))
+              m = [r['n'] for r in R if r['k'].startswith('tornm:')]
+              if m: print(f"  Torn reads per member: {len(m)} members · avg {sum(m) / len(m) / hrs:.1f}/h · busiest {max(m) / hrs:.1f}/h")
+          PY
           # Suite users (counts only): seen by the Hub's OC assignment call (oc_seen) vs Suite pings (sx_ver) in the last 3 days
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT (SELECT COUNT(*) FROM oc_seen WHERE env = 'prod' AND ts > (strftime('%s','now') - 259200) * 1000) AS seen, (SELECT COUNT(*) FROM sx_ver WHERE at > (strftime('%s','now') - 259200) * 1000) AS ver, (SELECT COUNT(*) FROM (SELECT pid FROM oc_seen WHERE env = 'prod' AND ts > (strftime('%s','now') - 259200) * 1000 UNION SELECT pid FROM sx_ver WHERE at > (strftime('%s','now') - 259200) * 1000)) AS both_n" > su.json 2>/dev/null \
             && python3 -c "import json; r = json.load(open('su.json'))[0]['results'][0]; print(f\"Suite users (3 days): OC assignment calls {r['seen']} · Suite pings {r['ver']} · either {r['both_n']}\")" || true

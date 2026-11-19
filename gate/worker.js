@@ -249,9 +249,38 @@ async function proxy(env, dir, rest, req, gated) {
 const notFound = () => page("Not found", `<h1>Not found</h1><p class="sub">That page doesn't exist.
 <br><br><a href="/m/">Go to the Members Hub</a></p>`, 404);
 
+// USAGE REPORT (Nov 19 2026, user: "10. Yes" - "add a section to the live check showing Hub calls per type per day and
+// Torn reads per member per hour"). Counts kept in memory per worker instance and added to D1 hub_usage (day, k, n)
+// at most once a minute (or every 300 counts) - one small batched write, never one per request. Keys:
+//   "p:<path group>"   every request (/sx ops are counted as "sx:<op>" / "sx:live:<what>" instead, /cw/<x> as "cw:<x>")
+//   "torn:<what>"      Torn reads the Suites report in their check-in (Suite 0.2.89+, counts only - no keys, no data)
+//   "tornm:<pid>"      the same, per member (for "Torn reads per member per hour" - shown as counts only)
+// Read by the oc_check workflow (today + yesterday). Rows older than 8 days are dropped on the daily cleanup.
+const USAGE = new Map(); let usageAt = Date.now();
+async function usageTable(env) {
+  await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS hub_usage (day TEXT NOT NULL, k TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, k))").run();
+}
+function usage(env, ctx, k, n = 1) {
+  if (!env.OC_DB || !k) return;
+  USAGE.set(k, (USAGE.get(k) || 0) + n);
+  let tot = 0; for (const v of USAGE.values()) tot += v;
+  if (Date.now() - usageAt < 60000 && tot < 300) return;
+  usageAt = Date.now();
+  const rows = [...USAGE.entries()]; USAGE.clear();
+  const day = new Date().toISOString().slice(0, 10);
+  const job = (async () => { try { await usageTable(env);
+    const st = env.OC_DB.prepare("INSERT INTO hub_usage (day, k, n) VALUES (?, ?, ?) ON CONFLICT (day, k) DO UPDATE SET n = n + excluded.n");
+    for (let i = 0; i < rows.length; i += 50) await env.OC_DB.batch(rows.slice(i, i + 50).map(([key, v]) => st.bind(day, key.slice(0, 80), v)));
+    if (Math.random() < 0.02) await env.OC_DB.prepare("DELETE FROM hub_usage WHERE day < ?").bind(new Date(Date.now() - 8 * 864e5).toISOString().slice(0, 10)).run();
+  } catch (e) { /* counts only - never break a request */ } })();
+  if (ctx && ctx.waitUntil) ctx.waitUntil(job);
+}
+const usageKey = p => p.startsWith("/sx") ? null : p.startsWith("/cw/") ? "cw:" + p.slice(4).split("/")[0] : p.startsWith("/m/") || p.startsWith("/l/") ? "p:" + p.slice(0, 3) + (p.slice(3).split("/")[0] || "") : "p:" + p.split("/").slice(0, 3).join("/");
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url), p = url.pathname;
+    { const k = usageKey(p); if (k && !/\.(png|jpe?g|gif|webp|svg|ico|woff2?|css|js)$/i.test(p)) usage(env, ctx, k); }
     // the dashboard address: everyone lands on the Members Hub (Nov 12 2026, user: one home - leaders see their
     // "Needs attention" there; the Leaders Hub page was merged into it)
     if (p === "/") {
@@ -476,7 +505,11 @@ async function sxRoute(env, ctx, req) {
   const a = await sxWho(env, ctx, b && b.code);
   if (!a.who) return sxJson({ok: false, error: a.error, relink: true}, 401);
   const who = a.who, op = String(b.op || "");
-  const leadersOnly = () => sxJson({ok: false, error: "Leaders only."}, 403);
+  usage(env, ctx, "sx:" + op + (op === "live" ? ":" + String(b.what || "").slice(0, 24) : ""));   // USAGE REPORT
+  // (Suite 0.2.89+) Torn reads since the last check-in, counts only: {what: n}
+  if (op === "share_ping" && b.torn && typeof b.torn === "object") { let t = 0;
+    for (const [w, n] of Object.entries(b.torn).slice(0, 30)) { const v = Math.max(0, Math.min(500, Math.round(Number(n) || 0))); if (v) { usage(env, ctx, "torn:" + String(w).replace(/[^\w:.-]/g, "").slice(0, 30), v); t += v; } }
+    if (t) usage(env, ctx, "tornm:" + who.id, t); }
   if (op === "whoami") return sxJson({ok: true, me: sxMe(who), exp: a.exp});
   if (op === "read") {
     const area = b.area === "l" ? "l" : "m", path = String(b.path || "");
@@ -2520,6 +2553,7 @@ async function ocTorn(env, path) {
   // API: Heart Breakers Hub - OC data feed (Torn V2). Key in the Authorization header, never in the address.
   const base = env.TORN_API_BASE || "https://api.torn.com";          // TORN_API_BASE: local tests only
   const sep = path.includes("?") ? "&" : "?";
+  usage(env, null, "hubtorn:" + path.split("?")[0].replace(/\d+/g, "#").slice(0, 30));   // USAGE REPORT (the Hub's own key)
   const r = await fetch(`${base}/v2/${path}${sep}comment=${encodeURIComponent(API_COMMENT)}`,
                         {headers: {Authorization: "ApiKey " + String(env.HUB_TORN_KEY).trim(), Accept: "application/json"}});
   const d = await r.json();
@@ -2603,6 +2637,7 @@ let ARMORY_V2_BAD = 0;
 async function tornV1(env, path) {
   // API: Heart Breakers Hub - armory stock (Torn V1 fallback)
   const base = env.TORN_API_BASE || "https://api.torn.com", sep = path.includes("?") ? "&" : "?";
+  usage(env, null, "hubtorn:v1:" + path.split("?")[0].replace(/\d+/g, "#").slice(0, 30));   // USAGE REPORT (the Hub's own key)
   const r = await fetch(`${base}/${path}${sep}comment=${encodeURIComponent(API_COMMENT)}`, {headers: {Authorization: "ApiKey " + String(env.HUB_TORN_KEY).trim(), Accept: "application/json"}});
   const d = await r.json();
   if (d && d.error) throw new Error("torn " + d.error.code);
