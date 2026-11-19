@@ -1474,7 +1474,8 @@ function planPay(c, v) {
     + `<div class="pl2">Normal ${fmt2(normal)}/day · Ready ${when} · ${filled}/${seats} filled</div>`;
 }
 // UNASSIGNED BY THE AUTOMATIC PLAN (Nov 19 2026, user: "Show members who are unassigned to a crime by the automatic team
-// deploy on the Planning screen."): members (CFG.members - Recruit rank already left out by the Hub) who are in no crime
+// deploy on the Planning screen." -> moved Nov 19 2026: "Unassigned players list should be on the recruiting tab, not
+// planning." - now on 🚀 Recruiting under "Available in under 24h"): members (CFG.members - Recruit rank already left out by the Hub) who are in no crime
 // in Torn (busyMap) AND hold no seat in the deployed plan (D.config.plan teams' roles). Each gets the first reason that
 // applies, in the same order the planner works:
 //   📵 no Suite      not seen using the Suite in 3 days - only a leader can place them (since Nov 17 2026)
@@ -1547,7 +1548,7 @@ function drawPlanning() {
   const statsP = `<div class="pstat">${tile(pMem, "Members", "in full crimes")}${tile(fullP.length, "Crimes", "full · planning")}`
     + tile(rngP(pIncLo, pInc), "Member income", "potential · lowest – highest") + tile(rngP(pTaxLo, pTax), "Faction tax", "potential · lowest – highest")
     + tile(pSucc.length ? "🎲 " + Math.round(pSucc.reduce((a, b) => a + b, 0) / pSucc.length) + "%" : "-", "Avg success", `${pSucc.length} of ${fullP.length} checked`) + `</div>`;
-  $("view").innerHTML = `<div class="panel">${statsP}${unassignedHtml()}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
+  $("view").innerHTML = `<div class="panel">${statsP}${alertsHtml()}<div class="hn">📋 <b>Planning</b> - crimes with every slot filled, soonest ready first.
     ${D.feedT ? `From the crimes in Torn (checked ${ago(D.feedT)}).` : ""}</div>
     ${list.length ? `<div class="teams">${cards}</div>` : '<div class="hn">No crimes are planning right now.</div>'}</div>`;
 }
@@ -1678,6 +1679,7 @@ function drawDeployed() {
       <b>🤖 Automatic</b><button id="autoOn" class="${OPT.auto !== false ? "gold" : ""}">On</button><button id="autoOff" class="${OPT.auto === false ? "gold" : ""}">Off</button>
       <button class="s" id="updNow" style="margin-left:auto" title="Read the crimes from Torn, rebuild the plan and reload this page's data (once a minute)">🔄 Update now</button></div>
     ${soonHtml(plan)}
+    ${unassignedHtml()}
     ${alertsHtml()}
     ${spawnAlertsHtml(plan.teams, sm)}
     <div class="teams">${cards}</div></div>`;
