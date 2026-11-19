@@ -1057,6 +1057,7 @@ async function sxShareOp(env, who, op, b) {
     // rate CHANGED): every check from the script moves the member's time on, changed or not (also when Torn showed
     // them no open role this time), so "x ago" = when their script last checked
     await env.OC_DB.prepare("UPDATE oc_cpr SET ts = ? WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(now, Number(env.FACTION_ID), pid).run().catch(() => {});
+    CPR_PAGE.clear();                                          // (fix 4) "last shared" moved on
     extra++;
   }
   if (row.cw && b.chain && typeof b.chain === "object" && env.CHAINROOM) {
@@ -1304,6 +1305,7 @@ const ocFb = x => String(x == null ? "" : x).replace(/[.$#\[\]/\x00-\x1f]/g, "_"
 async function ocCprDrop(env, id) {
   if (!env.OC_DB) return;
   await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Number(env.FACTION_ID), Number(id)).run();
+  await cprBump(env);                                          // (fix 4)
   await env.OC_DB.prepare("DELETE FROM oc_cpr_t WHERE env = 'prod' AND faction_id = ? AND player_id = ?").bind(Number(env.FACTION_ID), Number(id)).run().catch(() => {});
   await env.OC_DB.prepare("DELETE FROM share_src WHERE pid = ? AND kind = 'oc'").bind(Number(id)).run().catch(() => {});
 }
@@ -1339,6 +1341,17 @@ async function ocShareAllOn(env, now) {
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'sx_oc_all_on', '1', ?, 'hub') ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts").bind(now).run();
   console.log("oc share all-on: script rows " + ((r.meta && r.meta.changes) || 0) + ", stored keys " + keys);
 }
+// D1 READS FIX 4 (Nov 19 2026, user: "Sure." - shared pass rates kept 15 s, cleared straight away on a new share):
+//   CPR_PAGE  OC Management's rates list (GET .../rates.json) kept up to CPR_PAGE_MS per Worker instance; cleared the
+//             moment this instance writes any shared rate or rate time (another instance's write shows within 15 s)
+//   cpr:ver   hub row bumped whenever a member's shared rates really change (or a member's rates are deleted) - the
+//             planner's "pass rates updated" trigger (ocTriggers) reads this ONE row instead of every member's rates
+const CPR_PAGE = new Map(), CPR_PAGE_MS = 15000;
+async function cprBump(env) {
+  CPR_PAGE.clear();
+  try { await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'cpr:ver', ?, '{}', 'hub') " +
+    "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of").bind(Date.now()).run(); } catch (e) { /* next change */ }
+}
 async function ocStoreRates(env, id, name, roles, src) {
   const n = Object.keys(roles).length;
   if (n && src) await shareSrcMark(env, id, "oc", src);
@@ -1352,6 +1365,7 @@ async function ocStoreRates(env, id, name, roles, src) {
       "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES ('prod', ?, ?, ?, json(?), ?) " +
       "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
       .bind(Number(env.FACTION_ID), Number(id), String(name || "").slice(0, 40), JSON.stringify(Object.assign(old, roles)), Date.now()).run();
+    if (changed) await cprBump(env);                          // (fix 4) the planner's rates trigger + the page list
     await ocCprTimes(env, "prod", Number(id), Object.keys(roles));    // these roles were read just now
     return {roles: n, changed};
   }
@@ -1367,6 +1381,7 @@ async function ocOptinPull(env, now, crimes) {
   if (roster && Object.keys(roster).length > 10) {
     const ids = Object.keys(roster).map(Number).filter(Boolean);
     await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
+    await cprBump(env);                                        // (fix 4)
     await env.OC_DB.prepare(`DELETE FROM oc_cpr_t WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run().catch(() => {});
   }
   const st0 = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
@@ -1697,6 +1712,7 @@ async function ocWrite(env, ctx, req, body, del) {
   const fid = Number(env.FACTION_ID);
   if (del) {
     await env.OC_DB.prepare("DELETE FROM oc_cpr WHERE env = ? AND faction_id = ? AND player_id = ?").bind(body.env, fid, id.player_id).run();
+    await cprBump(env);                                        // (fix 4)
     await env.OC_DB.prepare("DELETE FROM oc_cpr_t WHERE env = ? AND faction_id = ? AND player_id = ?").bind(body.env, fid, id.player_id).run().catch(() => {});
     return ocJson({ok: true});
   }
@@ -1724,10 +1740,12 @@ async function ocWrite(env, ctx, req, body, del) {
   const cur = await env.OC_DB.prepare("SELECT roles FROM oc_cpr WHERE env = ? AND faction_id = ? AND player_id = ?")
     .bind(body.env, fid, id.player_id).first();
   let old = {}; try { old = cur ? JSON.parse(cur.roles) || {} : {}; } catch (e) {}
+  const cprCh = Object.keys(clean).some(k => old[k] !== clean[k]);   // (fix 4) a real change, worked out before the merge
   await env.OC_DB.prepare(
     "INSERT INTO oc_cpr (env, faction_id, player_id, name, roles, ts) VALUES (?, ?, ?, ?, json(?), ?) " +
     "ON CONFLICT (env, faction_id, player_id) DO UPDATE SET name = excluded.name, roles = excluded.roles, ts = excluded.ts")
     .bind(body.env, fid, id.player_id, name, JSON.stringify(Object.assign(old, clean)), now).run();
+  if (cprCh) await cprBump(env); else CPR_PAGE.clear();       // (fix 4)
   await ocCprTimes(env, body.env, id.player_id, Object.keys(clean), now);
   if (body.env === "prod") await shareSrcMark(env, id.player_id, "oc", "ocopt").catch(() => {});   // shared from the OC Optimizer script
   return ocJson({ok: true});
@@ -2116,12 +2134,16 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.script_seen = await ocScriptSeen(env, envName);                                                              // {pid: ms} OC script users
       c.hold_log = ((((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).data) || {}).hold_log || {};   // spawn hold cooldowns
       return Response.json(c, H); }
+    // (fix 4, Nov 19 2026) kept CPR_PAGE_MS per Worker instance, cleared on any rate write here
+    const hit = CPR_PAGE.get(envName);
+    if (hit && Date.now() - hit.at < CPR_PAGE_MS) return Response.json(hit.out, H);
     const {results} = await env.OC_DB.prepare("SELECT c.player_id, c.name, c.roles, c.ts, t.t AS rt FROM oc_cpr c LEFT JOIN oc_cpr_t t " +
       "ON t.env = c.env AND t.faction_id = c.faction_id AND t.player_id = c.player_id WHERE c.env = ? AND c.faction_id = ?")
       .bind(envName, Number(env.FACTION_ID)).all();
     const out = {};
     for (const r of results || []) { let roles = {}, t = {}; try { roles = JSON.parse(r.roles); } catch (e) {} try { t = r.rt ? JSON.parse(r.rt) : {}; } catch (e) {}
       out[String(r.player_id)] = {name: r.name, ts: r.ts, t, roles}; }   // t: {"Crime|Role": ms} when each role was read
+    CPR_PAGE.set(envName, {at: Date.now(), out});
     return Response.json(out, H);
   }
   // GET /l/oc/crimes.json?env= -> the feed's crimes {as_of, crimes} (recruiting + planning, every 3 min) - the
@@ -2372,6 +2394,17 @@ function ocSnapPut(env, envName, ds, asOf, data, by) {
 }
 // history rows, 150 crimes per statement through json_each (D1 allows few queries per run - one statement, not one
 // per crime); a crime already stored is left alone (completed crimes never change)
+// D1 READS FIX 2 (Nov 19 2026, user: "Sure." to the 5 read fixes): which of these crime ids are already stored - looks
+// up just these ids by the (env, id) key (a few rows) instead of reading the newest 200-300 stored ids every time
+async function histKnown(env, ids) {
+  const out = new Set(), list = [...new Set((ids || []).map(Number).filter(i => i > 0))];
+  for (let i = 0; i < list.length; i += 100) {
+    const {results} = await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' AND id IN (SELECT value FROM json_each(?))")
+      .bind(JSON.stringify(list.slice(i, i + 100))).all();
+    (results || []).forEach(r => out.add(Number(r.id)));
+  }
+  return out;
+}
 function ocHistPut(env, envName, crimes, asOf) {
   const out = [];
   for (let i = 0; i < crimes.length; i += 150)
@@ -2855,7 +2888,8 @@ async function ocFeedPull(env) {
   if (!env.OC_DB || !env.HUB_TORN_KEY) return;
   const now = Date.now(), ENVS = ["prod", "test"];
   // when the Hub last pulled each dataset (pull:<ds> rows, env 'hub')
-  const {results} = await env.OC_DB.prepare("SELECT ds, as_of FROM oc_snap WHERE env = 'hub'").all();
+  // D1 READS FIX 5 (Nov 19 2026): only the pull:<ds> timer rows (a key range on (env, ds)), not every hub row
+  const {results} = await env.OC_DB.prepare("SELECT ds, as_of FROM oc_snap WHERE env = 'hub' AND ds >= 'pull:' AND ds < 'pull;'").all();
   const lastPull = {};
   (results || []).forEach(r => { lastPull[r.ds.replace(/^pull:/, "")] = Number(r.as_of); });
   const due = ds => now - (lastPull[ds] || 0) >= FEED_EVERY[ds] - 30e3;
@@ -2898,7 +2932,7 @@ async function ocFeedPull(env) {
     ops.push(ocSnapPut(env, "hub", "completed:raw", now, JSON.stringify(d.crimes || []), "hub"));
     const done = (d.crimes || []).filter(c => c && c.id && c.executed_at && c.status === "Successful");
     if (done.length) {
-      const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 300").all()).results || []).map(r => Number(r.id)));
+      const known = await histKnown(env, done.map(c => c.id));   // (fix 2, Nov 19 2026)
       const fresh = done.filter(c => !known.has(Number(c.id)));
       if (fresh.length) { const hops = []; ENVS.forEach(e => hops.push(...ocHistPut(env, e, fresh, now))); await env.OC_DB.batch(hops); newHist = true; noteItems(fresh); }
     }
@@ -2956,12 +2990,11 @@ async function ocFeedPull(env) {
   } catch (e) { fail("catalog", e); }
   // history - every 30 min: newest first until a crime we already have (normally 1 call; first time up to 6)
   if (due("history")) try {
-    const known = new Set(((await env.OC_DB.prepare("SELECT id FROM oc_hist WHERE env = 'prod' ORDER BY executed_at DESC LIMIT 200").all()).results || [])
-      .map(r => Number(r.id)));
     const fresh = [];
     for (let page = 0; page < 6; page++) {
       const d = await ocTorn(env, `faction/crimes?cat=successful&limit=100&offset=${page * 100}&sort=DESC`);
       const list = d.crimes || [];
+      const known = await histKnown(env, list.map(c => c && c.id));   // (fix 2, Nov 19 2026) just this page's ids
       let hit = false;
       for (const c of list) { if (known.has(Number(c.id))) { hit = true; continue; } if (c && c.id && c.executed_at) fresh.push(c); }
       if (hit || list.length < 100) break;
@@ -3398,52 +3431,100 @@ async function ocAssignPings(env, crimes) {
 const SUM_WINDOW = 100;
 const SUM_BASE_ROLE = "trim(CASE WHEN instr(label, '#') > 0 THEN substr(label, 1, instr(label, '#') - 1) ELSE label END)";
 
+// D1 READS FIXES 1 + 3 (Nov 19 2026, user: "Sure." - "1. pass rates from history: rebuild only when new completed crimes
+// arrive ... 3. crime summaries: only redo the crime types that just changed", each with a daily full rebuild as the
+// safety net). The history-derived parts are kept in oc_snap (env, 'sum:cache'):
+//   types  {crime: {samples, mavg, mmin, mmax, ravg, rmin, rmax, ppavg, items: {id: qty}, rows: [[cash, [[id, qty]..]]..]}}
+//          - each crime type's latest SUM_WINDOW completions, worked out in JS from ONE query (was 4 SQL scans)
+//   rates  {"crime|role|pid": [rate, t]} - each member's newest pass rate per crime / base role over ALL history
+//   at     history rows stored after this time (oc_hist.as_of, indexed) are the "new" ones next time (2 min margin -
+//          re-reading a row twice is harmless: types are recomputed whole, rates keep the newest)
+//   day    UTC day of the last FULL rebuild - a new day = full rebuild (also: no cache yet)
+// Incremental run: read only the rows stored since `at` (as_of index), recompute just their crime types (by the
+// json name expression index idx_oc_hist_name - a few hundred rows) and merge their slots into rates. A run with no
+// new rows (roster / prices / settings / tornprobability changes) reads no history at all. Same results as before.
+const SUM_CACHE_MARGIN_MS = 120e3;
+let SUM_INDEX_OK = false;
+const sumBaseRole = label => { const t = String(label); const i = t.indexOf("#"); return (i > 0 ? t.slice(0, i) : t).trim(); };
+// one crime type's latest-window figures from its rows [{n, rw}] (rw = the rewards object) - same maths as the old SQL
+function sumType(rows) {
+  const o = {samples: rows.length, mavg: 0, mmin: 0, mmax: 0, ravg: null, rmin: null, rmax: null, ppavg: null, items: {}, rows: []};
+  const cash = [], resp = [], pp = [];
+  for (const r of rows) {
+    const rw = r.rw || {}, m = Number(rw.money) || 0; cash.push(m);
+    if (rw.respect != null && isFinite(Number(rw.respect))) resp.push(Number(rw.respect));
+    const pc = rw.payout && rw.payout.percentage; if (pc != null && isFinite(Number(pc))) pp.push(Number(pc));
+    const its = Array.isArray(rw.items) ? rw.items : Object.values(rw.items || {}), list = [];
+    for (const it of its) { if (!it || typeof it !== "object") continue;
+      const id = it.id ?? it.item_id, q = Number(it.quantity ?? it.amount ?? 1) || 0;
+      if (id != null) { o.items[String(id)] = (o.items[String(id)] || 0) + q; list.push([String(id), q]); } }
+    o.rows.push([m, list]);
+  }
+  if (cash.length) { o.mavg = cash.reduce((a, b) => a + b, 0) / cash.length; o.mmin = Math.min(...cash); o.mmax = Math.max(...cash); }
+  if (resp.length) { o.ravg = resp.reduce((a, b) => a + b, 0) / resp.length; o.rmin = Math.min(...resp); o.rmax = Math.max(...resp); }
+  if (pp.length) o.ppavg = pp.reduce((a, b) => a + b, 0) / pp.length;
+  return o;
+}
+// latest SUM_WINDOW completions per crime type -> {crime: sumType}; names = only these types (null = all)
+async function sumTypes(db, envName, names) {
+  const filt = names ? " AND json_extract(data, '$.name') IN (SELECT value FROM json_each(?))" : "";
+  const q = db.prepare(`WITH c AS (SELECT json_extract(data, '$.name') AS crime, json_extract(data, '$.rewards') AS rw,
+                                          ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
+                                   FROM oc_hist WHERE env = ?${filt})
+                        SELECT crime, n, rw FROM c WHERE n <= ? AND crime IS NOT NULL`);
+  const {results} = await (names ? q.bind(envName, JSON.stringify(names), SUM_WINDOW) : q.bind(envName, SUM_WINDOW)).all();
+  const by = {};
+  for (const r of results || []) { let rw = null; try { rw = r.rw ? JSON.parse(r.rw) : null; } catch (e) {} (by[r.crime] || (by[r.crime] = [])).push({n: r.n, rw}); }
+  const out = {}; for (const [c, rows] of Object.entries(by)) out[c] = sumType(rows.sort((a, b) => a.n - b.n));
+  return out;
+}
+// merge history rows' slots into rates {"crime|role|pid": [rate, t]} - the newest t wins
+function sumRatesMerge(rates, crime, t, slots) {
+  for (const sl of (Array.isArray(slots) ? slots : Object.values(slots || {}))) {
+    if (!sl || typeof sl !== "object") continue;
+    const pid = sl.user && sl.user.id, rate = sl.checkpoint_pass_rate;
+    if (pid == null || rate == null) continue;
+    const label = (sl.position_info && sl.position_info.label) ?? sl.position; if (label == null) continue;
+    const k = crime + "|" + sumBaseRole(label) + "|" + pid, cur = rates[k];
+    if (!cur || Number(t) > cur[1]) rates[k] = [Number(rate), Number(t)];
+  }
+}
 async function ocSummaries(env, envName) {
-  const db = env.OC_DB;
+  const db = env.OC_DB, start = Date.now(), today = new Date(start).toISOString().slice(0, 10);
+  if (!SUM_INDEX_OK) { await db.prepare("CREATE INDEX IF NOT EXISTS idx_oc_hist_name ON oc_hist (env, json_extract(data, '$.name'), executed_at)").run().catch(() => {}); SUM_INDEX_OK = true; }
   const top = await db.prepare("SELECT MAX(executed_at) AS t FROM oc_hist WHERE env = ?").bind(envName).first();
-  const pay = await db.prepare(
-    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
-                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
-                FROM oc_hist WHERE env = ?)
-     SELECT crime, COUNT(*) AS samples,
-            AVG(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mavg, MIN(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mmin,
-            MAX(COALESCE(json_extract(data, '$.rewards.money'), 0)) AS mmax,
-            AVG(json_extract(data, '$.rewards.respect')) AS ravg, MIN(json_extract(data, '$.rewards.respect')) AS rmin,
-            MAX(json_extract(data, '$.rewards.respect')) AS rmax,
-            AVG(json_extract(data, '$.rewards.payout.percentage')) AS ppavg
-     FROM c WHERE n <= ? AND crime IS NOT NULL GROUP BY crime`).bind(envName, SUM_WINDOW).all();
-  const items = await db.prepare(
-    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
-                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
-                FROM oc_hist WHERE env = ?)
-     SELECT c.crime, COALESCE(json_extract(j.value, '$.id'), json_extract(j.value, '$.item_id')) AS item,
-            SUM(COALESCE(json_extract(j.value, '$.quantity'), json_extract(j.value, '$.amount'), 1)) AS qty
-     FROM c, json_each(c.data, '$.rewards.items') AS j WHERE c.n <= ? GROUP BY c.crime, item`).bind(envName, SUM_WINDOW).all();
-  const rates = await db.prepare(
-    `WITH s AS (SELECT json_extract(h.data, '$.name') AS crime, h.executed_at AS t,
-                       json_extract(j.value, '$.user.id') AS pid, json_extract(j.value, '$.checkpoint_pass_rate') AS rate,
-                       COALESCE(json_extract(j.value, '$.position_info.label'), json_extract(j.value, '$.position')) AS label
-                FROM oc_hist AS h, json_each(h.data, '$.slots') AS j WHERE h.env = ?),
-          b AS (SELECT crime, t, pid, rate, ${SUM_BASE_ROLE} AS role FROM s WHERE pid IS NOT NULL AND rate IS NOT NULL),
-          r AS (SELECT crime, role, pid, rate, t, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
-     SELECT crime, role, pid, rate, t FROM r WHERE n = 1`).bind(envName).all();
+  const cRow = await ocSnapGet(env, envName, "sum:cache").catch(() => null);
+  let C = cRow && cRow.data && cRow.data.day === today && cRow.data.types && cRow.data.rates ? cRow.data : null;
+  if (C) {
+    // INCREMENTAL: only the history rows stored since the cache
+    const {results} = await db.prepare("SELECT executed_at, data FROM oc_hist WHERE env = ? AND as_of > ?").bind(envName, Number(C.at) || 0).all();
+    const fresh = (results || []).map(r => { try { return {t: r.executed_at, d: JSON.parse(r.data)}; } catch (e) { return null; } }).filter(Boolean);
+    if (fresh.length) {
+      const names = [...new Set(fresh.map(x => x.d && x.d.name).filter(Boolean))];
+      if (names.length) Object.assign(C.types, await sumTypes(db, envName, names));
+      fresh.forEach(x => { if (x.d && x.d.name) sumRatesMerge(C.rates, x.d.name, x.t, x.d.slots); });
+      C.at = start - SUM_CACHE_MARGIN_MS;
+      await ocSnapPut(env, envName, "sum:cache", Date.now(), JSON.stringify(C), "hub").run().catch(() => {});
+    }
+  } else {
+    // FULL rebuild (first run / a new UTC day): every type + every member's rates from the whole history
+    const types = await sumTypes(db, envName, null);
+    const rq = await db.prepare(
+      `WITH s AS (SELECT json_extract(h.data, '$.name') AS crime, h.executed_at AS t,
+                         json_extract(j.value, '$.user.id') AS pid, json_extract(j.value, '$.checkpoint_pass_rate') AS rate,
+                         COALESCE(json_extract(j.value, '$.position_info.label'), json_extract(j.value, '$.position')) AS label
+                  FROM oc_hist AS h, json_each(h.data, '$.slots') AS j WHERE h.env = ?),
+            b AS (SELECT crime, t, pid, rate, ${SUM_BASE_ROLE} AS role FROM s WHERE pid IS NOT NULL AND rate IS NOT NULL),
+            r AS (SELECT crime, role, pid, rate, t, ROW_NUMBER() OVER (PARTITION BY crime, role, pid ORDER BY t DESC) AS n FROM b)
+       SELECT crime, role, pid, rate, t FROM r WHERE n = 1`).bind(envName).all();
+    const rates = {}; for (const r of rq.results || []) rates[r.crime + "|" + r.role + "|" + r.pid] = [Number(r.rate), Number(r.t)];
+    C = {day: today, at: start - SUM_CACHE_MARGIN_MS, types, rates};
+    await ocSnapPut(env, envName, "sum:cache", Date.now(), JSON.stringify(C), "hub").run().catch(() => {});
+  }
   // NET VALUE per completion (Nov 2026, project doc claude/oc-optimizer-hub-netpayout-addendum.md): each of the
   // latest `window` completions' cash + reward items at today's prices (net of the 5% fee), x the members' share
   // (the leaders' fixed % if set, else that crime's average recorded payout %, else 80%) -> valueMin / Avg / Max.
   // Every crime with >= 1 successful completion is included (no minimum).
-  const rowsQ = await db.prepare(
-    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
-                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
-                FROM oc_hist WHERE env = ?)
-     SELECT crime, n, COALESCE(json_extract(data, '$.rewards.money'), 0) AS money FROM c WHERE n <= ? AND crime IS NOT NULL`)
-    .bind(envName, SUM_WINDOW).all();
-  const rowItems = await db.prepare(
-    `WITH c AS (SELECT json_extract(data, '$.name') AS crime, data,
-                       ROW_NUMBER() OVER (PARTITION BY json_extract(data, '$.name') ORDER BY executed_at DESC) AS n
-                FROM oc_hist WHERE env = ?)
-     SELECT c.crime, c.n, COALESCE(json_extract(j.value, '$.id'), json_extract(j.value, '$.item_id')) AS item,
-            COALESCE(json_extract(j.value, '$.quantity'), json_extract(j.value, '$.amount'), 1) AS qty
-     FROM c, json_each(c.data, '$.rewards.items') AS j WHERE c.n <= ?`).bind(envName, SUM_WINDOW).all();
   const priS = (await ocSnapGet(env, envName, "prices")) || (await ocSnapGet(env, "prod", "prices"));
   const prices = (priS && priS.data) || {};
   const cfgO = await ocConfig(env, envName).catch(() => ({}));
@@ -3451,26 +3532,16 @@ async function ocSummaries(env, envName) {
   const ros = await ocSnapGet(env, envName, "roster");
   const roster = (ros && ros.data) || null;
   const payouts = {};
-  for (const r of pay.results || []) {
-    payouts[r.crime] = {samples: r.samples, moneyAvg: Math.round(r.mavg || 0), moneyMin: r.mmin || 0, moneyMax: r.mmax || 0,
-                        respAvg: r.ravg == null ? null : Math.round(r.ravg), respMin: r.rmin ?? null, respMax: r.rmax ?? null,
-                        items: {}, itemBased: false,
-                        ppAvg: r.ppavg == null ? null : Math.round(r.ppavg)};   // average payout % to members (Nov 2026)
-  }
-  for (const r of items.results || []) {
-    const p = payouts[r.crime];
-    if (p && r.item != null) p.items[String(r.item)] = Math.round(100 * (r.qty || 0) / p.samples) / 100;
-  }
-  for (const p of Object.values(payouts)) p.itemBased = p.moneyMax === 0 && Object.keys(p.items).length > 0;
-  {
-    const rowVal = {};                                     // "crime|n" -> cash + items at today's price
-    for (const r of rowsQ.results || []) rowVal[r.crime + "|" + r.n] = Number(r.money) || 0;
-    for (const r of rowItems.results || []) { const k = r.crime + "|" + r.n;
-      if (k in rowVal && r.item != null) rowVal[k] += (Number(r.qty) || 0) * (Number((prices[String(r.item)] || {}).price) || 0); }
-    const by = {};
-    for (const [k, v] of Object.entries(rowVal)) { const c = k.slice(0, k.lastIndexOf("|")); (by[c] || (by[c] = [])).push(v); }
-    for (const [c, vals] of Object.entries(by)) {
-      const p = payouts[c]; if (!p || !vals.length) continue;
+  for (const [crime, T] of Object.entries(C.types)) {
+    payouts[crime] = {samples: T.samples, moneyAvg: Math.round(T.mavg || 0), moneyMin: T.mmin || 0, moneyMax: T.mmax || 0,
+                      respAvg: T.ravg == null ? null : Math.round(T.ravg), respMin: T.rmin ?? null, respMax: T.rmax ?? null,
+                      items: {}, itemBased: false,
+                      ppAvg: T.ppavg == null ? null : Math.round(T.ppavg)};   // average payout % to members (Nov 2026)
+    const p = payouts[crime];
+    for (const [id, q] of Object.entries(T.items || {})) p.items[id] = Math.round(100 * (q || 0) / p.samples) / 100;
+    p.itemBased = p.moneyMax === 0 && Object.keys(p.items).length > 0;
+    const vals = (T.rows || []).map(([m, its]) => (Number(m) || 0) + (its || []).reduce((a, [id, q]) => a + (Number(q) || 0) * (Number((prices[String(id)] || {}).price) || 0), 0));
+    if (vals.length) {
       const share = (fixedShare != null ? fixedShare : (p.ppAvg ?? 80)) / 100;
       p.valueMin = Math.round(Math.min(...vals) * share);
       p.valueAvg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * share);
@@ -3512,7 +3583,8 @@ async function ocSummaries(env, envName) {
     }
   } catch (e) { /* no tornprobability data yet - our own figures stand */ }
   const memberRates = {};
-  for (const r of rates.results || []) {
+  const rateRows = Object.entries(C.rates).map(([k, v]) => { const [crime, role, pid] = k.split("|"); return {crime, role, pid, rate: v[0], t: v[1]}; });
+  for (const r of rateRows) {
     if (roster && roster[String(r.pid)] == null) continue;                 // members who left aren't suggested
     const byRole = memberRates[r.crime] || (memberRates[r.crime] = {});
     (byRole[r.role] || (byRole[r.role] = [])).push({pid: Number(r.pid), name: roster ? roster[String(r.pid)] : "#" + r.pid,
@@ -3916,13 +3988,14 @@ async function ocTriggers(env, cfg, crimes) {
     .map(c => [c.id, c.status, (c.slots || []).map(sl => sl.user ? [sl.user.id, Math.floor((Number(sl.user.progress) || 0) / 100)] : 0)])
     .sort((a, b) => a[0] - b[0]);
   const [ros, sum, rt, sc] = await Promise.all([ocSnapGet(env, "prod", "roster").catch(() => null), ocSnapGet(env, "prod", "summaries").catch(() => null),
-    // rates: the shared rates themselves (a script re-sharing the same rates doesn't count as a change - ts is left out)
-    env.OC_DB.prepare("SELECT player_id, roles FROM oc_cpr WHERE env = 'prod' ORDER BY player_id").all().catch(() => null),
+    // rates: (fix 4, Nov 19 2026) the cpr:ver row, bumped only when a member's shared rates really change (cprBump) -
+    // one row instead of every member's rates (a script re-sharing the same rates still doesn't count as a change)
+    env.OC_DB.prepare("SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'cpr:ver'").first().catch(() => null),
     // CALCULATED SUCCESS: new chances checked (the planned teams' - a team found below the target is re-planned)
     env.OC_DB.prepare("SELECT as_of FROM oc_snap WHERE env = 'hub' AND ds = 'tp:success'").first().catch(() => null)]);
   return {crimes: ocHash(JSON.stringify(cr)), members: ocHash(JSON.stringify(Object.keys((ros && ros.data) || {}).sort())),
           settings: ocHash(JSON.stringify([cfg.opts || {}, cfg.disabled || [], cfg.rotate || []])),
-          rates: ocHash(JSON.stringify([((rt && rt.results) || []).map(r => [r.player_id, r.roles]), sum && sum.as_of])),
+          rates: ocHash(JSON.stringify([(rt && rt.as_of) || 0, sum && sum.as_of])),
           success: ocHash(String((sc && sc.as_of) || 0))};
 }
 const OC_TRIG_LABEL = {crimes: "crimes changed", members: "members joined or left", settings: "settings changed", rates: "pass rates updated", success: "success chances checked"};
@@ -4893,6 +4966,7 @@ async function cwShiftAlerts(env) {
 // history rate's completion time, so the newest rate for each crime/role wins and older ones never count.
 async function ocCprTimes(env, envName, pid, keys, now) {
   if (!keys || !keys.length) return;
+  CPR_PAGE.clear();                                            // (fix 4) the page list shows these times
   now = now || Date.now();
   try {
     const row = await env.OC_DB.prepare("SELECT t FROM oc_cpr_t WHERE env = ? AND faction_id = ? AND player_id = ?")
