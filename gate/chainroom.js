@@ -357,6 +357,26 @@ export class ChainRoom {
       await this.save();
       return Response.json({ ok: true, count: Object.keys(next).length });
     }
+    // 📡 HUB PUSH (Nov 19 2026, user picked "9. Yes" - the Hub sends a short note when something changes and the Suite
+    // fetches only what changed): worker.js busNote POSTs {k, v, to} here and every connected Suite gets
+    // {t: "bus", k, v} on the Chain Watch connection it already has open. to = "leaders" sends only to leaders (by the
+    // member list); anything else = everyone. The newest value per k is kept (this.mem.bus) and sent once on connect
+    // ({t: "bus", all}) so a Suite that was offline can tell what changed meanwhile. Notes only - never any data.
+    if (path === "/bus") {
+      let b = {}; try { b = await request.json(); } catch (e) { /* ignore */ }
+      const k = String(b.k || "").slice(0, 20), v = String(b.v == null ? Date.now() : b.v).slice(0, 60);
+      if (!/^[a-z_]+$/.test(k)) return Response.json({ ok: false });
+      if (this.mem.bus && this.mem.bus[k] === v) return Response.json({ ok: true, same: true });   // nothing new
+      this.mem.bus = Object.assign({}, this.mem.bus || {}, { [k]: v });
+      const msg = JSON.stringify({ t: "bus", k, v }), leadersOnly = b.to === "leaders";
+      let n = 0;
+      for (const [pid, c] of this.conns) {
+        if (leadersOnly && !(this.mem.members[pid] && this.mem.members[pid].is_leader)) continue;
+        try { c.ws.send(msg); n++; } catch (e) { this.conns.delete(pid); }
+      }
+      await this.save();
+      return Response.json({ ok: true, sent: n });
+    }
     if (path === "/board") return this.handleBoard();   // members' schedule page: live chain + queue (no Torn call)
     if (path === "/laststats") {   // schedule page: one member's last stats report (worker.js, signed-in member's own)
       const pid = Number(new URL(request.url).searchParams.get("pid"));
@@ -387,6 +407,7 @@ export class ChainRoom {
     const name = (this.mem.members[pid] && this.mem.members[pid].name) || "Unknown";
     server.serializeAttachment({ pid, name, seen: Date.now() });
     this.state.acceptWebSocket(server);
+    this.sendTo(server, { t: "bus", all: this.mem.bus || {} });   // 📡 HUB PUSH: what changed while this Suite was away
 
     // One live connection per member (§1): the older one is closed.
     const existing = this.conns.get(pid);

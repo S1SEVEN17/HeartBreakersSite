@@ -256,6 +256,18 @@ const notFound = () => page("Not found", `<h1>Not found</h1><p class="sub">That 
 //   "torn:<what>"      Torn reads the Suites report in their check-in (Suite 0.2.89+, counts only - no keys, no data)
 //   "tornm:<pid>"      the same, per member (for "Torn reads per member per hour" - shown as counts only)
 // Read by the oc_check workflow (today + yesterday). Rows older than 8 days are dropped on the daily cleanup.
+// 📡 HUB PUSH (Nov 19 2026, user picked "9. Yes"): a short note to every connected Suite that something changed, sent
+// through the Chain Watch room (chainroom.js "/bus"). k = what changed, v = its new version (a signature or a time),
+// to = "leaders" for leader-only data. Notes only - never any data; the Suite then fetches just that. Never throws,
+// never holds the request up (ctx.waitUntil when there is one). The room ignores a note whose v hasn't changed.
+//   crimes  the crime list changed (feeder upload / the Hub's own read)   plan  the deployed plan changed
+//   loans   the loaned-utilities list changed (leaders + loan staff)    armory  the armory stock changed (leaders)
+function busNote(env, ctx, k, v, to) {
+  if (!env.CHAINROOM) return;
+  const job = cwStub(env).fetch("https://do/bus", {method: "POST", body: JSON.stringify({k, v: String(v), to: to || null})}).catch(() => {});
+  if (ctx && ctx.waitUntil) ctx.waitUntil(job);
+  return job;
+}
 const USAGE = new Map(); let usageAt = Date.now();
 async function usageTable(env) {
   await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS hub_usage (day TEXT NOT NULL, k TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, k))").run();
@@ -840,6 +852,12 @@ async function sxRoute(env, ctx, req) {
   // {min: {key: n}} - only known keys, whole numbers 0..1,000,000; a key left out keeps its value
   // 🧰 LOANS FROM THE ARMOURY PAGE (HB Suite 0.2.79) - loan staff; see loansSeen
   if (op === "loans_seen") { if (!(who.leader || who.loans)) return leadersOnly(); return sxJson(await loansSeen(env, who, b || {})); }
+  // 🧰 LOANS FROM A LEADER'S REFRESH (Nov 19 2026, user: "4. Yes, but share data with the HUB when it's outdated."):
+  // Suite 0.2.89+ uses the Hub's loaned-utilities list when it's under 3 minutes old; only when it's older does it read
+  // Torn itself (faction utilities, the leader's own key) and hand the rows here, so every loan staff member gets them
+  // too. {rows: [{pid, iid, item}]} - current members only, whole-number ids, at most 400 rows; replaces the Hub's
+  // list only when the Hub's own copy is older than this one.
+  if (op === "loans_put") { if (!(who.leader || who.loans)) return leadersOnly(); return sxJson(await loansPut(env, who, b || {})); }
   if (op === "armory_now") { if (!who.leader) return leadersOnly(); return sxJson(await armoryNow(env)); }   // 🧰 read the armory now (HB Suite 0.2.80)
   if (op === "armory_cfg") {
     if (!who.leader) return leadersOnly();
@@ -992,6 +1010,16 @@ async function sxShareOp(env, who, op, b) {
         const c = bd && bd.chain, mine = (bd.queue || []).find(q => Number(q.pid) === pid);
         out.want_chain = !!(c && c.current > 0 && c.expires_at > now && !(mine && mine.connected));
       } catch (e) { /* room busy - next ping */ }
+    }
+    // ONE SYNC CALL (Nov 19 2026, user picked "7. Yes" - "combine the check-in, your OC check and alert badges into one
+    // call every 2 minutes"): Suite 0.2.89+ sends sync: 1 and gets, in this same answer,
+    //   myoc      exactly what op live "myoc" returns (the 📌 OC tile, the crime-changed check) - so the Suite no longer
+    //             asks for it separately every 1-3 minutes
+    //   alerts_v  leaders: a short signature of the leaders' alert list (ocSpawnAlerts, worked out at most once a
+    //             minute for everyone) - the Suite re-reads the full list only when it changes
+    if (b.sync) {
+      try { out.myoc = await ocMine(env, pid); } catch (e) { /* the Suite asks live "myoc" itself */ }
+      if (who.leader) try { out.alerts_v = await alertsSig(env); } catch (e) { /* no badge hint this time */ }
     }
     return sxJson(out);
   }
@@ -2243,6 +2271,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       .bind(b.env, b.k, text, Date.now(), `${who.name} [${who.id}]`).run();
     // the members' share changed -> the summaries' net values (valueMin/Avg/Max) are worked out again now
     if (b.k === "opts" && prevShare !== (v.share ?? null)) await ocSummariesSave(env, b.env).catch(() => {});
+    if (b.k === "plan" && b.env === "prod") await busNote(env, null, "plan", Date.now());   // 📡 HUB PUSH: a leader changed the plan
     return Response.json({ok: true}, H);
   }
   return new Response("Not found", {status: 404});
@@ -2466,7 +2495,15 @@ async function ocFeedSx(env, ctx, who, b) {
   if (what === "me") return ocFeedMe(env, ctx, who, b, now);
   if (what === "stop") { if (held === pid) await lease(ls.data.sig, 0).run(); return {ok: true, feed: false}; }
   if (held && held !== pid) return {ok: true, feed: false, every: OC_FEED_EVERY_S};
-  if (what !== "put") { await lease(ls && ls.data && Number(ls.data.pid) === pid ? ls.data.sig : null, now).run(); return {ok: true, feed: true, every: OC_FEED_EVERY_S}; }
+  // FEEDER BACKUP (Nov 19 2026, user picked "5. Yes" - "the feeder skips its crime read when the Hub's own read is under
+  // a minute old"): every answer to the feeder carries hub_at = when the Hub's OWN key last wrote each reading the
+  // feeder supplies {crimes, now, recent} (ms epoch; 0 = the latest one came from a Suite). Suite 0.2.89+ skips a read
+  // whose Hub copy is under a minute old (completed crimes: under 3 minutes) and just keeps its lease with do "beat".
+  const hubAt = async () => { const o = {crimes: 0, now: 0, recent: 0};
+    try { const {results} = await env.OC_DB.prepare("SELECT env, ds, as_of, by FROM oc_snap WHERE (env = 'prod' AND ds = 'crimes') OR (env = 'hub' AND ds IN ('now', 'recent'))").all();
+      (results || []).forEach(r => { if (r.by === "hub" && o[r.ds] != null) o[r.ds] = Number(r.as_of) || 0; }); } catch (e) { /* no hint */ }
+    return o; };
+  if (what !== "put") { await lease(ls && ls.data && Number(ls.data.pid) === pid ? ls.data.sig : null, now).run(); return {ok: true, feed: true, every: OC_FEED_EVERY_S, hub_at: await hubAt()}; }
   // ---- an upload: the same checks as the member write-back (bad data is dropped, never stored) ----
   const [cat, ros] = await Promise.all([ocSnapGet(env, "prod", "catalog"), ocSnapGet(env, "prod", "roster")]);
   const names = new Set(((cat && cat.data && cat.data.organizedcrimes) || []).map(c => c && c.name).filter(Boolean));
@@ -2501,6 +2538,7 @@ async function ocFeedSx(env, ctx, who, b) {
     fops.push(ocSnapPut(env, "hub", "now", now, JSON.stringify({chain: b.now.chain || null, wars: b.now.wars || null}), by)); extra.push("now");
   }
   await env.OC_DB.batch(fops);
+  if (changed) busNote(env, ctx, "crimes", sig);             // 📡 HUB PUSH
   // the planner (+ the Discord seat pings that follow a plan) - after the answer, never holding the script up
   const cfg = await ocConfig(env, "prod").catch(() => ({}));
   const fast = false;   // (Nov 17 2026) the 1-2 minute timers are gone (OC_AUTO_MIN) - only a change runs the planner here
@@ -2592,6 +2630,25 @@ async function warFeedSx(env, who, b) {
   if (at && now - at < WAR_FEED_FRESH_MS) return {ok: true, at, members: D.members};
   const read = !(now - Number(D.claim || 0) < WAR_FEED_CLAIM_MS);            // nobody is already reading it
   if (read) await save(at || 0, Object.assign({}, D, {claim: now}));
+  // HUB READS IT ITSELF (Nov 19 2026, user picked "3. Yes" - "the Hub already keeps the enemy list and could hand it to
+  // both"): the stale list is read with the Hub's own key (v2 faction/{fid}/members, 1 call, at most once per
+  // WAR_FEED_FRESH_MS thanks to the claim) instead of asking this member's Suite to spend its key. Only when the Hub's
+  // read fails does the Suite get `read: true` and read Torn as before (0.2.71).
+  if (read && env.HUB_TORN_KEY) {
+    try {
+      // API: Heart Breakers Hub - War tab / war target: the enemy faction's members + status (Hub key)
+      const r = await ocTorn(env, `faction/${fid}/members`);
+      const list = Array.isArray(r.members) ? r.members : Object.entries(r.members || {}).map(([id, m]) => Object.assign({id}, m));
+      const members = list.filter(m => m && Number(m.id) > 0).slice(0, 150).map(m => ({pid: Number(m.id), name: String(m.name || "").slice(0, 40),
+        level: Math.max(0, Math.min(100, Number(m.level) || 0)), state: String((m.status || {}).state || "").slice(0, 20),
+        until: Number((m.status || {}).until) || 0, la: String((m.last_action || {}).status || "").slice(0, 12)}));
+      if (members.length) {
+        await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'war:feed', ?, ?, 'hub') " +
+          "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data, by = excluded.by").bind(now, JSON.stringify({fid, members, claim: 0})).run();
+        return {ok: true, at: now, members};
+      }
+    } catch (e) { /* fall back to the Suite reading it */ }
+  }
   return {ok: true, at: at || null, members: D.members || null, read};
 }
 // a completed-crimes list -> the compact rows of oc_snap hub 'recent' (the Hub's pull and the feeder's upload)
@@ -2688,7 +2745,8 @@ async function armoryPull(env, now, ops, crimes, minAge) {
                                           catch (e) { ARMORY_V2_BAD = now; d = null; } }
   if (!d) d = await tornV1(env, "faction/?selections=medical,drugs,boosters,utilities");
   { const mem = await currentMembers(env).catch(() => null), rows = loanRowsOf(d, mem && mem.size >= 5 ? mem : null);
-    if (rows) { putLoans({rows, at: now, seats, kick: false}); delete LIVE_MEMO["loans:util"]; }
+    if (rows) { putLoans({rows, at: now, seats, kick: false}); delete LIVE_MEMO["loans:util"];
+      await busNote(env, null, "loans", ocHash(JSON.stringify(rows.map(x => [x.pid, x.iid]).sort()))); }   // 📡 HUB PUSH (only when the list changed)
     else putLoans({rows: L.rows || [], at: L.at || null, seats, kick}); }    // no utilities in the answer: keep the list, try again
   const rows = [].concat(...["medical", "drugs", "boosters"].map(k => { const v = d[k]; return Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []; }));
   if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer");
@@ -2708,6 +2766,7 @@ async function armoryPull(env, now, ops, crimes, minAge) {
     if (now - pat > ARMORY_PRICE_MS) pat = now;
   } catch (e) { /* stock is still stored; prices next run */ }
   ops.push(ocSnapPut(env, "hub", "armory", now, JSON.stringify({stock, ids, prices, prices_at: pat}), "hub"));
+  await busNote(env, null, "armory", ocHash(JSON.stringify(stock)), "leaders");   // 📡 HUB PUSH (only when the stock changed)
 }
 // what loan staff get: {loaned: [{pid, iid, item}], loaned_at}
 async function loansUtil(env) {
@@ -2719,6 +2778,29 @@ async function loansUtil(env) {
 // loan a moment ago that are now back (a Retrieve). Applied to the stored list at once so every loan staff member
 // sees a Loan / Retrieve within seconds; the Hub's own 15-minute read stays the full truth and replaces it.
 // Only current members, whole-number ids, at most 200 rows. Item names come from the stored list / the OC catalog.
+// leaders' alert list signature for the sync answer: hash of ocSpawnAlerts, kept 60 s per worker instance
+let ALERTS_SIG = {at: 0, v: ""};
+async function alertsSig(env) {
+  if (Date.now() - ALERTS_SIG.at < 60000) return ALERTS_SIG.v;
+  const a = await ocSpawnAlerts(env), txt = JSON.stringify(a || {});
+  let h = 0; for (let i = 0; i < txt.length; i++) h = (h * 31 + txt.charCodeAt(i)) | 0;
+  ALERTS_SIG = {at: Date.now(), v: (h >>> 0).toString(36) + "." + txt.length};
+  return ALERTS_SIG.v;
+}
+async function loansPut(env, who, b) {
+  const rows = Array.isArray(b.rows) ? b.rows : null, now = Date.now();
+  if (!rows || rows.length > 400 || !rows.every(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0 && Number.isInteger(Number(x.iid)) && Number(x.iid) > 0))
+    return {ok: false, error: "bad rows"};
+  const [r, mem] = await Promise.all([ocSnapGet(env, "hub", "loans:util").catch(() => null), currentMembers(env).catch(() => null)]);
+  const L = (r && r.data) || {};
+  if (L.at && now - Number(L.at) < 60000) return {ok: true, kept: true};    // the Hub read it in the last minute itself
+  const out = rows.filter(x => !(mem && mem.size >= 5) || mem.has(Number(x.pid)))
+    .map(x => ({pid: Number(x.pid), iid: Number(x.iid), item: String(x.item || "#" + Number(x.iid)).slice(0, 60)}));
+  await ocSnapPut(env, "hub", "loans:util", now, JSON.stringify(Object.assign({}, L, {rows: out, at: now, kick: false})), `${String(who.name || "").slice(0, 40)} [${Number(who.id)}]`).run();
+  delete LIVE_MEMO["loans:util"];
+  await busNote(env, null, "loans", ocHash(JSON.stringify(out.map(x => [x.pid, x.iid]).sort())));   // 📡 HUB PUSH
+  return {ok: true, at: now};
+}
 async function loansSeen(env, who, b) {
   const pair = x => x && Number.isInteger(Number(x.iid)) && Number(x.iid) > 0 && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0;
   const seen = Array.isArray(b.seen) ? b.seen : [], gone = Array.isArray(b.gone) ? b.gone : [];
@@ -2736,6 +2818,7 @@ async function loansSeen(env, who, b) {
     haveK.add(k); out.push({pid: Number(x.pid), iid: Number(x.iid), item: names[Number(x.iid)] || "#" + Number(x.iid)}); n++; }
   let v = Number(r.as_of) || 0;
   if (n) { v = Date.now(); await ocSnapPut(env, "hub", "loans:util", v, JSON.stringify(Object.assign({}, L, {rows: out})), `${String(who.name || "").slice(0, 40)} [${Number(who.id)}]`).run();
+    await busNote(env, null, "loans", ocHash(JSON.stringify(out.map(x => [x.pid, x.iid]).sort())));   // 📡 HUB PUSH
            delete LIVE_MEMO["loans:util"]; }
   return {ok: true, changed: n, loaned: out, loaned_at: Number(L.at), loaned_v: v};
 }
@@ -2791,6 +2874,7 @@ async function ocFeedPull(env) {
     const cl = (d.crimes || []).map(ocFeedCleanCrime);
     try { ocApplyMe(cl, await ocMeGet(env), now); } catch (e) { fail("me", e); }   // ⚡ members' own join / leave reports (last 90 s)
     put("crimes", cl);
+    try { await busNote(env, null, "crimes", ocCrimeSig(cl)); } catch (e) { /* 📡 HUB PUSH - the room ignores an unchanged list */ }
     crimesNow = cl;                                          // (the delay check runs after Right now - it reuses that call's members)
   } catch (e) { fail("crimes", e); }
   // RECENTLY COMPLETED (Nov 16 2026, HB Suite 0.2.68 - user: "'Recently Completed' tile. Show the last 5 completed
@@ -4153,6 +4237,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
     .bind(JSON.stringify({teams: ocCleanTeams(r.teams), auto: r.stats}), now).run();
+  await busNote(env, null, "plan", now);                    // 📡 HUB PUSH
 }
 
 // ======================================================================================================
