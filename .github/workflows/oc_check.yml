@@ -64,7 +64,7 @@ jobs:
           PY
           # BOOSTER CAP (Nov 19 2026): the faction's booster-cooldown cap the Hub found in its upgrades (faction-wide, no names)
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT as_of, data FROM oc_snap WHERE env = 'hub' AND ds = 'boost:max'" > bm.json 2>/dev/null \
-            && python3 -c "import json, time; r = (json.load(open('bm.json'))[0]['results'] or [None])[0]; d = json.loads(r['data']) if r else {}; print('Booster cap (faction):', (str(round(d['sec'] / 3600, 1)) + ' h') if d.get('sec') else 'none found (24 h used)', '| upgrade text:', d.get('txt'), '| read', (str(round((time.time() * 1000 - r['as_of']) / 60000)) + ' min ago') if r else 'never')" || true
+            && python3 -c "import json, time; r = (json.load(open('bm.json'))[0]['results'] or [None])[0]; d = json.loads(r['data']) if r else {}; print('Booster cap (faction):', (str(round(d['sec'] / 3600, 1)) + ' h') if d.get('sec') else 'none found (24 h used)', '| upgrade text:', d.get('txt'), '| entries:', d.get('objs'), '| top keys:', d.get('top'), '| read', (str(round((time.time() * 1000 - r['as_of']) / 60000)) + ' min ago') if r else 'never')" || true
           # USAGE REPORT (Nov 19 2026): Hub calls per type and Torn reads (counts only) for today (UTC) and yesterday
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT day, k, n FROM hub_usage WHERE day >= date('now', '-1 day') ORDER BY day DESC, n DESC" > us.json 2>/dev/null \
             && python3 - <<'PY' || true

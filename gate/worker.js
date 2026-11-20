@@ -2836,13 +2836,14 @@ async function boostMaxPull(env) {
   // API: Heart Breakers Hub - Chain Watch booster cap: the faction's upgrades (Hub key, once a day)
   try { d = await ocTorn(env, "faction/upgrades"); } catch (e) { d = await tornV1(env, "faction/?selections=upgrades"); }
   const txts = [];
-  (function walk(o, depth) { if (!o || depth > 6) return;
-    if (typeof o === "string") { if (/booster/i.test(o) && /cooldown/i.test(o)) txts.push(o.slice(0, 120)); return; }
-    if (typeof o === "object") Object.values(o).forEach(v => walk(v, depth + 1)); })(d, 0);
+  const objs = [];
+  (function walk(o, depth, parent) { if (!o || depth > 7) return;
+    if (typeof o === "string") { if (/booster/i.test(o) && /cooldown/i.test(o)) { txts.push(o.slice(0, 120)); if (parent && !objs.includes(parent)) objs.push(parent); } return; }
+    if (typeof o === "object") Object.values(o).forEach(v => walk(v, depth + 1, o)); })(d, 0, null);
   let hrs = 0;
   txts.forEach(t => { if (/%/.test(t)) return; const m = t.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i); if (m) hrs = Math.max(hrs, Number(m[1])); });
   const sec = hrs > 0 && hrs <= 24 ? Math.round((24 + hrs) * 3600) : 0;
-  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, txt: txts.slice(0, 4)}), "hub").run();
+  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, txt: txts.slice(0, 4), objs: objs.slice(0, 4).map(o => JSON.stringify(o).slice(0, 400)), top: d && typeof d === "object" ? Object.keys(d).slice(0, 10) : null}), "hub").run();
   if (sec && env.CHAINROOM) await cwStub(env).fetch("https://do/boostmax", {method: "POST", body: JSON.stringify({sec})}).catch(() => {});
   return sec;
 }
