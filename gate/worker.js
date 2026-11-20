@@ -3036,7 +3036,7 @@ async function ocFeedPull(env) {
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) { newHist = true; histFull = true; } } catch (e) { fail("backfill", e); }
   // (Nov 19 2026) the faction's booster cap for Chain Watch, once a day (boostMaxPull)
-  if (now - (lastPull.boostmax || 0) > 864e5) { mark("boostmax"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
+  if (now - (lastPull.boostmax2 || 0) > 864e5) { mark("boostmax2"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
   // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
   // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
   try {
