@@ -2852,7 +2852,14 @@ async function boostMaxPull(env) {
     const t = String(o.ability || o.name || ""); if (/%/.test(t)) return;
     const m = t.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i); if (m) hrs = Math.max(hrs, Number(m[1])); });
   const sec = hrs > 0 && hrs <= 24 ? Math.round((24 + hrs) * 3600) : 0;
-  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, state, txt: objs.map((o, i) => (paths[i] || "").split("/")[2] + ": " + (o.name || "") + " - " + (o.ability || "")).slice(0, 6)}), "hub").run();
+  // (Nov 19 2026, one-off check) how a member's own perks list shows the booster upgrade - only the lines that mention a
+  // booster cooldown (faction upgrade text, nothing personal), to confirm the Suite's perks reading
+  let perk = null;
+  try { const u = await ocTorn(env, "user/perks"); const out = [];
+    (function w(o, k, depth) { if (!o || depth > 4) return; if (typeof o === "string") { if (/booster/i.test(o) && /cooldown/i.test(o)) out.push(k + ": " + o.slice(0, 100)); return; }
+      if (typeof o === "object") Object.entries(o).forEach(([kk, v]) => w(v, typeof v === "object" ? kk : k, depth + 1)); })(u, "", 0);
+    perk = out.slice(0, 6); } catch (e) { perk = ["read failed: " + String(e && e.message || e).slice(0, 60)]; }
+  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, state, perk, txt: objs.map((o, i) => (paths[i] || "").split("/")[2] + ": " + (o.name || "") + " - " + (o.ability || "")).slice(0, 6)}), "hub").run();
   if (sec && env.CHAINROOM) await cwStub(env).fetch("https://do/boostmax", {method: "POST", body: JSON.stringify({sec})}).catch(() => {});
   return sec;
 }
@@ -3045,7 +3052,7 @@ async function ocFeedPull(env) {
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) { newHist = true; histFull = true; } } catch (e) { fail("backfill", e); }
   // (Nov 19 2026) the faction's booster cap for Chain Watch, once an hour (boostMaxPull - follows peace / war)
-  if (now - (lastPull.boostmax4 || 0) > 3600e3) { mark("boostmax4"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
+  if (now - (lastPull.boostmax5 || 0) > 3600e3) { mark("boostmax5"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
   // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
   // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
   try {
