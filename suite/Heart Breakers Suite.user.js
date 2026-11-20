@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.89
+// @version      0.2.90
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.89';
+    const VERSION = '0.2.90';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -674,7 +674,7 @@
             #hbs-panel .hbs-pt .ic{margin-top:5px;padding-top:5px;border-top:1px solid #2c313a;} #hbs-panel .hbs-ch .ic{margin-top:3px;gap:2px 4px;}
             #hbs-panel .hbs-ci{display:flex;align-items:center;justify-content:center;gap:2px;font-size:10px;white-space:nowrap;line-height:13px;} #hbs-panel .hbs-ch .hbs-ci{justify-content:flex-start;}
             #hbs-panel .hbs-ci svg{width:13px;height:13px;flex:0 0 13px;} #hbs-panel .hbs-ci em{font-style:normal;}
-            #hbs-panel .hbs-ci.free{color:#7CFC9A;} #hbs-panel .hbs-ci.cd{color:#FFB454;} #hbs-panel .hbs-ci.off{color:#6b7078;}
+            #hbs-panel .hbs-ci.free{color:#7CFC9A;} #hbs-panel .hbs-ci.cd{color:#FFB454;} #hbs-panel .hbs-ci.blk{color:#FF6B6B;} #hbs-panel .hbs-ci.off{color:#6b7078;}
             #hbs-panel .hbs-qsub{font-size:10.5px;opacity:.65;text-transform:uppercase;letter-spacing:.5px;margin:8px 0 4px;}
             #hbs-panel .hbs-chg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;}
             #hbs-panel .hbs-ch{background:#1b1e24;border:1px solid #2c313a;border-radius:7px;padding:4px 5px;min-width:0;} #hbs-panel .hbs-ch.up{border-color:#FFB454;}
@@ -880,7 +880,7 @@
             .hbs-qt.cant{background:#5a2626;color:#ffc4c4;} .hbs-qt.hit{background:#1f4d3a;color:#7CFC9A;}
             .hbs-qr .st{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:3px;padding-left:22px;font-size:11px;}
             .hbs-qr .st span{display:inline-flex;align-items:center;gap:3px;}
-            .hbs-qr .st .en{color:#7CFC9A;font-weight:bold;} .hbs-qr .st .cd{color:#FFB454;} .hbs-qr .st .ok{color:#888;} .hbs-qr .st .n{color:#888;}
+            .hbs-qr .st .en{color:#7CFC9A;font-weight:bold;} .hbs-qr .st .cd{color:#FFB454;} .hbs-qr .st .blk{color:#FF6B6B;} .hbs-qr .st .ok{color:#888;} .hbs-qr .st .n{color:#888;}
             .hbs-qr .st .bolt.off{opacity:.3;filter:grayscale(1);}
             .hbs-ic{height:12px;width:auto;vertical-align:middle;}
             /* 0.2.18 - Armory Loan Filter (on Torn's page, outside the panel) */
@@ -2670,6 +2670,10 @@
     }
     document.addEventListener('visibilitychange', () => { if (!document.hidden && cw.queued) cwPresence(); });
 
+    const BOOST_BASE = 86400, BOOST_TOP = 48 * 3600;
+    const boostCap = () => { const fac = num(cw && cw.state && cw.state.boost_max);
+        return fac >= BOOST_BASE && fac <= BOOST_TOP ? fac : BOOST_BASE; };
+
     function cwStatsCached(maxAge) { const c = store.get(K.cwStats, null); return c && Date.now() - num(c.at) < (maxAge || 600000) ? c.s : null; }
     async function cwStats(force) {
         if (!getKey() || document.hidden) return null;
@@ -3047,6 +3051,13 @@
     const cwCdTxt = sec => { sec = num(sec); if (!(sec > 0)) return '';
         if (sec < 3570) return Math.max(1, Math.ceil(sec / 60)) + 'm';
         const h = Math.round(sec / 360) / 10; return (h % 1 ? h.toFixed(1) : String(h)) + 'h'; };
+    function boostIco(sT, at) {
+        if (sT.booster == null) return `<span class="hbs-ci off" title="Booster: not known">${CW_ICO.booster}</span>`;
+        const cap = boostCap(), endMs = at + num(sT.booster) * 1000, left = (endMs - Date.now()) / 1000, capH = Math.round(cap / 360) / 10;
+        if (!(left > 0)) return `<span class="hbs-ci free" title="Booster: free (cap ${capH}h)">${CW_ICO.booster}</span>`;
+        if (left < cap) return `<span class="hbs-ci cd" title="Booster cooldown ${cwCdTxt(left)} of ${capH}h - still usable" data-cdend="${Math.round(endMs)}">${CW_ICO.booster}<em>${cwCdTxt(left)}</em></span>`;
+        return `<span class="hbs-ci blk" title="Booster capped (${capH}h) - usable again in ${cwCdTxt(left - cap)}" data-cdend="${Math.round(endMs - cap * 1000)}">${CW_ICO.booster}<em>${cwCdTxt(left - cap)}</em></span>`;
+    }
     function cwIcons(x) {
         const sT = x.stats, one = (k, title, endMs, known, offWhy) => {
             if (!known) return `<span class="hbs-ci off" title="${title}: ${offWhy}">${CW_ICO[k]}</span>`;
@@ -3056,7 +3067,7 @@
         if (!sT) return ['drug', 'booster', 'medical', 'refill'].map(k => `<span class="hbs-ci off" title="not shared">${CW_ICO[k]}</span>`).join('');
         const at = num(sT.at);
         return one('drug', 'Drug', at + num(sT.drug) * 1000, sT.drug != null, 'not known')
-            + one('booster', 'Booster', at + num(sT.booster) * 1000, sT.booster != null, 'not known')
+            + boostIco(sT, at)
             + one('medical', 'Medical', at + num(sT.medical) * 1000, sT.medical != null, 'not known (their script is older than 0.2.60)')
             + (num(sT.refill) === 1 ? `<span class="hbs-ci free" title="Energy refill available">${CW_ICO.refill}</span>` : `<span class="hbs-ci off" title="Energy refill used">${CW_ICO.refill}</span>`);
     }
@@ -3103,7 +3114,10 @@
         const en = cwEnergy(x), drug = cwCd(s.drug, s.at), boost = cwCd(s.booster, s.at), ref = num(s.refill) === 1;
         return (en ? `<span class="en"><span class="bolt${ref ? '' : ' off'}" title="${ref ? 'Energy refill available' : 'Energy refill used'}">⚡</span>${int(en.cur)}${en.max ? '/' + int(en.max) : ''}</span>` : '')
             + `<span class="${drug > 0 ? 'cd' : 'ok'}" title="Drug cooldown">${CW_WEED}${drug > 0 ? cwFmtCd(drug) : '✓'}</span>`
-            + `<span class="${boost > 0 ? 'cd' : 'ok'}" title="Booster cooldown">${CW_CAN}${boost > 0 ? cwFmtCd(boost) : '✓'}</span>`;
+            + (() => { const cap = boostCap(), capH = Math.round(cap / 360) / 10;
+                return boost <= 0 ? `<span class="ok" title="Booster: free (cap ${capH}h)">${CW_CAN}✓</span>`
+                    : boost < cap ? `<span class="cd" title="Booster cooldown ${cwFmtCd(boost)} of ${capH}h - still usable">${CW_CAN}${cwFmtCd(boost)}</span>`
+                    : `<span class="blk" title="Booster capped (${capH}h) - usable again in ${cwFmtCd(boost - cap)}">${CW_CAN}${cwFmtCd(boost - cap)}</span>`; })();
     }
     async function cwAction(a, b) {
         if (a === 'target') { const G = bonusGuard();
