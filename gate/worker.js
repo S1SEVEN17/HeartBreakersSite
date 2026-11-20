@@ -2788,11 +2788,8 @@ async function armoryPull(env, now, ops, crimes, minAge) {
     if (rows) { putLoans({rows, at: now, seats, kick: false}); delete LIVE_MEMO["loans:util"];
       await busNote(env, null, "loans", ocHash(JSON.stringify(rows.map(x => [x.pid, x.iid]).sort()))); }   // 📡 HUB PUSH (only when the list changed)
     else putLoans({rows: L.rows || [], at: L.at || null, seats, kick}); }    // no utilities in the answer: keep the list, try again
-  // (Nov 20 2026, ONE-OFF PROBE - remove after checking) what each armory category returns: fields + loaned counts only
-  try { const pr = {}; ["medical", "drugs", "boosters", "utilities"].forEach(k => { const v = d[k], arr = Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : [];
-      pr[k] = {n: arr.length, keys: arr[0] ? Object.keys(arr[0]).slice(0, 12) : [], loaned: arr.filter(x => x && x.loaned_to != null && x.loaned_to !== 0 && x.loaned_to !== "0" && x.loaned_to !== "").length,
-               loanedNames: arr.filter(x => x && x.loaned_to != null && x.loaned_to !== 0 && x.loaned_to !== "0" && x.loaned_to !== "").map(x => String(x.name || "").slice(0, 30)).slice(0, 8)}; });
-    ops.push(ocSnapPut(env, "hub", "probe:arm", now, JSON.stringify(pr), "hub")); } catch (e) { /* probe only */ }
+  // (Nov 20 2026, checked once) Torn's faction medical / drugs / boosters lists carry only ID, name, type, quantity - NO
+  // loaned / loaned_to - so loans can only be read from utilities here; medical items loaned for OCs aren't visible in the API
   const rows = [].concat(...["medical", "drugs", "boosters"].map(k => { const v = d[k]; return Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []; }));
   if (!d.medical && !d.drugs && !d.boosters) throw new Error("no armory in the answer");
   const byName = new Map(rows.filter(x => x && x.name).map(x => [armNorm(x.name), x]));
