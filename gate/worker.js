@@ -2827,7 +2827,7 @@ async function alertsSig(env) {
   ALERTS_SIG = {at: Date.now(), v: (h >>> 0).toString(36) + "." + txt.length};
   return ALERTS_SIG.v;
 }
-// BOOSTER CAP BACKUP (Nov 19 2026, user: "#1 with #2 as a backup" - see chainroom.js BOOSTER_CD_MAX): once a day the
+// BOOSTER CAP BACKUP (Nov 19 2026, user: "#1 with #2 as a backup" - see chainroom.js BOOSTER_CD_MAX): once an hour the
 // Hub reads the faction's upgrades with its own key and finds the booster-cooldown upgrade ("... booster cooldown ...
 // N hours"); cap = 24 h + N h, kept in hub 'boost:max' {sec, txt} and sent to the Chain Watch room. Any member whose
 // Suite reports their own cap uses theirs instead. Nothing found = the room keeps 24 h.
@@ -2841,10 +2841,18 @@ async function boostMaxPull(env) {
   (function walk(o, depth, parent, path) { if (!o || depth > 7) return;
     if (typeof o === "string") { if (/booster/i.test(o) && /cooldown/i.test(o)) { txts.push(o.slice(0, 120)); if (parent && !objs.includes(parent)) { objs.push(parent); paths.push(path); } } return; }
     if (typeof o === "object") Object.entries(o).forEach(([k, v]) => walk(v, depth + 1, o, typeof v === "object" ? path + "/" + k : path)); })(d, 0, null, "");
+  // PEACE / WAR (Nov 19 2026, live check): Torn lists the faction's upgrades per state - upgrades.core (always),
+  // upgrades.peace and upgrades.war - and each state has its own booster-cooldown level (ours: peace V = +5 h -> 29 h,
+  // war XXIV = +24 h -> 48 h). Only core + the CURRENT state (d.state) count; read every hour so a war starting or
+  // ending changes the cap within the hour.
+  const state = String((d && d.state) || "").toLowerCase();
   let hrs = 0;
-  txts.forEach(t => { if (/%/.test(t)) return; const m = t.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i); if (m) hrs = Math.max(hrs, Number(m[1])); });
+  objs.forEach((o, i) => { const p = String(paths[i] || "").toLowerCase();
+    if (!(p.startsWith("/upgrades/core") || (state && p.startsWith("/upgrades/" + state)))) return;
+    const t = String(o.ability || o.name || ""); if (/%/.test(t)) return;
+    const m = t.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i); if (m) hrs = Math.max(hrs, Number(m[1])); });
   const sec = hrs > 0 && hrs <= 24 ? Math.round((24 + hrs) * 3600) : 0;
-  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, txt: txts.slice(0, 4), objs: objs.slice(0, 4).map(o => JSON.stringify(o).slice(0, 200)), paths: paths.slice(0, 4), state: d && d.state, top: d && typeof d === "object" ? Object.keys(d).slice(0, 10) : null}), "hub").run();
+  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, state, txt: objs.map((o, i) => (paths[i] || "").split("/")[2] + ": " + (o.name || "") + " - " + (o.ability || "")).slice(0, 6)}), "hub").run();
   if (sec && env.CHAINROOM) await cwStub(env).fetch("https://do/boostmax", {method: "POST", body: JSON.stringify({sec})}).catch(() => {});
   return sec;
 }
@@ -3036,8 +3044,8 @@ async function ocFeedPull(env) {
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) { newHist = true; histFull = true; } } catch (e) { fail("backfill", e); }
-  // (Nov 19 2026) the faction's booster cap for Chain Watch, once a day (boostMaxPull)
-  if (now - (lastPull.boostmax3 || 0) > 864e5) { mark("boostmax3"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
+  // (Nov 19 2026) the faction's booster cap for Chain Watch, once an hour (boostMaxPull - follows peace / war)
+  if (now - (lastPull.boostmax4 || 0) > 3600e3) { mark("boostmax4"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
   // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
   // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
   try {
