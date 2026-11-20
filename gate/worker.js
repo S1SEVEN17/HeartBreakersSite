@@ -2852,14 +2852,9 @@ async function boostMaxPull(env) {
     const t = String(o.ability || o.name || ""); if (/%/.test(t)) return;
     const m = t.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i); if (m) hrs = Math.max(hrs, Number(m[1])); });
   const sec = hrs > 0 && hrs <= 24 ? Math.round((24 + hrs) * 3600) : 0;
-  // (Nov 19 2026, one-off check) how a member's own perks list shows the booster upgrade - only the lines that mention a
-  // booster cooldown (faction upgrade text, nothing personal), to confirm the Suite's perks reading
-  let perk = null;
-  try { const u = await ocTorn(env, "user/perks"); const out = [];
-    (function w(o, k, depth) { if (!o || depth > 4) return; if (typeof o === "string") { if (/booster/i.test(o) && /cooldown/i.test(o)) out.push(k + ": " + o.slice(0, 100)); return; }
-      if (typeof o === "object") Object.entries(o).forEach(([kk, v]) => w(v, typeof v === "object" ? kk : k, depth + 1)); })(u, "", 0);
-    perk = out.slice(0, 6); } catch (e) { perk = ["read failed: " + String(e && e.message || e).slice(0, 60)]; }
-  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, state, perk, txt: objs.map((o, i) => (paths[i] || "").split("/")[2] + ": " + (o.name || "") + " - " + (o.ability || "")).slice(0, 6)}), "hub").run();
+  // (Nov 19 2026, checked once) a member's own perks list shows only the ACTIVE state's upgrade
+  // ("faction: + 5 hours maximum booster cooldown" in peace) - the Suite's hourly perks reading relies on that
+  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, state, txt: objs.map((o, i) => (paths[i] || "").split("/")[2] + ": " + (o.name || "") + " - " + (o.ability || "")).slice(0, 6)}), "hub").run();
   if (sec && env.CHAINROOM) await cwStub(env).fetch("https://do/boostmax", {method: "POST", body: JSON.stringify({sec})}).catch(() => {});
   return sec;
 }
