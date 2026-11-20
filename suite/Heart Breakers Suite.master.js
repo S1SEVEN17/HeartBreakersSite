@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.90
+// @version      0.2.91
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.91 (Nov 20 2026) - 🧰 Loan / Retrieve open the item's own armoury tab (Medical, Temporary, Drugs ...), not always Utilities.
  *  v0.2.90 (Nov 20 2026) - 🍺 Booster cooldown uses the faction's real cap (24 h + its booster upgrade, peace / war) - amber = still usable, red = capped.
  *  v0.2.89 (Nov 19 2026) - 📡 Smarter syncing: the Hub tells your Suite when something changes; shared Torn reads; one check-in for your OC tile + alerts; Loans use the Hub's copy.
  *  v0.2.88 (Nov 18 2026) - 📡 Fewer API calls: your OC pass rates are re-read every 6 hours (was hourly), plus at once when a crime spawns, your crime changes or a seat opens while you're free.
@@ -488,7 +489,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.90';
+    const VERSION = '0.2.91';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -545,6 +546,7 @@
         schTz: 'hbs_sch_tz',                   // schedule clock: tct | local
         schHr: 'hbs_sch_hr',                   // schedule clock: 24 | 12
         view: 'hbs_view',                      // 💾 panel view {pid, back, open, set, scroll:{viewKey: px}} (0.2.4)
+        armTabs: 'hbs_arm_tabs',               // (0.2.91) item id -> armoury tab (sub=...), from the Hub
         loanCache: 'hbs_loan_cache',           // 🧰 Loans {missing, needs, unused, uts} (0.2.4, leaders)
         loanIgn: 'hbs_loan_ign',               // 🧰 "pid:itemId" unused loans you chose to ignore (0.2.4)
         rsDb: 'hbs_rs_db',                     // 🔎 Recruit Scout list - full data, fits / near / shortlisted, max 1,000 (0.2.8)
@@ -5699,6 +5701,7 @@
     let loanView = 'toloan', loanBusy = false, loanErr = '';
     // (0.2.79) lay the Hub's loaned-utilities list over the local one. force = the answer to our own page report.
     function loanFromHub(S, N, force) {
+        if (S && S.arm_tabs && typeof S.arm_tabs === 'object') store.set(K.armTabs, S.arm_tabs);   // (0.2.91) item -> tab
         const C = loanRead(), at = num(S.loaned_at), v = num(S.loaned_v);
         if (!at || !Array.isArray(S.loaned)) return false;
         if (!force && C.usrc === 'hub' && v <= num(C.uv)) return false;             // nothing new (or an older, remembered answer)
@@ -5922,7 +5925,13 @@
     }
     // ---- the faction Armoury page (read only while Torn is focused + visible; nothing is ever clicked to finish) ----
     const onArmoury = () => /factions\.php/.test(location.href) && /tab=armou?ry/i.test(location.hash + location.href);
-    function armRows() { return [...document.querySelectorAll('.img-wrap[data-itemid]')].map(iw => ({ el: iw.parentElement, iid: parseInt(iw.dataset.itemid, 10) })).filter(r => r.el && r.iid); }
+    // (0.2.91) only the VISIBLE armoury tab's rows (Torn keeps opened tabs on the page, hidden) - see build_patch_0291.py
+    const armPanel = () => document.querySelector('div[role="tabpanel"].armoury-tabs[aria-hidden="false"]');
+    const armActiveSub = () => { const p = armPanel(); const m = p && String(p.id).match(/sub=(\w+)/); return m ? m[1] : ((location.hash.match(/sub=(\w+)/) || [])[1] || ''); };
+    const ARM_TAB_LABEL = { weapons: 'Weapons', armour: 'Armor', temporary: 'Temporary', medical: 'Medical', consumables: 'Consumables', drugs: 'Drugs', boosters: 'Boosters', utilities: 'Utilities' };
+    const armTabOf = iid => { const t = (store.get(K.armTabs, null) || {})[iid]; return ARM_TAB_LABEL[t] ? t : 'utilities'; };
+    function armRows() { const root = armPanel() || document;
+        return [...root.querySelectorAll('.img-wrap[data-itemid]')].map(iw => ({ el: iw.parentElement, iid: parseInt(iw.dataset.itemid, 10) })).filter(r => r.el && r.iid); }
     function rowPid(r) {
         const h = r.el.querySelector('.retrieve-cont input[name="user"]'); if (h && h.value) { const m = h.value.match(/\[(\d+)\]/); if (m) return +m[1]; }
         const a = r.el.querySelector('.loaned a[href*="XID="]'); if (a) { const m = a.href.match(/XID=(\d+)/); if (m) return +m[1]; }
@@ -5953,8 +5962,7 @@
     const loanSeenSent = new Set();
     function loanSeenScan() {
         if (!me || !(me.leader || me.loans)) return;
-        const li = document.querySelector('#faction-armoury-tabs li.utilities, ul.armory-main-tab li.utilities');
-        if (li ? !li.classList.contains('ui-tabs-active') : !/sub=utilities/.test(location.hash)) { loanSeenPrev = null; return; }
+        if (armActiveSub() !== 'utilities') { loanSeenPrev = null; return; }   // (0.2.91) the visible tab
         const rows = armRows(); if (!rows.length) return;
         const C = loanRead(); if (C.usrc !== 'hub' && !C.uv) return;                  // no Hub list on this device yet
         const now = new Set(), ids = new Set();
@@ -5988,15 +5996,17 @@
     // row can't be seen or retrieved.
     // (0.2.52, user: "Needs to link: https://www.torn.com/factions.php?step=your&type=1#/tab=armoury&sub=utilities&start=0")
     const ARM_UTIL = '#/tab=armoury&sub=utilities&start=0';
+    const armHash = sub => '#/tab=armoury&sub=' + sub + '&start=0';   // (0.2.91) any tab
     // (0.2.61, user: '"Loan" button for OCs should also take you to the same armory/utilities page as the Retrieve one.')
     // mode 'loan' does the same trip: opens Armoury -> Utilities, selects the tab, then highlights a copy of the item
     // that ISN'T out on loan. Torn's Loan button is not pressed on that tap - tap Loan again for that.
     function armGoRetrieve(iid, pid, mode) {
         mode = mode === 'loan' ? 'loan' : 'retrieve';
-        toast(`Opening Armoury → Utilities - tap ${mode === 'loan' ? 'Loan' : 'Retrieve'} again once the item is highlighted.`, true);
-        if (/factions\.php/.test(location.pathname) && /step=your/.test(location.search)) location.hash = ARM_UTIL;   // Torn's own tab switch
+        const sub = armTabOf(iid);                                   // (0.2.91) the item's own tab
+        toast(`Opening Armoury → ${ARM_TAB_LABEL[sub]} - tap ${mode === 'loan' ? 'Loan' : 'Retrieve'} again once the item is highlighted.`, true);
+        if (/factions\.php/.test(location.pathname) && /step=your/.test(location.search)) location.hash = armHash(sub);   // Torn's own tab switch
         else { try { sessionStorage.setItem('hbs_arm_go', JSON.stringify({ iid, pid, mode, at: Date.now() })); } catch (e) { /* */ }
-            location.href = 'https://www.torn.com/factions.php?step=your&type=1' + ARM_UTIL; return; }
+            location.href = 'https://www.torn.com/factions.php?step=your&type=1' + armHash(sub); return; }
         armFindLoaned(iid, pid, 0, mode);
     }
     // (0.2.54 FIX, user: "This isnt correctly opening the utilities tab. It might need to be manually selected when
@@ -6005,20 +6015,24 @@
     // [href="#tab=armoury&sub=utilities"]. So after opening the armoury the Utilities tab is selected by pressing that
     // anchor (once per Retrieve tap; still only navigation - Torn's Retrieve is never pressed here).
     let armTabTried = false;
-    function armOpenUtilTab() {
-        const li = document.querySelector('#faction-armoury-tabs li.utilities, ul.armory-main-tab li.utilities');
+    // (0.2.91) any tab: its anchor a[href="#tab=armoury&sub=<sub>"]; its li is ui-tabs-active when open
+    function armOpenTab(sub) {
+        const a = document.querySelector(`#faction-armoury-tabs a[href="#tab=armoury&sub=${sub}"], ul.armory-main-tab a[href="#tab=armoury&sub=${sub}"]`);
+        const li = a && a.closest('li');
         if (!li) return false;                                   // the armoury hasn't drawn yet
-        if (li.classList.contains('ui-tabs-active')) return true;
-        if (!armTabTried) { const a = li.querySelector('a.ui-tabs-anchor, a'); if (a) { armTabTried = true; a.click(); } }
+        if (li.classList.contains('ui-tabs-active') && armActiveSub() === sub) return true;
+        if (!armTabTried) { armTabTried = true; a.click(); }
         return false;
     }
+    const armOpenUtilTab = () => armOpenTab('utilities');
     function armFindLoaned(iid, pid, n, mode) {
         const loan = mode === 'loan';
         if (!n) armTabTried = false;
-        if (pageScrapeAllowed() && /factions\.php/.test(location.pathname)) { try { armOpenUtilTab(); } catch (e) { /* Torn's page changed */ } }
-        if (n > 60) { toast(loan ? 'Couldn\'t find a free copy of that item on Armoury → Utilities - it may be in another category, or every copy is out on loan.' : 'Couldn\'t find that loaned copy on Armoury → Utilities - it may be in another category.', true); return; }
+        const sub = armTabOf(iid);                               // (0.2.91) the item's own tab
+        if (pageScrapeAllowed() && /factions\.php/.test(location.pathname)) { try { armOpenTab(sub); } catch (e) { /* Torn's page changed */ } }
+        if (n > 60) { toast(loan ? `Couldn't find a free copy of that item on Armoury → ${ARM_TAB_LABEL[sub]} - every copy may be out on loan.` : `Couldn't find that loaned copy on Armoury → ${ARM_TAB_LABEL[sub]} - it may already be back.`, true); return; }
         setTimeout(() => {
-            const row = onArmoury() && pageScrapeAllowed() ? armRows().filter(r => r.iid === iid).find(r => loan ? !rowPid(r) : rowPid(r) === pid) : null;
+            const row = onArmoury() && pageScrapeAllowed() && armActiveSub() === sub ? armRows().filter(r => r.iid === iid).find(r => loan ? !rowPid(r) : rowPid(r) === pid) : null;
             if (!row) return armFindLoaned(iid, pid, n + 1, mode);
             try { armFilterApply(); } catch (e) { /* */ }
             row.el.scrollIntoView({ behavior: 'smooth', block: 'center' }); row.el.classList.add('hbs-arm-pulse'); setTimeout(() => row.el.classList.remove('hbs-arm-pulse'), 2400);
@@ -6031,14 +6045,14 @@
         if (mode === 'retrieve') {
             if (store.get(K.armHide, false)) { store.set(K.armHide, false); try { armFilterApply(); } catch (e) { /* */ } }   // show loaned rows
             if (!onArmoury() || !armRows().some(r => r.iid === iid && rowPid(r) === pid)) {
-                if (!(onArmoury() && /sub=utilities/i.test(location.hash))) { armGoRetrieve(iid, pid); return; }
+                if (!(onArmoury() && armActiveSub() === armTabOf(iid))) { armGoRetrieve(iid, pid); return; }
             }
         }
         // (0.2.61) Loan away from Armoury -> Utilities (or with the item not on the open Armoury tab): go there first
-        if (mode === 'loan' && (!onArmoury() || !armRows().some(r => r.iid === iid)) && !(onArmoury() && /sub=utilities/i.test(location.hash))) { armGoRetrieve(iid, pid, 'loan'); return; }
-        if (!onArmoury()) { toast('Open your faction Armoury → Utilities first, then tap this again.', true); return; }
+        if (mode === 'loan' && (!onArmoury() || !armRows().some(r => r.iid === iid)) && !(onArmoury() && armActiveSub() === armTabOf(iid))) { armGoRetrieve(iid, pid, 'loan'); return; }
+        if (!onArmoury()) { toast(`Open your faction Armoury → ${ARM_TAB_LABEL[armTabOf(iid)]} first, then tap this again.`, true); return; }
         const rows = armRows().filter(r => r.iid === iid);
-        if (!rows.length) { toast('That item isn\'t on this Armoury tab - open Utilities (or its category) and try again.', true); return; }
+        if (!rows.length) { toast(`That item isn't on this Armoury tab - open ${ARM_TAB_LABEL[armTabOf(iid)]} and try again.`, true); return; }
         const label = String(name || '').replace(/\s*\[\d+\]$/, '') + ' [' + pid + ']';
         if (mode === 'retrieve') {
             const row = rows.find(r => rowPid(r) === pid); if (!row) { toast('That loaned copy isn\'t on this tab.', true); return; }
