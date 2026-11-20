@@ -2812,8 +2812,27 @@ async function armoryPull(env, now, ops, crimes, minAge) {
 }
 // what loan staff get: {loaned: [{pid, iid, item}], loaned_at}
 async function loansUtil(env) {
-  const r = await ocSnapGet(env, "hub", "loans:util").catch(() => null), L = (r && r.data) || {};
-  return L.at ? {loaned: L.rows || [], loaned_at: Number(L.at), loaned_v: Number(r.as_of) || 0} : {};   // loaned_v: changes with every write
+  const [r, t] = await Promise.all([ocSnapGet(env, "hub", "loans:util").catch(() => null), ocSnapGet(env, "hub", "arm:tabs").catch(() => null)]);
+  const L = (r && r.data) || {}, tabs = (t && t.data && t.data.map) || null;
+  return Object.assign(L.at ? {loaned: L.rows || [], loaned_at: Number(L.at), loaned_v: Number(r.as_of) || 0} : {},   // loaned_v: changes with every write
+                       tabs ? {arm_tabs: tabs} : {});                                                               // (Nov 20 2026) see armTabsPull
+}
+// 🧰 WHICH ARMOURY TAB HOLDS EACH ITEM (Nov 20 2026, user: "Sometimes loans are different categories of items, not only
+// utilities. For example, medical tab, irradiated blood bag is an item for an OC. So the script needs to determine the
+// item type and select the correct page for it when loaning or retrieving." + the HTML of every armoury tab): once a day
+// the Hub reads the faction's armoury lists with its own key and records item id -> the tab's address name (sub=...):
+// weapons, armour, temporary, medical, drugs, boosters, utilities (Torn's API has no "consumables" list - items there
+// fall back to utilities in the Suite). Kept in hub 'arm:tabs' {map: {iid: sub}}; served with the loan lists (arm_tabs).
+const ARM_TAB_SEL = {weapons: "weapons", armor: "armour", temporary: "temporary", medical: "medical", drugs: "drugs", boosters: "boosters", utilities: "utilities"};
+async function armTabsPull(env) {
+  const map = {}, add = (sel, d) => { const v = d && d[sel], arr = Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : [];
+    arr.forEach(it => { const iid = Number(it && (it.ID != null ? it.ID : it.id)); if (iid > 0 && !map[iid]) map[iid] = ARM_TAB_SEL[sel]; }); };
+  // API: Heart Breakers Hub - which armoury tab holds each item (faction armoury lists, Hub key, once a day; one call, or
+  // one per list if Torn refuses the combined one)
+  try { const d = await tornV1(env, "faction/?selections=" + Object.keys(ARM_TAB_SEL).join(",")); Object.keys(ARM_TAB_SEL).forEach(k => add(k, d)); }
+  catch (e) { for (const k of Object.keys(ARM_TAB_SEL)) { try { add(k, await tornV1(env, "faction/?selections=" + k)); } catch (x) { /* that list isn't readable */ } } }
+  if (Object.keys(map).length) await ocSnapPut(env, "hub", "arm:tabs", Date.now(), JSON.stringify({map}), "hub").run();
+  return Object.keys(map).length;
 }
 // 3. FROM THE ARMOURY PAGE (sx op "loans_seen", loan staff): the Suite, while the member has Armoury -> Utilities open
 // and focused, reports {seen: [{iid, pid}], gone: [{iid, pid}]} - rows the page shows on loan, and rows it showed on
@@ -3049,6 +3068,7 @@ async function ocFeedPull(env) {
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) { newHist = true; histFull = true; } } catch (e) { fail("backfill", e); }
   // (Nov 19 2026) the faction's booster cap for Chain Watch, once an hour (boostMaxPull - follows peace / war)
+  if (now - (lastPull.armtabs || 0) > 864e5) { mark("armtabs"); try { await armTabsPull(env); } catch (e) { fail("armtabs", e); } }   // (Nov 20 2026)
   if (now - (lastPull.boostmax5 || 0) > 3600e3) { mark("boostmax5"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
   // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
   // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
