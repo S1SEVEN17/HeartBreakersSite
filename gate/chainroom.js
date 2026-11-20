@@ -89,7 +89,14 @@ const PING = '{"t":"ping"}', PONG = '{"t":"pong"}'; // answered by the runtime w
 
 // Member-supplied "stats" (energy/cooldowns) — used for queue auto-remove rules (§5).
 const HIT_ENERGY_COST = 25;
-const BOOSTER_CD_CEILING = 24 * 3600;     // booster usable while cooldown < 24h (stacks to 24h)
+const BOOSTER_CD_CEILING = 24 * 3600;     // booster usable while cooldown < 24h (stacks to 24h) - the BASE cap only:
+// BOOSTER CAP PER MEMBER (Nov 19 2026, user: "Booster cooldowns can be upgraded to a maximum of 48 hours ... Can we reliably
+// determine the max cooldown (currently 29 hours) and base the icon/reading/kicked from queue from that?" -> "#1 with #2 as
+// a backup ... Usable (for boosters) means anything below the max cooldown."): the cap used is, in order,
+//   1. the member's own (stats.bmax, seconds) - HB Suite 0.2.90+ reads the member's perks once an hour, on the hour
+//   2. the faction's (this.mem.boostMax) - worker.js reads the faction's upgrades once a day with the Hub key (/boostmax)
+//   3. BOOSTER_CD_CEILING (24 h)
+const BOOSTER_CD_MAX = 48 * 3600;         // Torn's highest possible cap - anything above is ignored as a misread
 const FAIL_RESULTS = ["Lost", "Stalemate", "Interrupted", "Assist", "Escape", "Timeout"]; // not a landed hit
 const BONUS_HITS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
 const CHAIN_TIMEOUT_S = 300;              // every hit resets the chain timer to 5 minutes
@@ -376,6 +383,13 @@ export class ChainRoom {
       }
       await this.save();
       return Response.json({ ok: true, sent: n });
+    }
+    // (Nov 19 2026) the faction's booster cap from its upgrades (worker.js boostMaxPull, daily) - see BOOSTER_CD_MAX
+    if (path === "/boostmax") {
+      let b = {}; try { b = await request.json(); } catch (e) { /* ignore */ }
+      const v = Number(b.sec);
+      if (v >= BOOSTER_CD_CEILING && v <= BOOSTER_CD_MAX && v !== this.mem.boostMax) { this.mem.boostMax = v; await this.save(); }
+      return Response.json({ ok: true, boostMax: this.mem.boostMax || null });
     }
     if (path === "/board") return this.handleBoard();   // members' schedule page: live chain + queue (no Torn call)
     if (path === "/laststats") {   // schedule page: one member's last stats report (worker.js, signed-in member's own)
@@ -1204,7 +1218,7 @@ export class ChainRoom {
     const cooling = this.coolingDown(now);
     this.orderedQueue(true).forEach((q, idx) => {
       const s = q.stats, e = energyNow(q, now);
-      if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s, now)) {   // under 25e, no way back
+      if (s && e != null && e < HIT_ENERGY_COST && !canRestoreEnergy(s, now, this.mem.boostMax)) {   // under 25e, no way back
         delete this.mem.queue[q.pid]; delete this.mem.status[q.pid]; return;
       }
       // (The old "#1 / #2 Offline in Torn for 5 min -> removed" rule is gone - Nov 11 2026, user: inactive members
@@ -1298,6 +1312,7 @@ export class ChainRoom {
     const me = this.mem.members[pid] || {};
     return {
       t: "state", now: Date.now(),
+      boost_max: this.mem.boostMax || null,               // (Nov 19 2026) the faction's booster cap (s) - see BOOSTER_CD_MAX
       suite: { latest: SUITE_LATEST, required: SUITE_REQUIRED },   // (Nov 15 2026) update banner
       chain: this.mem.chain, queue: this.orderedQueue(), status: this.mem.status,
       retals: this.openRetals(), config: this.publicConfig(),
@@ -1763,18 +1778,21 @@ function sanitizeStats(s) {
     energyCur: n(s.energyCur), energyMax: n(s.energyMax),
     energyInc: n(s.energyInc), energyInt: n(s.energyInt), energyTick: n(s.energyTick),
     drug: n(s.drug), booster: n(s.booster), refill: n(s.refill), at: Date.now(),
+    // (Nov 19 2026) the member's own booster cap in seconds (see BOOSTER_CD_MAX), null = not known
+    bmax: Number(s.bmax) >= BOOSTER_CD_CEILING && Number(s.bmax) <= BOOSTER_CD_MAX ? Number(s.bmax) : null,
     // MEDICAL COOLDOWN (Nov 16 2026, HB Suite 0.2.60, user: "Medical can be shown."): seconds left, from the member's own
     // reading; null when their script doesn't send it (older than 0.2.60) - the queue then draws the icon grey
     medical: s.medical == null || !Number.isFinite(Number(s.medical)) ? null : Number(s.medical),
   };
 }
-function canRestoreEnergy(s, now) {
+function canRestoreEnergy(s, now, factionMax) {
   if (!s) return true;                                     // unknown -> don't drop on a guess
   // cooldowns were reported as seconds left at s.at - count them down to now
   const el = Math.max(0, ((now || Date.now()) - (Number(s.at) || 0)) / 1000);
   if (Number(s.refill) === 1) return true;
   if (Number(s.drug) - el <= 0) return true;               // drug cooldown clear
-  if (Number(s.booster) - el < BOOSTER_CD_CEILING) return true; // booster usable (<24h)
+  // booster usable while below the cap: the member's own, else the faction's, else 24 h (see BOOSTER_CD_MAX)
+  if (Number(s.booster) - el < (Number(s.bmax) || Number(factionMax) || BOOSTER_CD_CEILING)) return true;
   return false;
 }
 

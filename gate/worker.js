@@ -2827,6 +2827,25 @@ async function alertsSig(env) {
   ALERTS_SIG = {at: Date.now(), v: (h >>> 0).toString(36) + "." + txt.length};
   return ALERTS_SIG.v;
 }
+// BOOSTER CAP BACKUP (Nov 19 2026, user: "#1 with #2 as a backup" - see chainroom.js BOOSTER_CD_MAX): once a day the
+// Hub reads the faction's upgrades with its own key and finds the booster-cooldown upgrade ("... booster cooldown ...
+// N hours"); cap = 24 h + N h, kept in hub 'boost:max' {sec, txt} and sent to the Chain Watch room. Any member whose
+// Suite reports their own cap uses theirs instead. Nothing found = the room keeps 24 h.
+async function boostMaxPull(env) {
+  let d = null;
+  // API: Heart Breakers Hub - Chain Watch booster cap: the faction's upgrades (Hub key, once a day)
+  try { d = await ocTorn(env, "faction/upgrades"); } catch (e) { d = await tornV1(env, "faction/?selections=upgrades"); }
+  const txts = [];
+  (function walk(o, depth) { if (!o || depth > 6) return;
+    if (typeof o === "string") { if (/booster/i.test(o) && /cooldown/i.test(o)) txts.push(o.slice(0, 120)); return; }
+    if (typeof o === "object") Object.values(o).forEach(v => walk(v, depth + 1)); })(d, 0);
+  let hrs = 0;
+  txts.forEach(t => { if (/%/.test(t)) return; const m = t.match(/(\d+(?:\.\d+)?)\s*(?:hours?|hrs?|h)\b/i); if (m) hrs = Math.max(hrs, Number(m[1])); });
+  const sec = hrs > 0 && hrs <= 24 ? Math.round((24 + hrs) * 3600) : 0;
+  await ocSnapPut(env, "hub", "boost:max", Date.now(), JSON.stringify({sec: sec || null, txt: txts.slice(0, 4)}), "hub").run();
+  if (sec && env.CHAINROOM) await cwStub(env).fetch("https://do/boostmax", {method: "POST", body: JSON.stringify({sec})}).catch(() => {});
+  return sec;
+}
 async function loansPut(env, who, b) {
   const rows = Array.isArray(b.rows) ? b.rows : null, now = Date.now();
   if (!rows || rows.length > 400 || !rows.every(x => x && Number.isInteger(Number(x.pid)) && Number(x.pid) > 0 && Number.isInteger(Number(x.iid)) && Number(x.iid) > 0))
@@ -3015,6 +3034,8 @@ async function ocFeedPull(env) {
   // history BACKFILL (summaries contract §3, one-time): page back until Torn returns an empty page, a few pages a
   // run, then record the probe (earliest completion + count). Stops for the day on any Torn error (code 14 incl.).
   try { if (await ocBackfill(env, now, ENVS)) { newHist = true; histFull = true; } } catch (e) { fail("backfill", e); }
+  // (Nov 19 2026) the faction's booster cap for Chain Watch, once a day (boostMaxPull)
+  if (now - (lastPull.boostmax || 0) > 864e5) { mark("boostmax"); try { await boostMaxPull(env); } catch (e) { fail("boostmax", e); } }
   // ONE-TIME CLEANUP (Nov 18 2026, keyless sign-in removed - user: "Yes" to deleting page-read rates): pass rates that
   // only ever came from the crimes page (share_src kind 'oc' src 'page', no other source) and the keyless list go.
   try {
