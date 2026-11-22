@@ -147,6 +147,7 @@ th{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:1px}
 .ntpill.old{background:rgba(232,190,90,.16);color:var(--gold);border:1px solid var(--gold)}
 .ntpill.no{background:rgba(228,56,46,.14);color:#ff7a70;border:1px solid var(--red)}
 tr.nt-ok td{background:rgba(120,200,120,.06)}tr.nt-old td{background:rgba(232,190,90,.06)}tr.nt-no td{background:rgba(228,56,46,.05)}
+.nt3{margin:2px 0 5px} .nt3:last-child{margin-bottom:0}
 </style></head><body>
 __MENU__
 <h1>OC Management</h1>
@@ -1281,15 +1282,17 @@ function alertsHtml() {
 //   ✉️ Mail  - copies the longer message (with the Scripts directory + Hub links) and opens Torn's compose page to them
 //   ✓ Sent   - ticks them off on this device (localStorage "hb_oc_notified" {"pid:crime_id": ms}), cleared when the
 //              assignment changes. The Hub script (2.7.0) has the same list on leaders' Home.
+// 📣 TOP CRIMES (Nov 22 2026, user: "Members who don't have a script should be able to be notified using the old methods
+// of their best crimes available to them ... Instead of assigning them, we just let them know their top 3 best crimes and
+// which roles they qualify for in them." + "Remove the old notifications"): the list is the Hub's (config.json oc_top,
+// gate/worker.js ocNotifyTop) - members without the Suite who are in no crime, each with up to 3 recruiting crimes
+// (best join-now pay per day first) and the open roles their pass rate reaches the Min role % in. why "norates" = no
+// known rate for any open seat (only the script invite fits), "none" = rates known, none high enough. Nobody is
+// reserved - several members may be told about the same seat.
 const NOTIFY_LS = "hb_oc_notified";
 function notifyList() {
   if (!scriptKnown()) return null;
-  const plan = D.config.plan, busy = busyMap(), out = [];
-  ((plan && plan.teams) || []).forEach(t => { if (t.kind !== "live" || t.crime_id == null) return;
-    t.roles.forEach(r => { if (r.pid == null || r.existing || r.queued || usesScript(r.pid)) return;
-      const b = busy[r.pid]; if (b && t.crime_id && b.cid != null && String(b.cid) === String(t.crime_id)) return;   // joined already
-      out.push({pid: +r.pid, name: r.name || nameOf(r.pid), crime: t.crime, crime_id: t.crime_id, position: r.position, since: r.since || null}); }); });
-  return out;
+  return Array.isArray(D.config.oc_top) ? D.config.oc_top : [];
 }
 // the crime's own page (Nov 13 2026 - the user's link format)
 const OC_CRIME_LINK = id => `https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId=${id}`;
@@ -1306,17 +1309,24 @@ const OC_CRIME_LINK = id => `https://www.torn.com/factions.php?step=your&type=1#
 // now link to the Suite."): {scripts} now fills in the Suite's Greasy Fork page (it used to be the Hub Scripts page),
 // so a wording leaders edited earlier links there too. Keep in step with the Suite's NOTIFY_DEFAULT / notifyFill.
 const SUITE_URL = "https://greasyfork.org/en/scripts/605562-heart-breakers-suite";
+// (Nov 22 2026) TOP CRIMES WORDING, saved as config "notify_top" (the old "notify" wording is no longer used).
+// Fill-ins: {name} {crimes} (their top crimes + roles: one line in chat, a numbered list with links + rates in the mail)
+// {count} ("3 crimes") {link} (the faction Crimes tab) {scripts} (the Suite on Greasy Fork) {hub} (the Hub).
+// Keep in step with the Suite's NOTIFY_DEFAULT / notifyFill.
+const CRIMES_TAB = "https://www.torn.com/factions.php?step=your&type=1#/tab=crimes";
 const NOTIFY_DEFAULT = {
-  chat: "Hi {name}! You've been picked for an Organized Crime: {crime} - {role}. Please join it here: {link} - thank you! 💗",
-  subject: "OC: please join {crime} ({role})",
-  mail: "Hi {name},\n\nYou've been picked for an Organized Crime: **{crime}**, role **{role}**.\nPlease join it here: [{crime} #{crime_id}]({link})\n\n"
-    + "Tip: the Heart Breakers Suite script shows your OC assignment automatically, so you never miss one - [install the Heart Breakers Suite]({scripts}).\n"
-    + "You can also see your crimes and pass rates on [the Hub]({hub}).\n\nThanks!"};
-const notifyTpl = () => { const t = (D.config && D.config.notify) || {}; return {chat: t.chat || NOTIFY_DEFAULT.chat, subject: t.subject || NOTIFY_DEFAULT.subject, mail: t.mail || NOTIFY_DEFAULT.mail}; };
-function notifyFill(tpl, x) {
-  const hub = location.origin, v = {name: x.name, crime: x.crime, role: x.position, crime_id: x.crime_id, link: OC_CRIME_LINK(x.crime_id),
-    scripts: SUITE_URL, hub: hub + "/m/"};
-  return String(tpl).replace(/\{(name|crime|role|crime_id|link|scripts|hub)\}/g, (m, k) => v[k] == null ? "" : String(v[k]));
+  chat: "Hi {name}! Your best open OCs right now: {crimes}. Join one here: {link} 💗",
+  subject: "OC: {count} you can join right now",
+  mail: "Hi {name},\n\nThese are the best Organized Crimes open for you right now:\n\n{crimes}\n\nSeats fill fast, so join whichever is still open.\n\n"
+    + "Tip: the Heart Breakers Suite shows your best crimes automatically - [install the Heart Breakers Suite]({scripts}).\n\nThanks!"};
+const notifyTpl = () => { const t = (D.config && D.config.notify_top) || {}; return {chat: t.chat || NOTIFY_DEFAULT.chat, subject: t.subject || NOTIFY_DEFAULT.subject, mail: t.mail || NOTIFY_DEFAULT.mail}; };
+function notifyFill(tpl, x, kind) {
+  const L = x.crimes || [];
+  const crimes = kind === "mail"
+    ? L.map((c, i) => `${i + 1}. **[${c.crime} #${c.crime_id}](${OC_CRIME_LINK(c.crime_id)})** - ${c.roles.map(r => `${r.position} (${r.rate}%)`).join(", ")}`).join("\n")
+    : L.map((c, i) => `${i + 1}) ${c.crime} - ${c.roles.map(r => r.position).join(" or ")}`).join(" ");
+  const v = {name: x.name, crimes, count: L.length === 1 ? "1 crime" : L.length + " crimes", link: CRIMES_TAB, scripts: SUITE_URL, hub: location.origin + "/m/"};
+  return String(tpl).replace(/\{(name|crimes|count|link|scripts|hub)\}/g, (m, k) => v[k] == null ? "" : String(v[k]));
 }
 const mdPlain = t => t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, "$1: $2").replace(/\*\*([^*]+)\*\*/g, "$1");
 function mdHtml(t) {
@@ -1329,14 +1339,14 @@ function mdHtml(t) {
   }).join("");
 }
 function notifyMsgs(x) {
-  const T = notifyTpl(), mail = notifyFill(T.mail, x);
-  return {chat: mdPlain(notifyFill(T.chat, x)), subject: mdPlain(notifyFill(T.subject, x)), mail: mdPlain(mail), mailHtml: mdHtml(mail)};
+  const T = notifyTpl(), mail = notifyFill(T.mail, x, "mail");
+  return {chat: mdPlain(notifyFill(T.chat, x, "chat")), subject: mdPlain(notifyFill(T.subject, x, "chat")), mail: mdPlain(mail), mailHtml: mdHtml(mail)};
 }
 // the editor (Notify tab, collapsible)
 function notifyEditor() {
-  const T = (D.config && D.config.notify) || {};
+  const T = (D.config && D.config.notify_top) || {};
   return `<details class="panel" style="margin-top:10px"><summary><b>✏️ Edit the messages</b> <span class="tag">${T.chat || T.subject || T.mail ? "custom wording" : "built-in wording"}</span></summary>
-    <div class="hn">Fill-ins: <code>{name}</code> <code>{crime}</code> <code>{role}</code> <code>{crime_id}</code> <code>{link}</code> (their crime) <code>{scripts}</code> (the Heart Breakers Suite on Greasy Fork) <code>{hub}</code> (the Hub).
+    <div class="hn">Fill-ins: <code>{name}</code> <code>{crimes}</code> (their top crimes and the roles they qualify for - one line in chat, a numbered list with links and pass rates in the mail) <code>{count}</code> ("3 crimes") <code>{link}</code> (the faction Crimes tab) <code>{scripts}</code> (the Heart Breakers Suite on Greasy Fork) <code>{hub}</code> (the Hub).
       In the mail: a blank line starts a new paragraph, <code>**bold**</code>, <code>[link text](address)</code> - plain addresses become links too. Leave a box empty for the built-in wording.</div>
     <label class="hn">💬 Chat<br><textarea id="ntChat" rows="3" style="width:100%">${esc(T.chat || NOTIFY_DEFAULT.chat)}</textarea></label>
     <label class="hn">✉️ Mail subject<br><input id="ntSubj" style="width:100%" value="${esc(T.subject || NOTIFY_DEFAULT.subject)}"></label>
@@ -1363,7 +1373,7 @@ function inviteEditor() {
     <div><button id="ivSave">💾 Save</button> <button id="ivReset">↩️ Back to the built-in wording</button> <span class="hn" id="ivMsg"></span></div></details>`;
 }
 function notifyEditorWire() {
-  const go = async v => { try { $("ntMsg").textContent = "Saving…"; await saveConfig("notify", v); D.config.notify = v; drawNotify(); }
+  const go = async v => { try { $("ntMsg").textContent = "Saving…"; await saveConfig("notify_top", v); D.config.notify_top = v; drawNotify(); }
     catch (e) { $("ntMsg").textContent = "Not saved: " + e.message; } };
   // a box left exactly as the built-in wording is saved empty, so later changes to the built-in wording still reach it
   const keep = (val, def) => (val.trim() === def.trim() ? "" : val);
@@ -1393,54 +1403,75 @@ function copyRich(html, text) {
 // "contacted", one entry per member, kept 30 days) so every leader sees it under the member's name. The Hub records
 // the press - Torn can't tell it whether the message was actually sent.
 function logContact(x, how) {
-  const e = {pid: x.pid, crime: x.crime, crime_id: x.crime_id, role: x.position, how};
+  // (Nov 22 2026) a top-crimes message is logged against their #1 crime (role "Top 3"); a script invite as "Script invite"
+  const c0 = (x.crimes || [])[0] || {};
+  const e = {pid: x.pid, crime: c0.crime || "", crime_id: c0.crime_id || null, role: x.crimes && x.crimes.length ? "Top 3" : "Script invite", how};
   D.config.contacted = D.config.contacted || {};
   D.config.contacted[String(x.pid)] = Object.assign({}, e, {at: Date.now(), by: "you"});   // show it straight away
+  x.contacted = D.config.contacted[String(x.pid)];
   saveConfig("contacted", e).catch(() => {});
 }
 // VERY VISIBLE (Nov 14 2026, user: "it should show when a member has already been notified. This should be very
 // visible on both the HUB script and webpage"): a big status pill - green ✅ NOTIFIED (this crime + role), amber ⚠️
 // NOTIFIED FOR ANOTHER CRIME (their assignment changed since - tell them again), red ✖ NOT NOTIFIED - plus the detail
 // line (when, crime, role, how, who). The row is tinted to match (notifyRowCls).
-function contactState(lc, x) { return !lc || !lc.at ? "no" : String(lc.crime_id) === String(x.crime_id) && lc.role === x.position ? "ok" : "old"; }
+// (Nov 22 2026) ok = told about this same #1 crime (or the script invite, for a member with no list); old = told about a
+// list whose #1 crime has changed since - their list changed, tell them again
+function contactState(lc, x) {
+  if (!lc || !lc.at) return "no";
+  const c0 = (x.crimes || [])[0];
+  if (!c0) return lc.role === "Script invite" ? "ok" : "old";
+  return lc.role === "Top 3" && String(lc.crime_id) === String(c0.crime_id) ? "ok" : "old";
+}
 function notifyRowCls(lc, x) { return "nt-" + contactState(lc, x); }
 function lastContact(lc, x) {
   const st = contactState(lc, x);
   if (st === "no") return `<br><span class="ntpill no">✖ NOT NOTIFIED</span>`;
-  const when = new Date(lc.at).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
   const how = {chat: "💬 chat", mail: "✉️ mail", sent: "✓ marked"}[lc.how] || lc.how;
-  return `<br><span class="ntpill ${st}">${st === "ok" ? "✅ NOTIFIED" : "⚠️ NOTIFIED FOR ANOTHER CRIME"} · ${ago(lc.at)}</span>`
-    + `<br><span class="tag" title="Logged when a leader pressed ${esc(how)}${lc.by ? " - " + esc(lc.by) : ""}">📨 ${esc(when)} · ${esc(lc.crime)}${lc.crime_id ? " #" + esc(lc.crime_id) : ""} · ${esc(lc.role)} · ${esc(how)}${lc.by ? " · by " + esc(String(lc.by).replace(/ \[\d+\]$/, "")) : ""}</span>`;
+  return `<br><span class="ntpill ${st}">${st === "ok" ? "✅ NOTIFIED" : "⚠️ LIST CHANGED SINCE"} · ${ago(lc.at)}</span>`
+    + `<br><span class="tag" title="Logged when a leader pressed ${esc(how)}">📨 ${esc(lc.role === "Top 3" ? "Top 3 · #1 " + (lc.crime || "?") : lc.role || lc.crime || "")} · ${esc(how)}${lc.by ? " · by " + esc(String(lc.by).replace(/ \[\d+\]$/, "")) : ""}</span>`;
 }
 function drawNotify() {
-  const L = notifyList();
-  let sent = {}; try { sent = JSON.parse(localStorage.getItem(NOTIFY_LS) || "{}") || {}; } catch (e) {}
-  const ago = ms => { const m = Math.round((Date.now() - ms) / 60e3); return m < 60 ? m + "m" : Math.round(m / 60) + "h"; };
-  const head = `<div class="hn">Members <b>without the OC script</b> can't see their assignment, so tell them. Torn doesn't let the Hub send chats or mails itself - each button copies the message and opens Torn; you paste and press Send.</div>`;
-  if (L === null) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">Nobody has used the OC script with the Hub yet, so the Hub can't tell who doesn't have it.</div></div>` + notifyEditor(); notifyEditorWire(); return; }
-  if (!L.length) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">✅ Nobody to notify - every member without the script who's placed has joined (or isn't placed in a recruiting crime).</div></div>` + notifyEditor(); notifyEditorWire(); return; }
-  $("view").innerHTML = `<div class="panel">${head}<table class="tb"><tr><th>Member</th><th>Crime · role</th><th></th></tr>`
-    + L.map((x, i) => { const k = x.pid + ":" + x.crime_id, s = sent[k], lc = (D.config.contacted || {})[String(x.pid)];
-      return `<tr class="${notifyRowCls(lc, x)}"><td><a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name)}</a>${s && !lc ? ` <span class="tag ok" title="Marked sent on this device">✓ sent ${ago(s)} ago</span>` : ""}${lastContact(lc, x)}</td>
-        <td>${esc(x.crime)} <span class="tag">#${esc(x.crime_id)}</span><br><span class="mid">${esc(x.position)}</span></td>
-        <td style="white-space:nowrap"><button data-n="chat" data-i="${i}">💬 Chat</button> <button data-n="mail" data-i="${i}">✉️ Mail</button> <button data-n="sent" data-i="${i}" title="Tick off on this device">✓</button></td></tr>`; }).join("")
-    + `</table><div class="hn" id="nmsg"></div></div>` + notifyEditor();
+  const L0 = notifyList();
+  const head = `<div class="hn">Members <b>without the Heart Breakers Suite</b> who aren't in a crime, with their <b>top 3 open crimes</b> (best pay per day for joining now) and the roles their pass rate reaches the Min role % in.
+    Nobody is reserved - whoever joins first gets the seat. Torn doesn't let the Hub send chats or mails itself - each button copies the message and opens Torn; you paste and press Send.</div>`;
+  if (L0 === null) { $("view").innerHTML = `<div class="panel">${head}<div class="hn">Nobody has used the Suite with the Hub yet, so the Hub can't tell who doesn't have it.</div></div>` + notifyEditor(); notifyEditorWire(); return; }
+  const L = L0.filter(x => x.crimes && x.crimes.length), noR = L0.filter(x => x.why === "norates"), none = L0.filter(x => x.why === "none");
+  const crimesHtml = x => x.crimes.map((c, i) => `<div class="nt3"><b>${i + 1}. ${esc(c.crime)}</b> <span class="tag">#${esc(c.crime_id)}</span> · <b class="ok">${c.pay_day ? fmt2(c.pay_day) + "/day" : "-"}</b> · ${c.filled}/${c.seats}
+      <br><span class="mid">${c.roles.map(r => `${esc(r.position)} ${r.rate}%`).join(" · ")}</span></div>`).join("");
+  const nameCell = x => `<a href="https://www.torn.com/profiles.php?XID=${x.pid}" target="_blank" rel="noopener">${esc(x.name || "#" + x.pid)}</a>`;
+  const rowsHtml = (list, kind) => list.map(x => { const i = L0.indexOf(x), lc = x.contacted || (D.config.contacted || {})[String(x.pid)];
+    return `<tr class="${notifyRowCls(lc, x)}"><td>${nameCell(x)}${lastContact(lc, x)}</td><td>${kind === "top" ? crimesHtml(x) : `<span class="hn">No known pass rate for any open seat - send the Suite invite so their rates are shared.</span>`}</td>
+      <td style="white-space:nowrap">${kind === "top" ? `<button data-n="chat" data-i="${i}">💬 Chat</button> ` : ""}<button data-n="mail" data-i="${i}">✉️ Mail</button> <button data-n="sent" data-i="${i}" title="Mark as notified">✓</button></td></tr>`; }).join("");
+  $("view").innerHTML = `<div class="panel">${head}`
+    + (L.length ? `<table class="tb"><tr><th>Member</th><th>Top crimes · roles they qualify for</th><th></th></tr>${rowsHtml(L, "top")}</table>` : `<div class="hn">✅ Nobody to notify about crimes right now - no member without the Suite qualifies for an open seat.</div>`)
+    + (noR.length ? `<details class="panel" style="margin-top:8px"><summary><b>No pass rates known</b> <span class="tag">${noR.length}</span></summary><table class="tb">${rowsHtml(noR, "inv")}</table></details>` : "")
+    + (none.length ? `<details class="panel" style="margin-top:8px"><summary><b>Nothing open they qualify for</b> <span class="tag">${none.length}</span></summary><div class="hn">Rates known, but none reaches the Min role % in an open seat: ${none.map(nameCell).join(", ")}</div></details>` : "")
+    + `<div class="hn" id="nmsg"></div></div>` + notifyEditor();
   notifyEditorWire();
   const say = h => { $("nmsg").innerHTML = h; };
   const copy = t => navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject();
   $("view").querySelectorAll("button[data-n]").forEach(b => b.onclick = () => {
-    const x = L[+b.dataset.i], m = notifyMsgs(x), k = x.pid + ":" + x.crime_id;
+    const x = L0[+b.dataset.i]; if (!x) return;
     logContact(x, b.dataset.n);                                  // shared "last contacted" log (all leaders)
-    if (b.dataset.n === "sent") { sent[k] = Date.now(); try { localStorage.setItem(NOTIFY_LS, JSON.stringify(sent)); } catch (e) {} drawNotify(); return; }
-    // copy first, then open Torn - both straight from the tap (clipboard + popup rules)
+    if (b.dataset.n === "sent") { drawNotify(); return; }
+    const top = !!(x.crimes && x.crimes.length);
+    // no list -> the ✉ script invite (config "invite", same as the Suite's Sharing list)
+    const m = top ? notifyMsgs(x) : inviteMsgs(x);
     const cp = b.dataset.n === "chat" ? copy(m.chat) : copyRich(m.mailHtml, m.mail);   // mail: clickable links
     const url = b.dataset.n === "chat" ? `https://www.torn.com/profiles.php?XID=${x.pid}` : `https://www.torn.com/messages.php#/p=compose&XID=${x.pid}`;
     window.open(url, "_blank");
-    drawNotify();                                                 // the new "last contacted" line shows at once (Nov 14 2026)
-    cp.then(() => say(b.dataset.n === "chat" ? `💬 Message copied ✓ - on <b>${esc(x.name)}</b>'s profile tap <b>Chat</b>, paste and send, then tick ✓.`
-                                            : `✉️ Message copied ✓ - set the subject to <b>${esc(m.subject)}</b>, paste the message, send, then tick ✓.`),
+    drawNotify();
+    cp.then(() => say(b.dataset.n === "chat" ? `💬 Message copied ✓ - on <b>${esc(x.name)}</b>'s profile tap <b>Chat</b>, paste and send.`
+                                            : `✉️ Message copied ✓ - set the subject to <b>${esc(m.subject)}</b>, paste the message and send.`),
             () => say(`Couldn't copy - here's the message:<br><textarea style="width:100%;height:110px">${esc(b.dataset.n === "chat" ? m.chat : m.mail)}</textarea>`));
   });
+}
+// the ✉ script invite for a member with no known rates (Nov 22 2026) - INVITE_DEFAULT / config "invite"
+function inviteMsgs(x) {
+  const T = (D.config && D.config.invite) || {}, f = t => String(t).replace(/\{(name|scripts|hub)\}/g, (m, k) => ({name: x.name, scripts: SUITE_URL, hub: location.origin + "/m/"})[k] || "");
+  const mail = f(T.mail || INVITE_DEFAULT.mail);
+  return {chat: mdPlain(mail), subject: mdPlain(f(T.subject || INVITE_DEFAULT.subject)), mail: mdPlain(mail), mailHtml: mdHtml(mail)};
 }
 
 // PLANNING % (Nov 17 2026, user: "Show planning % for members on the Deployed and Planning pages."): a member's own

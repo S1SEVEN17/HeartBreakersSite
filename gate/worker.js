@@ -2132,6 +2132,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.tp_names = (tpw && tpw.data && tpw.data.names) || null;                                                      // role order
       c.success = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;               // team success (CalculateSuccess)
       c.script_seen = await ocScriptSeen(env, envName);                                                              // {pid: ms} OC script users
+      { let fc = []; try { const fs = await env.OC_DB.prepare("SELECT data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first();   // (Nov 22 2026) 📣 Notify top crimes
+          const d = fs ? JSON.parse(fs.data) : []; fc = Array.isArray(d) ? d : (d.crimes || []); } catch (e) {}
+        c.oc_top = envName === "prod" ? await ocNotifyTop(env, c, fc).catch(() => []) : []; }
       c.hold_log = ((((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).data) || {}).hold_log || {};   // spawn hold cooldowns
       return Response.json(c, H); }
     // (fix 4, Nov 19 2026) kept CPR_PAGE_MS per Worker instance, cleared on any rate write here
@@ -2219,7 +2222,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
     let b;
     try { b = await req.json(); } catch (e) { return Response.json({ok: false, error: "body must be JSON"}, {status: 400}); }
-    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify", "invite", "contacted"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
+    if (!b || !OC_ENVS.has(b.env) || !["disabled", "plan", "opts", "rotate", "notify", "notify_top", "invite", "contacted"].includes(b.k)) return Response.json({ok: false, error: "bad request"}, {status: 400});
     let v = b.v;
     if (b.k === "contacted") {
       // 📣 CONTACT LOG (Nov 14 2026) - see ocContactLog; the page sends ONE entry {pid, crime, crime_id, role, how}
@@ -2233,7 +2236,9 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       // disabled: crimes switched off; rotate (Nov 2026): crimes leaders ROTATE (the page adds their prerequisites)
       if (!Array.isArray(v)) return Response.json({ok: false, error: b.k + " must be a list"}, {status: 400});
       v = [...new Set(v.map(x => String(x).slice(0, 80)))].slice(0, 200);
-    } else if (b.k === "notify") {
+    } else if (b.k === "notify" || b.k === "notify_top") {
+      // (Nov 22 2026) notify_top = the TOP CRIMES wording ({name} {crimes} {count} {link} {scripts} {hub}); the old
+      // "notify" (one assigned seat) is no longer used - kept so an old page can't error
       // 📣 NOTIFY MESSAGES (Nov 13 2026, user: leaders edit the default chat / mail wording) - {chat, subject, mail}
       // plain text with fill-ins ({name} {crime} {role} {crime_id} {link} {scripts} {hub}); blank = the built-in wording.
       // OC Management's Notify tab and the Hub script (live "spawn" notify_tpl) both use it.
@@ -3903,8 +3908,10 @@ async function ocSpawnAlerts(env) {
   // joinable seat in a RECRUITING crime (not joined yet, not queued behind their current crime). Torn's API can't send
   // chats or mails, so a leader sends each one (Hub script / OC Management prepare the text). Spawn teams aren't
   // listed - that crime doesn't exist yet, so there's nothing to join.
+  // (Nov 22 2026) the old single-seat list is gone - oc_notify stays empty for older Suites; oc_top is the new list
+  const oc_top = await ocNotifyTop(env, cfg, crimes).catch(() => []);
   let oc_notify = [];
-  try {
+  if (false) try {
     const seen = await ocScriptSeen(env, "prod");
     if (Object.keys(seen).length)                        // nobody tracked yet = can't tell who lacks the script
       for (const t of plan.teams || []) {
@@ -3964,8 +3971,8 @@ async function ocSpawnAlerts(env) {
       }
     }
   } catch (e) { /* the rest still goes out */ }
-  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts, oc_notify,
-          notify_tpl: cfg.notify || null,   // leaders' edited Notify wording (null = built-in)
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, plan_ts: cfg.plan_ts || null, alerts, oc_alerts, oc_notify, oc_top,
+          notify_tpl: cfg.notify_top || null,   // leaders' edited Notify wording (null = built-in) - (Nov 22 2026) the top-crimes wording
           delays, paused, missing, needs};
 }
 // LEADERSHIP ALERTS (Nov 12 2026, user: "Alerts for leadership for anyone who joins roles outside of the set min-max
@@ -4015,6 +4022,33 @@ async function ocSeenTable(env) {
   if (OC_SEEN_READY || !env.OC_DB) return;
   await env.OC_DB.prepare("CREATE TABLE IF NOT EXISTS oc_seen (env TEXT NOT NULL, pid INTEGER NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (env, pid))").run();
   OC_SEEN_READY = true;
+}
+// 📣 TOP CRIMES LIST, LIVE (Nov 22 2026) - the planner's notify_top (plan:stats, see ocAutoPlan) re-checked against the
+// crimes right now: members who joined a crime or started using the Suite drop off, roles whose seat was taken drop
+// off, crimes with no qualifying open seat left drop off, then the first 3. Each row:
+//   {pid, name, crimes: [{crime, crime_id, pay_day, filled, seats, roles: [{position, rate}]}], why, contacted}
+// why: null | "norates" (no known pass rate for any open seat) | "none" (none high enough) - shown without a top list.
+// contacted = the shared contact log entry (crime / crime_id = the top crime they were told about, role "Top 3").
+async function ocNotifyTop(env, cfg, crimes) {
+  const st = await ocSnapGet(env, "hub", "plan:stats").catch(() => null), T = (st && st.data && st.data.notify_top) || null;
+  if (!T) return [];
+  const seen = await ocScriptSeen(env, "prod").catch(() => ({}));
+  if (!Object.keys(seen).length) return [];
+  const lab = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
+  const busy = new Set(), info = new Map();
+  for (const c of crimes || []) { if (!c || (c.status !== "Recruiting" && c.status !== "Planning")) continue;
+    const open = new Set(); for (const sl of c.slots || []) { if (sl.user) busy.add(Number(sl.user.id)); else if (c.status === "Recruiting") open.add(lab(sl)); }
+    info.set(String(c.id), {open, filled: (c.slots || []).filter(sl => sl.user).length, seats: (c.slots || []).length}); }
+  const log = cfg.contacted || {}, out = [];
+  for (const [pid, x] of Object.entries(T)) {
+    if (seen[pid] || busy.has(Number(pid))) continue;
+    const L = [];
+    for (const c of (x && x.crimes) || []) { const I = info.get(String(c.crime_id)); if (!I) continue;
+      const roles = (c.roles || []).filter(rr => I.open.has(rr.position)); if (!roles.length) continue;
+      L.push({crime: c.crime, crime_id: c.crime_id, pay_day: c.pay_day || null, filled: I.filled, seats: I.seats, roles}); if (L.length >= 3) break; }
+    out.push({pid: Number(pid), name: (x && x.name) || "", crimes: L, why: L.length ? null : ((x && x.why) || "none"), contacted: log[pid] || null});
+  }
+  return out.sort((a, b) => (b.crimes.length ? 1 : 0) - (a.crimes.length ? 1 : 0) || ((b.crimes[0] || {}).pay_day || 0) - ((a.crimes[0] || {}).pay_day || 0) || a.name.localeCompare(b.name));
 }
 async function ocScriptSeen(env, envName) {
   await ocSeenTable(env).catch(() => {});
@@ -4229,13 +4263,10 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   // whose member doesn't use the script and whom a leader has sent the Notify message for exactly this crime + role
   // (the contact log, oc_config "contacted") is marked told - the planner then leaves it where it is (gate/
   // oc_planner.js TOLD). The no-show clock runs from when they were told, so they get the full time to act on it.
-  { const seen0 = await ocScriptSeen(env, "prod").catch(() => ({})), log = cfg.contacted || {};
-    for (const t of prevTeams) for (const r0 of (t && t.roles) || []) {
-      if (!r0 || r0.pid == null || r0.existing) { if (r0) delete r0.told; continue; }
-      const lc = log[String(r0.pid)];
-      if (lc && lc.at && !seen0[String(r0.pid)] && t.crime_id != null && String(lc.crime_id) === String(t.crime_id) && lc.role === r0.position) {
-        r0.told = true; r0.since = Math.max(Number(r0.since) || 0, Number(lc.at) || 0); }
-      else delete r0.told; } }
+  // TOLD REMOVED (Nov 22 2026, user: "Remove the old notifications, these won't be used anymore. Only notify about top 3
+  // crimes and the roles in them that qualify."): members without the script are told their best crimes instead
+  // (notify_top below), so no reservation is "told" / locked any more - any old flag is cleared.
+  for (const t of prevTeams) for (const r0 of (t && t.roles) || []) if (r0) delete r0.told;
   const lastStats = await ocSnapGet(env, "hub", "plan:stats").catch(() => null);   // SPAWN HOLD cooldowns (hold_log)
   const seen = await ocScriptSeen(env, "prod");
   // CALCULATED SUCCESS (Nov 12 2026, the user: "Target + pay"): tornprobability.com's success chance for a full team,
@@ -4366,6 +4397,43 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
       await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'pay:joined', ?, ?, 'hub') " +
         "ON CONFLICT (env, ds) DO UPDATE SET as_of = excluded.as_of, data = excluded.data").bind(now, JSON.stringify(out)).run().catch(() => {});
   } catch (e) { console.log("oc plan: joined pay skipped"); }
+  // 📣 TOP CRIMES FOR MEMBERS WITHOUT THE SUITE (Nov 22 2026, user: "Members who don't have a script should be able to be
+  // notified using the old methods of their best crimes available to them (based on available information.) Instead of
+  // assigning them, we just let them know their top 3 best crimes and which roles they qualify for in them." + "Only
+  // available, non-script users" + "If they miss out, that's on them" + "Remove the old notifications"):
+  //   who     roster members (Recruits already left out) with no Suite / OC script seen in OC_SCRIPT_DAYS who are in no
+  //           Recruiting / Planning crime
+  //   crimes  RECRUITING crimes with an open seat, not switched off by leaders (cfg.disabled), known to the catalog
+  //   roles   each OPEN seat whose rate for them (rateOf: in a crime now > newest of shared CPR / history) is at least
+  //           opts.minRole (the "Min role %" setting); the role cap is NOT applied - this only says what they CAN join
+  //   order   pay per member per day for joining now (the planner's pay_day x inst_mult, else the type's normal)
+  // Up to 5 kept per member (ocNotifyTop re-checks the seats live and shows the first 3 still open). why = "norates"
+  // (no known rate for any open seat) or "none" (rates known, none high enough). Several members may be told about the
+  // same seat - first to join gets it. Nobody is reserved for these (non-script members aren't placed automatically).
+  try {
+    const busyP = new Set(), off = new Set(cfg.disabled || []), IM = r.stats.inst_mult || {}, minR = Number(opts.minRole) || 0;
+    for (const c of crimes || []) if (c && (c.status === "Recruiting" || c.status === "Planning")) for (const sl of c.slots || []) if (sl.user) busyP.add(Number(sl.user.id));
+    const lab = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
+    const openC = (crimes || []).filter(c => c && c.status === "Recruiting" && catalog[c.name] && !off.has(c.name) && (c.slots || []).some(sl => !sl.user));
+    const top = {};
+    if (Object.keys(seen).length) for (const [pid, mv] of Object.entries(members || {})) {
+      if (seen[String(pid)] || busyP.has(Number(pid))) continue;
+      let known = false; const L = [];
+      for (const c of openC) {
+        const roles = [];
+        for (const sl of c.slots || []) { if (sl.user) continue;
+          const h = rateOf(pid, c.name, lab(sl)); if (!h || h.rate == null) continue;
+          known = true; if (h.rate >= minR) roles.push({position: lab(sl), rate: Math.round(h.rate)}); }
+        if (!roles.length) continue;
+        const pd = Number(r.stats.pay_day[c.name]) || 0, m = Number(IM[String(c.id)]) || 1;
+        L.push({crime: c.name, crime_id: c.id, pay_day: Math.round(pd * m), roles: roles.sort((a, b) => b.rate - a.rate)});
+      }
+      L.sort((a, b) => b.pay_day - a.pay_day);
+      const name = typeof mv === "string" ? mv : ((mv && mv.name) || "");
+      top[String(pid)] = L.length ? {name, crimes: L.slice(0, 5)} : {name, crimes: [], why: known ? "none" : "norates"};
+    }
+    r.stats.notify_top = top;
+  } catch (e) { console.log("oc plan: notify top skipped"); }
   r.stats.trig = trig; r.stats.reason = reason; r.stats.every = every;
   // the planner's stats every run (incl. why recruiting crimes were left open) - read by the oc_check workflow
   await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'plan:stats', ?, ?, 'hub') " +

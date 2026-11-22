@@ -68,6 +68,9 @@ jobs:
           # ARMOURY TABS (Nov 20 2026): how many items the Hub knows per armoury tab (counts only) + where item 1012 (Irradiated Blood Bag) is
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT as_of, data FROM oc_snap WHERE env = 'hub' AND ds = 'arm:tabs'" > at.json 2>/dev/null \
             && python3 -c "import json, collections; r = (json.load(open('at.json'))[0]['results'] or [None])[0]; m = json.loads(r['data'])['map'] if r else {}; print('Armoury tabs known:', dict(collections.Counter(m.values())), '| item 1012 ->', m.get('1012'))" || true
+          # NOTIFY TOP CRIMES (Nov 22 2026): members without the Suite, not in a crime - how many have a top list / no rates / nothing qualifying (counts only)
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT data FROM oc_snap WHERE env = 'hub' AND ds = 'plan:stats'" > nt.json 2>/dev/null \
+            && python3 -c "import json, collections; r = (json.load(open('nt.json'))[0]['results'] or [None])[0]; T = json.loads(r['data']).get('notify_top') if r else None; print('Notify top crimes:', 'not built yet' if T is None else dict(collections.Counter(('with crimes' if v.get('crimes') else v.get('why','?')) for v in T.values())), '| crimes listed per member:', sorted(collections.Counter(len(v.get('crimes') or []) for v in (T or {}).values()).items()))" || true
           # USAGE REPORT (Nov 19 2026): Hub calls per type and Torn reads (counts only) for today (UTC) and yesterday
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT day, k, n FROM hub_usage WHERE day >= date('now', '-1 day') ORDER BY day DESC, n DESC" > us.json 2>/dev/null \
             && python3 - <<'PY' || true
