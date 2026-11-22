@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.91
+// @version      0.2.92
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.91';
+    const VERSION = '0.2.92';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -172,16 +172,20 @@
     let notifyList = [];
     const OC_CRIME_LINK = id => `https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId=${id}`;
     let notifyTplS = null;
+    const OC_CRIMES_TAB = 'https://www.torn.com/factions.php?step=your&type=1#/tab=crimes';
     const NOTIFY_DEFAULT = {
-        chat: "Hi {name}! You've been picked for an Organized Crime: {crime} - {role}. Please join it here: {link} - thank you! 💗",
-        subject: 'OC: please join {crime} ({role})',
-        mail: "Hi {name},\n\nYou've been picked for an Organized Crime: **{crime}**, role **{role}**.\nPlease join it here: [{crime} #{crime_id}]({link})\n\n"
-            + 'Tip: the Heart Breakers Suite script shows your OC assignment automatically, so you never miss one - [install the Heart Breakers Suite]({scripts}).\n'
-            + 'You can also see your crimes and pass rates on [the Hub]({hub}).\n\nThanks!' };
-    function notifyFill(tpl, x) {
-        const v = { name: x.name, crime: x.crime, role: x.position, crime_id: x.crime_id, link: OC_CRIME_LINK(x.crime_id),
+        chat: 'Hi {name}! Your best open OCs right now: {crimes}. Join one here: {link} 💗',
+        subject: 'OC: {count} you can join right now',
+        mail: 'Hi {name},\n\nThese are the best Organized Crimes open for you right now:\n\n{crimes}\n\nSeats fill fast, so join whichever is still open.\n\n'
+            + 'Tip: the Heart Breakers Suite shows your best crimes automatically - [install the Heart Breakers Suite]({scripts}).\n\nThanks!' };
+    function notifyFill(tpl, x, kind) {
+        const L = x.crimes || [];
+        const crimes = kind === 'mail'
+            ? L.map((c, i) => `${i + 1}. **[${c.crime} #${c.crime_id}](${OC_CRIME_LINK(c.crime_id)})** - ${(c.roles || []).map(r => `${r.position} (${r.rate}%)`).join(', ')}`).join('\n')
+            : L.map((c, i) => `${i + 1}) ${c.crime} - ${(c.roles || []).map(r => r.position).join(' or ')}`).join(' ');
+        const v = { name: x.name, crimes, count: L.length === 1 ? '1 crime' : L.length + ' crimes', link: OC_CRIMES_TAB,
             scripts: 'https://greasyfork.org/en/scripts/605562-heart-breakers-suite', hub: HUB_BASE + '/m/' };
-        return String(tpl).replace(/\{(name|crime|role|crime_id|link|scripts|hub)\}/g, (m, k) => v[k] == null ? '' : String(v[k]));
+        return String(tpl).replace(/\{(name|crimes|count|link|scripts|hub)\}/g, (m, k) => v[k] == null ? '' : String(v[k]));
     }
     const mdPlain = t => t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '$1: $2').replace(/\*\*([^*]+)\*\*/g, '$1');
     function mdHtml(t) {
@@ -195,8 +199,8 @@
     }
     function notifyMsgs(x) {
         const t = notifyTplS || {}, T = { chat: t.chat || NOTIFY_DEFAULT.chat, subject: t.subject || NOTIFY_DEFAULT.subject, mail: t.mail || NOTIFY_DEFAULT.mail };
-        const mail = notifyFill(T.mail, x);
-        return { chat: mdPlain(notifyFill(T.chat, x)), subject: mdPlain(notifyFill(T.subject, x)), mail: mdPlain(mail), mailHtml: mdHtml(mail) };
+        const mail = notifyFill(T.mail, x, 'mail');
+        return { chat: mdPlain(notifyFill(T.chat, x, 'chat')), subject: mdPlain(notifyFill(T.subject, x, 'chat')), mail: mdPlain(mail), mailHtml: mdHtml(mail) };
     }
     async function copyRich(html, text) {
         try {
@@ -212,7 +216,9 @@
             const ok = document.execCommand('copy'); sel.removeAllRanges(); d.remove(); return ok;
         } catch (e) { return copyText(text); }
     }
-    const ntfSame = x => !!(x.contacted && x.contacted.at && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position);
+    const ntfSame = x => { const c = x.contacted, c0 = (x.crimes || [])[0]; if (!c || !c.at) return false;
+        return c0 ? c.role === 'Top 3' && String(c.crime_id) === String(c0.crime_id) : c.role === 'Script invite'; };
+    const ntfTodo = NT => NT.filter(x => (x.crimes && x.crimes.length || x.why === 'norates') && !ntfSame(x));
     function ntfBadge(x) {
         const c = x.contacted, line = (cls, t) => `<span class="hbs-ntfs ${cls}" title="${esc(t)}">${esc(t)}</span>`;
         if (!c || !c.at) return line('hbs-bad', 'Not notified yet');
@@ -221,29 +227,35 @@
         const same = ntfSame(x), how = { chat: 'chat', mail: 'mail', sent: 'marked' }[c.how] || c.how || '';
         const by = c.by ? ' · ' + String(c.by).replace(/ \[\d+\]$/, '') : '';
         return same ? line('hbs-good', `Notified ${ago}${how ? ' · ' + how : ''}${by}`)
-                    : line('hbs-ntfw', `Other crime ${ago} · was ${c.crime && c.crime !== x.crime ? c.crime + ' · ' : ''}${c.role || '?'}${how ? ' · ' + how : ''}${by}`);
+                    : line('hbs-ntfw', `List changed since ${ago}${c.role === 'Top 3' && c.crime ? ' · #1 was ' + c.crime : ''}${how ? ' · ' + how : ''}${by}`);
     }
     function ntfListHtml(NT, nameHtml, max) {
-        const idx = NT.map((x, i) => i), todo = idx.filter(i => !ntfSame(NT[i])), done = idx.filter(i => ntfSame(NT[i]));
+        const idx = NT.map((x, i) => i).filter(i => (NT[i].crimes && NT[i].crimes.length) || NT[i].why === 'norates');
+        const todo = idx.filter(i => !ntfSame(NT[i])), done = idx.filter(i => ntfSame(NT[i])), none = NT.filter(x => x.why === 'none').length;
         const cap = max ? Math.max(0, max - todo.length) : Infinity;
-        const row = i => { const x = NT[i]; return `<div class="hbs-li hbs-ntf" title="${esc(x.name)} - ${esc(x.crime)} #${esc(x.crime_id)} · ${esc(x.position)}"><span class="hbs-ntfl"><b class="hbs-ntfn">${nameHtml(x)}</b>
-                <span class="hbs-ntfc">${esc(x.crime)} · ${esc(x.position)}</span><span data-ntfst="${i}">${ntfBadge(x)}</span></span>
-            <span class="hbs-ntfb"><button class="hbs-btn" data-ntf="chat" data-i="${i}" title="Chat">💬</button><button class="hbs-btn" data-ntf="mail" data-i="${i}" title="Mail">✉️</button><button class="hbs-btn" data-ntf="sent" data-i="${i}" title="Mark as notified">✓</button></span></div>`; };
-        return (todo.length ? `<div class="hbs-ntfh">Needs a message · ${todo.length}</div>` + (max ? todo.slice(0, max) : todo).map(row).join('') : '<div class="hbs-hint hbs-good" style="text-align:left">✓ Everyone has been notified.</div>')
+        const row = i => { const x = NT[i], L = x.crimes || [];
+            const det = L.length ? L.map((c, j) => `<span class="hbs-ntfc"><b>${j + 1}. ${esc(c.crime)}</b> · ${c.pay_day ? shortMoney(c.pay_day) + '/day' : '-'} · ${num(c.filled)}/${num(c.seats)}</span>`
+                    + `<span class="hbs-ntfc hbs-ntfr">${(c.roles || []).map(r => `${esc(r.position)} ${num(r.rate)}%`).join(' · ')}</span>`).join('')
+                : '<span class="hbs-ntfc">No pass rates known - ✉️ sends the Suite invite</span>';
+            return `<div class="hbs-li hbs-ntf" title="${esc(x.name)}"><span class="hbs-ntfl"><b class="hbs-ntfn">${nameHtml(x)}</b>${det}<span data-ntfst="${i}">${ntfBadge(x)}</span></span>
+            <span class="hbs-ntfb">${L.length ? `<button class="hbs-btn" data-ntf="chat" data-i="${i}" title="Chat">💬</button>` : ''}<button class="hbs-btn" data-ntf="mail" data-i="${i}" title="Mail">✉️</button><button class="hbs-btn" data-ntf="sent" data-i="${i}" title="Mark as notified">✓</button></span></div>`; };
+        return (none ? `<div class="hbs-hint" style="text-align:left">${none} more have rates, but none reaches the Min role % in an open seat.</div>` : '') + (todo.length ? `<div class="hbs-ntfh">Needs a message · ${todo.length}</div>` + (max ? todo.slice(0, max) : todo).map(row).join('') : '<div class="hbs-hint hbs-good" style="text-align:left">✓ Everyone has been notified.</div>')
             + (done.length ? cFold('ntfdone', '✅', 'Already notified', `<b class="hbs-foldn">${done.length}</b>`, done.slice(0, cap).map(row).join('') || '<div class="hbs-hint">Listed in OC Management → Notify.</div>') : '');
     }
     // [HB Suite] Hub API — op "oc_contacted": log the contact in the Hub's shared Notify log (leaders)
     function logContact(x, how) {
-        x.contacted = { at: Date.now(), crime: x.crime, crime_id: x.crime_id, role: x.position, how, by: 'you' };
+        const c0 = (x.crimes || [])[0] || {}, role = c0.crime ? 'Top 3' : 'Script invite';
+        x.contacted = { at: Date.now(), crime: c0.crime || '', crime_id: c0.crime_id || null, role, how, by: 'you' };
         const el = bodyEl.querySelector(`[data-ntfst="${notifyList.indexOf(x)}"]`); if (el) el.innerHTML = ntfBadge(x);
-        hub('oc_contacted', { entry: { pid: x.pid, crime: x.crime, crime_id: x.crime_id, role: x.position, how } }).catch(() => {   });
+        hub('oc_contacted', { entry: { pid: x.pid, crime: c0.crime || '', crime_id: c0.crime_id || null, role, how } }).catch(() => {   });
     }
     async function notifyClick(b) {
         const x = notifyList[Number(b.dataset.i)]; if (!x) return;
-        const k = x.pid + ':' + x.crime_id, msgEl = bodyEl.querySelector('[data-ntfmsg]');
+        const msgEl = bodyEl.querySelector('[data-ntfmsg]');
         const say = t => { if (msgEl) msgEl.textContent = t; };
         logContact(x, b.dataset.ntf);
         if (b.dataset.ntf === 'sent') return;
+        if (!(x.crimes && x.crimes.length)) { cprNotify(x.pid, x.name); return; }
         const m = notifyMsgs(x), chat = b.dataset.ntf === 'chat';
         if (chat) store.set(K.chatFill, { pid: Number(x.pid), text: m.chat, at: Date.now() });
         else store.set(K.mailFill, { pid: Number(x.pid), subject: m.subject, html: m.mailHtml, text: m.mail, at: Date.now() });
@@ -1048,6 +1060,7 @@
             /* (0.2.81) 📣 Notify rows: three one-line rows that cut off instead of wrapping; buttons on the right */
             #hbs-panel .hbs-ntf{align-items:center;gap:8px;} #hbs-panel .hbs-ntfl{flex:1;min-width:0;display:block;}
             #hbs-panel .hbs-ntfn,#hbs-panel .hbs-ntfc,#hbs-panel .hbs-ntfs{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+            #hbs-panel .hbs-ntfr{padding-left:12px;font-size:11px;opacity:.65 !important;}
             #hbs-panel .hbs-ntfn{font-size:12.5px;} #hbs-panel .hbs-ntfc{opacity:.75;} #hbs-panel .hbs-ntfs{font-size:10.5px;} #hbs-panel .hbs-ntfw{color:#FFB454;}
             #hbs-panel .hbs-ntfb{display:flex;gap:4px;flex:none;} #hbs-panel .hbs-ntfb .hbs-btn{min-width:34px;padding-left:0;padding-right:0;}
             #hbs-panel .hbs-ntfh{font-size:11px;color:#FFB454;margin:6px 0 1px;text-align:left;}
@@ -1510,17 +1523,17 @@
                         <span class="n"><a href="#" data-prof="${id}">${esc(nameOf(N, id))}</a>${W ? `<em>${W.from == null ? 'NEW' : '▼ ' + GRADES[W.from][1] + '→' + GRADES[W.to][1]}</em>` : ''}<small>${why || 'not enough detail yet'}</small></span>
                         <span class="sc"><b style="color:${g[1]}">${int(R.score)}</b><i><u style="width:${Math.max(0, Math.min(100, num(R.score)))}%;background:${g[1]}"></u></i></span></div>`; }).join('') + '</div>'
                 + (bad.length > REL_MAX ? `<div class="hbs-hint">+${bad.length - REL_MAX} more - 👥 Members → sort by Lowest reliability.</div>` : '');
-            const NT = (S && S.oc_notify) || [];
+            const NT = (S && S.oc_top) || [];
             notifyList = NT; notifyTplS = (S && S.notify_tpl) || null;
-            const todo = NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position)).length;
+            const todo = ntfTodo(NT).length;
             const n = lines.length + bad.length + todo; alertN = n;
-            alertKeys = lines.map(t => String(t).replace(/<[^>]+>/g, '')).concat(NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position))
-                .map(x => 'ntf:' + x.pid + ':' + x.crime_id + ':' + x.position));
+            alertKeys = lines.map(t => String(t).replace(/<[^>]+>/g, '')).concat(ntfTodo(NT)
+                .map(x => 'ntf:' + x.pid + ':' + ((x.crimes || [])[0] || {}).crime_id));
             out += `<div class="hbs-card ${n ? 'hbs-red' : 'hbs-green'}"><div class="hbs-r1"><span class="hbs-name">🔔 Leader alerts</span><span class="hbs-chip">${n}</span></div>`
                 + (n ? '' : '<div class="hbs-hint">✅ Nothing needs you right now.</div>')
                 + lines.map(t => `<div class="hbs-li"><span>${t}</span></div>`).join('')
                 + relHtml
-                + (NT.length ? sec(`📣 Notify (no OC script) · ${todo} to do`) + `<div class="hbs-hint">They can't see their OC assignment. Each button copies the message and opens Torn - paste and send. 💬 / ✉️ / ✓ log the contact for every leader (here and on the Hub site).</div>`
+                + (NT.length ? sec(`📣 Notify (no Suite) · ${todo} to do`) + `<div class="hbs-hint">Members without the Suite who aren't in a crime - their top 3 open crimes and the roles they qualify for. Each button copies the message and opens Torn - paste and send. 💬 / ✉️ / ✓ log the contact for every leader (here and on the Hub site).</div>`
                     + ntfListHtml(NT, x => esc(x.name), 12)
                     + `<div class="hbs-hint" data-ntfmsg>Full list: OC Management → 📣 Notify on the Hub site.</div>` : '')
                 + (lines.length ? '<div class="hbs-hint">Details: OC Management / War reports on the Hub site.</div>' : '') + '</div>';
@@ -4527,12 +4540,12 @@
         const S = ocLead || {}, N = await names().catch(() => ({ byId: {} }));
         const pl = (pid, name) => `<a href="#" data-prof="${pid}">${esc(name || nameOf(N, pid))}</a>`;
         let out = sec('Leaders');
-        const NT = S.oc_notify || [];
+        const NT = S.oc_top || [];
         notifyList = NT; notifyTplS = S.notify_tpl || null;
-        const todo = NT.filter(x => !(x.contacted && String(x.contacted.crime_id) === String(x.crime_id) && x.contacted.role === x.position)).length;
+        const todo = ntfTodo(NT).length;
         const lastAt = c => c && c.at ? ` · last contact ${new Date(c.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '';
-        out += cmCard('ocntf', '📣', 'Notify (no OC script)', `<b class="hbs-foldn">${todo}</b><small>to do</small>`, todo > 0, `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">📣 Notify (no OC script)</span><span class="hbs-chip">${todo} to do</span></div>`
-            + (NT.length ? `<div class="hbs-hint">They can't see their OC seat. ✉️ opens the mail with the subject and message filled in; 💬 opens their profile - tap Chat and the message is typed in. You press Send. ✓ just logs it. Every leader sees the contact.</div>`
+        out += cmCard('ocntf', '📣', 'Notify (no Suite)', `<b class="hbs-foldn">${todo}</b><small>to do</small>`, todo > 0, `<div class="hbs-card"><div class="hbs-r1"><span class="hbs-name">📣 Notify (no Suite)</span><span class="hbs-chip">${todo} to do</span></div>`
+            + (NT.length ? `<div class="hbs-hint">Members without the Suite who aren't in a crime: their top 3 open crimes and the roles they qualify for (nobody is reserved - first to join gets the seat). ✉️ opens the mail with the subject and message filled in; 💬 opens their profile - tap Chat and the message is typed in. You press Send. ✓ just logs it. Every leader sees the contact.</div>`
                 + ntfListHtml(NT, x => pl(x.pid, x.name), 0)
                 + '<div class="hbs-hint" data-ntfmsg></div>'
             : '<div class="hbs-hint">✅ Nobody to notify.</div>') + '</div>');
