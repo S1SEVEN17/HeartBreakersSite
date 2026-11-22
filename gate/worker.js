@@ -4045,6 +4045,7 @@ async function ocNotifyTop(env, cfg, crimes) {
     const L = [];
     for (const c of (x && x.crimes) || []) { const I = info.get(String(c.crime_id)); if (!I) continue;
       const roles = (c.roles || []).filter(rr => I.open.has(rr.position)); if (!roles.length) continue;
+      if (!I.filled && L.some(y => !y.filled && y.crime === c.crime)) continue;   // ONE EMPTY COPY PER CRIME (Nov 22 2026, see ocAutoPlan)
       L.push({crime: c.crime, crime_id: c.crime_id, pay_day: c.pay_day || null, filled: I.filled, seats: I.seats, roles}); if (L.length >= 3) break; }
     out.push({pid: Number(pid), name: (x && x.name) || "", crimes: L, why: L.length ? null : ((x && x.why) || "none"), contacted: log[pid] || null});
   }
@@ -4426,9 +4427,15 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
           known = true; if (h.rate >= minR) roles.push({position: lab(sl), rate: Math.round(h.rate)}); }
         if (!roles.length) continue;
         const pd = Number(r.stats.pay_day[c.name]) || 0, m = Number(IM[String(c.id)]) || 1;
-        L.push({crime: c.name, crime_id: c.id, pay_day: Math.round(pd * m), roles: roles.sort((a, b) => b.rate - a.rate)});
+        L.push({crime: c.name, crime_id: c.id, pay_day: Math.round(pd * m), roles: roles.sort((a, b) => b.rate - a.rate),
+                empty: !(c.slots || []).some(sl => sl.user)});
       }
       L.sort((a, b) => b.pay_day - a.pay_day);
+      // ONE EMPTY COPY PER CRIME (Nov 22 2026, user: "aedw has 3 of the same crime names, this shouldn't happen if they're
+      // empty. If they're empty, only show one listing of that name."): empty copies of the same crime are all the same
+      // to join, so only the best-paying empty one of each name is kept; crimes with members in them stay separate.
+      { const emp = new Set(); for (let i = 0; i < L.length; i++) { if (!L[i].empty) continue; if (emp.has(L[i].crime)) L.splice(i--, 1); else emp.add(L[i].crime); } }
+      L.forEach(x => { delete x.empty; });
       const name = typeof mv === "string" ? mv : ((mv && mv.name) || "");
       top[String(pid)] = L.length ? {name, crimes: L.slice(0, 5)} : {name, crimes: [], why: known ? "none" : "norates"};
     }
