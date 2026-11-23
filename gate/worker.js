@@ -316,6 +316,7 @@ const usageKey = p => p.startsWith("/sx") ? null : p.startsWith("/cw/") ? "cw:" 
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url), p = url.pathname;
+    if (!HUB_ORIGIN) HUB_ORIGIN = url.origin;   // (Nov 23 2026) for {hub} in the Notify messages built here (ocNotifyMsgs)
     { const k = usageKey(p); if (k && !/\.(png|jpe?g|gif|webp|svg|ico|woff2?|css|js)$/i.test(p)) usage(env, ctx, k); }
     // the dashboard address: everyone lands on the Members Hub (Nov 12 2026, user: one home - leaders see their
     // "Needs attention" there; the Leaders Hub page was merged into it)
@@ -454,6 +455,9 @@ async function ghProxy(env, req, who, path) {
     // (Nov 23 2026) a published newsletter image doesn't start a site rebuild: the data repo's notify workflow skips
     // commits marked [bot]; the image is live at once through panelImage and the scheduled full run copies it
     if (/^data\/panels\//.test(path)) j.message += " [bot]";
+    // (Nov 23 2026, user: "2. Yes") the Discord layout editor only changes how Discord posts look - no site rebuild;
+    // the next post uses it (its commit message starts "Discord messages")
+    if (path === "config.json" && /^Discord messages/i.test(String(j.message))) j.message += " [bot]";
     body = JSON.stringify(j);
   }
   const ref = new URL(req.url).searchParams.get("ref");
@@ -568,6 +572,11 @@ async function sxRoute(env, ctx, req) {
   // "Not Sharing CPR" list. Add a "Last Notified" timestamp.'): leaders only - records that this leader pressed Notify
   // for member `pid` just now, shared between leaders (oc_config all/'cpr_notified' {pid: {ts, by}}; entries older
   // than 90 days dropped). Nothing is sent by the Hub - the leader sends the Torn mail themselves.
+  // 📨 FILL HANDOFF (Nov 23 2026): the leader's Suite on torn.com (?hbfill=1) takes the message OC Management saved
+  if (op === "notify_fill") {
+    if (!who.leader) return leadersOnly();
+    return sxJson({ok: true, fill: await ocFillTake(env, who, b.pid)});
+  }
   if (op === "cprnote") {
     if (!who.leader) return leadersOnly();
     const pid = Number(b.pid); if (!pid) return sxJson({ok: false, error: "bad member"}, 400);
@@ -1293,7 +1302,9 @@ async function writeOptin(env, id, fn, msg) {
       if (nv) data.members[id] = nv; else delete data.members[id]; }
     const body = JSON.stringify(data, null, 1) + "\n";
     const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/${OPTIN_PATH}`, {method: "PUT", headers: ghHeaders(env),
-      body: JSON.stringify({message: msg, sha, branch: "main", content: btoa(unescape(encodeURIComponent(body)))})});
+      // (Nov 23 2026, user: "1. Yes") [bot] = the data repo's notify workflow doesn't rebuild the site for an opt-in
+      // change; the next scheduled full run picks it up
+      body: JSON.stringify({message: /\[bot\]/.test(msg) ? msg : msg + " [bot]", sha, branch: "main", content: btoa(unescape(encodeURIComponent(body)))})});
     if (r.ok) { OPTIN_CACHE = {t: 0, v: null}; return true; }
     if (r.status !== 409 && r.status !== 422) throw new Error("save failed (" + r.status + ")");
   }
@@ -2162,7 +2173,8 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.script_seen = await ocScriptSeen(env, envName);                                                              // {pid: ms} OC script users
       { let fc = []; try { const fs = await env.OC_DB.prepare("SELECT data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first();   // (Nov 22 2026) 📣 Notify top crimes
           const d = fs ? JSON.parse(fs.data) : []; fc = Array.isArray(d) ? d : (d.crimes || []); } catch (e) {}
-        c.oc_top = envName === "prod" ? await ocNotifyTop(env, c, fc).catch(() => []) : []; }
+        c.oc_top = envName === "prod" ? await ocNotifyTop(env, c, fc).catch(() => []) : [];
+        c.notify_defaults = {top: NOTIFY_TOP_DEFAULT, invite: INVITE_DEFAULT_TPL}; }   // (Nov 23 2026) the built-in wording (editor boxes)
       c.hold_log = ((((await ocSnapGet(env, "hub", "plan:stats").catch(() => null)) || {}).data) || {}).hold_log || {};   // spawn hold cooldowns
       return Response.json(c, H); }
     // (fix 4, Nov 19 2026) kept CPR_PAGE_MS per Worker instance, cleared on any rate write here
@@ -2206,6 +2218,11 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     if (by.roster) try { const rec = await ocRecruitIds(env); if (rec.size) by.roster = JSON.stringify(ocNoRecruits(JSON.parse(by.roster), rec)); } catch (e) { /* the full roster */ }
     return new Response(`{"summaries":${by.summaries || "null"},"prices":${by.prices || "null"},"roster":${by.roster || "null"},"roster_at":${at.roster || 0}}`,
                         {headers: {"Content-Type": "application/json", "Cache-Control": "no-store"}});
+  }
+  // 📨 FILL HANDOFF (Nov 23 2026) - OC Management saves the message its button is about to open in Torn (ocFillPut)
+  if (req.method === "POST" && sub === "fill") {
+    if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
+    return Response.json(await ocFillPut(env, who, await req.json().catch(() => null)), H);
   }
   if (req.method === "POST" && sub === "refresh") {
     if (req.headers.get("X-HB-Save") !== "1") return new Response("Missing header", {status: 400});
@@ -4057,6 +4074,68 @@ async function ocSeenTable(env) {
 //   {pid, name, crimes: [{crime, crime_id, pay_day, filled, seats, roles: [{position, rate}]}], why, contacted}
 // why: null | "norates" (no known pass rate for any open seat) | "none" (none high enough) - shown without a top list.
 // contacted = the shared contact log entry (crime / crime_id = the top crime they were told about, role "Top 3").
+// ✉ NOTIFY MESSAGES BUILT ON THE HUB (Nov 23 2026, user: "The messages also don't match whats provided on the Suite
+// notifications. These should always be the same and the details should be pulled from the Hub OC Management
+// notification settings."): every oc_top row carries msg {chat, subject, mail (plain), html (the mail with links)}
+// made HERE from the leaders' saved wording - notify_top for a member with a top list, invite (the script invite) for
+// one with no known rates - so OC Management and the Suite send exactly the same text. Both only use msg as it is.
+// The built-in wording lives here (NOTIFY_TOP_DEFAULT / INVITE_DEFAULT_TPL, sent to the page as notify_defaults).
+let HUB_ORIGIN = "";
+const SUITE_GF_URL = "https://greasyfork.org/en/scripts/605562-heart-breakers-suite";
+const OC_CRIMES_TAB = "https://www.torn.com/factions.php?step=your&type=1#/tab=crimes";
+const NOTIFY_TOP_DEFAULT = {
+  chat: "Hi {name}! Your best open OCs right now: {crimes}. Join one here: {link} 💗",
+  subject: "OC: {count} you can join right now",
+  mail: "Hi {name},\n\nThese are the best Organized Crimes open for you right now:\n\n{crimes}\n\nSeats fill fast, so join whichever is still open.\n\n"
+    + "Tip: the Heart Breakers Suite shows your best crimes automatically - [install the Heart Breakers Suite]({scripts}).\n\nThanks!"};
+const INVITE_DEFAULT_TPL = {
+  subject: "Please install the Heart Breakers Suite",
+  mail: "Hi {name},\n\nHeart Breakers now runs on one script: the **Heart Breakers Suite**. It shows your Organized Crime assignment, Chain Watch and more, and shares your OC pass rates with the Hub so leaders can seat you in the roles you pass best.\n\n"
+    + "Please install it here: [Heart Breakers Suite]({scripts})\n\nThanks! 💗"};
+const mdEsc = t => String(t).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
+const mdPlainS = t => String(t).replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, "$1: $2").replace(/\*\*([^*]+)\*\*/g, "$1");
+function mdHtmlS(t) {
+  const link = (u, txt) => `<a href="${mdEsc(u)}">${txt}</a>`;
+  return String(t).split(/\n\s*\n/).map(par => {
+    const parts = [], re = /\[([^\]]+)\]\((https?:[^)\s]+)\)|(https?:\/\/[^\s<]*[^\s<.,!?;:)])/g; let last = 0, m;
+    while ((m = re.exec(par))) { parts.push(mdEsc(par.slice(last, m.index))); parts.push(m[1] ? link(m[2], mdEsc(m[1])) : link(m[3], mdEsc(m[3]))); last = re.lastIndex; }
+    parts.push(mdEsc(par.slice(last)));
+    return "<p>" + parts.join("").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/\n/g, "<br>") + "</p>";
+  }).join("");
+}
+function ocNotifyMsgs(cfg, x) {
+  const L = x.crimes || [], link = id => `https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId=${id}`;
+  const v = {name: x.name || "", count: L.length === 1 ? "1 crime" : L.length + " crimes", link: OC_CRIMES_TAB, scripts: SUITE_GF_URL, hub: (HUB_ORIGIN || "") + "/m/"};
+  const fill = (tpl, kind) => String(tpl).replace(/\{(name|crimes|count|link|scripts|hub)\}/g, (m, k) => k !== "crimes" ? String(v[k] == null ? "" : v[k])
+    : kind === "mail" ? L.map((c, i) => `${i + 1}. **[${c.crime} #${c.crime_id}](${link(c.crime_id)})** - ${(c.roles || []).map(r => `${r.position} (${r.rate}%)`).join(", ")}`).join("\n")
+    : L.map((c, i) => `${i + 1}) ${c.crime} - ${(c.roles || []).map(r => r.position).join(" or ")}`).join(" "));
+  if (L.length) { const t = cfg.notify_top || {}, mail = fill(t.mail || NOTIFY_TOP_DEFAULT.mail, "mail");
+    return {chat: mdPlainS(fill(t.chat || NOTIFY_TOP_DEFAULT.chat, "chat")), subject: mdPlainS(fill(t.subject || NOTIFY_TOP_DEFAULT.subject, "chat")), mail: mdPlainS(mail), html: mdHtmlS(mail)}; }
+  const t = cfg.invite || {}, mail = fill(t.mail || INVITE_DEFAULT_TPL.mail, "mail");
+  return {chat: mdPlainS(mail), subject: mdPlainS(fill(t.subject || INVITE_DEFAULT_TPL.subject, "chat")), mail: mdPlainS(mail), html: mdHtmlS(mail)};
+}
+// 📨 FILL HANDOFF (Nov 23 2026, user: "When sending messages from the OC Management tab its not posting the
+// subject/content of the mail messages. Can we fix that? Even using the script you created for this before?"):
+// OC Management (a different site from torn.com) can't reach the Suite's storage, so the button saves the message on
+// the Hub for THIS leader + that member (oc_snap env "fill", ds "<leader id>:<member id>", 10 minutes), then opens
+// Torn with ?hbfill=1. The leader's Suite sees hbfill=1 on the compose page / profile, takes it (Suite op
+// "notify_fill" - read once, then deleted) and types it into Torn's own fields like its own buttons do. Nothing is
+// ever sent for anyone - the leader presses Send.
+async function ocFillPut(env, who, b) {
+  const pid = Number(b && b.pid); if (!pid) return {ok: false, error: "bad member"};
+  const t = (x, n) => typeof x === "string" ? x.slice(0, n) : "";
+  const d = {pid, kind: b.kind === "chat" ? "chat" : "mail", chat: t(b.chat, 1200), subject: t(b.subject, 200), mail: t(b.mail, 6000), html: t(b.html, 12000)};
+  await ocSnapPut(env, "fill", who.id + ":" + pid, Date.now(), JSON.stringify(d), String(who.name || "")).run();
+  return {ok: true};
+}
+async function ocFillTake(env, who, pid) {
+  pid = Number(pid); if (!pid) return null;
+  const k = who.id + ":" + pid;
+  const r = await env.OC_DB.prepare("SELECT as_of, data FROM oc_snap WHERE env = 'fill' AND ds = ?").bind(k).first().catch(() => null);
+  await env.OC_DB.prepare("DELETE FROM oc_snap WHERE env = 'fill' AND (ds = ? OR as_of < ?)").bind(k, Date.now() - 6e5).run().catch(() => {});
+  if (!r || Date.now() - Number(r.as_of) > 6e5) return null;
+  try { return JSON.parse(r.data); } catch (e) { return null; }
+}
 async function ocNotifyTop(env, cfg, crimes) {
   const st = await ocSnapGet(env, "hub", "plan:stats").catch(() => null), T = (st && st.data && st.data.notify_top) || null;
   if (!T) return [];
@@ -4075,7 +4154,9 @@ async function ocNotifyTop(env, cfg, crimes) {
       const roles = (c.roles || []).filter(rr => I.open.has(rr.position)); if (!roles.length) continue;
       if (!I.filled && L.some(y => !y.filled && y.crime === c.crime)) continue;   // ONE EMPTY COPY PER CRIME (Nov 22 2026, see ocAutoPlan)
       L.push({crime: c.crime, crime_id: c.crime_id, pay_day: c.pay_day || null, filled: I.filled, seats: I.seats, roles}); if (L.length >= 3) break; }
-    out.push({pid: Number(pid), name: (x && x.name) || "", crimes: L, why: L.length ? null : ((x && x.why) || "none"), contacted: log[pid] || null});
+    const row = {pid: Number(pid), name: (x && x.name) || "", crimes: L, why: L.length ? null : ((x && x.why) || "none"), contacted: log[pid] || null};
+    if (row.crimes.length || row.why === "norates") row.msg = ocNotifyMsgs(cfg, row);   // (Nov 23 2026) the exact text to send
+    out.push(row);
   }
   return out.sort((a, b) => (b.crimes.length ? 1 : 0) - (a.crimes.length ? 1 : 0) || ((b.crimes[0] || {}).pay_day || 0) - ((a.crimes[0] || {}).pay_day || 0) || a.name.localeCompare(b.name));
 }

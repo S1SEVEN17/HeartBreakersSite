@@ -246,7 +246,7 @@ PK.mount({
       c.discord_layout = out; c.discord_messages = msgs;
       c.crimes_alert = Object.assign({}, c.crimes_alert || {}); ["message", "escalate_message"].forEach(k => { if (delay[k]) c.crimes_alert[k] = delay[k]; else delete c.crimes_alert[k]; });
     });
-    return "Saved ✓ - after the next site update (a few minutes) new posts use it and the hub posts / OC pings already in Discord are edited to match";
+    return "Saved ✓ - from the next scheduled site update (within 3 hours) new posts use it and the hub posts / OC pings already in Discord are edited to match"   // (Nov 23 2026) a Discord-only save no longer starts a rebuild;
   },
   sections: (C, view) => view === "messages"
     ? TYPES.map(t => ({key: t.key, icon: t.icon, label: t.label, sub: (CH(t.ch).label || "") + " · " + (typeDefault(C, t) ? "built-in" : "customised"), fixed: true}))

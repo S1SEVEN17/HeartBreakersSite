@@ -1432,6 +1432,8 @@ function lastContact(lc, x) {
     + `<br><span class="tag" title="Logged when a leader pressed ${esc(how)}">📨 ${esc(lc.role === "Top 3" ? "Top 3 · #1 " + (lc.crime || "?") : lc.role || lc.crime || "")} · ${esc(how)}${lc.by ? " · by " + esc(String(lc.by).replace(/ \[\d+\]$/, "")) : ""}</span>`;
 }
 function drawNotify() {
+  // (Nov 23 2026) the built-in wording comes from the Hub (config.json notify_defaults) - the Hub builds every message
+  if (D.config && D.config.notify_defaults) { Object.assign(NOTIFY_DEFAULT, D.config.notify_defaults.top || {}); Object.assign(INVITE_DEFAULT, D.config.notify_defaults.invite || {}); }
   const L0 = notifyList();
   const head = `<div class="hn">Members <b>without the Heart Breakers Suite</b> who aren't in a crime, with their <b>top 3 open crimes</b> (best pay per day for joining now) and the roles their pass rate reaches the Min role % in.
     Nobody is reserved - whoever joins first gets the seat. Torn doesn't let the Hub send chats or mails itself - each button copies the message and opens Torn; you paste and press Send.</div>`;
@@ -1455,15 +1457,21 @@ function drawNotify() {
     const x = L0[+b.dataset.i]; if (!x) return;
     logContact(x, b.dataset.n);                                  // shared "last contacted" log (all leaders)
     if (b.dataset.n === "sent") { drawNotify(); return; }
-    const top = !!(x.crimes && x.crimes.length);
-    // no list -> the ✉ script invite (config "invite", same as the Suite's Sharing list)
-    const m = top ? notifyMsgs(x) : inviteMsgs(x);
-    const cp = b.dataset.n === "chat" ? copy(m.chat) : copyRich(m.mailHtml, m.mail);   // mail: clickable links
-    const url = b.dataset.n === "chat" ? `https://www.torn.com/profiles.php?XID=${x.pid}` : `https://www.torn.com/messages.php#/p=compose&XID=${x.pid}`;
-    window.open(url, "_blank");
+    const top = !!(x.crimes && x.crimes.length), chat = b.dataset.n === "chat";
+    // (Nov 23 2026) the Hub builds the exact text (x.msg - the same the Suite sends); built here only if it's missing
+    const m = x.msg ? {chat: x.msg.chat, subject: x.msg.subject, mail: x.msg.mail, mailHtml: x.msg.html} : (top ? notifyMsgs(x) : inviteMsgs(x));
+    const cp = chat ? copy(m.chat) : copyRich(m.mailHtml, m.mail);   // mail: clickable links (a fallback to paste)
+    // 📨 FILL HANDOFF (Nov 23 2026, user: "its not posting the subject/content of the mail messages"): the message is
+    // saved on the Hub for you + this member, and Torn opens with ?hbfill=1 - your Heart Breakers Suite there takes it
+    // and types it into Torn's chat / mail fields (gate/worker.js ocFillPut). You still press Send.
+    const url = chat ? `https://www.torn.com/profiles.php?XID=${x.pid}&hbfill=1` : `https://www.torn.com/messages.php?hbfill=1#/p=compose&XID=${x.pid}`;
+    const w = window.open("about:blank", "_blank");            // opened on the tap (pop-up blockers), sent to Torn once saved
+    fetch("oc/fill", {method: "POST", headers: {"Content-Type": "application/json", "X-HB-Save": "1"},
+      body: JSON.stringify({pid: x.pid, kind: chat ? "chat" : "mail", chat: m.chat, subject: m.subject, mail: m.mail, html: m.mailHtml})})
+      .catch(() => {}).finally(() => { if (w) w.location.href = url; else location.href = url; });
     drawNotify();
-    cp.then(() => say(b.dataset.n === "chat" ? `💬 Message copied ✓ - on <b>${esc(x.name)}</b>'s profile tap <b>Chat</b>, paste and send.`
-                                            : `✉️ Message copied ✓ - set the subject to <b>${esc(m.subject)}</b>, paste the message and send.`),
+    cp.then(() => say(chat ? `💬 On <b>${esc(x.name)}</b>'s profile tap <b>Chat</b> - your Heart Breakers Suite types the message in (it's also copied). Press Enter to send.`
+                           : `✉️ Your Heart Breakers Suite fills in the subject <b>${esc(m.subject)}</b> and the message (also copied) - check it and press Send.`),
             () => say(`Couldn't copy - here's the message:<br><textarea style="width:100%;height:110px">${esc(b.dataset.n === "chat" ? m.chat : m.mail)}</textarea>`));
   });
 }
