@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.95
+// @version      0.2.96
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.95';
+    const VERSION = '0.2.96';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -1177,6 +1177,11 @@
             #hbs-full span{color:#ccc;font:12px system-ui,Arial,sans-serif;}
             /* crimes page: your assigned crime + seat (OC module) */
             .hbs-occard{outline:2px solid #FFB454 !important;outline-offset:2px;border-radius:6px;}
+            /* 0.2.96 - 💰 pay per day beside each crime's title on Torn's crimes page */
+            .hbs-ocpay{display:inline-block;margin:0 0 0 8px;padding:1px 7px;border-radius:9px;vertical-align:middle;white-space:nowrap;
+                font:600 11px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#181b21;border:1px solid #3a3f48;color:#c9ced6;}
+            .hbs-ocpay b{font-weight:800;} .hbs-ocpay small{font-size:10px;opacity:.8;margin-left:3px;}
+            .hbs-ocpay.jn{border-color:#FFB454;color:#FFB454;} .hbs-ocpay.you{border-color:#3ecf6e;color:#3ecf6e;}
             /* (0.2.74) a crime leadership disabled: red hatch (never catches a press itself) + dead Join buttons */
             .hbs-ocdis{position:relative !important;}
             .hbs-ocdis::before{content:'';position:absolute;inset:0;z-index:3;border-radius:6px;pointer-events:none;
@@ -3376,11 +3381,31 @@
             if (!/flex|grid/.test(disp)) { box.style.display = 'flex'; box.style.flexDirection = 'column'; box.setAttribute('data-hbs-ocflex', '1'); }
             if (keep.getAttribute('data-hbs-octop') !== '1') { keep.style.order = '-1'; keep.setAttribute('data-hbs-octop', '1'); }
         } catch (e) {   } };
+        const payTags = MY => {
+            const P = (MY && MY.crime_pay) || {}, cur = MY && MY.current, want = new Map();
+            document.querySelectorAll('[id^="crime-history-root-"]').forEach(root => {
+                const id = root.id.slice('crime-history-root-'.length), card = cardOf(root); if (!card) return;
+                const t = card.querySelector('[class*="panelTitle"]'); if (!t) return;
+                const x = P[id], mine = cur && String(cur.crime_id) === id && cur.pay && cur.pay.pay_day;
+                if (mine) want.set(t, { cls: 'you', html: `<b>${shortMoney(cur.pay.pay_day)}</b>/day<small>your pay</small>`, tip: 'Your pay per member per day, from when you joined (est)' });
+                else if (x && x.s === 'r' && x.jn) want.set(t, { cls: 'jn', html: `⚡ <b>${shortMoney(x.jn)}</b>/day<small>join now</small>`, tip: 'Pay per member per day if you join now (est)' });
+                else if (x && x.s === 'p' && x.n) want.set(t, { cls: '', html: `💰 <b>${shortMoney(x.n)}</b>/day`, tip: 'Normal pay per member per day (est)' });
+            });
+            document.querySelectorAll('.hbs-ocpay').forEach(n => { const t = n.previousElementSibling; if (!t || !want.has(t)) n.remove(); });
+            want.forEach((w, t) => {
+                let n = t.nextElementSibling; if (!n || !n.classList.contains('hbs-ocpay')) { n = el('span', 'hbs-ocpay'); t.insertAdjacentElement('afterend', n); }
+                const cls = 'hbs-ocpay' + (w.cls ? ' ' + w.cls : '');
+                if (n.className !== cls) n.className = cls;
+                if (n.innerHTML !== w.html) n.innerHTML = w.html;
+                if (n.title !== w.tip) n.title = w.tip;
+            });
+        };
         const run = async () => {
-            if (!/tab=crimes/.test(location.hash)) { markDisabled([]); pinTop(null); return; }
+            if (!/tab=crimes/.test(location.hash)) { markDisabled([]); pinTop(null); try { payTags(null); } catch (e) {   } return; }
             const MY = await loadMyOc(false), as = MY && MY.assignment;
             document.querySelectorAll('.hbs-ocseat,.hbs-occard').forEach(n => n.classList.remove('hbs-ocseat', 'hbs-occard'));
             markDisabled(MY && MY.disabled);
+            try { payTags(MY); } catch (e) {   }
             const aRoot = as && as.crime_id ? document.getElementById('crime-history-root-' + as.crime_id) : null;
             pinTop(aRoot ? cardOf(aRoot) : null);
             if (!as || as.joined || !as.crime_id) return;
