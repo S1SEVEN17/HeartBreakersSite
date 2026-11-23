@@ -9,7 +9,7 @@
   Rajdhani fonts as the announcement images - then export it:
     Download PNG / Copy image  -> Discord DMs, anywhere an image can be pasted
     Publish to site            -> commits data/panels/<name>.png with a GitHub token (same token the
-                                  payout calculator saves, same browser) - online in a few minutes at
+                                  payout calculator saves, same browser) - online at once (the Hub serves it from the data repo until the next full run copies it) at
                                   <member_base>/panels/<name>.png, so it can go in Torn newsletters / mail
     Torn HTML / Open in Torn newsletter (HB Newsletter Filler userscript fills it in)
   Everything is drawn on a <canvas> at the frame's 2x size (W = 1298 px), exactly like generate.py:
@@ -754,7 +754,7 @@ $("publish").onclick = async () => {
     }
     published = `${CFG.member_base}/panels/${name}.png`; save("hb_builder_published", published);
     publishedBtns = urls; save("hb_builder_published_btns", urls);
-    $("pubStatus").innerHTML = `Published ✓ <b>${label}</b> - online in a few minutes: <a href="${published}" target="_blank" style="color:#e8be5a">${name}.png</a>`;
+    $("pubStatus").innerHTML = `Published ✓ <b>${label}</b> - online now: <a href="${published}" target="_blank" style="color:#e8be5a">${name}.png</a>`;
     updateHtml();
   } catch (e) { $("pubStatus").textContent = "Publish failed: " + e.message; }
 };

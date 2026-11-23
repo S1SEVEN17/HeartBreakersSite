@@ -246,6 +246,30 @@ async function proxy(env, dir, rest, req, gated) {
   h.set("Cache-Control", gated ? "private, max-age=60" : "public, max-age=300");
   return new Response(r.body, {status: r.status, headers: h});
 }
+// 📰 PUBLISHED IMAGES LIVE AT ONCE (Nov 23 2026, user: "Is there a faster way for the newsletters/announcements/etc to
+// generate upon publishing?" + "The rebuild can still happen, but it can stay on its normal schedule. Generating
+// newsletters should be independent from the main rebuild."): the Newsletter / Message Builder saves
+// data/panels/<name>.png (+ -btn-N.png, .json) to the private data repo, and the site copies them to panels/ on its
+// next FULL run. Until then this route serves a members' panels/*.png straight from the data repo (GitHub contents API,
+// raw, the faction's token - never sent to the browser), kept in Cloudflare's edge cache for a day (published names are
+// never reused - the builder picks <type>-YYYY-MM-DD, -2, -3 ...). Once the site has its own copy, that copy is used.
+// A miss is cached for 30 s so a wrong link can't hammer GitHub. The data repo's notify workflow no longer starts a
+// rebuild for data/panels/ (the members page's "Latest" list picks new ones up on the next scheduled full run).
+async function panelImage(env, ctx, dir, rest, req) {
+  const site = await proxy(env, dir, rest, req, false);
+  if (site.status === 200 || site.status === 304) return site;
+  const name = rest.slice("panels/".length), cache = caches.default, key = new Request("https://panels.hb/" + name);
+  const hit = await cache.match(key); if (hit) return hit.status === 200 ? hit : notFound();
+  const tok = env.GH_SAVE || env.GH_DISPATCH;
+  let out = null;
+  if (tok) { const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/data/panels/${encodeURIComponent(name)}?ref=main`, {
+      headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github.raw", "User-Agent": "hb-gate"}}).catch(() => null);
+    if (r && r.ok) out = new Response(r.body, {status: 200, headers: {"Content-Type": "image/png", "Cache-Control": "public, max-age=86400",
+      "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff"}}); }
+  if (!out) { ctx.waitUntil(cache.put(key, new Response("", {status: 404, headers: {"Cache-Control": "public, max-age=30"}})).catch(() => {})); return notFound(); }
+  ctx.waitUntil(cache.put(key, out.clone()).catch(() => {}));
+  return out;
+}
 const notFound = () => page("Not found", `<h1>Not found</h1><p class="sub">That page doesn't exist.
 <br><br><a href="/m/">Go to the Members Hub</a></p>`, 404);
 
@@ -324,6 +348,7 @@ export default {
     const rest = p.slice(3);
     const dir = area === "m" ? env.MEMBER_DIR : env.LEADER_DIR;
     // images + fonts: open (Torn / Discord embed them without a pass)
+    if (area === "m" && /^panels\/[\w.-]+\.png$/.test(rest)) return panelImage(env, ctx, dir, rest, req);   // (Nov 23 2026) live on publish
     if (area === "m" && PUBLIC_EXT.test(rest)) return proxy(env, dir, rest, req, false);
     const who = await whoIs(env, ctx, req);
     if (!who) {
