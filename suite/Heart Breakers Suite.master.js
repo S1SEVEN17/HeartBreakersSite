@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.94
+// @version      0.2.95
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.95 (Nov 23 2026) - 🚨 Not in an OC: the minimized icon shakes with a red "Join an OC!" label until you join one (toast every 6 h). Green "New OC" is now only for a new assignment while you're already in a crime.
  *  v0.2.94 (Nov 23 2026) - 🔔 The minimized icon hops with a green "New OC" / "Notify" label when you have a new OC assignment (or, leaders, someone to notify) - clears when you open the OC tab.
  *  v0.2.93 (Nov 23 2026) - ✉ Notify messages come from the Hub (same as OC Management); OC Management's Chat / Mail buttons now fill Torn's chat / mail through your Suite.
  *  v0.2.92 (Nov 22 2026) - 📣 Notify tells members without the Suite their top 3 open crimes + the roles they qualify for (no more single-seat messages).
@@ -492,7 +493,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.94';
+    const VERSION = '0.2.95';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -528,7 +529,8 @@
         myOcSync: 'hbs_myoc_sync',             // (0.2.89) the check-in's myoc {at, d} (shared between tabs)
         ocAlAck: 'hbs_oc_al_ack',              // (0.2.94) icon alert: the assignment key you've seen on the OC tab
         ntfAlAck: 'hbs_ntf_al_ack',            // (0.2.94) icon alert: Notify rows you've seen on the OC tab
-        ocAlToast: 'hbs_oc_al_toast',          // (0.2.94) icon alert: the last alert a toast was shown for
+        ocAlToast: 'hbs_oc_al_toast',
+        ocJoinToast: 'hbs_oc_join_toast',      // (0.2.95) last "not in an OC" toast (ms) - once every 6 h          // (0.2.94) icon alert: the last alert a toast was shown for
         alertsV: 'hbs_alerts_v',               // (0.2.89) leaders: the alert list's signature from the check-in
         busSeen: 'hbs_bus_seen',               // (0.2.89) 📡 the Hub push notes already acted on {k: v}
         ocMeSig: 'hbs_oc_me_sig',              // (0.2.70) the own crime last reported to the Hub ("<crime id>:<role>" or "0")
@@ -704,6 +706,7 @@
     // contact log entry ({at, crime, crime_id, role, how, by}) -> "Notified 13h ago · marked · Chris5295"
     // (0.2.92) told about the same #1 crime (role "Top 3"), or - no list - sent the script invite
     const ntfSame = x => { const c = x.contacted, c0 = (x.crimes || [])[0]; if (!c || !c.at) return false;
+        if (Date.now() - num(c.at) < 48 * 3600e3) return true;   // (0.2.95) quiet for 48 h after any contact
         return c0 ? c.role === 'Top 3' && String(c.crime_id) === String(c0.crime_id) : c.role === 'Script invite'; };
     const ntfTodo = NT => NT.filter(x => (x.crimes && x.crimes.length || x.why === 'norates') && !ntfSame(x));
     function ntfBadge(x) {
@@ -1296,7 +1299,15 @@
             #hbs-launcher .hbs-loc.r{left:calc(100% + 9px);top:50%;transform:translateY(-50%);} #hbs-launcher .hbs-loc.r::after{right:100%;top:50%;margin-top:-4px;border-right-color:#3ecf6e;}
             #hbs-launcher .hbs-loc.t{bottom:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.t::after{top:100%;left:50%;margin-left:-4px;border-top-color:#3ecf6e;}
             #hbs-launcher .hbs-loc.b{top:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.b::after{bottom:100%;left:50%;margin-left:-4px;border-bottom-color:#3ecf6e;}
-            #hbs-launcher.hbs-l-oc:hover::after{opacity:0;}   /* the hover name label would sit on top of ours */
+            #hbs-launcher.hbs-l-oc:hover::after{opacity:0;}
+            /* 0.2.95 - 🚨 not in a crime: red + a shake every 2 s (rotate, not transform - the Dock pins transform) */
+            #hbs-launcher.hbs-l-join{border:2px solid #ff4d4d;color:#ff4d4d;}
+            #hbs-launcher.hbs-l-join:not(.hbs-l-flash):not(.hbs-alerting){animation:hbsOcShake 2.2s ease-in-out infinite;}
+            @keyframes hbsOcShake{0%,70%,100%{rotate:0deg;}74%{rotate:-14deg;}78%{rotate:12deg;}82%{rotate:-9deg;}86%{rotate:6deg;}90%{rotate:0deg;}}
+            #hbs-launcher.hbs-l-join .hbs-loc{background:#e53935;color:#fff;rotate:0deg;}
+            #hbs-launcher.hbs-l-join .hbs-loc.l::after{border-left-color:#e53935;} #hbs-launcher.hbs-l-join .hbs-loc.r::after{border-right-color:#e53935;}
+            #hbs-launcher.hbs-l-join .hbs-loc.t::after{border-top-color:#e53935;} #hbs-launcher.hbs-l-join .hbs-loc.b::after{border-bottom-color:#e53935;}
+            #hbs-launcher.hbs-l-join:hover::after{opacity:0;}   /* the hover name label would sit on top of ours */
             @keyframes hbsLFlash{0%{background:#ff3b30;box-shadow:0 0 0 6px rgba(255,59,48,.55),0 0 18px 6px rgba(255,59,48,.6);transform:scale(1.12);}
                 50%{background:#FFB454;box-shadow:0 0 0 2px rgba(255,180,84,.5);transform:scale(1);}}
             /* 0.2.33 - 🛡 low reliability rows */
@@ -5175,13 +5186,19 @@
     }, 1000);
     // 🔔 OC ICON ALERT (0.2.94) - see build_patch_0294.py
     function ocAlKeys() {
-        const M = typeof myOc !== 'undefined' ? myOc : null, as = M && M.assignment;
-        const oc = modOn('oc') && as && !as.joined && !(M && M.current) ? String(as.crime_id) + ':' + String(as.position || '') : '';
+        const M = typeof myOc !== 'undefined' ? myOc : null, as = M && M.assignment, cur = M && M.current;
+        // (0.2.95) red: the OC reading says you're in no crime (no reading = no alert)
+        const join = !!(modOn('oc') && M && !cur), joinMine = !!(join && as && !as.joined && as.crime_id);
+        // (0.2.95) green "New OC" only while you ARE in a crime and the Hub assigned you a different one
+        const oc = modOn('oc') && cur && as && !as.joined && as.crime_id && String(as.crime_id) !== String(cur.crime_id || cur.id) ? String(as.crime_id) + ':' + String(as.position || '') : '';
         const ntf = me && me.leader && Array.isArray(notifyList) ? ntfTodo(notifyList).map(x => x.pid + ':' + (((x.crimes || [])[0] || {}).crime_id || 'inv')) : [];
-        return { oc, ntf };
+        return { oc, ntf, join, joinMine };
     }
+    let ocAlReadAt = 0;
     function ocIconAlert() {
         if (!me) return;
+        // (0.2.95) keep the OC reading fresh while the page is visible: Hub only, at most every 10 minutes
+        if (modOn('oc') && !document.hidden && Date.now() - myOcAt > 600000 && Date.now() - ocAlReadAt > 600000) { ocAlReadAt = Date.now(); loadMyOc(false).then(() => { try { drawOcPin(); drawTabDots(); } catch (e) { /* */ } }).catch(() => {}); }
         const k = ocAlKeys();
         if (!collapsed && tab === 'oc' && !showSettings) {                    // looking at the OC tab = seen
             if (store.get(K.ocAlAck, '') !== k.oc) store.set(K.ocAlAck, k.oc);
@@ -5189,10 +5206,19 @@
             if (k.ntf.some(x => !seen.includes(x)) || seen.length > 200) store.set(K.ntfAlAck, k.ntf.slice(0, 200));
         }
         const ack = store.get(K.ntfAlAck, []);
-        const kind = k.oc && k.oc !== store.get(K.ocAlAck, '') ? 'oc' : k.ntf.some(x => !ack.includes(x)) ? 'ntf' : '';
+        const kind = k.join ? 'join' : k.oc && k.oc !== store.get(K.ocAlAck, '') ? 'oc' : k.ntf.some(x => !ack.includes(x)) ? 'ntf' : '';
         let lab = launcher.querySelector('.hbs-loc');
-        launcher.classList.toggle('hbs-l-oc', !!kind);
+        launcher.classList.toggle('hbs-l-oc', kind === 'oc' || kind === 'ntf');
+        launcher.classList.toggle('hbs-l-join', kind === 'join');
         if (!kind) { if (lab) lab.remove(); return; }
+        if (kind === 'join') {                                  // (0.2.95) red, until you're in a crime
+            const txt = k.joinMine ? 'Join your OC!' : 'Join an OC!';
+            if (!lab) { lab = el('span', 'hbs-loc'); launcher.appendChild(lab); }
+            if (lab.textContent !== txt) lab.textContent = txt;
+            const side = ocAlSide(); if (!lab.classList.contains(side)) lab.className = 'hbs-loc ' + side;
+            if (Date.now() - num(store.get(K.ocJoinToast, 0)) > 6 * 3600e3) { store.set(K.ocJoinToast, Date.now()); toast("You're not in an Organized Crime - join one now!", true); }
+            return;
+        }
         const txt = kind === 'oc' ? 'New OC' : 'Notify';
         if (!lab) { lab = el('span', 'hbs-loc'); launcher.appendChild(lab); }
         if (lab.textContent !== txt) lab.textContent = txt;
