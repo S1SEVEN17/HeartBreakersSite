@@ -3930,7 +3930,17 @@ async function ocMine(env, pid) {
   }
   // disabled (HB Suite 0.2.74): the crime NAMES leaders switched off in OC Management - the Suite blocks their Join
   // buttons on Torn's crimes page
-  return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment, disabled: Array.isArray(cfg.disabled) ? cfg.disabled : []};
+  // PAY ON TORN'S CRIMES PAGE (HB Suite 0.2.96, Nov 23 2026, user: "On the torn crimes pages, show the current 'Join
+  // Now' pay per day for all crimes in the recruiting tab. Show the normal 'pay per day' for the Planning tab (full
+  // crimes). For your crime, show YOUR Join Now pay per day when you joined the crime."): {crime id: {s, jn, n}} for every
+  // Recruiting / Planning crime - s "r" / "p", jn = pay per member per day for joining now (payOf: pay_day x the
+  // crime's multiplier; an empty crime = the normal figure), n = the crime type's normal pay per day. Your own crime's
+  // figure is current.pay (payMine - fixed at when you joined).
+  const crime_pay = {};
+  for (const c of crimes) { if (!c || (c.status !== "Recruiting" && c.status !== "Planning")) continue;
+    const p = payOf(c); if (!p) continue;
+    crime_pay[String(c.id)] = {s: c.status === "Recruiting" ? "r" : "p", jn: p.pay_day || null, n: p.normal || null}; }
+  return {ok: true, as_of: snap ? Number(snap.as_of) : null, current, assignment, disabled: Array.isArray(cfg.disabled) ? cfg.disabled : [], crime_pay};
 }
 async function ocSpawnAlerts(env) {
   const cfg = await ocConfig(env, "prod"), plan = cfg.plan || {};
