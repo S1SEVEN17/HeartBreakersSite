@@ -1417,8 +1417,12 @@ function logContact(x, how) {
 // line (when, crime, role, how, who). The row is tinted to match (notifyRowCls).
 // (Nov 22 2026) ok = told about this same #1 crime (or the script invite, for a member with no list); old = told about a
 // list whose #1 crime has changed since - their list changed, tell them again
+// (Nov 23 2026, user: "Once notification contact has been made, no more alerts should be sent for 48 hours, even if the
+// lineup of missions change.") - contacted in the last 48 h = notified, whatever their list looks like now
+const NOTIFY_QUIET_MS = 48 * 3600e3;
 function contactState(lc, x) {
   if (!lc || !lc.at) return "no";
+  if (Date.now() - Number(lc.at) < NOTIFY_QUIET_MS) return "ok";
   const c0 = (x.crimes || [])[0];
   if (!c0) return lc.role === "Script invite" ? "ok" : "old";
   return lc.role === "Top 3" && String(lc.crime_id) === String(c0.crime_id) ? "ok" : "old";
