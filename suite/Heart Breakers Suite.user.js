@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.92
+// @version      0.2.93
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.92';
+    const VERSION = '0.2.93';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -198,6 +198,7 @@
         }).join('');
     }
     function notifyMsgs(x) {
+        if (x && x.msg && (x.msg.mail || x.msg.chat)) return { chat: x.msg.chat || '', subject: x.msg.subject || '', mail: x.msg.mail || '', mailHtml: x.msg.html || '' };
         const t = notifyTplS || {}, T = { chat: t.chat || NOTIFY_DEFAULT.chat, subject: t.subject || NOTIFY_DEFAULT.subject, mail: t.mail || NOTIFY_DEFAULT.mail };
         const mail = notifyFill(T.mail, x, 'mail');
         return { chat: mdPlain(notifyFill(T.chat, x, 'chat')), subject: mdPlain(notifyFill(T.subject, x, 'chat')), mail: mdPlain(mail), mailHtml: mdHtml(mail) };
@@ -255,7 +256,7 @@
         const say = t => { if (msgEl) msgEl.textContent = t; };
         logContact(x, b.dataset.ntf);
         if (b.dataset.ntf === 'sent') return;
-        if (!(x.crimes && x.crimes.length)) { cprNotify(x.pid, x.name); return; }
+        if (!(x.crimes && x.crimes.length) && !x.msg) { cprNotify(x.pid, x.name); return; }
         const m = notifyMsgs(x), chat = b.dataset.ntf === 'chat';
         if (chat) store.set(K.chatFill, { pid: Number(x.pid), text: m.chat, at: Date.now() });
         else store.set(K.mailFill, { pid: Number(x.pid), subject: m.subject, html: m.mailHtml, text: m.mail, at: Date.now() });
@@ -5443,6 +5444,21 @@
         };
         setTimeout(run, 600);
     }
+    let hbFillDone = '';
+    async function hbFillPull() {
+        if (!/[?&]hbfill=1/.test(location.search)) return;
+        const chat = /profiles\.php/.test(location.pathname), mail = /messages\.php/.test(location.pathname);
+        const pid = Number(((chat ? location.search : location.hash).match(/XID=(\d+)/) || [])[1]);
+        if (!pid || !(chat || mail) || hbFillDone === location.href) return;
+        hbFillDone = location.href;
+        // [HB Suite] Hub API — op "notify_fill": the message OC Management saved for you + this member (read once)
+        const r = await hub('notify_fill', { pid }).catch(() => null), F = r && r.fill;
+        if (!F) return;
+        if (chat) { store.set(K.chatFill, { pid, text: F.chat || '', at: Date.now() }); ocChatFill(); }
+        else { store.set(K.mailFill, { pid, subject: F.subject || '', html: F.html || '', text: F.mail || '', at: Date.now() }); rsMailFill(); }
+    }
+    setTimeout(() => { hbFillPull().catch(() => {}); }, 300);
+    window.addEventListener('hashchange', () => { hbFillPull().catch(() => {}); });
     window.addEventListener('hashchange', rsMailFill);
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', rsMailFill); else setTimeout(rsMailFill, 0);
 

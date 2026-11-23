@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.92
+// @version      0.2.93
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.93 (Nov 23 2026) - ✉ Notify messages come from the Hub (same as OC Management); OC Management's Chat / Mail buttons now fill Torn's chat / mail through your Suite.
  *  v0.2.92 (Nov 22 2026) - 📣 Notify tells members without the Suite their top 3 open crimes + the roles they qualify for (no more single-seat messages).
  *  v0.2.91 (Nov 20 2026) - 🧰 Loan / Retrieve open the item's own armoury tab (Medical, Temporary, Drugs ...), not always Utilities.
  *  v0.2.90 (Nov 20 2026) - 🍺 Booster cooldown uses the faction's real cap (24 h + its booster upgrade, peace / war) - amber = still usable, red = capped.
@@ -490,7 +491,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.92';
+    const VERSION = '0.2.93';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -675,6 +676,7 @@
         }).join('');
     }
     function notifyMsgs(x) {
+        if (x && x.msg && (x.msg.mail || x.msg.chat)) return { chat: x.msg.chat || '', subject: x.msg.subject || '', mail: x.msg.mail || '', mailHtml: x.msg.html || '' };   // (0.2.93) built by the Hub
         const t = notifyTplS || {}, T = { chat: t.chat || NOTIFY_DEFAULT.chat, subject: t.subject || NOTIFY_DEFAULT.subject, mail: t.mail || NOTIFY_DEFAULT.mail };
         const mail = notifyFill(T.mail, x, 'mail');
         return { chat: mdPlain(notifyFill(T.chat, x, 'chat')), subject: mdPlain(notifyFill(T.subject, x, 'chat')), mail: mdPlain(mail), mailHtml: mdHtml(mail) };
@@ -739,7 +741,7 @@
         const say = t => { if (msgEl) msgEl.textContent = t; };
         logContact(x, b.dataset.ntf);                                    // shared log + green pill at once (2.7.4)
         if (b.dataset.ntf === 'sent') return;
-        if (!(x.crimes && x.crimes.length)) { cprNotify(x.pid, x.name); return; }   // (0.2.92) no rates known: the script invite
+        if (!(x.crimes && x.crimes.length) && !x.msg) { cprNotify(x.pid, x.name); return; }   // (0.2.92) no rates known: the script invite (0.2.93: the Hub's msg when sent)
         const m = notifyMsgs(x), chat = b.dataset.ntf === 'chat';
         // (0.2.23) like 🤝 Recruit: the compose page fills in subject + message (rsMailFill), the profile's new chat box gets
         // the chat text (ocChatFill) - saved BEFORE the tab opens; the copy stays as the fallback. You press Send.
@@ -6830,6 +6832,22 @@
         };
         setTimeout(run, 600);
     }
+    // 📨 (0.2.93) FILL HANDOFF from OC Management - see build_patch_0293.py
+    let hbFillDone = '';
+    async function hbFillPull() {
+        if (!/[?&]hbfill=1/.test(location.search)) return;
+        const chat = /profiles\.php/.test(location.pathname), mail = /messages\.php/.test(location.pathname);
+        const pid = Number(((chat ? location.search : location.hash).match(/XID=(\d+)/) || [])[1]);
+        if (!pid || !(chat || mail) || hbFillDone === location.href) return;
+        hbFillDone = location.href;
+        // [HB Suite] Hub API — op "notify_fill": the message OC Management saved for you + this member (read once)
+        const r = await hub('notify_fill', { pid }).catch(() => null), F = r && r.fill;
+        if (!F) return;
+        if (chat) { store.set(K.chatFill, { pid, text: F.chat || '', at: Date.now() }); ocChatFill(); }
+        else { store.set(K.mailFill, { pid, subject: F.subject || '', html: F.html || '', text: F.mail || '', at: Date.now() }); rsMailFill(); }
+    }
+    setTimeout(() => { hbFillPull().catch(() => {}); }, 300);
+    window.addEventListener('hashchange', () => { hbFillPull().catch(() => {}); });
     window.addEventListener('hashchange', rsMailFill);
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', rsMailFill); else setTimeout(rsMailFill, 0);
 
