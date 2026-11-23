@@ -451,6 +451,9 @@ async function ghProxy(env, req, who, path) {
     if (!j || typeof j.content !== "string") return new Response("Bad request", {status: 400});
     // who saved it goes in the commit message (the commit itself is made with the faction's token)
     j.message = `${String(j.message || "Update " + path).slice(0, 200)} (by ${who.name} [${who.id}])`;
+    // (Nov 23 2026) a published newsletter image doesn't start a site rebuild: the data repo's notify workflow skips
+    // commits marked [bot]; the image is live at once through panelImage and the scheduled full run copies it
+    if (/^data\/panels\//.test(path)) j.message += " [bot]";
     body = JSON.stringify(j);
   }
   const ref = new URL(req.url).searchParams.get("ref");
