@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.93
+// @version      0.2.94
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.93';
+    const VERSION = '0.2.94';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -57,6 +57,9 @@
         shareDay: 'hbs_share_day',
         ocCurSig: 'hbs_oc_cur_sig',
         myOcSync: 'hbs_myoc_sync',
+        ocAlAck: 'hbs_oc_al_ack',
+        ntfAlAck: 'hbs_ntf_al_ack',
+        ocAlToast: 'hbs_oc_al_toast',
         alertsV: 'hbs_alerts_v',
         busSeen: 'hbs_bus_seen',
         ocMeSig: 'hbs_oc_me_sig',
@@ -777,6 +780,18 @@
             #hbs-launcher.hbs-l-up{box-shadow:0 0 0 3px #ff4d4d,0 2px 10px rgba(0,0,0,.6);}
             #hbs-launcher.hbs-l-flash,#hbs-launcher.hbs-l-flash.hbs-alerting{animation:hbsLFlash .9s steps(1,end) infinite;}   /* wins over the old 2.6 s hbs-alerting pulse */
             #hbs-launcher.hbs-l-flash.hbs-l-panic,#hbs-launcher.hbs-l-flash.hbs-l-panic.hbs-alerting{animation-duration:.45s;}
+            /* 0.2.94 - 🔔 OC icon alert: green label + a hop every 2 s (translate, not transform - the Dock pins transform) */
+            #hbs-launcher.hbs-l-oc{border-color:#3ecf6e;color:#3ecf6e;}
+            #hbs-launcher.hbs-l-oc:not(.hbs-l-flash):not(.hbs-alerting){animation:hbsOcHop 2s ease-in-out infinite;}
+            @keyframes hbsOcHop{0%,60%,100%{translate:0 0;}70%{translate:0 -8px;}80%{translate:0 0;}88%{translate:0 -4px;}}
+            #hbs-launcher .hbs-loc{position:absolute;z-index:2;white-space:nowrap;padding:3px 8px;border-radius:9px;background:#3ecf6e;color:#0b2a14;
+                font:700 11px/1.2 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,.5);}
+            #hbs-launcher .hbs-loc::after{content:"";position:absolute;border:4px solid transparent;}
+            #hbs-launcher .hbs-loc.l{right:calc(100% + 9px);top:50%;transform:translateY(-50%);} #hbs-launcher .hbs-loc.l::after{left:100%;top:50%;margin-top:-4px;border-left-color:#3ecf6e;}
+            #hbs-launcher .hbs-loc.r{left:calc(100% + 9px);top:50%;transform:translateY(-50%);} #hbs-launcher .hbs-loc.r::after{right:100%;top:50%;margin-top:-4px;border-right-color:#3ecf6e;}
+            #hbs-launcher .hbs-loc.t{bottom:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.t::after{top:100%;left:50%;margin-left:-4px;border-top-color:#3ecf6e;}
+            #hbs-launcher .hbs-loc.b{top:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.b::after{bottom:100%;left:50%;margin-left:-4px;border-bottom-color:#3ecf6e;}
+            #hbs-launcher.hbs-l-oc:hover::after{opacity:0;}   /* the hover name label would sit on top of ours */
             @keyframes hbsLFlash{0%{background:#ff3b30;box-shadow:0 0 0 6px rgba(255,59,48,.55),0 0 18px 6px rgba(255,59,48,.6);transform:scale(1.12);}
                 50%{background:#FFB454;box-shadow:0 0 0 2px rgba(255,180,84,.5);transform:scale(1);}}
             /* 0.2.33 - 🛡 low reliability rows */
@@ -4062,7 +4077,42 @@
         }
         const fl = Date.now() < alFlashUntil;
         launcher.classList.toggle('hbs-l-flash', fl); launcher.classList.toggle('hbs-l-panic', fl && alFlashLvl >= 4);
+        try { ocIconAlert(); } catch (e) {   }
     }, 1000);
+    function ocAlKeys() {
+        const M = typeof myOc !== 'undefined' ? myOc : null, as = M && M.assignment;
+        const oc = modOn('oc') && as && !as.joined && !(M && M.current) ? String(as.crime_id) + ':' + String(as.position || '') : '';
+        const ntf = me && me.leader && Array.isArray(notifyList) ? ntfTodo(notifyList).map(x => x.pid + ':' + (((x.crimes || [])[0] || {}).crime_id || 'inv')) : [];
+        return { oc, ntf };
+    }
+    function ocIconAlert() {
+        if (!me) return;
+        const k = ocAlKeys();
+        if (!collapsed && tab === 'oc' && !showSettings) {
+            if (store.get(K.ocAlAck, '') !== k.oc) store.set(K.ocAlAck, k.oc);
+            const seen = store.get(K.ntfAlAck, []);
+            if (k.ntf.some(x => !seen.includes(x)) || seen.length > 200) store.set(K.ntfAlAck, k.ntf.slice(0, 200));
+        }
+        const ack = store.get(K.ntfAlAck, []);
+        const kind = k.oc && k.oc !== store.get(K.ocAlAck, '') ? 'oc' : k.ntf.some(x => !ack.includes(x)) ? 'ntf' : '';
+        let lab = launcher.querySelector('.hbs-loc');
+        launcher.classList.toggle('hbs-l-oc', !!kind);
+        if (!kind) { if (lab) lab.remove(); return; }
+        const txt = kind === 'oc' ? 'New OC' : 'Notify';
+        if (!lab) { lab = el('span', 'hbs-loc'); launcher.appendChild(lab); }
+        if (lab.textContent !== txt) lab.textContent = txt;
+        const side = ocAlSide(); if (!lab.classList.contains(side)) lab.className = 'hbs-loc ' + side;
+        const tk = kind === 'oc' ? 'oc:' + k.oc : 'ntf:' + k.ntf.filter(x => !ack.includes(x)).sort().join(',');
+        if (store.get(K.ocAlToast, '') !== tk) { store.set(K.ocAlToast, tk); toast(kind === 'oc' ? 'New Organized Crime Assignment!' : 'New Notification Pending.', true); }
+    }
+    function ocAlSide() {
+        const vw = window.innerWidth, vh = window.innerHeight, d = launcher.closest('#torn-dock');
+        if (d) { const r = d.getBoundingClientRect();
+            if (r.height > r.width * 1.2) return r.left + r.width / 2 > vw / 2 ? 'l' : 'r';
+            return r.top + r.height / 2 > vh / 2 ? 't' : 'b'; }
+        const r = launcher.getBoundingClientRect();
+        return r.left + r.width / 2 > vw / 2 ? 'l' : 'r';
+    }
     const chainAlive = () => { const c = cwChain(); return c.current > 0 && !!cw.state && num(c.expires_at) - cwNow() > (cwVerifyAt ? 0 : -3000); };
     const alLog = [];
     function alNote(m, result) {
