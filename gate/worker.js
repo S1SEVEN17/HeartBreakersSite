@@ -2171,6 +2171,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
       c.tp_names = (tpw && tpw.data && tpw.data.names) || null;                                                      // role order
       c.success = ((await ocSnapGet(env, "hub", "tp:success").catch(() => null)) || {}).data || null;               // team success (CalculateSuccess)
       c.script_seen = await ocScriptSeen(env, envName);                                                              // {pid: ms} OC script users
+      c.viewer = Number(who.id) || null;   // (Nov 24 2026) who's looking - Planning shows THEIR joined pay on their own crime
       { let fc = []; try { const fs = await env.OC_DB.prepare("SELECT data FROM oc_snap WHERE env = 'prod' AND ds = 'crimes'").first();   // (Nov 22 2026) 📣 Notify top crimes
           const d = fs ? JSON.parse(fs.data) : []; fc = Array.isArray(d) ? d : (d.crimes || []); } catch (e) {}
         c.oc_top = envName === "prod" ? await ocNotifyTop(env, c, fc).catch(() => []) : [];
