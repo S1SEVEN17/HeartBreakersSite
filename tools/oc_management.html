@@ -1507,21 +1507,14 @@ function planOf(crimeId, pid) {
 //   2. Normal $X/day (highest recorded, over the crime type's planning days) · Ready <day time> (in Xh) · filled/total
 // Members' join times missing -> line 1 shows the normal pay. "below the target" stays under it.
 // PLANNING = NORMAL PAY (Nov 24 2026, user: "Planning tab on both HUB and Torn should show the normal Pay per day, not
-// the Join Now pay per day, except for the active crime for the user."): every Planning crime shows the crime type's
-// normal pay per member per day; only the crime YOU (the leader looking - config.json viewer) are in shows your own
-// pay from when you joined (the crime's cut / days from your joined_at to ready, never below normal).
+// the Join Now pay per day ..." -> "Planning tab in the hub should only show the normal pay per day. Not per user. Per
+// user should only be done on the torn pages and through the script."): every Planning crime shows only the crime
+// type's normal pay per member per day - nobody's own pay here (that's the Suite + Torn's crimes page).
 function planPay(c, v) {
   if (!v || !v.pot) return "💰 no pay data yet";
-  const seats = (c.slots || []).length || rolesOf(c.name).length || 1, cut = v.pot / (rolesOf(c.name).length || seats), normal = eachPay(c.name);
-  const me = Number(D.config && D.config.viewer) || 0, mine = me ? (c.slots || []).find(sl => sl.user && Number(sl.user.id) === me) : null;
+  const seats = (c.slots || []).length || rolesOf(c.name).length || 1, normal = eachPay(c.name);
   const filled = (c.slots || []).filter(sl => sl.user).length;
   const when = c.ready_at ? new Date(c.ready_at * 1000).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"}) + ` (in ${freeIn(c.ready_at * 1000)})` : "-";
-  if (mine) {
-    let yours = normal; const ja = Number(mine.user.joined_at);
-    if (c.ready_at && ja) { const d = (c.ready_at - ja) / 86400; if (d > 0.05) yours = Math.max(normal, cut / d); }
-    return `<div class="pl1"><b class="ok">${fmt2(yours)}/day</b> <span class="ok plp">your pay</span></div>`
-      + `<div class="pl2">Normal ${fmt2(normal)}/day · Ready ${when} · ${filled}/${seats} filled</div>`;
-  }
   return `<div class="pl1"><b>${fmt2(normal)}/day</b> <span class="plp" style="color:var(--sub)">normal</span></div>`
     + `<div class="pl2">Ready ${when} · ${filled}/${seats} filled</div>`;
 }
