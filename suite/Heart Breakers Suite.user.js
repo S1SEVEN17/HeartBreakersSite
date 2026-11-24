@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.96
+// @version      0.2.97
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.96';
+    const VERSION = '0.2.97';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -1952,7 +1952,7 @@
         const ok = inR.filter(x => x.state === 'Okay').sort((a, b) => b.ff - a.ff);
         const off = inR.filter(x => x.state !== 'Okay').sort((a, b) => (a.until || 9e12) - (b.until || 9e12) || b.ff - a.ff);
         const slots = compact ? WT_SLOTS_C : WT_SLOTS, show = ok.slice(0, slots).concat(off.slice(0, Math.max(0, slots - ok.length)));
-        const atk = pid => `https://www.torn.com/loader.php?sid=attack&user2ID=${pid}`;
+        const atk = pid => `https://www.torn.com/page.php?sid=attack&user2ID=${pid}`;
         let list;
         if (!Object.keys(FM).length && wt.ffBusy) list = '<div class="hbs-hint">Asking FFScouter…</div>';
         else if (!show.length) list = `<div class="hbs-hint">Nobody in ${rng} right now. Widen your range to see more targets.</div>`;

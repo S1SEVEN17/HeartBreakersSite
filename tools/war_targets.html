@@ -175,7 +175,7 @@ function draw() {
   $("tbl").innerHTML = !m ? "" : `<tr><th>Target</th><th class="n">Lvl</th>${th("bs", "Est. stats")}${th("ff", "FF", "n")}${th("rs", "Respect", "n")}${th("st", "Status")}<th></th></tr>`
     + (rows.length ? rows.map(r => `<tr class="${r.ok ? "" : "na"}"><td><a href="https://www.torn.com/profiles.php?XID=${r.id}" target="_blank" rel="noopener">${esc(r.e.n)}</a></td>
       <td class="n">${r.e.l || "-"}</td><td>${esc(r.e.bs || "-")}</td><td class="n"><b>${Math.min(r.ff, 3).toFixed(2)}</b>${r.ff > 3 ? ' <span class="mid" title="Stronger than 75% of these stats - Torn pays 3× at most, the fight is riskier">⚠️</span>' : ""}</td><td class="n">${r.rs.toFixed(2)}</td><td>${r.st}</td>
-      <td><a class="atk" href="https://www.torn.com/loader.php?sid=attack&user2ID=${r.id}" target="_blank" rel="noopener">Attack</a></td></tr>`).join("")
+      <td><a class="atk" href="https://www.torn.com/page.php?sid=attack&user2ID=${r.id}" target="_blank" rel="noopener">Attack</a></td></tr>`).join("")
       : `<tr><td colspan="7" class="dim" style="text-align:center;padding:14px">${m.s === "none" ? "No stats to match against." : only ? "No target in range is available right now." : `No enemy matches ${fltText()} for this member.`}</td></tr>`);
 }
 

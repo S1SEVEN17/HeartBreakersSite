@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.96
+// @version      0.2.97
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.97 (Nov 24 2026) - ⚔ War tab Attack opens Torn's current attack page (page.php - loader.php was phased out).
  *  v0.2.96 (Nov 23 2026) - 💰 Torn's crimes page shows each crime's pay per day: ⚡ join now (Recruiting), normal (Planning), and your own pay from when you joined.
  *  v0.2.95 (Nov 23 2026) - 🚨 Not in an OC: the minimized icon shakes with a red "Join an OC!" label until you join one (toast every 6 h). Green "New OC" is now only for a new assignment while you're already in a crime.
  *  v0.2.94 (Nov 23 2026) - 🔔 The minimized icon hops with a green "New OC" / "Notify" label when you have a new OC assignment (or, leaders, someone to notify) - clears when you open the OC tab.
@@ -494,7 +495,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.96';
+    const VERSION = '0.2.97';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -2570,7 +2571,7 @@
         const ok = inR.filter(x => x.state === 'Okay').sort((a, b) => b.ff - a.ff);
         const off = inR.filter(x => x.state !== 'Okay').sort((a, b) => (a.until || 9e12) - (b.until || 9e12) || b.ff - a.ff);
         const slots = compact ? WT_SLOTS_C : WT_SLOTS, show = ok.slice(0, slots).concat(off.slice(0, Math.max(0, slots - ok.length)));
-        const atk = pid => `https://www.torn.com/loader.php?sid=attack&user2ID=${pid}`;
+        const atk = pid => `https://www.torn.com/page.php?sid=attack&user2ID=${pid}`;   // (0.2.97) loader.php was phased out
         let list;
         if (!Object.keys(FM).length && wt.ffBusy) list = '<div class="hbs-hint">Asking FFScouter…</div>';
         else if (!show.length) list = `<div class="hbs-hint">Nobody in ${rng} right now. Widen your range to see more targets.</div>`;
