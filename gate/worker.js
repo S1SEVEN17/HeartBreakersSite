@@ -667,9 +667,13 @@ async function sxRoute(env, ctx, req) {
       const W = {open: "status IN ('new','contacted')", mine: "claim_pid = ?1", unclaimed: "claim_pid IS NULL AND status NOT IN ('joined','declined')", all: "1 = 1"};
       const f = W[b.filter] ? b.filter : "open";
       try {
-        const cnt = await env.OC_DB.prepare("SELECT SUM(CASE WHEN status IN ('new','contacted') THEN 1 ELSE 0 END) AS open, " +
+        // COUNTS MEMO (Nov 26 2026, "reduce the overall load"): the four counts scanned every recruit on every page call
+        // (scrolling = one call per 30 rows); now kept a minute per leader (RC_CNT) and dropped on any recruit change
+        const ck = String(me), cm = RC_CNT.get(ck);
+        const cnt = cm && Date.now() - cm.at < 60e3 ? cm.v : await env.OC_DB.prepare("SELECT SUM(CASE WHEN status IN ('new','contacted') THEN 1 ELSE 0 END) AS open, " +
           "SUM(CASE WHEN claim_pid = ?1 THEN 1 ELSE 0 END) AS mine, SUM(CASE WHEN claim_pid IS NULL AND status NOT IN ('joined','declined') THEN 1 ELSE 0 END) AS unclaimed, " +
           "COUNT(*) AS all_n FROM rc_recruit WHERE removed_at IS NULL").bind(me).first() || {};
+        if (!(cm && Date.now() - cm.at < 60e3)) RC_CNT.set(ck, {at: Date.now(), v: cnt});
         const rows = (await env.OC_DB.prepare("SELECT pid, name, data, sent_by, first_sent, updated, status, status_by, status_at, claim_pid, claim_name, claim_at, " +
           "note, note_by, note_at FROM rc_recruit WHERE removed_at IS NULL AND " + W[f] + " " +
           "ORDER BY COALESCE(CAST(json_extract(data, '$.fit.pct') AS REAL), -1) DESC, updated DESC LIMIT ?2 OFFSET ?3").bind(me, lim, off).all()).results || [];
@@ -678,6 +682,7 @@ async function sxRoute(env, ctx, req) {
         return sxJson({ok: true, recruits, total: counts[f], counts, offset: off, me: {id: who.id, name: who.name}});
       } catch (e) { return sxJson({ok: true, recruits: [], total: 0, counts: {open: 0, mine: 0, unclaimed: 0, all: 0}, offset: off, me: {id: who.id, name: who.name}}); }   // table not there yet
     }
+    if (b.do === "update") RC_CNT.clear();                       // (Nov 26 2026) counts change with this
     if (b.do === "update") return sxPass(await rcLeaderRoute(env, new Request("https://sx.local/update", {method: "POST",
       headers: {"X-HB-Save": "1", "Content-Type": "application/json"}, body: JSON.stringify(b.body || {})}), who, "update"));
     return sxJson({ok: false, error: "unknown"}, 400);
@@ -866,7 +871,10 @@ async function sxRoute(env, ctx, req) {
       const where = w.length ? " WHERE " + w.join(" AND ") : "";
       const order = {level: "level DESC", bs: "bs DESC", pct: "pct DESC", added: "added DESC"}[b.sort] || "added DESC";
       const lim = Math.min(500, Math.max(1, n(b.limit) || 100)), off = Math.max(0, n(b.offset) || 0);
-      const tot = await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool" + where).bind(...v).first();
+      // (Nov 26 2026) the filtered total kept 5 minutes per filter (POOL_CNT) - it scanned the pool on every page
+      const pk = where + "|" + JSON.stringify(v), pm = POOL_CNT.get(pk);
+      const tot = pm && Date.now() - pm.at < 300e3 ? pm.v : await DB.prepare("SELECT COUNT(*) AS c FROM rc_pool" + where).bind(...v).first();
+      if (!(pm && Date.now() - pm.at < 300e3)) { if (POOL_CNT.size > 50) POOL_CNT.clear(); POOL_CNT.set(pk, {at: Date.now(), v: tot}); }
       const {results} = await DB.prepare(`SELECT * FROM rc_pool${where} ORDER BY ${order} NULLS LAST, pid LIMIT ? OFFSET ?`).bind(...v, lim, off).all();
       return sxJson({ok: true, rows: (results || []).map(rcPoolRow), total: Number(tot && tot.c) || 0});
     }
@@ -1403,6 +1411,7 @@ async function ocShareAllOn(env, now) {
 //   cpr:ver   hub row bumped whenever a member's shared rates really change (or a member's rates are deleted) - the
 //             planner's "pass rates updated" trigger (ocTriggers) reads this ONE row instead of every member's rates
 const CPR_PAGE = new Map(), CPR_PAGE_MS = 15000;
+const RC_CNT = new Map(), POOL_CNT = new Map();   // (Nov 26 2026) recruit / pool count memos - see their uses
 async function cprBump(env) {
   CPR_PAGE.clear();
   try { await env.OC_DB.prepare("INSERT INTO oc_snap (env, ds, as_of, data, by) VALUES ('hub', 'cpr:ver', ?, '{}', 'hub') " +
@@ -1434,11 +1443,19 @@ async function ocOptinPull(env, now, crimes) {
   const {data} = await readOptin(env, false);
   const ros = await ocSnapGet(env, "prod", "roster");
   const roster = (ros && ros.data) || null;
+  // ONLY WHEN THE ROSTER CHANGED (Nov 26 2026, "reduce the overall load"): this cleanup scanned every shared rate (oc_cpr +
+  // the per-role times oc_cpr_t) on EVERY run, and its cprBump told the planner "rates changed" every run too, so the
+  // planner reloaded everyone's rates each time. Now: the roster's id list is hashed and kept (oc_snap hub 'cpr:roster');
+  // the deletes run only when it differs, and the planner is only told when a row was actually removed.
   if (roster && Object.keys(roster).length > 10) {
-    const ids = Object.keys(roster).map(Number).filter(Boolean);
-    await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
-    await cprBump(env);                                        // (fix 4)
-    await env.OC_DB.prepare(`DELETE FROM oc_cpr_t WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run().catch(() => {});
+    const ids = Object.keys(roster).map(Number).filter(Boolean).sort((a, b) => a - b), sig = ocHash(ids.join(","));
+    const prev = await ocSnapGet(env, "hub", "cpr:roster").catch(() => null);
+    if (!prev || !prev.data || prev.data.sig !== sig) {
+      const del = await env.OC_DB.prepare(`DELETE FROM oc_cpr WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run();
+      if (del && del.meta && del.meta.changes) await cprBump(env);   // (fix 4) only a real change
+      await env.OC_DB.prepare(`DELETE FROM oc_cpr_t WHERE faction_id = ? AND player_id NOT IN (${ids.join(",")})`).bind(Number(env.FACTION_ID)).run().catch(() => {});
+      await ocSnapPut(env, "hub", "cpr:roster", now, JSON.stringify({sig}), "hub").run().catch(() => {});
+    }
   }
   const st0 = ((await ocSnapGet(env, "hub", "oc-optin")) || {data: {}}).data || {};
   const st = {seen: Array.isArray(st0.seen) ? st0.seen : [], pending: Array.isArray(st0.pending) ? st0.pending : [],
@@ -4187,7 +4204,18 @@ async function ocNotifyTop(env, cfg, crimes) {
   }
   return out.sort((a, b) => (b.crimes.length ? 1 : 0) - (a.crimes.length ? 1 : 0) || ((b.crimes[0] || {}).pay_day || 0) - ((a.crimes[0] || {}).pay_day || 0) || a.name.localeCompare(b.name));
 }
+// MEMO (Nov 26 2026, user: "might as well reduce the overall load"): the answer is worked out at most once a minute per
+// Hub instance (SEEN_MEMO) - Notify, the planner, leader alerts and OC Management all ask, and each ask used to rescan
+// oc_seen + sx_ver. A Suite that starts up shows as a user within a minute.
+const SEEN_MEMO = new Map();
 async function ocScriptSeen(env, envName) {
+  const m = SEEN_MEMO.get(envName);
+  if (m && Date.now() - m.at < 60e3) return Object.assign({}, m.out);
+  const out = await ocScriptSeenRead(env, envName);
+  SEEN_MEMO.set(envName, {at: Date.now(), out});
+  return Object.assign({}, out);
+}
+async function ocScriptSeenRead(env, envName) {
   await ocSeenTable(env).catch(() => {});
   const {results} = await env.OC_DB.prepare("SELECT pid, ts FROM oc_seen WHERE env = ? AND ts > ?")
     .bind(envName, Date.now() - OC_SCRIPT_DAYS * 864e5).all().catch(() => ({results: []}));
