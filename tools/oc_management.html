@@ -1098,6 +1098,31 @@ function suiteVer(pid) {
   const old = D.config.suite_latest && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0;
   return `<span class="${old ? "mid" : "ok"}" title="Last reported ${ago(v.at)}">${esc(v.ver)}</span>${v.pda ? ' <span class="tag">PDA</span>' : ""}${nk}`;
 }
+// REASON (Nov 26 2026, user picked "9. A Reason column on the Rate sharing tab: why a member's rates are stale or
+// missing"): worked out from what the Hub already knows - their shared rates (D.rates ts) and the Suite's last
+// version report (config.vers {ver, at}, sent on every Suite start / check-in). Best guess, in this order:
+//   not sharing: no Suite report ever -> no Suite / old script · last report 3 d+ ago -> Suite not opened lately ·
+//                recent report -> Suite running but OC sharing is off (or it hasn't read rates yet)
+//   sharing, 24 h+ old: report 3 d+ ago -> Suite not opened lately · recent report -> Suite running but not re-reading
+//                (sharing off since, or an older Suite) · no report -> shared by the opt-in key / an old script
+//   sharing, fresh: an older Suite than the newest release is noted; otherwise nothing to fix
+function shareReason(x) {
+  const v = (D.config.vers || {})[String(x.pid)], vAt = v && v.at ? Number(v.at) : 0, days = vAt ? (Date.now() - vAt) / 864e5 : null;
+  const n = t => String(t || "").split(".").map(Number), a = n(v && v.ver), b = n(D.config.suite_latest);
+  const old = v && v.ver && D.config.suite_latest && (a[0] - b[0] || a[1] - b[1] || a[2] - b[2]) < 0;
+  const stale = x.on && (Date.now() - x.ts) / 3600e3 >= 24;
+  if (!x.on) {
+    if (!v || !v.ver) return '<span class="bad">No Suite seen</span> <span class="hn">- not installed, or an old script</span>';
+    if (days >= 3) return `<span class="bad">Suite not opened in ${Math.floor(days)}d</span>`;
+    return '<span class="mid">Suite running, OC sharing off</span> <span class="hn">- or no rates read yet</span>';
+  }
+  if (stale) {
+    if (!v || !v.ver) return '<span class="mid">Opt-in key / old script</span> <span class="hn">- not refreshed by a Suite</span>';
+    if (days >= 3) return `<span class="bad">Suite not opened in ${Math.floor(days)}d</span>`;
+    return `<span class="mid">Suite running, not re-reading</span> <span class="hn">- sharing off${old ? ", or update the Suite" : ""}</span>`;
+  }
+  return old ? '<span class="mid">Older Suite</span> <span class="hn">- update when you can</span>' : '<span class="hn">-</span>';
+}
 function drawSharing() {
   const ids = Object.keys(CFG.members);
   const rows = ids.map(pid => { const r = D.rates[pid]; const n = r && r.roles ? Object.keys(r.roles).length : 0;
@@ -1110,10 +1135,11 @@ function drawSharing() {
   const stale = rows.filter(x => x.on && fresh(x.ts) === "bad").length;
   $("view").innerHTML = `<div class="panel"><div class="hn">📡 Members who share their CPR rates (through the Heart Breakers Suite or the opt-in key on their Settings page) can be placed in any crime. Members who don't can only be placed in crimes they've completed before, from those old rates.</div>
     <div class="stat"><div><b class="ok">${on}</b><span>Sharing</span></div><div><b class="${on < ids.length ? "bad" : ""}">${ids.length - on}</b><span>Not sharing</span></div><div><b class="${stale ? "bad" : ""}">${stale}</b><span>Stale (24h+)</span></div><div><b>${ids.length}</b><span>Members</span></div></div>
-    <table><tr><th>Member</th><th>Status</th><th>Suite</th><th>Last shared</th><th>Roles</th></tr>${rows.map(x =>
+    <table><tr><th>Member</th><th>Status</th><th>Suite</th><th>Last shared</th><th>Roles</th><th>Reason</th></tr>${rows.map(x =>
       `<tr><td><b>${esc(x.name)}</b> <span class="tag">[${esc(x.pid)}]</span></td><td>${x.on ? '<span class="ok">✅ sharing</span>' : '<span class="bad">❌ not sharing</span>'}</td>
-       <td>${suiteVer(x.pid)}</td><td>${x.on ? `<span class="${fresh(x.ts)}">${ago(x.ts)}</span>` : "-"}</td><td>${x.on ? x.n : "-"}</td></tr>`).join("")}</table>
+       <td>${suiteVer(x.pid)}</td><td>${x.on ? `<span class="${fresh(x.ts)}">${ago(x.ts)}</span>` : "-"}</td><td>${x.on ? x.n : "-"}</td><td>${shareReason(x)}</td></tr>`).join("")}</table>
     <div class="hn">Last shared: <span class="ok">green</span> = under 6 h (the Suite's routine re-read) · <span class="mid">amber</span> = 6-24 h · <span class="bad">red</span> = over 24 h - their Suite hasn't run lately, so their rates may be out of date.</div>
+    <div class="hn">Reason = the Hub's best guess from when their Suite last checked in and when their rates were last shared.</div>
     <div class="hn">Suite = the Heart Breakers Suite version that member's script last reported (0.2.77 and newer report it; "-" = an older Suite, the old OC Optimizer, or the opt-in key only). Amber = older than the newest release.</div></div>`;
 }
 
@@ -1581,10 +1607,18 @@ function drawPlanning() {
       return `<div class="dr"><span class="drp" title="${esc(pos)}">${esc(pos)}${wTag(c.name, pos)}</span><span>${u ? `<b>${esc(nameOf(u.id))}</b>` : '<span class="mid">Unfilled</span>'}</span>`
         + `<span class="drr ${col(rate)}">${rate == null ? "" : rate + "%"}${out_ ? ` <span title="Below the ${min}% minimum">⚠️</span>` : ""}</span>`
         + `${u ? `<span class="drs">${planTag(pg)}</span>` : ""}</div>`; }).join("");
-    return `<div class="team"><div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
+    // COLLAPSIBLE (Nov 26 2026, user picked "10. Collapsible Planning crimes: like on the Recruiting tab"): each crime is a
+    // <details data-col="p:<id>"> - closed by default, remembered per crime in hb_oc_open like Recruiting. The one-line
+    // summary: D# name · normal pay per day · filled/total · success (🎲 calculated, else weighted) · ready in. Opened,
+    // the summary's details hide and the full card shows (same CSS as Recruiting's crimeSum).
+    const succ = sc != null ? sc : w, filledN = (c.slots || []).filter(sl => sl.user).length;
+    const sumP = `<summary class="csum"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
+      <span class="csx">${v.pot ? `<b>${fmt2(eachPay(c.name))}/day</b>` : "no pay data"} · 👥 ${filledN}/${(c.slots || []).length}
+      · <span class="${col(succ)}">${sc != null ? "🎲 " : ""}${succ == null ? "-" : Math.round(succ) + "%"}</span>${c.ready_at ? ` · ⏱ ${freeIn(c.ready_at * 1000)}` : ""}</span></summary>`;
+    return `<details class="team" data-col="p:${esc(c.id)}"${colOpen("p:" + c.id, false) ? " open" : ""}>${sumP}<div class="th"><span class="dif">D${c.difficulty ?? diffOf(c.name) ?? "?"}</span><b>${esc(c.name)}</b>
         <span class="kind live">#${esc(c.id)}</span><span class="sr ${col(w)}" title="Weighted team success (role weights)">${w == null ? "-" : Math.round(w) + "%"}</span>${sc == null ? "" : ` <span class="tag" title="Calculated success chance (tornprobability.com)">🎲 ${sc}%</span>`}</div>
       <div class="tag">${planPay(c, v)}${w != null && w < OPT.target ? `<div class="bad">below the ${OPT.target}% target</div>` : ""}</div>
-      <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</div>`; }).join("");
+      <div class="drh"><span>Role</span><span>Member</span><span>Rate</span></div>${rows}</details>`; }).join("");
   // PLANNING STATS (Nov 18 2026, user: "Add some stats to the Planning section" -> "This should only account for crimes
   // that are full and in their planning phase." + "1. Highest Potential 2. No." (no colour on the success tile)):
   //   members  = everyone seated in a FULL crime with status Planning

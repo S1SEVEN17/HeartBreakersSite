@@ -255,20 +255,37 @@ async function proxy(env, dir, rest, req, gated) {
 // never reused - the builder picks <type>-YYYY-MM-DD, -2, -3 ...). Once the site has its own copy, that copy is used.
 // A miss is cached for 30 s so a wrong link can't hammer GitHub. The data repo's notify workflow no longer starts a
 // rebuild for data/panels/ (the members page's "Latest" list picks new ones up on the next scheduled full run).
+// IN-MEMORY COPY (Nov 26 2026, user picked "5. Yes": "Ease the load on GitHub from new newsletter images"): the Hub runs
+// on workers.dev, where Cloudflare's edge cache (caches.default) doesn't keep anything - so every view of a new image
+// was a GitHub read until the next full run. Each Hub instance now keeps the last few published images in memory
+// (PANEL_MEM: up to 12 images / 16 MB, 6 h; a miss for 60 s), so one GitHub read serves every view on that instance.
+// Published names are never reused, so a kept copy can't go stale. The edge cache stays as a second layer.
+const PANEL_MEM = new Map(), PANEL_MEM_MAX = 12, PANEL_MEM_BYTES = 16 * 1024 * 1024;
+const panelHeaders = () => ({"Content-Type": "image/png", "Cache-Control": "public, max-age=86400", "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff"});
+function panelMemPut(name, buf) {
+  PANEL_MEM.delete(name); PANEL_MEM.set(name, {buf, at: Date.now()});
+  let total = 0; for (const v of PANEL_MEM.values()) total += v.buf ? v.buf.byteLength : 0;
+  while (PANEL_MEM.size > PANEL_MEM_MAX || total > PANEL_MEM_BYTES) {
+    const [k, v] = PANEL_MEM.entries().next().value; PANEL_MEM.delete(k); total -= v.buf ? v.buf.byteLength : 0; }
+}
 async function panelImage(env, ctx, dir, rest, req) {
   const site = await proxy(env, dir, rest, req, false);
   if (site.status === 200 || site.status === 304) return site;
-  const name = rest.slice("panels/".length), cache = caches.default, key = new Request("https://panels.hb/" + name);
-  const hit = await cache.match(key); if (hit) return hit.status === 200 ? hit : notFound();
+  const name = rest.slice("panels/".length), now = Date.now();
+  const m = PANEL_MEM.get(name);
+  if (m && (m.buf ? now - m.at < 6 * 3600e3 : now - m.at < 60e3)) return m.buf ? new Response(m.buf, {status: 200, headers: panelHeaders()}) : notFound();
+  const cache = caches.default, key = new Request("https://panels.hb/" + name);
+  const hit = await cache.match(key).catch(() => null); if (hit) return hit.status === 200 ? hit : notFound();
   const tok = env.GH_SAVE || env.GH_DISPATCH;
-  let out = null;
+  let buf = null;
   if (tok) { const r = await fetch(`https://api.github.com/repos/${DATA_REPO}/contents/data/panels/${encodeURIComponent(name)}?ref=main`, {
       headers: {Authorization: "Bearer " + tok, Accept: "application/vnd.github.raw", "User-Agent": "hb-gate"}}).catch(() => null);
-    if (r && r.ok) out = new Response(r.body, {status: 200, headers: {"Content-Type": "image/png", "Cache-Control": "public, max-age=86400",
-      "X-Robots-Tag": "noindex, nofollow", "X-Content-Type-Options": "nosniff"}}); }
-  if (!out) { ctx.waitUntil(cache.put(key, new Response("", {status: 404, headers: {"Cache-Control": "public, max-age=30"}})).catch(() => {})); return notFound(); }
-  ctx.waitUntil(cache.put(key, out.clone()).catch(() => {}));
-  return out;
+    if (r && r.ok) buf = await r.arrayBuffer().catch(() => null); }
+  if (!buf) { PANEL_MEM.set(name, {buf: null, at: now});
+    ctx.waitUntil(cache.put(key, new Response("", {status: 404, headers: {"Cache-Control": "public, max-age=30"}})).catch(() => {})); return notFound(); }
+  panelMemPut(name, buf);
+  ctx.waitUntil(cache.put(key, new Response(buf.slice(0), {status: 200, headers: panelHeaders()})).catch(() => {}));
+  return new Response(buf, {status: 200, headers: panelHeaders()});
 }
 const notFound = () => page("Not found", `<h1>Not found</h1><p class="sub">That page doesn't exist.
 <br><br><a href="/m/">Go to the Members Hub</a></p>`, 404);
