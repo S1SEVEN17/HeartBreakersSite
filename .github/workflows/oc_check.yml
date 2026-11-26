@@ -92,14 +92,20 @@ jobs:
           npx wrangler d1 execute hb-oc --remote --json --command "SELECT (SELECT COUNT(*) FROM oc_seen WHERE env = 'prod' AND ts > (strftime('%s','now') - 259200) * 1000) AS seen, (SELECT COUNT(*) FROM sx_ver WHERE at > (strftime('%s','now') - 259200) * 1000) AS ver, (SELECT COUNT(*) FROM (SELECT pid FROM oc_seen WHERE env = 'prod' AND ts > (strftime('%s','now') - 259200) * 1000 UNION SELECT pid FROM sx_ver WHERE at > (strftime('%s','now') - 259200) * 1000)) AS both_n" > su.json 2>/dev/null \
             && python3 -c "import json; r = json.load(open('su.json'))[0]['results'][0]; print(f\"Suite users (3 days): OC assignment calls {r['seen']} · Suite pings {r['ver']} · either {r['both_n']}\")" || true
           # which queries read the most rows today (D1's daily row-read allowance) - query text + counts only
-          npx wrangler d1 insights hb-oc --timePeriod 1d --sort-type sum --sort-by reads --limit 14 --json > ins.json 2> ins.err || true
+          npx wrangler d1 insights hb-oc --timePeriod 1d --sort-type sum --sort-by reads --limit 500 --json > ins.json 2> ins.err || true
           python3 - <<'PY' || true
           import json
           try:
               d = json.load(open("ins.json"))
-              print("Top queries by rows read (last 24 h):")
-              for r in d:
-                  print(f"  reads={int(r.get('rowsRead', r.get('totalRowsRead', 0)) or 0):>10}  runs={int(r.get('numberOfTimesRun', r.get('count', 0)) or 0):>7}  {' '.join(str(r.get('query', '')).split())[:170]}")
+              import re
+              # (Nov 26 2026) counts only in public logs: numbers in the query text (member ids in NOT IN (...) lists) are masked
+              q = lambda r: re.sub(r'\d{3,}', '#', ' '.join(str(r.get('query', '')).split()))[:170]
+              rd = lambda r: int(r.get('rowsRead', r.get('totalRowsRead', 0)) or 0)
+              wr = lambda r: int(r.get('rowsWritten', r.get('totalRowsWritten', 0)) or 0)
+              print(f'D1 totals (last 24 h, {len(d)} query shapes): rows read {sum(map(rd, d))} · rows written {sum(map(wr, d))}')
+              print('Top queries by rows read (last 24 h):')
+              for r in d[:14]:
+                  print(f"  reads={rd(r):>10}  writes={wr(r):>8}  runs={int(r.get('numberOfTimesRun', r.get('count', 0)) or 0):>7}  {q(r)}")
           except Exception as e:
               print("no insights:", str(e)[:120]); print(open("ins.err").read()[:300])
           PY
