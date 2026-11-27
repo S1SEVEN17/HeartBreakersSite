@@ -4511,7 +4511,10 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   // for the script (Nov 2026): pay per member per day of every planned crime + each catalog role's required item
   r.stats.pay_day = {}; r.stats.pay_day_min = {}; r.stats.items = {};
   // (JOIN NOW, Nov 12 2026: every recruiting crime's type too, not only planned ones - the script's join-now badges)
-  const payNames = new Set(r.teams.map(t => t.crime).concat((crimes || []).filter(c => c && c.status === "Recruiting" && catalog[c.name]).map(c => c.name)));
+  // (Nov 27 2026, user: "Some crimes aren't showing their payouts." - a full Bidding War on Torn's Planning tab had no tag):
+  // pay figures were only worked out for crime types that were recruiting or planned, so a type with only FULL crimes
+  // in Planning had none - Planning crimes' types are included now (the Suite's crimes-page tags, myoc crime_pay)
+  const payNames = new Set(r.teams.map(t => t.crime).concat((crimes || []).filter(c => c && (c.status === "Recruiting" || c.status === "Planning") && catalog[c.name]).map(c => c.name)));
   for (const n of payNames) { const p = payOf(n), q = payOf(n, true);
     r.stats.pay_day[n] = p.days ? Math.round(p.pot / p.days / seats(n)) : 0;            // best recorded
     r.stats.pay_day_min[n] = q.days ? Math.round(q.pot / q.days / seats(n)) : 0; }      // worst recorded
