@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.97
+// @version      0.2.98
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.97';
+    const VERSION = '0.2.98';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -1178,7 +1178,8 @@
             /* crimes page: your assigned crime + seat (OC module) */
             .hbs-occard{outline:2px solid #FFB454 !important;outline-offset:2px;border-radius:6px;}
             /* 0.2.96 - 💰 pay per day beside each crime's title on Torn's crimes page */
-            .hbs-ocpay{display:inline-block;margin:0 0 0 8px;padding:1px 7px;border-radius:9px;vertical-align:middle;white-space:nowrap;
+            .hbs-ocpayrow{display:block;padding:6px 10px 0;line-height:1;}
+            .hbs-ocpay{display:inline-block;margin:0;padding:1px 7px;border-radius:9px;vertical-align:middle;white-space:nowrap;
                 font:600 11px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#181b21;border:1px solid #3a3f48;color:#c9ced6;}
             .hbs-ocpay b{font-weight:800;} .hbs-ocpay small{font-size:10px;opacity:.8;margin-left:3px;}
             .hbs-ocpay.jn{border-color:#FFB454;color:#FFB454;} .hbs-ocpay.you{border-color:#3ecf6e;color:#3ecf6e;}
@@ -3391,9 +3392,12 @@
                 else if (x && x.s === 'r' && x.jn) want.set(t, { cls: 'jn', html: `⚡ <b>${shortMoney(x.jn)}</b>/day<small>join now</small>`, tip: 'Pay per member per day if you join now (est)' });
                 else if (x && x.s === 'p' && x.n) want.set(t, { cls: '', html: `💰 <b>${shortMoney(x.n)}</b>/day`, tip: 'Normal pay per member per day (est)' });
             });
-            document.querySelectorAll('.hbs-ocpay').forEach(n => { const t = n.previousElementSibling; if (!t || !want.has(t)) n.remove(); });
-            want.forEach((w, t) => {
-                let n = t.nextElementSibling; if (!n || !n.classList.contains('hbs-ocpay')) { n = el('span', 'hbs-ocpay'); t.insertAdjacentElement('afterend', n); }
+            const hdrOf = t => { const card = cardOf(t); let h = t; while (h.parentElement && h.parentElement !== card) h = h.parentElement; return h.parentElement === card ? h : t; };
+            const W2 = new Map(); want.forEach((w, t) => W2.set(hdrOf(t), w));
+            document.querySelectorAll('.hbs-ocpayrow').forEach(r => { const h = r.previousElementSibling; if (!h || !W2.has(h)) r.remove(); });
+            W2.forEach((w, h) => {
+                let row = h.nextElementSibling; if (!row || !row.classList.contains('hbs-ocpayrow')) { row = el('div', 'hbs-ocpayrow'); h.insertAdjacentElement('afterend', row); }
+                let n = row.firstElementChild; if (!n) { n = el('span', 'hbs-ocpay'); row.appendChild(n); }
                 const cls = 'hbs-ocpay' + (w.cls ? ' ' + w.cls : '');
                 if (n.className !== cls) n.className = cls;
                 if (n.innerHTML !== w.html) n.innerHTML = w.html;
