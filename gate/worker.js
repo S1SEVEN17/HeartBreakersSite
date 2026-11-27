@@ -317,7 +317,9 @@ function usage(env, ctx, k, n = 1) {
   if (!env.OC_DB || !k) return;
   USAGE.set(k, (USAGE.get(k) || 0) + n);
   let tot = 0; for (const v of USAGE.values()) tot += v;
-  if (Date.now() - usageAt < 60000 && tot < 300) return;
+  // (Nov 27 2026, user: "Do 1-3") flushed every 5 minutes / 2,000 counts per Hub instance (was 1 min / 300): the
+  // counters were over half of all database writes. Counts only - an instance that's shut down loses its last few.
+  if (Date.now() - usageAt < 300000 && tot < 2000) return;
   usageAt = Date.now();
   const rows = [...USAGE.entries()]; USAGE.clear();
   const day = new Date().toISOString().slice(0, 10);
@@ -567,9 +569,13 @@ async function sxRoute(env, ctx, req) {
   if (!a.who) return sxJson({ok: false, error: a.error, relink: true}, 401);
   const who = a.who, op = String(b.op || "");
   usage(env, ctx, "sx:" + op + (op === "live" ? ":" + String(b.what || "").slice(0, 24) : ""));   // USAGE REPORT
+  // (Nov 27 2026, user: "Look into 4, name names" - one member ~120 Torn reads an hour): per member, which Hub ops
+  // ("sxm:<pid>:<op>") and which Torn reads ("tornmt:<pid>:<type>") - read back only into the PRIVATE data repo
+  // (oc_check -> data/usage_members.json), never printed in public logs
+  if (who && who.id) usage(env, ctx, "sxm:" + who.id + ":" + op + (op === "live" ? ":" + String(b.what || "").slice(0, 16) : ""));
   // (Suite 0.2.89+) Torn reads since the last check-in, counts only: {what: n}
   if (op === "share_ping" && b.torn && typeof b.torn === "object") { let t = 0;
-    for (const [w, n] of Object.entries(b.torn).slice(0, 30)) { const v = Math.max(0, Math.min(500, Math.round(Number(n) || 0))); if (v) { usage(env, ctx, "torn:" + String(w).replace(/[^\w:.-]/g, "").slice(0, 30), v); t += v; } }
+    for (const [w, n] of Object.entries(b.torn).slice(0, 30)) { const v = Math.max(0, Math.min(500, Math.round(Number(n) || 0))); if (v) { usage(env, ctx, "torn:" + String(w).replace(/[^\w:.-]/g, "").slice(0, 30), v); usage(env, ctx, "tornmt:" + who.id + ":" + String(w).replace(/[^\w:.-]/g, "").slice(0, 24), v); t += v; } }
     if (t) usage(env, ctx, "tornm:" + who.id, t); }
   if (op === "whoami") return sxJson({ok: true, me: sxMe(who), exp: a.exp});
   if (op === "read") {
@@ -602,6 +608,7 @@ async function sxRoute(env, ctx, req) {
     const now = Date.now();
     Object.keys(m).forEach(k => { if (now - Number((m[k] || {}).ts) > 90 * 864e5) delete m[k]; });
     m[String(pid)] = {ts: now, by: String(who.name || "").slice(0, 40)};
+    CFG_MEMO.clear();   // (Nov 27 2026) settings memo
     await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'cpr_notified', ?, ?, ?) ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
       .bind(JSON.stringify(m), now, String(who.name || "")).run();
     return sxJson({ok: true, pid, ts: now, by: m[String(pid)].by});
@@ -1011,6 +1018,7 @@ const sxJ = (t, d) => { try { return t ? JSON.parse(t) : d; } catch (e) { return
 async function sxReadyWatched(env) {
   if (!env.OC_DB || Date.now() - SX_WATCH_WRITTEN < 30000) return;
   SX_WATCH_WRITTEN = Date.now();
+  CFG_MEMO.clear();   // (Nov 27 2026) settings memo
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'sx_ready_watch', '1', ?, 'hub') " +
     "ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts").bind(Date.now()).run().catch(() => {});
 }
@@ -1402,6 +1410,7 @@ async function ocShareAllOn(env, now) {
   const {data} = await readOptin(env, true);
   if (Object.values(data.members || {}).some(e => e && e.k && !e.oc))
     await writeOptin(env, null, {whole: d => { Object.values(d.members || {}).forEach(e => { if (e && e.k && !e.oc) { e.oc = true; e.updated = now; keys++; } }); }}, "OC pass rates on for members with a stored key");
+  CFG_MEMO.clear();   // (Nov 27 2026) settings memo
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'sx_oc_all_on', '1', ?, 'hub') ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts").bind(now).run();
   console.log("oc share all-on: script rows " + ((r.meta && r.meta.changes) || 0) + ", stored keys " + keys);
 }
@@ -1917,12 +1926,25 @@ async function ocContactLog(env, envName, e, by) {
     role: String(e.role || "").slice(0, 40), how: ["chat", "mail", "sent"].includes(e.how) ? e.how : "sent", by: String(by || "").slice(0, 60)};
   for (const k of Object.keys(map)) if (!map[k] || !(now - Number(map[k].at) < 30 * 864e5)) delete map[k];
   const v = Object.fromEntries(Object.entries(map).sort((a, c) => c[1].at - a[1].at).slice(0, 500));
+  CFG_MEMO.clear();   // (Nov 27 2026) settings memo
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES (?, ?, ?, ?, ?) " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
     .bind(envName, "contacted", JSON.stringify(v), now, String(by || "")).run();
   return map[String(pid)];
 }
+// SETTINGS MEMO (Nov 27 2026, user: "Do 1-3" - the settings read was the Hub's biggest database reader, ~64k rows a day):
+// each Hub instance keeps an env's settings 15 s (CFG_MEMO) and hands out a deep copy (callers add fields / the planner
+// edits plan.teams). Every oc_config write in this file clears it first, so a save is seen at once on that instance;
+// other instances catch up within 15 s.
+const CFG_MEMO = new Map();
 async function ocConfig(env, envName) {
+  const m = CFG_MEMO.get(envName);
+  if (m && Date.now() - m.at < 15e3) return structuredClone(m.out);
+  const out = await ocConfigRead(env, envName);
+  CFG_MEMO.set(envName, {at: Date.now(), out: structuredClone(out)});
+  return out;
+}
+async function ocConfigRead(env, envName) {
   const {results} = await env.OC_DB.prepare("SELECT k, v, ts, by FROM oc_config WHERE env = ?").bind(envName).all();
   const out = {disabled: [], plan: null};
   for (const r of results || []) {
@@ -2264,6 +2286,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     const last = await env.OC_DB.prepare("SELECT ts FROM oc_config WHERE env = 'all' AND k = 'refresh'").first();
     if (last && now - Number(last.ts) < GAP)
       return Response.json({ok: false, retry_in: Math.ceil((GAP - (now - Number(last.ts))) / 1000)}, {status: 429, headers: H.headers});
+    CFG_MEMO.clear();   // (Nov 27 2026) settings memo
     await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'refresh', '{}', ?, ?) " +
       "ON CONFLICT (env, k) DO UPDATE SET ts = excluded.ts, by = excluded.by").bind(now, `${who.name} [${who.id}]`).run();
     if (!env.GH_DISPATCH) return Response.json({ok: false, error: "can't start a crime check (no dispatch token)"}, {status: 503});
@@ -2372,6 +2395,7 @@ async function ocLeaderRoute(env, req, url, who, sub) {
     const text = JSON.stringify(v);
     if (text.length > 200000) return Response.json({ok: false, error: "too large"}, {status: 413});
     const prevShare = b.k === "opts" ? (((await ocConfig(env, b.env)).opts || {}).share ?? null) : null;
+    CFG_MEMO.clear();   // (Nov 27 2026) settings memo
     await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES (?, ?, ?, ?, ?) " +
       "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
       .bind(b.env, b.k, text, Date.now(), `${who.name} [${who.id}]`).run();
@@ -3194,7 +3218,7 @@ async function ocFeedPull(env) {
     const tpScan = full || now - (lastPull.pricetp || 0) > 3600e3;
     if (tpScan) mark("pricetp");
     const tpIds = !tpScan ? [] : (await env.OC_DB.prepare("SELECT DISTINCT j.value AS i FROM oc_snap, json_each(oc_snap.data, '$.ids') AS j " +
-      "WHERE oc_snap.env = 'hub' AND oc_snap.ds LIKE 'tpp:%'").all().catch(() => ({}))).results || [];
+      "WHERE oc_snap.env = 'hub' AND oc_snap.ds >= 'tpp:' AND ds < 'tpp;'").all().catch(() => ({}))).results || [];
     const all = [...new Set(rows.concat(tpIds).map(r => Number(r.i)).filter(i => i > 0))];
     const list = daily ? all : all.filter(i => !have[String(i)]);
     if (list.length) {
@@ -3224,7 +3248,7 @@ async function ocFeedPull(env) {
     // stored summaries from before the net values (Nov 2026) count as missing, so they're worked out once now
     const have = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'prod' AND ds = 'summaries' AND instr(data, '\"valueMax\"') > 0").first();
     // + new tornprobability payouts (the daily tp_payouts.yml run) since the summaries were last worked out
-    const tpNew = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds LIKE 'tpp:%' AND as_of > " +
+    const tpNew = await env.OC_DB.prepare("SELECT 1 FROM oc_snap WHERE env = 'hub' AND ds >= 'tpp:' AND ds < 'tpp;' AND as_of > " +
       "COALESCE((SELECT as_of FROM oc_snap WHERE env = 'prod' AND ds = 'summaries'), 0) LIMIT 1").first();
     if (newHist || newRoster || newPrices || !have || tpNew) for (const e of ENVS) await ocSummariesSave(env, e);
   } catch (e) { fail("summaries", e); }
@@ -3703,7 +3727,7 @@ async function ocSummaries(env, envName) {
   //   valueMin = their worst successful run;  respect min / avg / max, average items, cash min / avg / max = theirs
   //   src "tp", tpRuns (successful runs recorded), tpAt (ms). A crime with no tornprobability data keeps ours.
   try {
-    const tpRows = ((await db.prepare("SELECT ds, as_of, data FROM oc_snap WHERE env = 'hub' AND ds LIKE 'tpp:%'").all()).results) || [];
+    const tpRows = ((await db.prepare("SELECT ds, as_of, data FROM oc_snap WHERE env = 'hub' AND ds >= 'tpp:' AND ds < 'tpp;'").all()).results) || [];
     for (const row of tpRows) {
       let t; try { t = JSON.parse(row.data); } catch (e) { continue; }
       if (!t || !(t.runs > 0)) continue;
@@ -4619,6 +4643,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
     .map(c => ({crime: c.name, roles: c.slots.map(sl => ({position: (sl.position_info && sl.position_info.label) || sl.position, pid: Number(sl.user.id), rate: sl.checkpoint_pass_rate}))}));
   await tpSuccessForTeams(env, r.teams.concat(fullInTorn)).catch(() => {});
   if (!r.changed) return;
+  CFG_MEMO.clear();   // (Nov 27 2026) settings memo
   await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'plan', ?, ?, 'auto (Hub)') " +
     "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
     .bind(JSON.stringify({teams: ocCleanTeams(r.teams), auto: r.stats}), now).run();
@@ -4670,6 +4695,7 @@ async function cwLeaderRoute(env, req, who, sub) {
       return Response.json({ok: false, error: "alerts must go down: 1st > 2nd > 3rd"}, {status: 400});
     if (v.minChain == null) return Response.json({ok: false, error: "minimum chain must be 0-100000"}, {status: 400});
     const by = `${who.name} [${who.id}]`, ts = Date.now();
+    CFG_MEMO.clear();   // (Nov 27 2026) settings memo
     await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('prod', 'chainwatch', ?, ?, ?) " +
       "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by").bind(JSON.stringify(v), ts, by).run();
     let pushed = false;
@@ -4765,6 +4791,7 @@ async function scriptsRoute(env, req, url, who) {
     let b; try { b = await req.json(); } catch (e) { return bad("bad request"); }
     if (Array.isArray(b.order)) {                             // leaders: save the order ([] = back to A-Z)
       const ids = [...new Set(b.order.map(Number).filter(x => x > 0))].slice(0, SCRIPT_LIMITS.count);
+      CFG_MEMO.clear();   // (Nov 27 2026) settings memo
       await env.OC_DB.prepare("INSERT INTO oc_config (env, k, v, ts, by) VALUES ('all', 'scripts_order', ?, ?, ?) " +
         "ON CONFLICT (env, k) DO UPDATE SET v = excluded.v, ts = excluded.ts, by = excluded.by")
         .bind(JSON.stringify(ids), Date.now(), String(who.name || "")).run();

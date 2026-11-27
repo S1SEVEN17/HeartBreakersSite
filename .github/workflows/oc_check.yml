@@ -146,6 +146,26 @@ jobs:
               print(f"{r['env']:5} {r['ds']:8} {m:7.1f} min old  {r['bytes']:>8} {'rows' if r['src'] == 'rows' else 'bytes'}  ({r['src']})")
           if not rows: print("No feed data yet.")
           PY
+      - name: Per-member usage (written to the PRIVATE data repo only - nothing printed)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ secrets.DATA_TOKEN }}
+        run: |
+          # (Nov 27 2026, user: "Look into 4, name names") per member: Torn reads (tornm / tornmt) and Hub ops (sxm) for
+          # today + yesterday -> HeartBreakersLogo data/usage_members.json (private). Public log: a count only.
+          cd w
+          npx wrangler d1 execute hb-oc --remote --json --command "SELECT day, k, n FROM hub_usage WHERE day >= date('now', '-1 day') AND (k LIKE 'tornm%' OR k LIKE 'sxm:%')" > um.json 2>/dev/null || { echo "no per-member usage"; exit 0; }
+          SHA=$(gh api repos/S1SEVEN17/HeartBreakersLogo/contents/data/usage_members.json --jq .sha 2>/dev/null || true)
+          SHA="$SHA" python3 - <<'PY'
+          import json, base64, os, datetime
+          rows = json.load(open("um.json"))[0]["results"]
+          body = {"message": "usage_members (oc_check) [bot]", "branch": "main",
+                  "content": base64.b64encode(json.dumps({"generated": datetime.datetime.utcnow().isoformat() + "Z", "rows": rows}).encode()).decode()}
+          if os.environ.get("SHA"): body["sha"] = os.environ["SHA"]
+          json.dump(body, open("um_body.json", "w")); print(f"per-member usage rows: {len(rows)}")
+          PY
+          gh api -X PUT repos/S1SEVEN17/HeartBreakersLogo/contents/data/usage_members.json --input um_body.json >/dev/null && echo "written to the private data repo" || echo "couldn't write to the private data repo"
       - name: Chain Watch Discord pings waiting to be deleted
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
