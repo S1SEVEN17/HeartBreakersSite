@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.98
+// @version      0.2.99
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.2.99 (Nov 27 2026) - 🧲 The Torn Dock is built in (⚙ Display -> Torn Dock, off by default) - keeps your Torn Dock layout; warns if the separate Torn Dock script is also running.
  *  v0.2.98 (Nov 26 2026) - 💰 Torn crimes page: the pay tag has its own line under the crime's header (no longer squeezes the name).
  *  v0.2.97 (Nov 24 2026) - ⚔ War tab Attack opens Torn's current attack page (page.php - loader.php was phased out).
  *  v0.2.96 (Nov 23 2026) - 💰 Torn's crimes page shows each crime's pay per day: ⚡ join now (Recruiting), normal (Planning), and your own pay from when you joined.
@@ -496,7 +497,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.98';
+    const VERSION = '0.2.99';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -533,6 +534,8 @@
         ocAlAck: 'hbs_oc_al_ack',              // (0.2.94) icon alert: the assignment key you've seen on the OC tab
         ntfAlAck: 'hbs_ntf_al_ack',            // (0.2.94) icon alert: Notify rows you've seen on the OC tab
         ocAlToast: 'hbs_oc_al_toast',
+        dockOn: 'hbs_dock_on',                 // (0.2.99) 🧲 built-in Torn Dock on this device (1 / 0)
+        dockNote: 'hbs_dock_note',             // (0.2.99) the Home card about the built-in Dock was answered
         ocJoinToast: 'hbs_oc_join_toast',      // (0.2.95) last "not in an OC" toast (ms) - once every 6 h          // (0.2.94) icon alert: the last alert a toast was shown for
         alertsV: 'hbs_alerts_v',               // (0.2.89) leaders: the alert list's signature from the check-in
         busSeen: 'hbs_bus_seen',               // (0.2.89) 📡 the Hub push notes already acted on {k: v}
@@ -1303,6 +1306,10 @@
             #hbs-launcher .hbs-loc.t{bottom:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.t::after{top:100%;left:50%;margin-left:-4px;border-top-color:#3ecf6e;}
             #hbs-launcher .hbs-loc.b{top:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.b::after{bottom:100%;left:50%;margin-left:-4px;border-bottom-color:#3ecf6e;}
             #hbs-launcher.hbs-l-oc:hover::after{opacity:0;}
+            /* 0.2.99 - 🧲 built-in Dock: the Home card + the two-docks warning */
+            #hbs-panel .hbs-docknote{border-color:#FFB454 !important;}
+            #hbs-panel .hbs-dockwarn{margin:4px 0 8px;padding:7px 9px;border:1px solid #e53935;border-radius:7px;background:#2a1717;color:#ffd6d6;font-size:11.5px;line-height:1.4;}
+            #hbs-panel .hbs-dockwarn b{color:#ff6b6b;}
             /* 0.2.95 - 🚨 not in a crime: red + a shake every 2 s (rotate, not transform - the Dock pins transform) */
             #hbs-launcher.hbs-l-join{border:2px solid #ff4d4d;color:#ff4d4d;}
             #hbs-launcher.hbs-l-join:not(.hbs-l-flash):not(.hbs-alerting){animation:hbsOcShake 2.2s ease-in-out infinite;}
@@ -1960,7 +1967,22 @@
         return `<div class="hbs-card hbs-onb"><div class="hbs-r1"><span class="hbs-name">✅ Getting started</span><span class="hbs-chip">${steps.length - left}/${steps.length}</span></div>
             ${steps.map(([k, ok, t, sub, btn]) => `<div class="hbs-onbrow${ok ? ' ok' : ''}"><i>${ok ? '✓' : '○'}</i><span><b>${t}</b><small>${sub}</small></span>${ok ? '' : btn}</div>`).join('')}</div>`;
     }
+    // (0.2.99) 🧲 HOME CARD about the built-in Dock - once per member (answered = hbs_dock_note)
+    function dockNoteHtml() {
+        if (store.get(K.dockNote, '') === '1' || num(store.get(K.dockOn, 0)) === 1) return '';
+        const had = dockHasStandaloneData() || dockForeign();
+        return `<div class="hbs-card hbs-docknote"><div class="hbs-r1"><span class="hbs-name">🧲 ${had ? 'Torn Dock is now part of the Suite' : 'New: Torn Dock is built in'}</span></div>
+            <div class="hbs-sub">${had ? 'You use the Torn Dock script. Switch to the built-in one: your icon order and position carry over. Then turn off or remove the separate Torn Dock script.'
+                : 'Gather all your minimized script icons into one tidy bar you can drag and reorder. Works with every script in the suite.'}</div>
+            <div class="hbs-row" style="margin-top:6px"><button type="button" class="hbs-btn" data-dockn="on">${had ? 'Switch to built-in' : 'Turn it on'}</button>
+                <button type="button" class="hbs-btn hbs-ghost" data-dockn="no">${had ? 'Keep the separate one' : 'Not now'}</button></div></div>`;
+    }
     function homeBind() {
+        bodyEl.querySelectorAll('[data-dockn]').forEach(x => x.addEventListener('click', () => {   // (0.2.99)
+            store.set(K.dockNote, '1');
+            if (x.dataset.dockn === 'on') { store.set(K.dockOn, 1); dockStart();
+                toast(dockConflict ? '⚠ The separate Torn Dock script is still running - turn it off in your userscript manager, then reload.' : '🧲 Torn Dock on - find it in ⚙ Display any time.', !!dockConflict); }
+            const c = x.closest('.hbs-docknote'); if (c) c.remove(); }));
         bodyEl.querySelectorAll('[data-onb]').forEach(x => x.addEventListener('click', () => { const a = x.dataset.onb;
             if (a === 'test') { cwAction('test'); toast('🔔 Test alert sent - it comes back from the Hub in a moment.'); setTimeout(() => { if (tab === 'home') render(true); }, 300); return; }
             tab = a; store.set(K.tab, tab); render(); })); const b = bodyEl.querySelector('[data-homeme]'); if (b) b.addEventListener('click', () => { tab = 'me'; store.set(K.tab, tab); render(); }); }
@@ -1979,6 +2001,7 @@
         const [N, MY, MINE] = await Promise.all([names(), soon(myP), soon(minP)]);   // the member list is needed for everything
         if (pend.length) Promise.all(pend.map(p => p.catch(() => null))).then(() => { if (tab === 'home' && !collapsed && !showSettings) render(true); });
         let out = onbHtml();   // (0.2.32) ✅ Getting started
+        out += dockNoteHtml();   // (0.2.99) 🧲 the built-in Dock, once
         // ---- HEADER: who you are in the faction ----
         const m = N.byId[me.id] || {}, row = H && H.m ? H.m[String(me.id)] : null, A = (H && H.avg) || {};
         out += `<div class="hbs-card hbs-gold"><div class="hbs-r1"><span class="hbs-name">${esc(me.name)} <span style="opacity:.5;font-weight:normal">[${me.id}]</span></span>
@@ -5076,6 +5099,8 @@
         box.innerHTML = `<div class="hbs-sec">Display (this device)</div>
             <label class="hbs-ck hbs-ckx"><input type="checkbox" data-ui="compact"${U.compact ? ' checked' : ''}> 🗜 Compact mode - smaller cards and text</label>
             <label class="hbs-ck hbs-ckx"><input type="checkbox" data-ui="pin"${U.pin ? ' checked' : ''}> 📌 Pinned Chain Watch tile on every tab</label>
+            <label class="hbs-ck hbs-ckx"><input type="checkbox" data-dockon${num(store.get(K.dockOn, 0)) === 1 ? ' checked' : ''}> 🧲 Torn Dock <small>- gathers every minimized script icon into one bar you can drag and reorder. Keeps your Torn Dock layout if you used it before.</small></label>
+            <div class="hbs-dockwarn" data-dockwarn${dockConflict && num(store.get(K.dockOn, 0)) === 1 ? '' : ' style="display:none"'}><b>⚠ Two docks installed</b><br>The separate Torn Dock script is also running, so the built-in Dock is paused. Turn off the Torn Dock script in Tampermonkey / PDA's userscripts, or switch this off.</div>
             <div class="hbs-tzrow"><span><b>🕒 Times shown in</b><small>Every clock time and date in the Suite - the same switch as on the chain watching schedule.</small></span>
                 <span class="hbs-tzset" data-tzset><span class="hbs-chips">${[['tct', '<span class="hbs-tct" aria-label="TCT"></span>'], ['local', 'Local']].map(([v, l]) => `<button type="button" data-v="${v}" class="${(tzLocal() ? 'local' : 'tct') === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>
                 ${tzLocal() ? `<span class="hbs-chips">${[['12', '12h'], ['24', '24h']].map(([v, l]) => `<button type="button" data-hr="${v}" class="${(store.get(K.schHr, '24') === '12' ? '12' : '24') === v ? 'hbs-on' : ''}">${l}</button>`).join('')}</span>` : ''}</span></div>
@@ -5085,6 +5110,12 @@
             if (b.dataset.v) store.set(K.schTz, b.dataset.v); else if (b.dataset.hr) store.set(K.schHr, b.dataset.hr);
             displayBox(box); });
         box.querySelectorAll('[data-ui]').forEach(c => c.addEventListener('change', () => { const u = Object.assign({}, UI_DEF, store.get(K.ui, {}) || {}); u[c.dataset.ui] = c.checked; store.set(K.ui, u); applyUi(); }));
+        // (0.2.99) 🧲 built-in Torn Dock
+        const dk = box.querySelector('[data-dockon]');
+        if (dk) dk.addEventListener('change', () => { store.set(K.dockOn, dk.checked ? 1 : 0); store.set(K.dockNote, '1');
+            if (dk.checked) { dockStart(); toast(dockConflict ? '⚠ The separate Torn Dock script is running - the built-in Dock is paused.' : '🧲 Torn Dock on.', !!dockConflict); }
+            else { dockStop(); dockConflict = false; toast('Torn Dock off.'); }
+            const w = box.querySelector('[data-dockwarn]'); if (w) w.style.display = dockConflict && dk.checked ? '' : 'none'; });
     }
 
     // the 20 s "I'm hitting" flag running out -> both buttons go back without waiting for the next Hub message
@@ -5218,6 +5249,275 @@
         launcher.classList.toggle('hbs-l-flash', fl); launcher.classList.toggle('hbs-l-panic', fl && alFlashLvl >= 4);
         try { ocIconAlert(); } catch (e) { /* (0.2.94) never break the chain timer */ }
     }, 1000);
+    // =====================================================================
+    // 🧲 TORN DOCK, BUILT IN (0.2.99) - see build_patch_0299.py. The standalone Torn Dock 1.11.0 (Greasy Fork 593429)
+    // nearly line for line, wrapped so it can start / stop: same CSS, same storage keys (shared with the standalone so a
+    // Dock user keeps their layout), same pointer-event drag (mouse + touch + PDA), ghosts, long-press to forget.
+    // =====================================================================
+    const DOCK_CFG = { overlayCorner: 'top-right', overlayGap: 8, accent: '#FFB454', panelBg: 'rgba(27,30,36,0.96)', border: '#33373f',
+        itemScale: 0.8, ghostOpacity: 0.42, showGhosts: true, ghostTTLDays: 10, hideWhenEmpty: true, dragThreshold: 6, longPressMs: 550,
+        orderKey: 'tornDock.order.v1', regKey: 'tornDock.registry.v1', posKey: 'tornDock.pos.v1',   // the standalone's keys
+        maxSnapshotChars: 15000, snapshotRetries: 6, snapshotRetryMs: 200, scanDebounceMs: 90 };
+    let D_ = null;                                   // the running dock's state (null = off)
+    let dockConflict = false, dockConflictToast = false;
+    const dockForeign = () => [...document.querySelectorAll('#torn-dock')].some(d => d.dataset.hbs !== '1');   // the standalone's dock
+    const dockHasStandaloneData = () => { try { return !!(localStorage.getItem(DOCK_CFG.regKey) || localStorage.getItem(DOCK_CFG.orderKey)); } catch (e) { return false; } };
+    function dockConflictNote() {
+        dockConflict = true;
+        if (!dockConflictToast) { dockConflictToast = true; toast('⚠ You have the Torn Dock script installed as well. The Suite\'s built-in Dock is paused.', true); }
+        const w = document.querySelector('[data-dockwarn]'); if (w) w.style.display = '';
+    }
+    function dockStop() {
+        if (!D_) return;
+        const S = D_; D_ = null;
+        try { S.mo.disconnect(); } catch (e) { /* */ }
+        // hand every live icon back to the page, as it was before the dock took it
+        S.strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)').forEach(el => {
+            el.classList.remove('torn-dock-item', 'torn-dock-dragging');
+            if (el.dataset.tornDockBackup !== undefined) { el.style.cssText = el.dataset.tornDockBackup; delete el.dataset.tornDockBackup; }
+            delete el.dataset.tornDockWired; document.body.appendChild(el); });
+        S.dock.remove();
+        const st = document.getElementById('torn-dock-style'); if (st && st.dataset.hbs === '1' && !document.getElementById('torn-dock')) st.remove();
+    }
+    function dockStart() {
+        if (D_ || num(store.get(K.dockOn, 0)) !== 1) return;
+        if (dockForeign()) { dockConflictNote(); return; }
+        const CFG = DOCK_CFG, LAUNCHER = '.torn-launcher';
+        let dock, strip, grip, suppressClick = false;
+        const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } };
+        const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* */ } };
+        const loadOrder = () => readJSON(CFG.orderKey, []);
+        const saveOrder = () => writeJSON(CFG.orderKey, [...strip.querySelectorAll('.torn-dock-item')].map(getKey));
+        const loadReg = () => readJSON(CFG.regKey, {});
+        const saveReg = r => writeJSON(CFG.regKey, r);
+        const loadPos = () => readJSON(CFG.posKey, null);
+        const savePos = p => writeJSON(CFG.posKey, p);
+        const clearPos = () => { try { localStorage.removeItem(CFG.posKey); } catch (e) { /* */ } };
+        let autoId = 0;
+        function getKey(el) {
+            if (el.dataset.tornDockKey) return el.dataset.tornDockKey;
+            const key = el.id || el.dataset.tornLauncher || el.dataset.script || (el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || '').trim() || ('launcher-' + (++autoId));
+            el.dataset.tornDockKey = key; return key;
+        }
+        const labelOf = el => (el.dataset.dockLabel || el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || getKey(el)).trim();
+        const normLabel = x => (x || '').trim().toLowerCase();
+        const iconReady = el => !!el && el.isConnected && (el.querySelector('svg,img,canvas,[class*="icon"]') || (el.textContent || '').trim().length > 0);
+        function injectStyles() {
+            if (document.getElementById('torn-dock-style')) return;
+            const st = document.createElement('style'); st.id = 'torn-dock-style'; st.dataset.hbs = '1';
+            st.textContent = `
+      #torn-dock{box-sizing:border-box;display:flex;align-items:center;background:${CFG.panelBg};border:1px solid ${CFG.border};border-radius:10px;
+        padding:3px 4px;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:2147483000;max-width:100%;}
+      #torn-dock.torn-dock--overlay{position:fixed;box-shadow:0 4px 16px rgba(0,0,0,.5);}
+      #torn-dock.torn-dock--overlay.torn-dock--top{top:${CFG.overlayGap}px;}
+      #torn-dock.torn-dock--overlay.torn-dock--bottom{bottom:${CFG.overlayGap}px;}
+      #torn-dock.torn-dock--overlay.torn-dock--right{right:${CFG.overlayGap}px;}
+      #torn-dock.torn-dock--overlay.torn-dock--left{left:${CFG.overlayGap}px;}
+      #torn-dock.torn-dock--overlay.torn-dock--center{left:50%;transform:translateX(-50%);}
+      #torn-dock .torn-dock-grip{display:flex;flex-direction:column;justify-content:center;gap:3px;align-self:stretch;padding:0 5px;margin-right:2px;
+        border-right:1px solid ${CFG.border};cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;flex:0 0 auto;}
+      #torn-dock .torn-dock-grip:active,#torn-dock .torn-dock-grip.dragging{cursor:grabbing;}
+      #torn-dock .torn-dock-grip span{display:block;width:9px;height:2px;border-radius:2px;background:${CFG.accent};opacity:.7;}
+      #torn-dock .torn-dock-grip:hover span{opacity:1;}
+      #torn-dock .torn-dock-strip{display:flex;align-items:center;flex-wrap:wrap;gap:4px;touch-action:none;}
+      #torn-dock .torn-dock-item{position:relative !important;left:auto !important;top:auto !important;right:auto !important;bottom:auto !important;
+        transform:none !important;margin:0 !important;cursor:grab;touch-action:none;zoom:${CFG.itemScale};transition:opacity .12s ease;
+        -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
+      #torn-dock .torn-dock-item.torn-dock-dragging{opacity:.55;cursor:grabbing;}
+      #torn-dock .torn-dock-item.torn-dock-forgetting{opacity:.12 !important;}
+      #torn-dock .torn-dock-ghost{opacity:${CFG.ghostOpacity};filter:grayscale(.35);cursor:pointer;}
+      #torn-dock .torn-dock-ghost:hover{opacity:.85;}
+      #torn-dock .torn-dock-declared{width:52px;height:52px;border-radius:50%;background:linear-gradient(180deg,#2a2f38,#1b1e24);border:1px solid #33373f;
+        color:#eaeaea;display:flex;align-items:center;justify-content:center;overflow:hidden;}
+      #torn-dock .torn-dock-declared svg{width:26px;height:26px;}
+      #torn-dock .torn-dock-declared .cq-fab-icon,#torn-dock .torn-dock-declared span{font-size:22px;line-height:1;}`;
+            (document.head || document.documentElement).appendChild(st);
+        }
+        const updateVisibility = () => { if (dock) dock.style.display = (CFG.hideWhenEmpty && strip.children.length === 0) ? 'none' : 'flex'; };
+        function applyDockPos(left, top) { dock.style.right = 'auto'; dock.style.bottom = 'auto'; dock.style.transform = 'none'; dock.style.left = left + 'px'; dock.style.top = top + 'px'; clampDockPos(); }
+        function clampDockPos() {
+            const m = 4; let left = parseFloat(dock.style.left), top = parseFloat(dock.style.top);
+            if (Number.isNaN(left) || Number.isNaN(top)) return null;
+            left = Math.max(m, Math.min(left, window.innerWidth - dock.offsetWidth - m)); top = Math.max(m, Math.min(top, window.innerHeight - dock.offsetHeight - m));
+            dock.style.left = left + 'px'; dock.style.top = top + 'px'; return { left, top };
+        }
+        function resetDockPos() { clearPos(); dock.style.left = dock.style.top = dock.style.right = dock.style.bottom = dock.style.transform = ''; clampDockPos(); }
+        function wireDockDrag() {
+            let d = null;
+            grip.addEventListener('pointerdown', e => {
+                e.preventDefault(); e.stopPropagation();
+                const r = dock.getBoundingClientRect();
+                d = { dx: e.clientX - r.left, dy: e.clientY - r.top, pid: e.pointerId, moved: false };
+                try { grip.setPointerCapture(e.pointerId); } catch (x) { /* */ }
+                grip.addEventListener('pointermove', onMove); grip.addEventListener('pointerup', onUp); grip.addEventListener('pointercancel', onUp);
+            });
+            function onMove(e) { if (!d) return; d.moved = true; grip.classList.add('dragging'); applyDockPos(e.clientX - d.dx, e.clientY - d.dy); }
+            function onUp() {
+                if (!d) return;
+                try { grip.releasePointerCapture(d.pid); } catch (x) { /* */ }
+                grip.removeEventListener('pointermove', onMove); grip.removeEventListener('pointerup', onUp); grip.removeEventListener('pointercancel', onUp);
+                grip.classList.remove('dragging');
+                if (d.moved) { const p = clampDockPos(); if (p) savePos(p); }
+                d = null;
+            }
+            grip.addEventListener('dblclick', e => { e.preventDefault(); resetDockPos(); });
+        }
+        function insertByOrder(elx) {
+            const order = loadOrder(), mine = order.indexOf(getKey(elx));
+            if (mine === -1) { strip.appendChild(elx); return; }
+            const after = [...strip.querySelectorAll('.torn-dock-item')].find(it => { const i = order.indexOf(getKey(it)); return i === -1 || i > mine; });
+            strip.insertBefore(elx, after || null);
+        }
+        function snapshotVisual(elx) {
+            try {
+                const props = ['display', 'box-sizing', 'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'padding', 'padding-top', 'padding-right',
+                    'padding-bottom', 'padding-left', 'border', 'border-radius', 'background-color', 'background-image', 'background-size', 'background-position',
+                    'background-repeat', 'color', 'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'box-shadow', 'opacity',
+                    'object-fit', 'fill', 'stroke', 'align-items', 'justify-content', 'flex-direction', 'gap'];
+                const clone = elx.cloneNode(true), orig = [elx, ...elx.querySelectorAll('*')], copy = [clone, ...clone.querySelectorAll('*')];
+                const n = Math.min(orig.length, copy.length, 60);
+                for (let i = 0; i < n; i++) {
+                    const cs = getComputedStyle(orig[i]); let css = '';
+                    for (const p of props) { let v = cs.getPropertyValue(p); if (!v) continue; if (p === 'display' && i === 0 && v === 'none') v = 'inline-flex'; css += p + ':' + v + ';'; }
+                    copy[i].setAttribute('style', css); copy[i].removeAttribute('id'); copy[i].removeAttribute('class');
+                }
+                return clone.outerHTML;
+            } catch (e) { return null; }
+        }
+        function remember(elx, key, tries = 0) {
+            const label = labelOf(elx), nlabel = normLabel(label), reg = loadReg();
+            for (const k of Object.keys(reg)) if (k !== key && nlabel && normLabel(reg[k] && reg[k].label) === nlabel) delete reg[k];
+            const prev = reg[key] || {}, declaredIcon = elx.dataset.dockIcon || null, icon = declaredIcon || prev.icon || null;
+            const ready = !!declaredIcon || iconReady(elx), snap = (!declaredIcon && iconReady(elx)) ? snapshotVisual(elx) : null;
+            const html = (snap && snap.length <= CFG.maxSnapshotChars) ? snap : (prev.html || null);
+            reg[key] = { label, url: location.href, icon, html, ts: Date.now() }; saveReg(reg);
+            removeGhostByLabel(nlabel, key);
+            if (!ready && tries < CFG.snapshotRetries) setTimeout(() => { if (elx.isConnected && D_) remember(elx, key, tries + 1); }, CFG.snapshotRetryMs * (tries + 1));
+        }
+        function adopt(elx) {
+            if (!elx || !D_ || elx.classList.contains('torn-dock-ghost') || elx.parentElement === strip) return;
+            if (elx.dataset.tornDockBackup === undefined) elx.dataset.tornDockBackup = elx.style.cssText;
+            elx.classList.add('torn-dock-item');
+            const key = getKey(elx); insertByOrder(elx); elx.dataset.tornDockWired = '1';
+            removeGhost(key); remember(elx, key); updateVisibility();
+        }
+        const removeGhost = key => strip.querySelectorAll('.torn-dock-ghost').forEach(g => { if (getKey(g) === key) g.remove(); });
+        const removeGhostByLabel = (nlabel, exceptKey) => { if (!nlabel) return; strip.querySelectorAll('.torn-dock-ghost').forEach(g => { if (getKey(g) !== exceptKey && normLabel(g.dataset.tornDockLabel) === nlabel) g.remove(); }); };
+        const forgetGhost = (key, node) => { const reg = loadReg(); delete reg[key]; saveReg(reg); node.remove(); updateVisibility(); };
+        function makeGhost(key, entry) {
+            let node, declared = false;
+            if (entry.icon) { node = document.createElement('div'); node.innerHTML = entry.icon; declared = true; }
+            else if (entry.html) { const tmp = document.createElement('div'); tmp.innerHTML = entry.html; node = tmp.firstElementChild; }
+            if (!node) { node = document.createElement('div');
+                node.textContent = (entry.label || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
+                node.style.cssText = 'display:flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid ' + CFG.border + ';border-radius:6px;font-size:11px;color:' + CFG.accent + ';background:#23262d;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;'; }
+            node.removeAttribute('id');
+            node.className = 'torn-dock-item torn-dock-ghost' + (declared ? ' torn-dock-declared' : '');
+            node.dataset.tornDockKey = key; node.dataset.tornDockLabel = entry.label || '';
+            node.setAttribute('title', (entry.label || 'script') + ' — open where it runs');
+            node.addEventListener('click', () => { if (entry.url) location.href = entry.url; });
+            node.addEventListener('contextmenu', e => { e.preventDefault(); forgetGhost(key, node); });
+            return node;
+        }
+        function pruneRegistry() {
+            if (!CFG.ghostTTLDays) return;
+            const cutoff = Date.now() - CFG.ghostTTLDays * 86400000, reg = loadReg(); let changed = false;
+            for (const key of Object.keys(reg)) { const ts = reg[key] && reg[key].ts; if (!ts || ts < cutoff) { delete reg[key]; changed = true; } }
+            if (changed) saveReg(reg);
+        }
+        function renderGhosts() {
+            pruneRegistry();
+            if (!CFG.showGhosts) { updateVisibility(); return; }
+            const reg = loadReg(), liveItems = [...strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)')];
+            const liveKeys = new Set(liveItems.map(getKey)), liveLabels = new Set(liveItems.map(x => normLabel(labelOf(x))));
+            const haveGhost = new Set([...strip.querySelectorAll('.torn-dock-ghost')].map(getKey)), seenLabels = new Set();
+            for (const key of Object.keys(reg)) {
+                const nlabel = normLabel(reg[key] && reg[key].label);
+                if (liveKeys.has(key) || haveGhost.has(key)) continue;
+                if (nlabel && (liveLabels.has(nlabel) || seenLabels.has(nlabel))) continue;
+                insertByOrder(makeGhost(key, reg[key])); if (nlabel) seenLabels.add(nlabel);
+            }
+            updateVisibility();
+        }
+        let drag = null, longPressTimer = null;
+        const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
+        const removeDragListeners = () => { document.removeEventListener('pointermove', dragMove, true); document.removeEventListener('pointerup', dragEnd, true); document.removeEventListener('pointercancel', dragEnd, true); };
+        function beginDrag(e) {
+            const item = e.target.closest && e.target.closest('.torn-dock-item');
+            if (!item || item.parentElement !== strip) return;
+            drag = { item, x: e.clientX, y: e.clientY, moved: false, pid: e.pointerId };
+            document.addEventListener('pointermove', dragMove, true); document.addEventListener('pointerup', dragEnd, true); document.addEventListener('pointercancel', dragEnd, true);
+            clearLongPress();
+            if (item.classList.contains('torn-dock-ghost') && e.pointerType !== 'mouse') {
+                longPressTimer = setTimeout(() => {
+                    longPressTimer = null;
+                    if (!drag || drag.item !== item || drag.moved) return;
+                    suppressClick = true; setTimeout(() => { suppressClick = false; }, 500);
+                    removeDragListeners(); drag = null;
+                    item.classList.add('torn-dock-forgetting'); setTimeout(() => forgetGhost(getKey(item), item), 130);
+                }, CFG.longPressMs);
+            }
+        }
+        function dragMove(e) {
+            if (!drag || e.pointerId !== drag.pid) return;
+            if (!drag.moved) {
+                if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < CFG.dragThreshold) return;
+                drag.moved = true; clearLongPress();
+                try { strip.setPointerCapture(drag.pid); } catch (x) { /* */ }
+                drag.item.classList.add('torn-dock-dragging');
+            }
+            e.preventDefault(); e.stopPropagation();
+            const t = itemUnderPoint(e.clientX, e.clientY, drag.item);
+            if (t) { const r = t.getBoundingClientRect(); strip.insertBefore(drag.item, (e.clientX < r.left + r.width / 2) ? t : t.nextSibling); }
+        }
+        function dragEnd(e) {
+            clearLongPress();
+            if (!drag || e.pointerId !== drag.pid) return;
+            const { item, moved, pid } = drag; removeDragListeners();
+            if (moved) { item.classList.remove('torn-dock-dragging'); try { strip.releasePointerCapture(pid); } catch (x) { /* */ } e.stopPropagation(); suppressClick = true; saveOrder(); }
+            drag = null;
+        }
+        function itemUnderPoint(x, y, self) {
+            for (const elx of document.elementsFromPoint(x, y)) { const it = elx.closest && elx.closest('.torn-dock-item'); if (it && it !== self && it.parentElement === strip) return it; }
+            return null;
+        }
+        // build
+        dock = document.createElement('div'); dock.id = 'torn-dock'; dock.dataset.hbs = '1';
+        grip = document.createElement('div'); grip.className = 'torn-dock-grip'; grip.title = 'Drag to move · double-click to reset position';
+        grip.innerHTML = '<span></span><span></span><span></span>';
+        strip = document.createElement('div'); strip.className = 'torn-dock-strip';
+        dock.appendChild(grip); dock.appendChild(strip);
+        injectStyles();
+        const [v, h] = (CFG.overlayCorner || 'top-right').split('-');
+        dock.classList.add('torn-dock--overlay', 'torn-dock--' + v, 'torn-dock--' + h);
+        document.body.appendChild(dock);
+        const saved = loadPos(); if (saved) applyDockPos(saved.left, saved.top);
+        wireDockDrag();
+        strip.addEventListener('click', e => { if (suppressClick) { suppressClick = false; e.stopPropagation(); e.preventDefault(); } }, true);
+        strip.addEventListener('pointerdown', beginDrag);
+        window.addEventListener('resize', () => { if (D_ && dock.style.left) clampDockPos(); });
+        if (window.ResizeObserver) new ResizeObserver(() => { if (D_ && dock.style.left) clampDockPos(); }).observe(dock);
+        const pending = new Set(); let scanTimer = null;
+        const flushScan = () => { scanTimer = null; const items = [...pending]; pending.clear(); items.forEach(x => { if (x.isConnected) adopt(x); }); updateVisibility(); };
+        const queue = node => {
+            if (node.nodeType !== 1) return;
+            if (node.id === 'torn-dock' && node.dataset.hbs !== '1') { dockStop(); dockConflictNote(); return; }   // the standalone appeared: step aside
+            if (node.id === 'torn-dock' || (node.closest && node.closest('#torn-dock'))) return;
+            if (node.matches && node.matches(LAUNCHER)) pending.add(node);
+            if (node.querySelectorAll) node.querySelectorAll(LAUNCHER).forEach(x => pending.add(x));
+        };
+        const mo = new MutationObserver(muts => {
+            for (const m of muts) { if (m.target && m.target.closest && m.target.closest('#torn-dock[data-hbs="1"]')) continue; for (const n of m.addedNodes) { queue(n); if (!D_) return; } }
+            if (pending.size && !scanTimer) scanTimer = setTimeout(flushScan, CFG.scanDebounceMs);
+        });
+        D_ = { dock, strip, mo };
+        document.querySelectorAll(LAUNCHER).forEach(adopt);
+        renderGhosts();
+        mo.observe(document.body, { childList: true, subtree: true });
+    }
+    // start 1.5 s after load (the standalone, if installed, has drawn its dock by then)
+    setTimeout(() => { try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); else if (dockForeign()) dockConflict = false; } catch (e) { console.warn(LOG, 'dock:', e.message); } }, 1500);
+
     // 🔔 OC ICON ALERT (0.2.94) - see build_patch_0294.py
     function ocAlKeys() {
         const M = typeof myOc !== 'undefined' ? myOc : null, as = M && M.assignment, cur = M && M.current;
