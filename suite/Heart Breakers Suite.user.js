@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.2.99
+// @version      0.3.0
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.2.99';
+    const VERSION = '0.3.0';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -796,6 +796,15 @@
             #hbs-launcher .hbs-loc.t{bottom:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.t::after{top:100%;left:50%;margin-left:-4px;border-top-color:#3ecf6e;}
             #hbs-launcher .hbs-loc.b{top:calc(100% + 9px);left:50%;transform:translateX(-50%);} #hbs-launcher .hbs-loc.b::after{bottom:100%;left:50%;margin-left:-4px;border-bottom-color:#3ecf6e;}
             #hbs-launcher.hbs-l-oc:hover::after{opacity:0;}
+            /* 0.3.0 - 🧲 alert label on the Torn Dock's tab / pill while the dock is closed */
+            #torn-dock .torn-dock-tab,#torn-dock .torn-dock-pill{position:relative;overflow:visible;}
+            #torn-dock .hbs-dtl{position:absolute;top:50%;transform:translateY(-50%);white-space:nowrap;padding:3px 8px;border-radius:9px;background:#3ecf6e;color:#0b2a14;
+                font:700 11px/1.2 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;pointer-events:none;box-shadow:0 2px 6px rgba(0,0,0,.5);}
+            #torn-dock .hbs-dtl.r{left:calc(100% + 8px);} #torn-dock .hbs-dtl.l{right:calc(100% + 8px);} #torn-dock .hbs-dtl.b{top:calc(100% + 8px);left:50%;transform:translateX(-50%);}
+            #torn-dock.hbs-d-join .hbs-dtl{background:#e53935;color:#fff;}
+            #torn-dock.hbs-d-al .torn-dock-tab,#torn-dock.hbs-d-al .torn-dock-pill{color:#3ecf6e;border-color:#3ecf6e;animation:hbsOcHop 2s ease-in-out infinite;}
+            #torn-dock.hbs-d-join .torn-dock-tab,#torn-dock.hbs-d-join .torn-dock-pill{color:#ff4d4d;border-color:#ff4d4d;animation:hbsOcShake 2.2s ease-in-out infinite;}
+            #torn-dock[data-open="true"] .torn-dock-tab .hbs-dtl{display:none;}
             /* 0.2.99 - 🧲 built-in Dock: the Home card + the two-docks warning */
             #hbs-panel .hbs-docknote{border-color:#FFB454 !important;}
             #hbs-panel .hbs-dockwarn{margin:4px 0 8px;padding:7px 9px;border:1px solid #e53935;border-radius:7px;background:#2a1717;color:#ffd6d6;font-size:11.5px;line-height:1.4;}
@@ -4146,14 +4155,10 @@
         launcher.classList.toggle('hbs-l-flash', fl); launcher.classList.toggle('hbs-l-panic', fl && alFlashLvl >= 4);
         try { ocIconAlert(); } catch (e) {   }
     }, 1000);
-    const DOCK_CFG = { overlayCorner: 'top-right', overlayGap: 8, accent: '#FFB454', panelBg: 'rgba(27,30,36,0.96)', border: '#33373f',
-        itemScale: 0.8, ghostOpacity: 0.42, showGhosts: true, ghostTTLDays: 10, hideWhenEmpty: true, dragThreshold: 6, longPressMs: 550,
-        orderKey: 'tornDock.order.v1', regKey: 'tornDock.registry.v1', posKey: 'tornDock.pos.v1',
-        maxSnapshotChars: 15000, snapshotRetries: 6, snapshotRetryMs: 200, scanDebounceMs: 90 };
     let D_ = null;
     let dockConflict = false, dockConflictToast = false;
     const dockForeign = () => [...document.querySelectorAll('#torn-dock')].some(d => d.dataset.hbs !== '1');
-    const dockHasStandaloneData = () => { try { return !!(localStorage.getItem(DOCK_CFG.regKey) || localStorage.getItem(DOCK_CFG.orderKey)); } catch (e) { return false; } };
+    const dockHasStandaloneData = () => { try { return !!(localStorage.getItem('tornDock.registry.v1') || localStorage.getItem('tornDock.order.v1') || localStorage.getItem('tornDock.settings.v2')); } catch (e) { return false; } };
     function dockConflictNote() {
         dockConflict = true;
         if (!dockConflictToast) { dockConflictToast = true; toast('⚠ You have the Torn Dock script installed as well. The Suite\'s built-in Dock is paused.', true); }
@@ -4161,251 +4166,706 @@
     }
     function dockStop() {
         if (!D_) return;
-        const S = D_; D_ = null;
-        try { S.mo.disconnect(); } catch (e) {   }
-        S.strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)').forEach(el => {
+        const X = D_; D_ = null;
+        try { X.mo.disconnect(); } catch (e) {   }
+        try { window.removeEventListener('resize', X.onResize); } catch (e) {   }
+        X.strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)').forEach(el => {
             el.classList.remove('torn-dock-item', 'torn-dock-dragging');
             if (el.dataset.tornDockBackup !== undefined) { el.style.cssText = el.dataset.tornDockBackup; delete el.dataset.tornDockBackup; }
             delete el.dataset.tornDockWired; document.body.appendChild(el); });
-        S.dock.remove();
-        const st = document.getElementById('torn-dock-style'); if (st && st.dataset.hbs === '1' && !document.getElementById('torn-dock')) st.remove();
+        X.dock.remove(); if (X.scrim) X.scrim.remove();
+        const st = document.getElementById('torn-dock-style'); if (st && st.dataset.hbs === '1') st.remove();
     }
     function dockStart() {
         if (D_ || num(store.get(K.dockOn, 0)) !== 1) return;
         if (dockForeign()) { dockConflictNote(); return; }
-        const CFG = DOCK_CFG, LAUNCHER = '.torn-launcher';
-        let dock, strip, grip, suppressClick = false;
-        const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } };
-        const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {   } };
+        D_ = {};
+        const CFG = {
+          accent:  '#FFB454',
+          panelBg: 'rgba(27,30,36,0.96)',
+          border:  '#33373f',
+          fabTop:  '#2a2f38', fabBot: '#1b1e24',
+
+          itemScaleTop: 0.8,
+          ghostOpacity: 0.42,
+          railOpacity:  0.5,
+
+          ghostTTLDays: 10,
+
+          mobileMaxWidth: 600,
+          overlayTopMobile: 50,
+          pageAnchors: ['#mainContainer', '.content-wrapper', '#content'],
+
+          hideWhenEmpty: true,
+          dragThreshold: 6,
+          longPressMs: 550,
+
+          orderKey:    'tornDock.order.v1',
+          regKey:      'tornDock.registry.v1',
+          settingsKey: 'tornDock.settings.v2',
+          openKey:     'tornDock.open.v2',
+
+          maxSnapshotChars: 15000,
+          snapshotRetries: 6,
+          snapshotRetryMs: 200,
+          scanDebounceMs: 90,
+        };
+
+        const DEFAULTS = {
+          edge: 'left',
+          variant: 'column',
+          ghosts: true,
+          startOpen: false,
+          mountMobile: 'edge',
+          bgColor: '#1b1e24',
+          bgOpacity: 0,
+          offsetV: 0,
+          gridCols: 2,
+          maxRows: 0,
+        };
+
+        const LAUNCHER = '.torn-launcher';
+        let dock, strip, tab, body, ctrls, gearBtn, minBtn, grip, pill, scrim;
+        let S = {}, isOpen = false, suppressClick = false;
+
+        const GLYPH_CHEVRON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>';
+        const GLYPH_GRID    = '<svg viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/></svg>';
+        const GLYPH_GEAR    = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+
+        const readJSON = (k, d) => { try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? d : v; } catch { return d; } };
+        const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
         const loadOrder = () => readJSON(CFG.orderKey, []);
         const saveOrder = () => writeJSON(CFG.orderKey, [...strip.querySelectorAll('.torn-dock-item')].map(getKey));
-        const loadReg = () => readJSON(CFG.regKey, {});
-        const saveReg = r => writeJSON(CFG.regKey, r);
-        const loadPos = () => readJSON(CFG.posKey, null);
-        const savePos = p => writeJSON(CFG.posKey, p);
-        const clearPos = () => { try { localStorage.removeItem(CFG.posKey); } catch (e) {   } };
+        const loadReg   = () => readJSON(CFG.regKey, {});
+        const saveReg   = (r) => writeJSON(CFG.regKey, r);
+        const loadSettings = () => Object.assign({}, DEFAULTS, readJSON(CFG.settingsKey, {}));
+        const saveSettings = () => writeJSON(CFG.settingsKey, S);
+        const loadOpen  = () => readJSON(CFG.openKey, null);
+        const saveOpen  = (v) => writeJSON(CFG.openKey, !!v);
+
+        const isMobileNow = () => window.innerWidth <= CFG.mobileMaxWidth;
+        const effMode = () => (isMobileNow() && S.mountMobile === 'top') ? 'top' : 'edge';
+
         let autoId = 0;
         function getKey(el) {
-            if (el.dataset.tornDockKey) return el.dataset.tornDockKey;
-            const key = el.id || el.dataset.tornLauncher || el.dataset.script || (el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || '').trim() || ('launcher-' + (++autoId));
-            el.dataset.tornDockKey = key; return key;
+          if (el.dataset.tornDockKey) return el.dataset.tornDockKey;
+          const key =
+            el.id || el.dataset.tornLauncher || el.dataset.script ||
+            (el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || '').trim() ||
+            ('launcher-' + (++autoId));
+          el.dataset.tornDockKey = key;
+          return key;
         }
-        const labelOf = el => (el.dataset.dockLabel || el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || getKey(el)).trim();
-        const normLabel = x => (x || '').trim().toLowerCase();
-        const iconReady = el => !!el && el.isConnected && (el.querySelector('svg,img,canvas,[class*="icon"]') || (el.textContent || '').trim().length > 0);
+        const labelOf = (el) =>
+          (el.dataset.dockLabel || el.getAttribute('title') || el.getAttribute('aria-label') || el.textContent || getKey(el)).trim();
+        const normLabel = (s) => (s || '').trim().toLowerCase();
+        const iconReady = (el) =>
+          !!el && el.isConnected &&
+          (el.querySelector('svg,img,canvas,[class*="icon"]') || (el.textContent || '').trim().length > 0);
+
+        function buildDock() {
+          if (dock) return;
+          S = loadSettings();
+
+          dock = document.createElement('div');
+          dock.id = 'torn-dock'; dock.dataset.hbs = '1';
+
+          tab = document.createElement('button');
+          tab.className = 'torn-dock-tab';
+          tab.type = 'button';
+          tab.setAttribute('aria-label', 'Open dock');
+          tab.innerHTML = GLYPH_CHEVRON;
+
+          body = document.createElement('div');
+          body.className = 'torn-dock-body';
+
+          grip = document.createElement('div');
+          grip.className = 'torn-dock-grip';
+          grip.innerHTML = '<span></span><span></span><span></span>';
+
+          strip = document.createElement('div');
+          strip.className = 'torn-dock-strip';
+
+          ctrls = document.createElement('div');
+          ctrls.className = 'torn-dock-ctrls';
+          gearBtn = document.createElement('button');
+          gearBtn.className = 'torn-dock-mini torn-dock-gear'; gearBtn.type = 'button';
+          gearBtn.setAttribute('aria-label', 'Customize dock'); gearBtn.innerHTML = GLYPH_GEAR;
+          minBtn = document.createElement('button');
+          minBtn.className = 'torn-dock-mini torn-dock-min'; minBtn.type = 'button';
+          minBtn.setAttribute('aria-label', 'Minimize dock'); minBtn.innerHTML = GLYPH_CHEVRON;
+          ctrls.appendChild(gearBtn); ctrls.appendChild(minBtn);
+
+          body.appendChild(grip);
+          body.appendChild(strip);
+          body.appendChild(ctrls);
+
+          pill = document.createElement('button');
+          pill.className = 'torn-dock-pill'; pill.type = 'button';
+          pill.setAttribute('aria-label', 'Expand dock'); pill.innerHTML = GLYPH_GRID;
+
+          dock.appendChild(tab);
+          dock.appendChild(body);
+          dock.appendChild(pill);
+
+          injectStyles();
+          buildSettings();
+
+          tab.addEventListener('click', () => setOpen(true));
+          pill.addEventListener('click', () => setOpen(true));
+          minBtn.addEventListener('click', () => setOpen(false));
+          gearBtn.addEventListener('click', openSettings);
+          strip.addEventListener('pointerdown', beginDrag);
+          strip.addEventListener('click', (e) => {
+            if (suppressClick) { suppressClick = false; e.stopPropagation(); e.preventDefault(); }
+          }, true);
+          window.addEventListener('resize', onResize);
+
+          applyMount();
+          applyLayout();
+          applyBackground();
+          isOpen = (loadOpen() == null) ? !!S.startOpen : !!loadOpen();
+          setOpen(isOpen, false);
+          updateVisibility();
+        }
+
+        let lastMode = null;
+        function onResize() {
+          const m = effMode();
+          if (m !== lastMode) { applyMount(); lastMode = m; }
+        }
+
+        function applyMount() {
+          const mode = effMode();
+          lastMode = mode;
+          dock.classList.remove('torn-dock--edge', 'torn-dock--top', 'torn-dock--left', 'torn-dock--right', 'torn-dock--overlay');
+          dock.style.top = '';
+          if (mode === 'edge') {
+            dock.classList.add('torn-dock--edge', 'torn-dock--' + S.edge);
+            if (dock.parentElement !== document.body) document.body.appendChild(dock);
+            applyOffset();
+            return;
+          }
+          dock.classList.add('torn-dock--top');
+          for (const sel of CFG.pageAnchors) {
+            const a = document.querySelector(sel);
+            if (a) { a.insertBefore(dock, a.firstChild); return; }
+          }
+          dock.classList.add('torn-dock--overlay');
+          dock.style.top = CFG.overlayTopMobile + 'px';
+          document.body.appendChild(dock);
+        }
+
+        function applyLayout() {
+          dock.dataset.variant = S.variant;
+          dock.dataset.edge = S.edge;
+          dock.dataset.ghosts = S.ghosts ? 'show' : 'hide';
+          dock.style.setProperty('--dock-cols', String(+S.gridCols || 2));
+          const n = +S.maxRows || 0;
+          dock.style.setProperty('--dock-strip-maxh', n > 0 ? (n * 52 + (n - 1) * 12 + 8) + 'px' : 'none');
+        }
+
+        function hexToRgba(hex, a) {
+          hex = String(hex || '#1b1e24').replace('#', '');
+          if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+          const n = parseInt(hex, 16);
+          if (Number.isNaN(n)) return 'rgba(27,30,36,' + a + ')';
+          return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+        }
+        function applyBackground() {
+          dock.style.setProperty('--dock-bg', hexToRgba(S.bgColor, S.bgOpacity));
+        }
+
+        function applyOffset() {
+          if (effMode() === 'edge') {
+            dock.style.top = S.offsetV ? `calc(50% + ${S.offsetV}px)` : '';
+          }
+        }
+
+        function setOpen(v, persist = true) {
+          isOpen = !!v;
+          dock.dataset.open = isOpen ? 'true' : 'false';
+          tab.setAttribute('aria-label', isOpen ? 'Dock open' : 'Open dock');
+          if (persist) saveOpen(isOpen);
+        }
+
+        function updateVisibility() {
+          if (!dock) return;
+          dock.style.display = (CFG.hideWhenEmpty && strip.children.length === 0) ? 'none' : '';
+        }
+
         function injectStyles() {
-            if (document.getElementById('torn-dock-style')) return;
-            const st = document.createElement('style'); st.id = 'torn-dock-style'; st.dataset.hbs = '1';
-            st.textContent = `
-      #torn-dock{box-sizing:border-box;display:flex;align-items:center;background:${CFG.panelBg};border:1px solid ${CFG.border};border-radius:10px;
-        padding:3px 4px;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;z-index:2147483000;max-width:100%;}
-      #torn-dock.torn-dock--overlay{position:fixed;box-shadow:0 4px 16px rgba(0,0,0,.5);}
-      #torn-dock.torn-dock--overlay.torn-dock--top{top:${CFG.overlayGap}px;}
-      #torn-dock.torn-dock--overlay.torn-dock--bottom{bottom:${CFG.overlayGap}px;}
-      #torn-dock.torn-dock--overlay.torn-dock--right{right:${CFG.overlayGap}px;}
-      #torn-dock.torn-dock--overlay.torn-dock--left{left:${CFG.overlayGap}px;}
-      #torn-dock.torn-dock--overlay.torn-dock--center{left:50%;transform:translateX(-50%);}
-      #torn-dock .torn-dock-grip{display:flex;flex-direction:column;justify-content:center;gap:3px;align-self:stretch;padding:0 5px;margin-right:2px;
-        border-right:1px solid ${CFG.border};cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;flex:0 0 auto;}
-      #torn-dock .torn-dock-grip:active,#torn-dock .torn-dock-grip.dragging{cursor:grabbing;}
-      #torn-dock .torn-dock-grip span{display:block;width:9px;height:2px;border-radius:2px;background:${CFG.accent};opacity:.7;}
-      #torn-dock .torn-dock-grip:hover span{opacity:1;}
-      #torn-dock .torn-dock-strip{display:flex;align-items:center;flex-wrap:wrap;gap:4px;touch-action:none;}
-      #torn-dock .torn-dock-item{position:relative !important;left:auto !important;top:auto !important;right:auto !important;bottom:auto !important;
-        transform:none !important;margin:0 !important;cursor:grab;touch-action:none;zoom:${CFG.itemScale};transition:opacity .12s ease;
-        -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
-      #torn-dock .torn-dock-item.torn-dock-dragging{opacity:.55;cursor:grabbing;}
-      #torn-dock .torn-dock-item.torn-dock-forgetting{opacity:.12 !important;}
-      #torn-dock .torn-dock-ghost{opacity:${CFG.ghostOpacity};filter:grayscale(.35);cursor:pointer;}
-      #torn-dock .torn-dock-ghost:hover{opacity:.85;}
-      #torn-dock .torn-dock-declared{width:52px;height:52px;border-radius:50%;background:linear-gradient(180deg,#2a2f38,#1b1e24);border:1px solid #33373f;
-        color:#eaeaea;display:flex;align-items:center;justify-content:center;overflow:hidden;}
-      #torn-dock .torn-dock-declared svg{width:26px;height:26px;}
-      #torn-dock .torn-dock-declared .cq-fab-icon,#torn-dock .torn-dock-declared span{font-size:22px;line-height:1;}`;
-            (document.head || document.documentElement).appendChild(st);
+          if (document.getElementById('torn-dock-style')) return;
+          const s = document.createElement('style');
+          s.id = 'torn-dock-style'; s.dataset.hbs = '1';
+          s.textContent = `
+            #torn-dock{box-sizing:border-box;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+              z-index:2147483000;}
+            #torn-dock *,#torn-dock-settings *{box-sizing:border-box}
+
+            /* ===================== EDGE TAB (both platforms) ===================== */
+            /* The tab is the only in-flow child, so the root shrink-wraps to it and stays flush at the
+               edge. The body is absolutely positioned beside the tab, so a hidden body can't push it in. */
+            #torn-dock.torn-dock--edge{position:fixed;top:50%;transform:translateY(-50%);display:inline-block;}
+            #torn-dock.torn-dock--edge.torn-dock--left{left:0;}
+            #torn-dock.torn-dock--edge.torn-dock--right{right:0;}
+
+            #torn-dock .torn-dock-tab{appearance:none;border:1px solid ${CFG.border};cursor:pointer;
+              width:26px;height:74px;display:none;align-items:center;justify-content:center;
+              background:linear-gradient(180deg,${CFG.fabTop},${CFG.fabBot});color:${CFG.accent};
+              box-shadow:0 4px 16px rgba(0,0,0,.5);transition:color .15s;touch-action:manipulation;}
+            #torn-dock.torn-dock--edge.torn-dock--left  .torn-dock-tab{border-radius:0 10px 10px 0;border-left:0;}
+            #torn-dock.torn-dock--edge.torn-dock--right .torn-dock-tab{border-radius:10px 0 0 10px;border-right:0;}
+            #torn-dock .torn-dock-tab:hover{color:#fff;}
+            #torn-dock .torn-dock-tab svg{width:14px;height:14px;}
+            #torn-dock.torn-dock--edge.torn-dock--left .torn-dock-tab svg{transform:rotate(180deg);} /* point outward */
+            /* show the tab only when closed (and never in rail, which is always parked) */
+            #torn-dock.torn-dock--edge:not([data-open="true"]):not([data-variant="rail"]) .torn-dock-tab{display:flex;}
+
+            /* body as the transparent slide-out tray */
+            #torn-dock.torn-dock--edge .torn-dock-body{position:absolute;top:50%;display:flex;flex-direction:column;
+              align-items:center;gap:12px;padding:10px;border-radius:14px;background:var(--dock-bg,transparent);
+              transition:opacity .24s ease,transform .24s ease,background .12s ease;}
+            #torn-dock.torn-dock--edge.torn-dock--left  .torn-dock-body{left:100%;}
+            #torn-dock.torn-dock--edge.torn-dock--right .torn-dock-body{right:100%;}
+            #torn-dock.torn-dock--edge .torn-dock-grip{display:none;}          /* no grip in edge mode */
+            /* closed (column/grid): hidden, nudged toward the edge */
+            #torn-dock.torn-dock--edge[data-variant="column"] .torn-dock-body,
+            #torn-dock.torn-dock--edge[data-variant="grid"] .torn-dock-body{opacity:0;pointer-events:none;}
+            #torn-dock.torn-dock--edge.torn-dock--left[data-variant="column"] .torn-dock-body,
+            #torn-dock.torn-dock--edge.torn-dock--left[data-variant="grid"] .torn-dock-body{transform:translateY(-50%) translateX(-18px);}
+            #torn-dock.torn-dock--edge.torn-dock--right[data-variant="column"] .torn-dock-body,
+            #torn-dock.torn-dock--edge.torn-dock--right[data-variant="grid"] .torn-dock-body{transform:translateY(-50%) translateX(18px);}
+            /* open */
+            #torn-dock.torn-dock--edge[data-open="true"][data-variant="column"] .torn-dock-body,
+            #torn-dock.torn-dock--edge[data-open="true"][data-variant="grid"] .torn-dock-body{opacity:1;pointer-events:auto;transform:translateY(-50%) translateX(0);}
+            /* rail: icons always parked beside the edge, faint until touched */
+            #torn-dock.torn-dock--edge[data-variant="rail"] .torn-dock-body{opacity:${CFG.railOpacity};transform:translateY(-50%);}
+            #torn-dock.torn-dock--edge[data-variant="rail"] .torn-dock-body:hover,
+            #torn-dock.torn-dock--edge[data-variant="rail"]:focus-within .torn-dock-body,
+            #torn-dock.torn-dock--edge[data-open="true"][data-variant="rail"] .torn-dock-body{opacity:1;}
+            #torn-dock.torn-dock--edge .torn-dock-pill{display:none;}          /* pill is Top-Mount only */
+
+            /* icon layouts */
+            #torn-dock.torn-dock--edge .torn-dock-strip{display:flex;flex-direction:column;align-items:center;gap:12px;}
+            /* Column/Rail: wrap into extra columns once the per-column cap (max-height) is hit */
+            #torn-dock.torn-dock--edge[data-variant="column"] .torn-dock-strip,
+            #torn-dock.torn-dock--edge[data-variant="rail"] .torn-dock-strip{flex-wrap:wrap;align-content:center;max-height:var(--dock-strip-maxh,none);}
+            /* Grid: configurable column count */
+            #torn-dock.torn-dock--edge[data-variant="grid"] .torn-dock-strip{display:grid;grid-template-columns:repeat(var(--dock-cols,2),auto);gap:12px;justify-items:center;}
+
+            /* ===================== TOP MOUNT (PDA original bar) ===================== */
+            #torn-dock.torn-dock--top{position:sticky;top:4px;margin:5px auto;width:fit-content;}
+            #torn-dock.torn-dock--top.torn-dock--overlay{position:fixed;left:50%;transform:translateX(-50%);margin:0;}
+            #torn-dock.torn-dock--top .torn-dock-tab{display:none;}
+            #torn-dock.torn-dock--top .torn-dock-body{display:flex;align-items:center;gap:8px;
+              background:var(--dock-bg,transparent);border:1px solid ${CFG.border};border-radius:10px;padding:3px 6px;
+              box-shadow:0 6px 24px rgba(0,0,0,.45);}
+            #torn-dock.torn-dock--top:not([data-open="true"]) .torn-dock-body{display:none;}
+            #torn-dock.torn-dock--top .torn-dock-strip{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;}
+            #torn-dock.torn-dock--top .torn-dock-item{zoom:${CFG.itemScaleTop};}
+            #torn-dock.torn-dock--top .torn-dock-grip{display:flex;flex-direction:column;justify-content:center;gap:3px;
+              padding:0 5px;border-right:1px solid ${CFG.border};flex:0 0 auto;}
+            #torn-dock.torn-dock--top .torn-dock-grip span{display:block;width:9px;height:2px;border-radius:2px;background:${CFG.accent};opacity:.7;}
+            #torn-dock.torn-dock--top .torn-dock-pill{display:none;}
+            #torn-dock.torn-dock--top:not([data-open="true"]) .torn-dock-pill{display:flex;}
+
+            /* ===================== shared bits ===================== */
+            .torn-dock-pill{appearance:none;cursor:pointer;width:38px;height:38px;border-radius:50%;
+              align-items:center;justify-content:center;color:#eaeaea;
+              background:linear-gradient(180deg,${CFG.fabTop},${CFG.fabBot});border:1px solid ${CFG.border};
+              box-shadow:0 4px 16px rgba(0,0,0,.5);touch-action:manipulation;}
+            .torn-dock-pill:hover{border-color:${CFG.accent};}
+            .torn-dock-pill svg{width:18px;height:18px;}
+
+            #torn-dock .torn-dock-ctrls{display:flex;align-items:center;}
+            #torn-dock.torn-dock--edge .torn-dock-ctrls{flex-direction:column;gap:10px;margin-top:4px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);}
+            #torn-dock.torn-dock--edge[data-variant="grid"] .torn-dock-ctrls{flex-direction:row;grid-column:1 / -1;justify-content:center;border-top:1px solid rgba(255,255,255,.07);padding-top:10px;}
+            #torn-dock.torn-dock--top .torn-dock-ctrls{flex-direction:row;gap:6px;margin-left:4px;padding-left:6px;border-left:1px solid ${CFG.border};}
+            /* rail has nothing to minimize */
+            #torn-dock.torn-dock--edge[data-variant="rail"] .torn-dock-min{display:none;}
+
+            .torn-dock-mini{appearance:none;width:34px;height:34px;border-radius:50%;flex:0 0 auto;cursor:pointer;
+              background:rgba(27,30,36,.72);border:1px solid ${CFG.border};color:#b7bcc6;
+              display:flex;align-items:center;justify-content:center;transition:.12s;touch-action:manipulation;}
+            #torn-dock.torn-dock--top .torn-dock-mini{width:28px;height:28px;background:transparent;}
+            .torn-dock-mini:hover{color:${CFG.accent};border-color:${CFG.accent};}
+            .torn-dock-mini svg{width:16px;height:16px;transition:transform .2s;}
+            /* minimize arrow points back toward the edge (edge) / up (top) */
+            #torn-dock.torn-dock--edge.torn-dock--right .torn-dock-min svg{transform:rotate(180deg);}
+            #torn-dock.torn-dock--top .torn-dock-min svg{transform:rotate(90deg);}
+
+            /* the adopted launcher icons — fixed slots; neutralise each script's own positioning */
+            #torn-dock .torn-dock-item{position:relative !important;left:auto !important;top:auto !important;
+              right:auto !important;bottom:auto !important;transform:none !important;margin:0 !important;
+              cursor:grab;touch-action:none;transition:opacity .12s ease;
+              -webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
+            #torn-dock .torn-dock-item.torn-dock-dragging{opacity:.55;cursor:grabbing;}
+            #torn-dock .torn-dock-item.torn-dock-forgetting{opacity:.12 !important;}
+            #torn-dock .torn-dock-ghost{opacity:${CFG.ghostOpacity};filter:grayscale(.35);cursor:pointer;}
+            #torn-dock .torn-dock-ghost:hover{opacity:.85;}
+            /* deterministic ghost: the dock draws the suite FAB chrome and drops the script's declared glyph in */
+            #torn-dock .torn-dock-declared{width:52px;height:52px;border-radius:50%;
+              background:linear-gradient(180deg,${CFG.fabTop},${CFG.fabBot});border:1px solid ${CFG.border};color:#eaeaea;
+              display:flex;align-items:center;justify-content:center;overflow:hidden;}
+            #torn-dock .torn-dock-declared svg{width:26px;height:26px;}
+            #torn-dock .torn-dock-declared .cq-fab-icon,#torn-dock .torn-dock-declared span{font-size:22px;line-height:1;}
+
+            /* ===================== Customize panel ===================== */
+            #torn-dock-settings{position:fixed;inset:0;z-index:2147483001;display:none;
+              align-items:center;justify-content:center;padding:18px;background:rgba(0,0,0,.5);
+              font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
+            #torn-dock-settings.open{display:flex;}
+            #torn-dock-settings .sheet{width:100%;max-width:300px;background:#1b1e24;border:1px solid ${CFG.border};
+              border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.6);padding:14px 14px 12px;color:#eaeaea;}
+            #torn-dock-settings h2{margin:0 0 10px;font-size:14px;color:${CFG.accent};letter-spacing:.3px;display:flex;align-items:center;gap:7px;}
+            #torn-dock-settings h2 svg{width:15px;height:15px;}
+            #torn-dock-settings .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;}
+            #torn-dock-settings .row + .row{border-top:1px solid rgba(255,255,255,.05);}
+            #torn-dock-settings .name{font-size:12.5px;}
+            #torn-dock-settings .name small{display:block;color:#8b909b;font-size:10px;letter-spacing:.3px;}
+            #torn-dock-settings .seg{display:flex;gap:3px;background:#14171c;border:1px solid ${CFG.border};border-radius:8px;padding:3px;}
+            #torn-dock-settings .seg button{appearance:none;border:0;background:transparent;color:#8b909b;
+              font:600 11px/1 inherit;padding:7px 9px;border-radius:5px;cursor:pointer;transition:.12s;}
+            #torn-dock-settings .seg button:hover{color:#eaeaea;}
+            #torn-dock-settings .seg button[aria-pressed="true"]{background:#2b303a;color:${CFG.accent};}
+            #torn-dock-settings[data-mode="top"] .row[data-edgeonly] .seg,
+            #torn-dock-settings[data-mode="top"] .row[data-edgeonly] input{opacity:.4;pointer-events:none;}
+            /* Grid columns only matter in the Grid layout; Max-per-column only in Column/Rail. Dim the rest. */
+            #torn-dock-settings[data-mode="edge"]:not([data-variant="grid"]) .row[data-row="gridcols"] .seg{opacity:.4;pointer-events:none;}
+            #torn-dock-settings[data-mode="edge"][data-variant="grid"] .row[data-row="maxrows"] .seg{opacity:.4;pointer-events:none;}
+            #torn-dock-settings input[type=color]{width:40px;height:28px;padding:2px;border:1px solid ${CFG.border};
+              border-radius:6px;background:#14171c;cursor:pointer;}
+            #torn-dock-settings input[type=range]{width:150px;accent-color:${CFG.accent};cursor:pointer;}
+            #torn-dock-settings .done{margin-top:12px;width:100%;appearance:none;border:1px solid ${CFG.border};
+              background:linear-gradient(180deg,${CFG.fabTop},${CFG.fabBot});color:#eaeaea;font:700 13px/1 inherit;
+              padding:11px;border-radius:9px;cursor:pointer;}
+            #torn-dock-settings .done:hover{border-color:${CFG.accent};color:#fff;}
+
+            @media (prefers-reduced-motion:reduce){#torn-dock *{transition:none !important;}}
+          `;
+          (document.head || document.documentElement).appendChild(s);
         }
-        const updateVisibility = () => { if (dock) dock.style.display = (CFG.hideWhenEmpty && strip.children.length === 0) ? 'none' : 'flex'; };
-        function applyDockPos(left, top) { dock.style.right = 'auto'; dock.style.bottom = 'auto'; dock.style.transform = 'none'; dock.style.left = left + 'px'; dock.style.top = top + 'px'; clampDockPos(); }
-        function clampDockPos() {
-            const m = 4; let left = parseFloat(dock.style.left), top = parseFloat(dock.style.top);
-            if (Number.isNaN(left) || Number.isNaN(top)) return null;
-            left = Math.max(m, Math.min(left, window.innerWidth - dock.offsetWidth - m)); top = Math.max(m, Math.min(top, window.innerHeight - dock.offsetHeight - m));
-            dock.style.left = left + 'px'; dock.style.top = top + 'px'; return { left, top };
+
+        function buildSettings() {
+          if (scrim) return;
+          scrim = document.createElement('div');
+          scrim.id = 'torn-dock-settings'; scrim.dataset.hbs = '1';
+
+          const rows = [
+            ['mountMobile', 'Mount', '', [['edge', 'Edge Tab'], ['top', 'Top Mount']], false],
+            ['variant', 'Layout', '', [['column', 'Column'], ['grid', 'Grid'], ['rail', 'Rail']], true],
+            ['edge', 'Edge', '', [['left', 'Left'], ['right', 'Right']], true],
+            ['gridCols', 'Grid columns', '', [['2', '2'], ['3', '3'], ['4', '4'], ['5', '5']], true],
+            ['maxRows', 'Max per column', '', [['0', 'Off'], ['4', '4'], ['6', '6'], ['8', '8'], ['10', '10']], true],
+            ['ghosts', 'Off-page icons', '', [[true, 'Show'], [false, 'Hide']], false],
+            ['startOpen', 'Start', '', [[false, 'Minimized'], [true, 'Open']], false],
+          ];
+
+          let html = '<div class="sheet" role="dialog" aria-label="Customize dock">' +
+            '<h2>' + GLYPH_GEAR + 'Customize dock</h2>';
+          for (const [key, label, sub, opts, edgeOnly] of rows) {
+            const dataRow = { mountMobile: 'mount', gridCols: 'gridcols', maxRows: 'maxrows' }[key];
+            const attrs = (edgeOnly ? ' data-edgeonly' : '') + (dataRow ? ' data-row="' + dataRow + '"' : '');
+            html += '<div class="row"' + attrs + '>' +
+              '<span class="name">' + label + (sub ? '<small>' + sub + '</small>' : '') + '</span>' +
+              '<div class="seg" data-opt="' + key + '">' +
+              opts.map(([v, t]) => '<button type="button" data-val="' + v + '" aria-pressed="' +
+                (String(S[key]) === String(v)) + '">' + t + '</button>').join('') +
+              '</div></div>';
+          }
+          html += '<div class="row" data-edgeonly><span class="name">Vertical offset <small>side tab</small></span>' +
+            '<input type="range" class="dock-offset" min="-300" max="300" value="' + (S.offsetV || 0) + '" aria-label="Vertical offset"></div>';
+          html += '<div class="row"><span class="name">Background</span>' +
+            '<input type="color" class="dock-bgcolor" value="' + S.bgColor + '" aria-label="Background colour"></div>';
+          html += '<div class="row"><span class="name">Opacity <small>of background</small></span>' +
+            '<input type="range" class="dock-bgopacity" min="0" max="100" value="' + Math.round(S.bgOpacity * 100) + '" aria-label="Background opacity"></div>';
+          html += '<button class="done" type="button">Done</button></div>';
+          scrim.innerHTML = html;
+          document.body.appendChild(scrim);
+
+          scrim.querySelector('.dock-bgcolor').addEventListener('input', (e) => {
+            S.bgColor = e.target.value; saveSettings(); applyBackground();
+          });
+          scrim.querySelector('.dock-bgopacity').addEventListener('input', (e) => {
+            S.bgOpacity = (+e.target.value) / 100; saveSettings(); applyBackground();
+          });
+          scrim.querySelector('.dock-offset').addEventListener('input', (e) => {
+            S.offsetV = +e.target.value; saveSettings(); applyOffset();
+          });
+
+          scrim.addEventListener('click', (e) => {
+            if (e.target === scrim || e.target.classList.contains('done')) { closeSettings(); return; }
+            const b = e.target.closest('button[data-val]'); if (!b) return;
+            const opt = b.parentElement.dataset.opt;
+            let val = b.dataset.val;
+            if (val === 'true') val = true; else if (val === 'false') val = false;
+            [...b.parentElement.children].forEach((x) => x.setAttribute('aria-pressed', x === b));
+            onSetting(opt, val);
+          });
         }
-        function resetDockPos() { clearPos(); dock.style.left = dock.style.top = dock.style.right = dock.style.bottom = dock.style.transform = ''; clampDockPos(); }
-        function wireDockDrag() {
-            let d = null;
-            grip.addEventListener('pointerdown', e => {
-                e.preventDefault(); e.stopPropagation();
-                const r = dock.getBoundingClientRect();
-                d = { dx: e.clientX - r.left, dy: e.clientY - r.top, pid: e.pointerId, moved: false };
-                try { grip.setPointerCapture(e.pointerId); } catch (x) {   }
-                grip.addEventListener('pointermove', onMove); grip.addEventListener('pointerup', onUp); grip.addEventListener('pointercancel', onUp);
-            });
-            function onMove(e) { if (!d) return; d.moved = true; grip.classList.add('dragging'); applyDockPos(e.clientX - d.dx, e.clientY - d.dy); }
-            function onUp() {
-                if (!d) return;
-                try { grip.releasePointerCapture(d.pid); } catch (x) {   }
-                grip.removeEventListener('pointermove', onMove); grip.removeEventListener('pointerup', onUp); grip.removeEventListener('pointercancel', onUp);
-                grip.classList.remove('dragging');
-                if (d.moved) { const p = clampDockPos(); if (p) savePos(p); }
-                d = null;
+
+        function openSettings() {
+          scrim.dataset.mode = effMode();
+          scrim.dataset.variant = S.variant;
+          const mountRow = scrim.querySelector('[data-row="mount"]');
+          if (mountRow) mountRow.style.display = isMobileNow() ? '' : 'none';
+          scrim.classList.add('open');
+        }
+        function closeSettings() { scrim.classList.remove('open'); }
+
+        function onSetting(opt, val) {
+          S[opt] = val; saveSettings();
+          if (opt === 'mountMobile') { applyMount(); applyLayout(); if (effMode() === 'top') setOpen(true); }
+          else if (opt === 'edge') { applyMount(); applyLayout(); }
+          else if (opt === 'variant') { applyLayout(); scrim.dataset.variant = S.variant; }
+          else if (opt === 'gridCols' || opt === 'maxRows') { applyLayout(); }
+          else if (opt === 'ghosts') { applyLayout(); applyGhosts(); }
+          else if (opt === 'startOpen') { setOpen(val); }
+        }
+
+        function applyGhosts() {
+          if (S.ghosts) renderGhosts();
+          else strip.querySelectorAll('.torn-dock-ghost').forEach((g) => g.remove());
+          updateVisibility();
+        }
+
+        function adopt(el) {
+          if (!el || !D_ || el.classList.contains('torn-dock-ghost') || el.parentElement === strip) return;
+          buildDock();
+          if (el.dataset.tornDockBackup === undefined) el.dataset.tornDockBackup = el.style.cssText;
+          el.classList.add('torn-dock-item');
+          const key = getKey(el);
+          insertByOrder(el);
+          el.dataset.tornDockWired = '1';
+          removeGhost(key);
+          remember(el, key);
+          updateVisibility();
+        }
+
+        function remember(el, key, tries = 0) {
+          const label = labelOf(el), nlabel = normLabel(label);
+          const reg = loadReg();
+          for (const k of Object.keys(reg)) {
+            if (k !== key && nlabel && normLabel(reg[k] && reg[k].label) === nlabel) delete reg[k];
+          }
+          const prev = reg[key] || {};
+          const declaredIcon = el.dataset.dockIcon || null;
+          const icon = declaredIcon || prev.icon || null;
+          const ready = !!declaredIcon || iconReady(el);
+          const snap = (!declaredIcon && iconReady(el)) ? snapshotVisual(el) : null;
+          const html = (snap && snap.length <= CFG.maxSnapshotChars) ? snap : (prev.html || null);
+          reg[key] = { label, url: location.href, icon, html, ts: Date.now() };
+          saveReg(reg);
+          removeGhostByLabel(nlabel, key);
+          if (!ready && tries < CFG.snapshotRetries) {
+            setTimeout(() => { if (el.isConnected && D_) remember(el, key, tries + 1); }, CFG.snapshotRetryMs * (tries + 1));
+          }
+        }
+
+        function insertByOrder(el) {
+          const order = loadOrder();
+          const mine = order.indexOf(getKey(el));
+          if (mine === -1) { strip.appendChild(el); return; }
+          const after = [...strip.querySelectorAll('.torn-dock-item')].find((it) => {
+            const i = order.indexOf(getKey(it));
+            return i === -1 || i > mine;
+          });
+          strip.insertBefore(el, after || null);
+        }
+
+        function snapshotVisual(el) {
+          try {
+            const props = ['display','box-sizing','width','height','min-width','min-height','max-width','max-height',
+              'padding','padding-top','padding-right','padding-bottom','padding-left','border','border-radius',
+              'background-color','background-image','background-size','background-position','background-repeat',
+              'color','font-family','font-size','font-weight','line-height','letter-spacing','text-align',
+              'box-shadow','opacity','object-fit','fill','stroke','align-items','justify-content','flex-direction','gap'];
+            const clone = el.cloneNode(true);
+            const orig = [el, ...el.querySelectorAll('*')];
+            const copy = [clone, ...clone.querySelectorAll('*')];
+            const n = Math.min(orig.length, copy.length, 60);
+            for (let i = 0; i < n; i++) {
+              const cs = getComputedStyle(orig[i]);
+              let css = '';
+              for (const p of props) {
+                let v = cs.getPropertyValue(p);
+                if (!v) continue;
+                if (p === 'display' && i === 0 && v === 'none') v = 'inline-flex';
+                css += p + ':' + v + ';';
+              }
+              copy[i].setAttribute('style', css);
+              copy[i].removeAttribute('id');
+              copy[i].removeAttribute('class');
             }
-            grip.addEventListener('dblclick', e => { e.preventDefault(); resetDockPos(); });
+            return clone.outerHTML;
+          } catch { return null; }
         }
-        function insertByOrder(elx) {
-            const order = loadOrder(), mine = order.indexOf(getKey(elx));
-            if (mine === -1) { strip.appendChild(elx); return; }
-            const after = [...strip.querySelectorAll('.torn-dock-item')].find(it => { const i = order.indexOf(getKey(it)); return i === -1 || i > mine; });
-            strip.insertBefore(elx, after || null);
+
+        function removeGhost(key) {
+          strip.querySelectorAll('.torn-dock-ghost').forEach((g) => { if (getKey(g) === key) g.remove(); });
         }
-        function snapshotVisual(elx) {
-            try {
-                const props = ['display', 'box-sizing', 'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'padding', 'padding-top', 'padding-right',
-                    'padding-bottom', 'padding-left', 'border', 'border-radius', 'background-color', 'background-image', 'background-size', 'background-position',
-                    'background-repeat', 'color', 'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-align', 'box-shadow', 'opacity',
-                    'object-fit', 'fill', 'stroke', 'align-items', 'justify-content', 'flex-direction', 'gap'];
-                const clone = elx.cloneNode(true), orig = [elx, ...elx.querySelectorAll('*')], copy = [clone, ...clone.querySelectorAll('*')];
-                const n = Math.min(orig.length, copy.length, 60);
-                for (let i = 0; i < n; i++) {
-                    const cs = getComputedStyle(orig[i]); let css = '';
-                    for (const p of props) { let v = cs.getPropertyValue(p); if (!v) continue; if (p === 'display' && i === 0 && v === 'none') v = 'inline-flex'; css += p + ':' + v + ';'; }
-                    copy[i].setAttribute('style', css); copy[i].removeAttribute('id'); copy[i].removeAttribute('class');
-                }
-                return clone.outerHTML;
-            } catch (e) { return null; }
+        function removeGhostByLabel(nlabel, exceptKey) {
+          if (!nlabel) return;
+          strip.querySelectorAll('.torn-dock-ghost').forEach((g) => {
+            if (getKey(g) !== exceptKey && normLabel(g.dataset.tornDockLabel) === nlabel) g.remove();
+          });
         }
-        function remember(elx, key, tries = 0) {
-            const label = labelOf(elx), nlabel = normLabel(label), reg = loadReg();
-            for (const k of Object.keys(reg)) if (k !== key && nlabel && normLabel(reg[k] && reg[k].label) === nlabel) delete reg[k];
-            const prev = reg[key] || {}, declaredIcon = elx.dataset.dockIcon || null, icon = declaredIcon || prev.icon || null;
-            const ready = !!declaredIcon || iconReady(elx), snap = (!declaredIcon && iconReady(elx)) ? snapshotVisual(elx) : null;
-            const html = (snap && snap.length <= CFG.maxSnapshotChars) ? snap : (prev.html || null);
-            reg[key] = { label, url: location.href, icon, html, ts: Date.now() }; saveReg(reg);
-            removeGhostByLabel(nlabel, key);
-            if (!ready && tries < CFG.snapshotRetries) setTimeout(() => { if (elx.isConnected && D_) remember(elx, key, tries + 1); }, CFG.snapshotRetryMs * (tries + 1));
+        function forgetGhost(key, node) {
+          const reg = loadReg(); delete reg[key]; saveReg(reg);
+          node.remove(); updateVisibility();
         }
-        function adopt(elx) {
-            if (!elx || !D_ || elx.classList.contains('torn-dock-ghost') || elx.parentElement === strip) return;
-            if (elx.dataset.tornDockBackup === undefined) elx.dataset.tornDockBackup = elx.style.cssText;
-            elx.classList.add('torn-dock-item');
-            const key = getKey(elx); insertByOrder(elx); elx.dataset.tornDockWired = '1';
-            removeGhost(key); remember(elx, key); updateVisibility();
-        }
-        const removeGhost = key => strip.querySelectorAll('.torn-dock-ghost').forEach(g => { if (getKey(g) === key) g.remove(); });
-        const removeGhostByLabel = (nlabel, exceptKey) => { if (!nlabel) return; strip.querySelectorAll('.torn-dock-ghost').forEach(g => { if (getKey(g) !== exceptKey && normLabel(g.dataset.tornDockLabel) === nlabel) g.remove(); }); };
-        const forgetGhost = (key, node) => { const reg = loadReg(); delete reg[key]; saveReg(reg); node.remove(); updateVisibility(); };
+
         function makeGhost(key, entry) {
-            let node, declared = false;
-            if (entry.icon) { node = document.createElement('div'); node.innerHTML = entry.icon; declared = true; }
-            else if (entry.html) { const tmp = document.createElement('div'); tmp.innerHTML = entry.html; node = tmp.firstElementChild; }
-            if (!node) { node = document.createElement('div');
-                node.textContent = (entry.label || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
-                node.style.cssText = 'display:flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid ' + CFG.border + ';border-radius:6px;font-size:11px;color:' + CFG.accent + ';background:#23262d;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;'; }
-            node.removeAttribute('id');
-            node.className = 'torn-dock-item torn-dock-ghost' + (declared ? ' torn-dock-declared' : '');
-            node.dataset.tornDockKey = key; node.dataset.tornDockLabel = entry.label || '';
-            node.setAttribute('title', (entry.label || 'script') + ' — open where it runs');
-            node.addEventListener('click', () => { if (entry.url) location.href = entry.url; });
-            node.addEventListener('contextmenu', e => { e.preventDefault(); forgetGhost(key, node); });
-            return node;
+          let node, declared = false;
+          if (entry.icon) {
+            node = document.createElement('div');
+            node.innerHTML = entry.icon;
+            declared = true;
+          } else if (entry.html) {
+            const tmp = document.createElement('div');
+            tmp.innerHTML = entry.html;
+            node = tmp.firstElementChild;
+          }
+          if (!node) {
+            node = document.createElement('div');
+            node.textContent = (entry.label || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
+            node.style.cssText = 'display:flex;align-items:center;justify-content:center;width:44px;height:44px;' +
+              'border:1px solid ' + CFG.border + ';border-radius:50%;font-size:13px;color:' + CFG.accent +
+              ';background:linear-gradient(180deg,' + CFG.fabTop + ',' + CFG.fabBot + ');font-weight:800;';
+          }
+          node.removeAttribute('id');
+          node.className = 'torn-dock-item torn-dock-ghost' + (declared ? ' torn-dock-declared' : '');
+          node.dataset.tornDockKey = key;
+          node.dataset.tornDockLabel = entry.label || '';
+          node.setAttribute('title', (entry.label || 'script') + ' — open where it runs');
+          node.addEventListener('click', () => { if (entry.url) location.href = entry.url; });
+          node.addEventListener('contextmenu', (e) => { e.preventDefault(); forgetGhost(key, node); });
+          return node;
         }
+
         function pruneRegistry() {
-            if (!CFG.ghostTTLDays) return;
-            const cutoff = Date.now() - CFG.ghostTTLDays * 86400000, reg = loadReg(); let changed = false;
-            for (const key of Object.keys(reg)) { const ts = reg[key] && reg[key].ts; if (!ts || ts < cutoff) { delete reg[key]; changed = true; } }
-            if (changed) saveReg(reg);
+          if (!CFG.ghostTTLDays) return;
+          const cutoff = Date.now() - CFG.ghostTTLDays * 86400000;
+          const reg = loadReg();
+          let changed = false;
+          for (const key of Object.keys(reg)) {
+            const ts = reg[key] && reg[key].ts;
+            if (!ts || ts < cutoff) { delete reg[key]; changed = true; }
+          }
+          if (changed) saveReg(reg);
         }
+
         function renderGhosts() {
-            pruneRegistry();
-            if (!CFG.showGhosts) { updateVisibility(); return; }
-            const reg = loadReg(), liveItems = [...strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)')];
-            const liveKeys = new Set(liveItems.map(getKey)), liveLabels = new Set(liveItems.map(x => normLabel(labelOf(x))));
-            const haveGhost = new Set([...strip.querySelectorAll('.torn-dock-ghost')].map(getKey)), seenLabels = new Set();
-            for (const key of Object.keys(reg)) {
-                const nlabel = normLabel(reg[key] && reg[key].label);
-                if (liveKeys.has(key) || haveGhost.has(key)) continue;
-                if (nlabel && (liveLabels.has(nlabel) || seenLabels.has(nlabel))) continue;
-                insertByOrder(makeGhost(key, reg[key])); if (nlabel) seenLabels.add(nlabel);
-            }
-            updateVisibility();
+          pruneRegistry();
+          if (!S.ghosts) { updateVisibility(); return; }
+          const reg = loadReg();
+          const liveItems = [...strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)')];
+          const liveKeys = new Set(liveItems.map(getKey));
+          const liveLabels = new Set(liveItems.map((el) => normLabel(labelOf(el))));
+          const haveGhost = new Set([...strip.querySelectorAll('.torn-dock-ghost')].map(getKey));
+          const seenLabels = new Set();
+          for (const key of Object.keys(reg)) {
+            const nlabel = normLabel(reg[key] && reg[key].label);
+            if (liveKeys.has(key) || haveGhost.has(key)) continue;
+            if (nlabel && (liveLabels.has(nlabel) || seenLabels.has(nlabel))) continue;
+            insertByOrder(makeGhost(key, reg[key]));
+            if (nlabel) seenLabels.add(nlabel);
+          }
+          updateVisibility();
         }
+
         let drag = null, longPressTimer = null;
         const clearLongPress = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
-        const removeDragListeners = () => { document.removeEventListener('pointermove', dragMove, true); document.removeEventListener('pointerup', dragEnd, true); document.removeEventListener('pointercancel', dragEnd, true); };
+        const removeDragListeners = () => {
+          document.removeEventListener('pointermove', dragMove, true);
+          document.removeEventListener('pointerup', dragEnd, true);
+          document.removeEventListener('pointercancel', dragEnd, true);
+        };
+
         function beginDrag(e) {
-            const item = e.target.closest && e.target.closest('.torn-dock-item');
-            if (!item || item.parentElement !== strip) return;
-            drag = { item, x: e.clientX, y: e.clientY, moved: false, pid: e.pointerId };
-            document.addEventListener('pointermove', dragMove, true); document.addEventListener('pointerup', dragEnd, true); document.addEventListener('pointercancel', dragEnd, true);
-            clearLongPress();
-            if (item.classList.contains('torn-dock-ghost') && e.pointerType !== 'mouse') {
-                longPressTimer = setTimeout(() => {
-                    longPressTimer = null;
-                    if (!drag || drag.item !== item || drag.moved) return;
-                    suppressClick = true; setTimeout(() => { suppressClick = false; }, 500);
-                    removeDragListeners(); drag = null;
-                    item.classList.add('torn-dock-forgetting'); setTimeout(() => forgetGhost(getKey(item), item), 130);
-                }, CFG.longPressMs);
-            }
+          const item = e.target.closest?.('.torn-dock-item');
+          if (!item || item.parentElement !== strip) return;
+          drag = { item, x: e.clientX, y: e.clientY, moved: false, pid: e.pointerId };
+          document.addEventListener('pointermove', dragMove, true);
+          document.addEventListener('pointerup', dragEnd, true);
+          document.addEventListener('pointercancel', dragEnd, true);
+
+          clearLongPress();
+          if (item.classList.contains('torn-dock-ghost') && e.pointerType !== 'mouse') {
+            longPressTimer = setTimeout(() => {
+              longPressTimer = null;
+              if (!drag || drag.item !== item || drag.moved) return;
+              suppressClick = true; setTimeout(() => { suppressClick = false; }, 500);
+              removeDragListeners(); drag = null;
+              item.classList.add('torn-dock-forgetting');
+              setTimeout(() => forgetGhost(getKey(item), item), 130);
+            }, CFG.longPressMs);
+          }
         }
         function dragMove(e) {
-            if (!drag || e.pointerId !== drag.pid) return;
-            if (!drag.moved) {
-                if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < CFG.dragThreshold) return;
-                drag.moved = true; clearLongPress();
-                try { strip.setPointerCapture(drag.pid); } catch (x) {   }
-                drag.item.classList.add('torn-dock-dragging');
-            }
-            e.preventDefault(); e.stopPropagation();
-            const t = itemUnderPoint(e.clientX, e.clientY, drag.item);
-            if (t) { const r = t.getBoundingClientRect(); strip.insertBefore(drag.item, (e.clientX < r.left + r.width / 2) ? t : t.nextSibling); }
+          if (!drag || e.pointerId !== drag.pid) return;
+          if (!drag.moved) {
+            if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < CFG.dragThreshold) return;
+            drag.moved = true;
+            clearLongPress();
+            try { strip.setPointerCapture?.(drag.pid); } catch (_) {}
+            drag.item.classList.add('torn-dock-dragging');
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          const t = itemUnderPoint(e.clientX, e.clientY, drag.item);
+          if (t) {
+            const r = t.getBoundingClientRect();
+            const horiz = effMode() === 'top';
+            const before = horiz ? (e.clientX < r.left + r.width / 2) : (e.clientY < r.top + r.height / 2);
+            strip.insertBefore(drag.item, before ? t : t.nextSibling);
+          }
         }
         function dragEnd(e) {
-            clearLongPress();
-            if (!drag || e.pointerId !== drag.pid) return;
-            const { item, moved, pid } = drag; removeDragListeners();
-            if (moved) { item.classList.remove('torn-dock-dragging'); try { strip.releasePointerCapture(pid); } catch (x) {   } e.stopPropagation(); suppressClick = true; saveOrder(); }
-            drag = null;
+          clearLongPress();
+          if (!drag || e.pointerId !== drag.pid) return;
+          const { item, moved, pid } = drag;
+          removeDragListeners();
+          if (moved) {
+            item.classList.remove('torn-dock-dragging');
+            try { strip.releasePointerCapture?.(pid); } catch (_) {}
+            e.stopPropagation();
+            suppressClick = true;
+            saveOrder();
+          }
+          drag = null;
         }
         function itemUnderPoint(x, y, self) {
-            for (const elx of document.elementsFromPoint(x, y)) { const it = elx.closest && elx.closest('.torn-dock-item'); if (it && it !== self && it.parentElement === strip) return it; }
-            return null;
+          for (const el of document.elementsFromPoint(x, y)) {
+            const it = el.closest?.('.torn-dock-item');
+            if (it && it !== self && it.parentElement === strip) return it;
+          }
+          return null;
         }
-        dock = document.createElement('div'); dock.id = 'torn-dock'; dock.dataset.hbs = '1';
-        grip = document.createElement('div'); grip.className = 'torn-dock-grip'; grip.title = 'Drag to move · double-click to reset position';
-        grip.innerHTML = '<span></span><span></span><span></span>';
-        strip = document.createElement('div'); strip.className = 'torn-dock-strip';
-        dock.appendChild(grip); dock.appendChild(strip);
-        injectStyles();
-        const [v, h] = (CFG.overlayCorner || 'top-right').split('-');
-        dock.classList.add('torn-dock--overlay', 'torn-dock--' + v, 'torn-dock--' + h);
-        document.body.appendChild(dock);
-        const saved = loadPos(); if (saved) applyDockPos(saved.left, saved.top);
-        wireDockDrag();
-        strip.addEventListener('click', e => { if (suppressClick) { suppressClick = false; e.stopPropagation(); e.preventDefault(); } }, true);
-        strip.addEventListener('pointerdown', beginDrag);
-        window.addEventListener('resize', () => { if (D_ && dock.style.left) clampDockPos(); });
-        if (window.ResizeObserver) new ResizeObserver(() => { if (D_ && dock.style.left) clampDockPos(); }).observe(dock);
+
+        buildDock();
         const pending = new Set(); let scanTimer = null;
         const flushScan = () => { scanTimer = null; const items = [...pending]; pending.clear(); items.forEach(x => { if (x.isConnected) adopt(x); }); updateVisibility(); };
         const queue = node => {
             if (node.nodeType !== 1) return;
             if (node.id === 'torn-dock' && node.dataset.hbs !== '1') { dockStop(); dockConflictNote(); return; }
-            if (node.id === 'torn-dock' || (node.closest && node.closest('#torn-dock'))) return;
+            if (node.id === 'torn-dock' || node.id === 'torn-dock-settings' || (node.closest && (node.closest('#torn-dock') || node.closest('#torn-dock-settings')))) return;
             if (node.matches && node.matches(LAUNCHER)) pending.add(node);
             if (node.querySelectorAll) node.querySelectorAll(LAUNCHER).forEach(x => pending.add(x));
         };
         const mo = new MutationObserver(muts => {
-            for (const m of muts) { if (m.target && m.target.closest && m.target.closest('#torn-dock[data-hbs="1"]')) continue; for (const n of m.addedNodes) { queue(n); if (!D_) return; } }
+            for (const m of muts) { if (m.target && m.target.closest && (m.target.closest('#torn-dock[data-hbs="1"]') || m.target.closest('#torn-dock-settings'))) continue;
+                for (const n of m.addedNodes) { queue(n); if (!D_) return; } }
             if (pending.size && !scanTimer) scanTimer = setTimeout(flushScan, CFG.scanDebounceMs);
         });
-        D_ = { dock, strip, mo };
+        Object.assign(D_, { dock, strip, scrim, mo, onResize });
         document.querySelectorAll(LAUNCHER).forEach(adopt);
         renderGhosts();
         mo.observe(document.body, { childList: true, subtree: true });
     }
-    setTimeout(() => { try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); else if (dockForeign()) dockConflict = false; } catch (e) { console.warn(LOG, 'dock:', e.message); } }, 1500);
+    setTimeout(() => { try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); } catch (e) { console.warn(LOG, 'dock:', e.message); } }, 1500);
 
     function ocAlKeys() {
         const M = typeof myOc !== 'undefined' ? myOc : null, as = M && M.assignment, cur = M && M.current;
@@ -4426,6 +4886,7 @@
         }
         const ack = store.get(K.ntfAlAck, []);
         const kind = k.join ? 'join' : k.oc && k.oc !== store.get(K.ocAlAck, '') ? 'oc' : k.ntf.some(x => !ack.includes(x)) ? 'ntf' : '';
+        try { dockTabAlert(kind, kind === 'join' ? (k.joinMine ? 'Join your OC!' : 'Join an OC!') : kind === 'oc' ? 'New OC' : kind === 'ntf' ? 'Notify' : ''); } catch (e) {   }
         let lab = launcher.querySelector('.hbs-loc');
         launcher.classList.toggle('hbs-l-oc', kind === 'oc' || kind === 'ntf');
         launcher.classList.toggle('hbs-l-join', kind === 'join');
@@ -4444,6 +4905,17 @@
         const side = ocAlSide(); if (!lab.classList.contains(side)) lab.className = 'hbs-loc ' + side;
         const tk = kind === 'oc' ? 'oc:' + k.oc : 'ntf:' + k.ntf.filter(x => !ack.includes(x)).sort().join(',');
         if (store.get(K.ocAlToast, '') !== tk) { store.set(K.ocAlToast, tk); toast(kind === 'oc' ? 'New Organized Crime Assignment!' : 'New Notification Pending.', true); }
+    }
+    function dockTabAlert(kind, txt) {
+        const d = launcher.closest('#torn-dock');
+        document.querySelectorAll('#torn-dock .hbs-dtl').forEach(n => { if (!d || !d.contains(n) || !kind) n.remove(); });
+        document.querySelectorAll('#torn-dock.hbs-d-al').forEach(x => { if (x !== d || !kind) x.classList.remove('hbs-d-al', 'hbs-d-join'); });
+        if (!d || !kind) return;
+        d.classList.add('hbs-d-al'); d.classList.toggle('hbs-d-join', kind === 'join');
+        const side = d.classList.contains('torn-dock--right') ? 'l' : d.classList.contains('torn-dock--top') ? 'b' : 'r';
+        [d.querySelector('.torn-dock-tab'), d.querySelector('.torn-dock-pill')].forEach(h => { if (!h) return;
+            let n = h.querySelector('.hbs-dtl'); if (!n) { n = el('span', 'hbs-dtl'); h.appendChild(n); }
+            if (n.textContent !== txt) n.textContent = txt; const c = 'hbs-dtl ' + side; if (n.className !== c) n.className = c; });
     }
     function ocAlSide() {
         const vw = window.innerWidth, vh = window.innerHeight, d = launcher.closest('#torn-dock');
