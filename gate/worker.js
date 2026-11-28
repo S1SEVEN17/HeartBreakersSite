@@ -4174,9 +4174,14 @@ function mdHtmlS(t) {
 function ocNotifyMsgs(cfg, x) {
   const L = x.crimes || [], link = id => `https://www.torn.com/factions.php?step=your&type=1#/tab=crimes&crimeId=${id}`;
   const v = {name: x.name || "", count: L.length === 1 ? "1 crime" : L.length + " crimes", link: OC_CRIMES_TAB, scripts: SUITE_GF_URL, hub: (HUB_ORIGIN || "") + "/m/"};
+  // (Nov 28 2026, user: "For the notify messages that are sent to members about crimes, show the Join Now pay per day for
+  // each crime listed. This should be how crimes are picked as well."): each crime carries its Join Now pay per member
+  // per day (c.pay_day - the figure the top 3 are ranked by, ocAutoPlan notify_top) - "$1.4m/day" in chat and mail
+  const money = n => { n = Number(n) || 0; return n >= 1e9 ? "$" + (n / 1e9).toFixed(2).replace(/\.?0+$/, "") + "b" : n >= 1e6 ? "$" + (n / 1e6).toFixed(n >= 1e7 ? 1 : 2).replace(/\.?0+$/, "") + "m" : n >= 1e3 ? "$" + Math.round(n / 1e3) + "k" : "$" + Math.round(n); };
+  const pd = c => c.pay_day ? ` (${money(c.pay_day)}/day)` : "";
   const fill = (tpl, kind) => String(tpl).replace(/\{(name|crimes|count|link|scripts|hub)\}/g, (m, k) => k !== "crimes" ? String(v[k] == null ? "" : v[k])
-    : kind === "mail" ? L.map((c, i) => `${i + 1}. **[${c.crime} #${c.crime_id}](${link(c.crime_id)})** - ${(c.roles || []).map(r => `${r.position} (${r.rate}%)`).join(", ")}`).join("\n")
-    : L.map((c, i) => `${i + 1}) ${c.crime} - ${(c.roles || []).map(r => r.position).join(" or ")}`).join(" "));
+    : kind === "mail" ? L.map((c, i) => `${i + 1}. **[${c.crime} #${c.crime_id}](${link(c.crime_id)})**${c.pay_day ? ` - **${money(c.pay_day)}/day** join now` : ""} - ${(c.roles || []).map(r => `${r.position} (${r.rate}%)`).join(", ")}`).join("\n")
+    : L.map((c, i) => `${i + 1}) ${c.crime}${pd(c)} - ${(c.roles || []).map(r => r.position).join(" or ")}`).join(" "));
   if (L.length) { const t = cfg.notify_top || {}, mail = fill(t.mail || NOTIFY_TOP_DEFAULT.mail, "mail");
     return {chat: mdPlainS(fill(t.chat || NOTIFY_TOP_DEFAULT.chat, "chat")), subject: mdPlainS(fill(t.subject || NOTIFY_TOP_DEFAULT.subject, "chat")), mail: mdPlainS(mail), html: mdHtmlS(mail)}; }
   const t = cfg.invite || {}, mail = fill(t.mail || INVITE_DEFAULT_TPL.mail, "mail");
@@ -4603,7 +4608,7 @@ async function ocAutoPlan(env, crimes, now, run = {}) {
   // (no known rate for any open seat) or "none" (rates known, none high enough). Several members may be told about the
   // same seat - first to join gets it. Nobody is reserved for these (non-script members aren't placed automatically).
   try {
-    const busyP = new Set(), off = new Set(cfg.disabled || []), IM = r.stats.inst_mult || {}, minR = Number(opts.minRole) || 0;
+    const busyP = new Set(), off = new Set(cfg.disabled || []), IM = Object.assign({}, r.stats.plan_mult || {}, r.stats.inst_mult || {}), minR = Number(opts.minRole) || 0;   // (Nov 28 2026) same Join Now multiplier as Recruiting / the Suite (myoc payOf)
     for (const c of crimes || []) if (c && (c.status === "Recruiting" || c.status === "Planning")) for (const sl of c.slots || []) if (sl.user) busyP.add(Number(sl.user.id));
     const lab = sl => (sl.position_info && sl.position_info.label) || sl.position || "";
     const openC = (crimes || []).filter(c => c && c.status === "Recruiting" && catalog[c.name] && !off.has(c.name) && (c.slots || []).some(sl => !sl.user));

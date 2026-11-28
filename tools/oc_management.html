@@ -1372,7 +1372,7 @@ function notifyMsgs(x) {
 function notifyEditor() {
   const T = (D.config && D.config.notify_top) || {};
   return `<details class="panel" style="margin-top:10px"><summary><b>✏️ Edit the messages</b> <span class="tag">${T.chat || T.subject || T.mail ? "custom wording" : "built-in wording"}</span></summary>
-    <div class="hn">Fill-ins: <code>{name}</code> <code>{crimes}</code> (their top crimes and the roles they qualify for - one line in chat, a numbered list with links and pass rates in the mail) <code>{count}</code> ("3 crimes") <code>{link}</code> (the faction Crimes tab) <code>{scripts}</code> (the Heart Breakers Suite on Greasy Fork) <code>{hub}</code> (the Hub).
+    <div class="hn">Fill-ins: <code>{name}</code> <code>{crimes}</code> (their top crimes with each one's Join Now pay per day and the roles they qualify for - one line in chat, a numbered list with links and pass rates in the mail) <code>{count}</code> ("3 crimes") <code>{link}</code> (the faction Crimes tab) <code>{scripts}</code> (the Heart Breakers Suite on Greasy Fork) <code>{hub}</code> (the Hub).
       In the mail: a blank line starts a new paragraph, <code>**bold**</code>, <code>[link text](address)</code> - plain addresses become links too. Leave a box empty for the built-in wording.</div>
     <label class="hn">💬 Chat<br><textarea id="ntChat" rows="3" style="width:100%">${esc(T.chat || NOTIFY_DEFAULT.chat)}</textarea></label>
     <label class="hn">✉️ Mail subject<br><input id="ntSubj" style="width:100%" value="${esc(T.subject || NOTIFY_DEFAULT.subject)}"></label>
