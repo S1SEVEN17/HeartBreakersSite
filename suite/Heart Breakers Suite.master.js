@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.3.0
+// @version      0.3.1
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,6 +24,7 @@
  * =====================================================================
  *  HEART BREAKERS SUITE (userscript) — maintainer notes (keep for future updates)
  * =====================================================================
+ *  v0.3.1 (Nov 27 2026) - 🧲 The built-in Dock starts with the Suite (no 1.5 s wait) and hides icons until it has taken them, so nothing flashes outside the dock.
  *  v0.3.0 (Nov 27 2026) - 🧲 The built-in Dock is now Torn Dock 2.3.0 (edge tab, layouts, Top Mount, ⚙ Customize); OC alerts show on the dock's tab while it's closed.
  *  v0.2.99 (Nov 27 2026) - 🧲 The Torn Dock is built in (⚙ Display -> Torn Dock, off by default) - keeps your Torn Dock layout; warns if the separate Torn Dock script is also running.
  *  v0.2.98 (Nov 26 2026) - 💰 Torn crimes page: the pay tag has its own line under the crime's header (no longer squeezes the name).
@@ -498,7 +499,7 @@
     // CONFIG
     // ---------------------------------------------------------------------
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.3.0';
+    const VERSION = '0.3.1';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';                // shows in the key owner's Torn API log
@@ -5270,12 +5271,14 @@
     const dockHasStandaloneData = () => { try { return !!(localStorage.getItem('tornDock.registry.v1') || localStorage.getItem('tornDock.order.v1') || localStorage.getItem('tornDock.settings.v2')); } catch (e) { return false; } };
     function dockConflictNote() {
         dockConflict = true;
+        document.documentElement.classList.remove('hbs-dock-run');   // (0.3.1) never leave icons hidden while ours is paused
         if (!dockConflictToast) { dockConflictToast = true; toast('⚠ You have the Torn Dock script installed as well. The Suite\'s built-in Dock is paused.', true); }
         const w = document.querySelector('[data-dockwarn]'); if (w) w.style.display = '';
     }
     function dockStop() {
         if (!D_) return;
         const X = D_; D_ = null;
+        document.documentElement.classList.remove('hbs-dock-run');   // (0.3.1) icons are handed back below - show them again
         try { X.mo.disconnect(); } catch (e) { /* */ }
         try { window.removeEventListener('resize', X.onResize); } catch (e) { /* */ }
         // hand every live icon back to the page, as it was before the dock took it
@@ -5290,6 +5293,11 @@
         if (D_ || num(store.get(K.dockOn, 0)) !== 1) return;
         if (dockForeign()) { dockConflictNote(); return; }
         D_ = {};   // set first: adopt() / remember() check it
+        // (0.3.1) hide launchers the dock hasn't taken yet, so none flash outside it (removed again in dockStop / the pause)
+        if (!document.getElementById('hbs-dock-wait')) { const w = document.createElement('style'); w.id = 'hbs-dock-wait';
+            w.textContent = 'html.hbs-dock-run .torn-launcher:not(.torn-dock-item){visibility:hidden !important;}';
+            (document.head || document.documentElement).appendChild(w); }
+        document.documentElement.classList.add('hbs-dock-run');
         // ---------------- Torn Dock 2.3.0 (verbatim apart from the (Suite 0.3.0) marks) ----------------
         // ---------------------------------------------------------------------------
         // CONFIG
@@ -6043,8 +6051,7 @@
         renderGhosts();
         mo.observe(document.body, { childList: true, subtree: true });
     }
-    // start 1.5 s after load (the separate script, if installed, has drawn its dock by then)
-    setTimeout(() => { try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); } catch (e) { console.warn(LOG, 'dock:', e.message); } }, 1500);
+    // (0.3.1) started from init() right after the Suite's launcher is built (was: 1.5 s after load) - see build_patch_0301.py
 
     // 🔔 OC ICON ALERT (0.2.94) - see build_patch_0294.py
     function ocAlKeys() {
@@ -8616,6 +8623,8 @@
         buildPanel();
         bindBody();
         buildLauncher();
+        // (0.3.1) 🧲 the built-in Dock starts now, before the launcher is shown, so no icon flashes outside it
+        try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); } catch (e) { document.documentElement.classList.remove('hbs-dock-run'); console.warn(LOG, 'dock:', e.message); }
         setCollapsed(store.get(K.collapsed, true) !== false);
         window.addEventListener('resize', () => { clampPanel(); clampLauncher(); });
         // other scripts' launchers are appended to <body>; re-slot ours when they appear

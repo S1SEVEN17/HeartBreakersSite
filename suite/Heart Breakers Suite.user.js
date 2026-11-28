@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Heart Breakers Suite
 // @namespace    S1SEVEN.suite
-// @version      0.3.0
+// @version      0.3.1
 // @description  One centralized "Suite" of scripts for Heart Breakers.
 // @author       Chris5295 [974757]
 // @match        https://www.torn.com/*
@@ -24,7 +24,7 @@
     'use strict';
 
     const SCRIPT_NAME = 'HB Suite';
-    const VERSION = '0.3.0';
+    const VERSION = '0.3.1';
     const LOG = '[HBSuite]';
     const HUB_BASE = 'https://hb-gate.heartbreakers.workers.dev';
     const API_COMMENT = 'HBSuite';
@@ -4161,12 +4161,14 @@
     const dockHasStandaloneData = () => { try { return !!(localStorage.getItem('tornDock.registry.v1') || localStorage.getItem('tornDock.order.v1') || localStorage.getItem('tornDock.settings.v2')); } catch (e) { return false; } };
     function dockConflictNote() {
         dockConflict = true;
+        document.documentElement.classList.remove('hbs-dock-run');
         if (!dockConflictToast) { dockConflictToast = true; toast('⚠ You have the Torn Dock script installed as well. The Suite\'s built-in Dock is paused.', true); }
         const w = document.querySelector('[data-dockwarn]'); if (w) w.style.display = '';
     }
     function dockStop() {
         if (!D_) return;
         const X = D_; D_ = null;
+        document.documentElement.classList.remove('hbs-dock-run');
         try { X.mo.disconnect(); } catch (e) {   }
         try { window.removeEventListener('resize', X.onResize); } catch (e) {   }
         X.strip.querySelectorAll('.torn-dock-item:not(.torn-dock-ghost)').forEach(el => {
@@ -4180,6 +4182,10 @@
         if (D_ || num(store.get(K.dockOn, 0)) !== 1) return;
         if (dockForeign()) { dockConflictNote(); return; }
         D_ = {};
+        if (!document.getElementById('hbs-dock-wait')) { const w = document.createElement('style'); w.id = 'hbs-dock-wait';
+            w.textContent = 'html.hbs-dock-run .torn-launcher:not(.torn-dock-item){visibility:hidden !important;}';
+            (document.head || document.documentElement).appendChild(w); }
+        document.documentElement.classList.add('hbs-dock-run');
         const CFG = {
           accent:  '#FFB454',
           panelBg: 'rgba(27,30,36,0.96)',
@@ -4865,7 +4871,6 @@
         renderGhosts();
         mo.observe(document.body, { childList: true, subtree: true });
     }
-    setTimeout(() => { try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); } catch (e) { console.warn(LOG, 'dock:', e.message); } }, 1500);
 
     function ocAlKeys() {
         const M = typeof myOc !== 'undefined' ? myOc : null, as = M && M.assignment, cur = M && M.current;
@@ -7049,6 +7054,7 @@
         buildPanel();
         bindBody();
         buildLauncher();
+        try { if (num(store.get(K.dockOn, 0)) === 1) dockStart(); } catch (e) { document.documentElement.classList.remove('hbs-dock-run'); console.warn(LOG, 'dock:', e.message); }
         setCollapsed(store.get(K.collapsed, true) !== false);
         window.addEventListener('resize', () => { clampPanel(); clampLauncher(); });
         let slotTimer = null;
